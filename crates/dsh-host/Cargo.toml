@@ -1,0 +1,27 @@
+[package]
+name = "dsh-host"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "GUI-free DeepSeek Harness host: process lifecycle, readiness probing, token parsing, path layout."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+url.workspace = true
+tokio.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+win32job.workspace = true
+windows-sys.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
