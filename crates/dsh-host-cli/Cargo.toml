@@ -1,0 +1,14 @@
+[package]
+name = "dsh-host-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Command-line front end for dsh-host: start / stop / status / tail a Harness instance."
+
+[dependencies]
+dsh-host.workspace = true
+clap = { version = "4", features = ["derive"] }
+tokio.workspace = true
+serde_json.workspace = true
