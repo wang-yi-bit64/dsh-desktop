@@ -1,0 +1,68 @@
+# DSH Desktop — Cargo workspace (阶段 0 任务 0.1)
+#
+# 三个成员：
+#   crates/dsh-host      无 GUI 依赖的宿主库（进程 / 就绪 / token / 路径 / env / 日志）
+#   crates/dsh-host-cli  命令行排障入口（start / stop / status / tail）
+#   src-tauri            Tauri 2 应用壳（只做窗口、事件、IPC 接线）
+#
+# 依赖版本在 [workspace.dependencies] 统一收敛，成员 crate 用 `workspace = true`
+# 引用，避免同一依赖在三个 crate 里漂移成多个版本。
+
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/dsh-host", "crates/dsh-host-cli"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["DataElement"]
+edition = "2021"
+license = "MIT"
+rust-version = "1.77"
+
+[workspace.dependencies]
+# 本地 crate
+dsh-host = { path = "crates/dsh-host" }
+
+# 通用
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+regex = "1"
+url = { version = "2", features = ["serde"] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "process",
+  "io-util",
+  "net",
+  "sync",
+  "fs",
+  "signal",
+] }
+
+# Tauri 与插件（仅 src-tauri 使用，版本在此统一）
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-log = "2"
+
+# 平台
+libc = "0.2"
+winreg = "0.55"
+win32job = "1"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_Globalization",
+  "Win32_Security",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -7,19 +7,29 @@
 ## 功能特性
 
 - **内置运行时** —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需安装 Node.js。
+
 - **Harness 生命周期** —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
+
 - **壳页面** —— 启动页、错误页（支持重试 / 打开日志 / 退出）、插件恢复页与安全模式页。
+
 - **桌面定制** —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。
+
 - **移动桥接** —— 提供带配对令牌、二维码的局域网 HTTP 服务，并转发 RPC 到 Harness。
+
 - **安全模式** —— 使用仅含核心 Harness 包的隔离配置，用于在插件故障时恢复。
+
 - **插件恢复** —— 扫描启动日志定位出问题的插件，并提供定向移除。
+
 - **自动更新** —— 基于 `tauri-plugin-updater` 的通用更新源（GitHub releases）。
+
 - **单实例** —— 第二次启动时聚焦已有窗口，而非另起一个副本。
 
 ## 环境要求
 
 - [Rust 工具链](https://rustup.rs/)（stable）
+
 - [Node.js](https://nodejs.org/)（v18+，用于构建工具链）
+
 - [Tauri v2](https://v2.tauri.app/start/prerequisites/) 对应的平台构建依赖（WebView2 / WebKit / WebKitGTK）
 
 ## 快速开始
@@ -63,6 +73,7 @@ scripts/          # 构建辅助（prepare-harness、install-brand-assets 等）
 
 - `node_modules/`、`harness-deps/`、`src-tauri/target/` 与 `src-tauri/resources/` 均已被 gitignore；
   其中 `resources/` 由构建重新生成，入库会显著增大仓库体积。
+
 - 更新源指向本仓库 GitHub 发布页的 `latest.json`。发布构建需要签名密钥
   （见 `tauri.conf.json` → `plugins.updater.pubkey`）。
 
@@ -75,3 +86,4 @@ scripts/          # 构建辅助（prepare-harness、install-brand-assets 等）
   需等待上游 Tauri 将 Linux 后端迁移到 gtk-rs 0.20+（tauri 2.11.5 已是最新 2.x）。
   因此该 Dependabot 告警以"不可利用 / 不可达"为理由标注为已处理。当某个 Tauri 版本引入
   `glib >= 0.20.0` 后，需重新执行 `cargo update`，并用 `cargo tree -i glib` 确认已解析到修补版本，再行复查。
+
