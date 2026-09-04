@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Local shell pages (splash / error / recovery / safe-mode) capability set. Task 1.4: no `remote` field is configured - the harness page and its plugins get no IPC by default.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

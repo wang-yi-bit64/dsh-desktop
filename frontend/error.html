@@ -17,6 +17,12 @@
       .icon { font-size: 40px; }
       .title { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.02em; }
       .message { margin: 0; color: #777a80; font-size: 13px; max-width: 520px; white-space: pre-wrap; word-break: break-word; }
+      .logs {
+        margin: 4px 0 0; padding: 12px 16px; max-width: 640px; max-height: 200px; overflow: auto;
+        text-align: left; font: 12px/1.5 Consolas, "Courier New", monospace;
+        color: #9ca0a8; background: rgba(127,127,127,.08); border-radius: 10px;
+        white-space: pre-wrap; word-break: break-all;
+      }
       .actions { display: flex; gap: 10px; margin-top: 8px; }
       button {
         appearance: none; border: 0; cursor: pointer; font: inherit;
@@ -41,9 +47,10 @@
       <div class="icon" aria-hidden="true">⚠️</div>
       <h1 class="title" id="title">Harness could not start</h1>
       <p class="message" id="message"></p>
+      <pre class="logs" id="logs" hidden></pre>
       <div class="actions">
         <button class="primary" id="retry">Retry</button>
-        <button class="secondary" id="logs">View log</button>
+        <button class="secondary" id="openlogs">View log</button>
         <button class="secondary" id="quit">Quit</button>
       </div>
     </main>
@@ -52,36 +59,53 @@
       if (zh) {
         document.getElementById('title').textContent = 'Harness 未能启动';
         document.getElementById('retry').textContent = '重试';
-        document.getElementById('logs').textContent = '查看日志';
+        document.getElementById('openlogs').textContent = '查看日志';
         document.getElementById('quit').textContent = '退出';
       }
       const invoke = window.__TAURI__?.core?.invoke;
-      if (window.__TAURI__?.event) {
-        window.__TAURI__.event.listen('harness://status', (event) => {
-          const snapshot = event.payload || {};
-          if (snapshot.phase === 'failed' && snapshot.message) {
-            document.getElementById('message').textContent = snapshot.message;
-          }
-        });
-        // Show the latest failure message immediately.
-        window.__TAURI__.core.invoke('harness_status').then((snapshot) => {
-          if (snapshot && snapshot.message) {
-            document.getElementById('message').textContent = snapshot.message;
+      const messageEl = document.getElementById('message');
+      const logsEl = document.getElementById('logs');
+
+      function apply(snapshot) {
+        if (!snapshot) return;
+        if (snapshot.message) messageEl.textContent = snapshot.message;
+        // Failed 相位的结构化归因（任务 1.4）：kind / plugin_fault / retryable。
+        if (snapshot.phase === 'failed' && snapshot.plugin_fault) {
+          const hint = zh
+            ? '\n（疑似第三方插件故障：可尝试安全模式排查）'
+            : '\n(Plugin fault suspected: try safe mode to recover.)';
+          if (!messageEl.textContent.includes(hint)) messageEl.textContent += hint;
+        }
+      }
+
+      function loadLogs() {
+        if (!invoke) return;
+        invoke('harness_logs_tail', { count: 30 }).then((lines) => {
+          if (Array.isArray(lines) && lines.length) {
+            logsEl.textContent = lines.join('\n');
+            logsEl.hidden = false;
           }
         }).catch(() => {});
+      }
+
+      if (window.__TAURI__?.event) {
+        window.__TAURI__.event.listen('harness://status', (event) => {
+          apply(event.payload || {});
+        });
+      }
+      // 进入页面立即拉取最新快照与日志尾部。
+      if (invoke) {
+        invoke('harness_status').then(apply).catch(() => {});
+        loadLogs();
       }
       document.getElementById('retry').addEventListener('click', () => {
         if (invoke) invoke('harness_restart').catch(console.error);
       });
-      document.getElementById('logs').addEventListener('click', () => {
+      document.getElementById('openlogs').addEventListener('click', () => {
         if (invoke) invoke('open_logs').catch(console.error);
       });
       document.getElementById('quit').addEventListener('click', () => {
-        if (window.__TAURI__?.process) {
-          window.__TAURI__.process.exit(0);
-        } else if (invoke) {
-          invoke('app_quit').catch(console.error);
-        }
+        if (invoke) invoke('app_quit').catch(console.error);
       });
     </script>
   </body>

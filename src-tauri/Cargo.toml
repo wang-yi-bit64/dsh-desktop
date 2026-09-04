@@ -1,10 +1,11 @@
 [package]
 name = "dsh-desktop"
-version = "0.1.0"
+version.workspace = true
 description = "A Rust + Tauri 2.0 desktop shell for DeepSeek Harness"
-authors = ["DataElement"]
-edition = "2021"
-license = "MIT"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 
 [lib]
 name = "dsh_desktop_lib"
@@ -14,37 +15,30 @@ name = "dsh_desktop_lib"
 crate-type = ["rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build.workspace = true
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-dialog = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = [
-  "rt-multi-thread",
-  "macros",
-  "time",
-  "process",
-  "io-util",
-  "net",
-  "sync",
-  "fs",
-] }
+dsh-host.workspace = true
+tauri.workspace = true
+tauri-plugin-single-instance.workspace = true
+tauri-plugin-updater.workspace = true
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+tauri-plugin-log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 regex = "1"
 url = "2"
 rand = "0.8"
 qrcode = "0.14"
 axum = "0.7"
-thiserror = "1"
+thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-strip = true
+[target.'cfg(windows)'.dependencies]
+# Cookie 清理需要与 wry 相同的 WebView2 COM 绑定版本（见 src/cookies.rs）。
+webview2-com = "0.38"
+windows-sys.workspace = true

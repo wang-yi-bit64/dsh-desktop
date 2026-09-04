@@ -11,7 +11,11 @@ use std::path::Path;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-const CORE_BUNDLES: [&str; 3] = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dshmarket"];
+const CORE_BUNDLES: [&str; 3] = [
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "dshmarket",
+];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PluginRecoveryDetection {
@@ -59,8 +63,10 @@ pub fn extract_duplicate_loader_entry_id(log_lines: &[String]) -> Option<String>
 }
 
 pub fn extract_slot_conflict_name(log_lines: &[String]) -> Option<String> {
-    let loader = Regex::new(r#"single slot\s+["']([^"']+)["']\s+already has a registration"#).ok()?;
-    let renderer = Regex::new(r#"UI slot\s+["']([^"']+)["']\s+has duplicate registrations"#).ok()?;
+    let loader =
+        Regex::new(r#"single slot\s+["']([^"']+)["']\s+already has a registration"#).ok()?;
+    let renderer =
+        Regex::new(r#"UI slot\s+["']([^"']+)["']\s+has duplicate registrations"#).ok()?;
     for line in latest_attempt(log_lines) {
         let Some(text) = line.strip_prefix("[stderr] ") else {
             continue;
@@ -97,7 +103,8 @@ where
 
     let loader_re =
         Regex::new(r"failed to (?:apply|import) loader entry [^\s]+ \((@[^)]+|[^)]+)\)").unwrap();
-    let profile_bundle_re = Regex::new(r#"cannot resolve profile bundle ["']([^"']+)["']"#).unwrap();
+    let profile_bundle_re =
+        Regex::new(r#"cannot resolve profile bundle ["']([^"']+)["']"#).unwrap();
     let no_bundle_re =
         Regex::new(r#"profile bundle ["']([^"']+)["'] declares no dsh\.bundle"#).unwrap();
     let failed_list_re = Regex::new(r"plugin\(s\) failed to load:\s*([a-zA-Z0-9@/_-]+)").unwrap();
@@ -105,9 +112,10 @@ where
         r"^((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*):\s*pending\s*\(waiting for service:\s*[^)]+\)\s*$",
     )
     .unwrap();
-    let node_modules_re =
-        Regex::new(r"[\\/]profiles[\\/][^\\/\s]+[\\/]node_modules[\\/]((?:@[^\\/\s]+[\\/])?[^\\/\s)]+)")
-            .unwrap();
+    let node_modules_re = Regex::new(
+        r"[\\/]profiles[\\/][^\\/\s]+[\\/]node_modules[\\/]((?:@[^\\/\s]+[\\/])?[^\\/\s)]+)",
+    )
+    .unwrap();
 
     for line in &attempt {
         let Some(text) = line.strip_prefix("[stderr] ") else {
@@ -183,7 +191,10 @@ pub fn remove_plugin_from_profile(dsh_home: &Path, plugin: &str) -> std::io::Res
     let raw = std::fs::read_to_string(&manifest_path)?;
     let mut manifest: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if let Some(deps) = manifest.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+    if let Some(deps) = manifest
+        .get_mut("dependencies")
+        .and_then(|d| d.as_object_mut())
+    {
         deps.remove(plugin);
     }
     std::fs::write(
@@ -208,9 +219,8 @@ mod tests {
 
     #[test]
     fn skips_core_bundles() {
-        let logs = vec![
-            "[stderr] failed to apply loader entry x (@deepseek-ai/dsh-base)".to_string(),
-        ];
+        let logs =
+            vec!["[stderr] failed to apply loader entry x (@deepseek-ai/dsh-base)".to_string()];
         let plugins = extract_offending_plugins(&logs);
         assert!(plugins.is_empty());
     }

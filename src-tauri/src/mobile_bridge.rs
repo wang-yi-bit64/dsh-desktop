@@ -93,7 +93,11 @@ impl MobileBridge {
         let running = port.is_some();
         let (pairing_url, qr, expires_at) = match pairing.as_ref() {
             Some(p) if now_ms() < p.expires_at => {
-                let url = format!("http://0.0.0.0:{}/pair?token={}", port.unwrap_or(0), p.token);
+                let url = format!(
+                    "http://0.0.0.0:{}/pair?token={}",
+                    port.unwrap_or(0),
+                    p.token
+                );
                 let qr = render_qr_svg(&url);
                 (Some(url), Some(qr), Some(p.expires_at))
             }
@@ -110,7 +114,10 @@ impl MobileBridge {
     }
 
     /// Rotate the pairing token and start listening on a LAN port.
-    pub async fn start(&self, preferred_port: Option<u16>) -> std::io::Result<MobileBridgeSnapshot> {
+    pub async fn start(
+        &self,
+        preferred_port: Option<u16>,
+    ) -> std::io::Result<MobileBridgeSnapshot> {
         let token = random_token(24);
         {
             let mut pairing = self.state.pairing.lock().await;
@@ -138,9 +145,7 @@ impl MobileBridge {
         let shutdown_state = Arc::clone(&self.state);
         tokio::spawn(async move {
             axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    shutdown_state.shutdown.notified().await
-                })
+                .with_graceful_shutdown(async move { shutdown_state.shutdown.notified().await })
                 .await
                 .ok();
         });
@@ -164,7 +169,9 @@ fn now_ms() -> u128 {
 
 fn random_token(bytes: usize) -> String {
     let mut rng = rand::thread_rng();
-    (0..bytes).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
+    (0..bytes)
+        .map(|_| format!("{:02x}", rng.gen::<u8>()))
+        .collect()
 }
 
 fn render_qr_svg(text: &str) -> String {
@@ -200,7 +207,11 @@ async fn pair(
         None => false,
     };
     if !valid {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok": false}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"ok": false})),
+        )
+            .into_response();
     }
 
     let session = random_token(32);
@@ -210,9 +221,7 @@ async fn pair(
     Json(serde_json::json!({"ok": true, "session": session})).into_response()
 }
 
-async fn brand_logo(
-    axum::extract::Path(variant): axum::extract::Path<String>,
-) -> Response {
+async fn brand_logo(axum::extract::Path(variant): axum::extract::Path<String>) -> Response {
     // Served from bundled resources; path resolved by the caller at runtime.
     let _ = variant;
     (StatusCode::NOT_FOUND, "logo").into_response()
@@ -263,11 +272,7 @@ async fn rpc_forward(
     let target = format!("{}/api/{}", harness_url.trim_end_matches('/'), endpoint);
     match forward_request(&target, &payload).await {
         Ok(response) => response,
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            format!("forward failed: {error}"),
-        )
-            .into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, format!("forward failed: {error}")).into_response(),
     }
 }
 
@@ -313,10 +318,7 @@ async fn forward_request(target: &str, payload: &serde_json::Value) -> std::io::
         .nth(1)
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(502);
-    let body_bytes = rest
-        .strip_prefix(b"\r\n\r\n")
-        .unwrap_or(rest)
-        .to_vec();
+    let body_bytes = rest.strip_prefix(b"\r\n\r\n").unwrap_or(rest).to_vec();
 
     let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     Ok((

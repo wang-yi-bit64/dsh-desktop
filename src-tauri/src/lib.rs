@@ -1,61 +1,69 @@
-//! DSH Desktop — a Rust + Tauri 2.0 desktop shell for DeepSeek Harness.
+//! DSH Desktop — Rust + Tauri 2.0 的 DeepSeek Harness 桌面壳。
 //!
-//! The app bundles a Node.js runtime and the full `@deepseek-ai/dsh`
-//! dependency tree, launches Harness on a random loopback port, waits for the
-//! per-process launch token and HTTP readiness, then loads the web UI into the
-//! main window. Profiles, plugins and sessions live in the app data directory
-//! so upgrades never remove user data.
+//! GUI 层只做壳与事件接线（ADR-3）：
+//!
+//! * 主链路（spawn → 就绪 → 导航 → 退出清理）全部在 `dsh-host` 库 crate 中，
+//!   可单测、可 CLI 排障（INV-6）；
+//! * 本模块负责：窗口创建与**导航白名单**（任务 1.4）、状态机事件转发、
+//!   菜单、单实例、IPC 命令（含命令守卫）；
+//! * 安全边界（INV-2）：harness 页面没有 remote capability，调用不了任何
+//!   宿主命令；本地静态页的命令也有 origin 守卫双重校验。
 
 mod commands;
-mod harness_runtime;
+mod cookies;
+mod layout;
 mod menu;
 mod mobile_bridge;
-mod paths;
+mod navigation;
 mod recovery;
-mod resources;
 mod safe_mode;
-mod shell_env;
 mod state;
 mod update;
 mod window;
 
 use std::sync::Arc;
 
-use harness_runtime::{HarnessRuntime, RuntimePhase, STATUS_EVENT};
-use state::AppState;
-use tauri::{Listener, Manager};
+use tauri::{Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_opener::OpenerExt;
 
+use navigation::{decide_navigation, NavigationDecision};
+use state::{AppState, HarnessSupervisor};
+
+use dsh_host::launch::LauncherConfig;
+
+/// 应用入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // Focus the existing window instead of launching a second copy.
-            if let Some(window) = window::main_window(app) {
-                let _ = window.set_focus();
+            // 二次启动 → 聚焦既有窗口，而不是再开一份。
+            if let Some(webview) = window::main_window(app) {
+                let _ = webview.set_focus();
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
 
-            // Application-owned data directories.
-            let data_dir = handle
-                .path()
-                .app_data_dir()
-                .expect("app data dir must resolve");
-            paths::ensure_data_dirs(&data_dir)
-                .expect("data directories must be creatable");
+            // 只读资源 + 可写 userData 布局（INV-1 的唯一落点）。
+            let layout = layout::resolve_layout(&handle)?;
+            layout.ensure_dirs()?;
 
-            // Runtime paths resolved from bundled resources.
-            let runtime_paths = resources::runtime_paths(&handle);
-
-            let runtime = Arc::new(HarnessRuntime::new(handle.clone(), runtime_paths));
+            let supervisor = Arc::new(HarnessSupervisor::new(
+                handle.clone(),
+                layout.clone(),
+                LauncherConfig::default(),
+            ));
             let mobile = Arc::new(mobile_bridge::MobileBridge::new());
-            let app_state = Arc::new(AppState::new(Arc::clone(&runtime), Arc::clone(&mobile)));
-            app.manage(app_state.clone());
+            app.manage(Arc::new(AppState::new(
+                Arc::clone(&supervisor),
+                layout.clone(),
+                Arc::clone(&mobile),
+            )));
 
-            // Menu.
+            // 菜单。
             let menu = menu::build_menu(&handle)?;
             handle.set_menu(menu)?;
             let menu_handle = handle.clone();
@@ -63,70 +71,79 @@ pub fn run() {
                 menu::handle_menu_event(&menu_handle, event.id().as_ref());
             });
 
-            // Drive window navigation from runtime status events.
+            // 主窗口：代码创建，以便挂导航白名单（配置文件创建的窗口无法补挂）。
             let nav_handle = handle.clone();
-            let runtime_for_events = Arc::clone(&runtime);
-            let mobile_for_events = Arc::clone(&mobile);
-            handle.listen(STATUS_EVENT, move |event| {
-                let snapshot: harness_runtime::RuntimeSnapshot =
-                    match serde_json::from_str(event.payload()) {
-                        Ok(snapshot) => snapshot,
-                        Err(_) => return,
-                    };
-                let phase = snapshot.phase;
-                let url = snapshot.url.clone();
-                let token = snapshot.auth_token.clone();
-
-                let nav_handle = nav_handle.clone();
-                let runtime_for_events = Arc::clone(&runtime_for_events);
-                let mobile_for_events = Arc::clone(&mobile_for_events);
-                tauri::async_runtime::spawn(async move {
-                    window::apply_phase(
-                        &nav_handle,
-                        phase,
-                        url.as_deref(),
-                        token.as_deref(),
-                    );
-                    if phase == RuntimePhase::Ready {
-                        mobile_for_events.set_harness_target(url).await;
+            WebviewWindowBuilder::new(
+                &handle,
+                window::MAIN_WINDOW,
+                WebviewUrl::App("index.html".into()),
+            )
+            .title("DSH Desktop")
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(900.0, 600.0)
+            .center()
+            .resizable(true)
+            // 任务 1.4：导航白名单——只放行本地静态页与当前 harness 实例。
+            .on_navigation(move |url| {
+                let port = nav_handle
+                    .try_state::<Arc<AppState>>()
+                    .and_then(|state| state.supervisor.harness_port());
+                match decide_navigation(url, port) {
+                    NavigationDecision::Allow => true,
+                    NavigationDecision::External => {
+                        // 非可信 http(s)：转交系统浏览器，窗口不放行。
+                        let opener = nav_handle.opener();
+                        let _ = opener.open_url(url.to_string(), None::<&str>);
+                        false
                     }
-                    let _ = runtime_for_events;
-                });
-            });
+                    NavigationDecision::Block => false,
+                }
+            })
+            // §2.2 非目标：不做多窗口。window.open / target=_blank 一律拦截，
+            // 外部链接交给系统浏览器。
+            .on_new_window(move |url, _features| {
+                let port = nav_handle
+                    .try_state::<Arc<AppState>>()
+                    .and_then(|state| state.supervisor.harness_port());
+                if decide_navigation(&url, port) == NavigationDecision::External {
+                    let opener = nav_handle.opener();
+                    let _ = opener.open_url(url.to_string(), None::<&str>);
+                }
+                tauri::NewWindowResponse::Deny
+            })
+            .build()?;
 
-            // Update manager.
+            // 更新管理器（阶段 6 完整接线；当前为启动 + 6h 轮询）。
             let update_manager = Arc::new(update::UpdateManager::new(handle.clone()));
             {
-                let app_state = app_state.clone();
+                let state = handle.state::<Arc<AppState>>();
                 let manager = Arc::clone(&update_manager);
                 tauri::async_runtime::spawn(async move {
-                    *app_state.updates.lock().await = Some(manager.clone());
+                    *state.updates.lock().await = Some(manager.clone());
                     manager.start();
                 });
             }
 
-            // Launch Harness once the window is up.
-            let start_runtime = Arc::clone(&runtime);
+            // 窗口就绪后启动 Harness（splash → … → harness UI）。
+            let start_supervisor = Arc::clone(&supervisor);
             tauri::async_runtime::spawn(async move {
-                start_runtime.start().await;
+                start_supervisor.start().await;
             });
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Gracefully stop Harness when the main window closes.
+        .on_window_event(|webview_window, event| {
+            // 关窗 → 停止子进程（SIGTERM → 4s → SIGKILL / taskkill /T）。
             if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if window.label() == window::MAIN_WINDOW {
-                    let app = window.app_handle();
+                if webview_window.label() == window::MAIN_WINDOW {
+                    let app = webview_window.app_handle();
                     if let Some(state) = app.try_state::<Arc<AppState>>() {
-                        let runtime = Arc::clone(&state.runtime);
                         let mobile = Arc::clone(&state.mobile);
-                        // Block briefly so the child process is reaped before
-                        // the desktop app exits; SIGTERM→4s→SIGKILL on POSIX,
-                        // taskkill /T on Windows.
+                        let supervisor = Arc::clone(&state.supervisor);
+                        // 阻塞一小段时间，确保子进程在应用退出前被回收（INV-3）。
                         tauri::async_runtime::block_on(async move {
                             mobile.stop().await;
-                            runtime.stop().await;
+                            supervisor.stop().await;
                         });
                     }
                 }
@@ -135,6 +152,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::harness_status,
             commands::harness_restart,
+            commands::harness_logs_tail,
             commands::open_logs,
             commands::open_in_finder,
             commands::directory_picker_open,

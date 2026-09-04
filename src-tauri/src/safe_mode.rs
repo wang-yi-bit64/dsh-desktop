@@ -7,14 +7,14 @@
 use std::path::{Path, PathBuf};
 
 pub const SAFE_MODE_PROFILE: &str = "desktop-safe-mode";
-pub const SAFE_MODE_BUNDLES: [&str; 2] =
-    ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
+pub const SAFE_MODE_BUNDLES: [&str; 2] = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
 
 const SAFE_MODE_PATCH: &str = "# Managed by DSH Desktop Safe Mode.\n\
 # Third-party bundles and the normal web profile's patch layer are intentionally omitted.\n\
 []\n";
 
-const SAFE_MODE_WORKSPACE: &str = "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n";
+const SAFE_MODE_WORKSPACE: &str =
+    "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n";
 
 /// Materialize the isolated safe-mode profile directory.
 pub fn ensure_safe_mode_profile(dsh_home: &Path) -> std::io::Result<PathBuf> {

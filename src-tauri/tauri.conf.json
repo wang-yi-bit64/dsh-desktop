@@ -4,25 +4,15 @@
   "version": "0.1.0",
   "identifier": "io.dsh.desktop",
   "build": {
-    "frontendDist": "../frontend"
+    "frontendDist": "../frontend",
+    "beforeDevCommand": "npm run prepare:harness",
+    "beforeBuildCommand": "npm run prepare:harness"
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "DSH Desktop",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600,
-        "center": true,
-        "resizable": true,
-        "visible": true
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": "default-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' http://127.0.0.1:* data: blob:; style-src 'self' 'unsafe-inline' http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* ipc: http://ipc.localhost; font-src 'self' http://127.0.0.1:* data:"
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
     }
   },
   "plugins": {
@@ -49,6 +39,7 @@
     "resources": [
       "resources/node/*",
       "resources/harness/**/*",
+      "resources/MANIFEST.json",
       "resources/harness-node-entry.mjs",
       "resources/windows-child-process-hide.mjs",
       "resources/dsh-desktop.patch.yml",
