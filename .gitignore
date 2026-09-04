@@ -1,0 +1,20 @@
+# Node
+node_modules/
+harness-deps/
+npm-debug.log*
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/resources/
+src-tauri/gen/
+
+# Build output
+dist/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local tooling
+.trae/

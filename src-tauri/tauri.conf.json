@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DSH Desktop",
+  "version": "0.1.0",
+  "identifier": "io.dsh.desktop",
+  "build": {
+    "frontendDist": "../frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "DSH Desktop",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' http://127.0.0.1:* data: blob:; style-src 'self' 'unsafe-inline' http://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* ipc: http://ipc.localhost; font-src 'self' http://127.0.0.1:* data:"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBRDNCMjgxRjAwNEQyMDIKUldRQzBnVHdnYkxUT280QVoybm44eExQbk5QQTVNMTlCTnJZdTRlTkJRL1NWSG0yN2VROFJuSU8K",
+      "endpoints": [
+        "https://github.com/dataelement/dsh-desktop/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/node/*",
+      "resources/harness/**/*",
+      "resources/harness-node-entry.mjs",
+      "resources/windows-child-process-hide.mjs",
+      "resources/dsh-desktop.patch.yml",
+      "resources/splash.html",
+      "resources/dsh-loader.gif",
+      "resources/dsh-loader-dark.gif",
+      "resources/plugin-recovery.html",
+      "resources/safe-mode.html",
+      "resources/windows-menu.html",
+      "resources/app-icon.png"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  }
+}

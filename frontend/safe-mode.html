@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>DSH Desktop Safe Mode</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --canvas: #f7f7f8; --surface: #fff; --soft: #f5f6f7; --ink: #18181b;
+        --muted: #71717a; --line: #e4e4e7; --strong: #d4d4d8;
+        --button: #18181b; --button-ink: #fff; --danger: #c33b38; --warning: #a45b00; --success: #267a4a;
+      }
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+      html, body { width: 100%; min-width: 320px; min-height: 100%; margin: 0; background: transparent; }
+      body { min-height: 100vh; display: grid; place-items: center; padding: 40px 24px; color: var(--ink); background: rgba(18,18,20,.28); }
+      button { font: inherit; }
+      .shell { width: min(760px, 100%); max-height: min(760px, calc(100vh - 80px)); overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: 0 22px 64px rgba(24,24,27,.2); }
+      .header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px 18px 26px; border-bottom: 1px solid var(--line); }
+      .brand { display: flex; align-items: center; gap: 11px; }
+      .brand img { width: 28px; height: 28px; border-radius: 8px; }
+      .brand-name { font-size: 14px; font-weight: 650; }
+      .badge { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; font-weight: 600; }
+      .close { width:32px; height:32px; display:grid; place-items:center; padding:0; border:0; border-radius:9px; color:var(--muted); background:transparent; cursor:pointer; font-size:25px; font-weight:300; line-height:1; }
+      .close:hover { color:var(--ink); background:var(--soft); }
+      .content { max-height:calc(min(760px, 100vh - 80px) - 70px); padding:26px 32px 24px; overflow:auto; }
+      h1:empty { display:none; }
+      .summary { margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+      .notice { display: none; margin: 0 0 18px; padding: 11px 13px; border-radius: 10px; font-size: 12px; line-height: 1.5; }
+      .notice.error { color: var(--danger); background: rgba(195,59,56,.08); }
+      .notice.success { color: var(--success); background: rgba(38,122,74,.09); }
+      .notice.visible { display: block; }
+      .list-card { overflow: hidden; margin-top:18px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); }
+      .list-heading { display: flex; justify-content: space-between; align-items: center; min-height: 43px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 650; }
+      .select-all { border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; }
+      .plugins { max-height: 310px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+      .plugins li { border-top: 1px solid var(--line); background: var(--surface); }
+      .plugins li:first-child { border-top: 0; }
+      .plugin { display: flex; align-items: center; gap: 11px; min-height: 48px; padding: 10px 16px; cursor: pointer; }
+      .plugin input { width: 16px; height: 16px; margin: 0; accent-color: var(--button); }
+      .plugin-copy { display:flex; flex-direction:column; min-width:0; }
+      .plugin-title { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px; }
+      .plugin-name { overflow-wrap: anywhere; font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 13px; font-weight: 600; }
+      .plugin-status { color:var(--danger); font-size:11px; font-weight:650; }
+      .plugin-status.warning { color:var(--warning); }
+      .plugin-action { margin-top:4px; font-size:11px; font-weight:620; }
+      .issue-group { border-top:1px solid var(--line); background:var(--surface); }
+      .issue-group:first-child { border-top:0; }
+      .issue { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 10px; padding: 13px 16px 10px; cursor:pointer; }
+      .issue input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--button); }
+      .issue-main { min-width: 0; }
+      .issue-title { display:flex; flex-wrap:wrap; align-items:center; gap:7px; }
+      .issue-name { overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; font-weight:650; }
+      .issue-badge { padding:1px 6px; border-radius:999px; color:var(--danger); background:rgba(195,59,56,.09); font-size:10px; font-weight:700; }
+      .issue-meta, .issue-detail, .issue-source, .issue-action { margin-top:4px; color:var(--muted); font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
+      .issue-action { color:var(--ink); font-weight:620; }
+      .issue-details { margin:0 16px 12px 42px; color:var(--muted); font-size:10px; }
+      .issue-details summary { width:max-content; cursor:pointer; font-weight:650; }
+      .findings { margin:7px 0 0; padding:8px 10px; border-radius:9px; background:var(--soft); list-style:none; }
+      .finding { padding:5px 0; border-top:1px solid var(--line); }
+      .finding:first-child { border-top:0; }
+      .finding-name { overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; font-weight:650; }
+      .finding-detail { margin-top:2px; color:var(--muted); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
+      .empty { display: none; margin: 0; padding: 24px 18px; color: var(--muted); background: var(--surface); text-align: center; font-size: 13px; }
+      .empty.visible { display: block; }
+      .safety { margin: 15px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .actions { display:flex; justify-content:flex-end; gap:9px; margin-top:22px; }
+      .button { min-height: 39px; padding: 9px 15px; border: 1px solid var(--strong); border-radius: 10px; color: var(--ink); background: var(--surface); cursor: pointer; font-size: 13px; font-weight: 620; }
+      .button:hover { background: var(--soft); }
+      .button.primary { border-color: var(--button); color: var(--button-ink); background: var(--button); }
+      .button.danger { color:var(--danger); border-color:rgba(195,59,56,.35); }
+      .button[disabled] { opacity: .55; cursor: default; }
+      .footer { display: flex; justify-content: flex-end; padding: 0 32px 18px; }
+      .quit { border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; }
+      :root[data-theme="dark"] { --canvas:#141416; --surface:#202023; --soft:#29292d; --ink:#f2f2f4; --muted:#a5a7ad; --line:#3a3a3f; --strong:#4a4a50; --button:#f4f4f5; --button-ink:#111217; --danger:#ee7772; --success:#78d59a; }
+      @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --canvas:#141416; --surface:#202023; --soft:#29292d; --ink:#f2f2f4; --muted:#a5a7ad; --line:#3a3a3f; --strong:#4a4a50; --button:#f4f4f5; --button-ink:#111217; --danger:#ee7772; --success:#78d59a; } }
+      @media (max-width: 620px) { body { display:block; padding:46px 0 0; background:var(--surface); } .shell { width:100%; min-height:calc(100vh - 46px); max-height:none; border:0; border-radius:0; box-shadow:none; } .content { max-height:none; padding:24px 20px; } .actions { flex-direction:column-reverse; } .button { width:100%; } }
+    </style>
+  </head>
+  <body>
+    <main class="shell" aria-labelledby="heading">
+      <header class="header">
+        <div class="brand"><img id="icon" alt="" /><span class="brand-name" id="brand"></span><span class="badge" id="badge"></span></div>
+        <button class="close" id="agent" type="button" aria-label="Close">×</button>
+      </header>
+      <section class="content">
+        <p class="notice" id="notice" role="alert"></p>
+        <h1 id="heading"></h1>
+        <p class="summary" id="summary"></p>
+        <section class="list-card" aria-labelledby="selection-hint">
+          <div class="list-heading"><span id="selection-hint"></span><button class="select-all" id="select-all" type="button"></button></div>
+          <ul class="plugins" id="items"></ul>
+          <p class="empty" id="empty"></p>
+        </section>
+        <p class="safety" id="safety-note"></p>
+        <div class="actions">
+          <button class="button" id="recovery-open" type="button" hidden></button>
+          <button class="button" id="apply" type="button" disabled></button>
+          <button class="button primary" id="restart" type="button"></button>
+        </div>
+      </section>
+      <footer class="footer"><button class="quit" id="quit" type="button"></button></footer>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search)
+      const model = JSON.parse(params.get('state') || '{}')
+      document.documentElement.lang = model.locale === 'zh' ? 'zh-CN' : 'en'
+      document.documentElement.dataset.theme = params.get('theme') || 'system'
+      document.title = `${model.badge || 'Safe Mode'} · ${model.brand || 'DSH Desktop'}`
+      const setText = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value || '' }
+      document.getElementById('icon').src = params.get('icon') || 'icon.png'
+      setText('brand', model.brand)
+      setText('badge', model.badge)
+      setText('heading', model.heading)
+      setText('summary', model.summary)
+      setText('empty', model.emptyMessage)
+      setText('selection-hint', model.selectionHint)
+      setText('safety-note', model.safetyNote)
+      setText('apply', model.applyLabel)
+      setText('restart', model.restartLabel)
+      setText('quit', model.quitLabel)
+      setText('select-all', model.selectAllLabel)
+      setText('recovery-open', model.recoveryOpenLabel)
+      document.getElementById('agent').setAttribute('aria-label', model.agentLabel || 'Close')
+      const notice = document.getElementById('notice')
+      if (model.notice) {
+        notice.textContent = model.notice
+        notice.classList.add('visible', model.noticeTone === 'success' ? 'success' : 'error')
+      }
+      const list = document.getElementById('items')
+      const empty = document.getElementById('empty')
+      const apply = document.getElementById('apply')
+      const recoveryOpen = document.getElementById('recovery-open')
+      const agent = document.getElementById('agent')
+      const restart = document.getElementById('restart')
+      if (model.recoveryLocked === true) {
+        document.querySelector('.list-card').hidden = true
+        document.getElementById('safety-note').hidden = true
+        apply.hidden = true
+        recoveryOpen.hidden = false
+      }
+      const pluginCheckboxes = []
+      const issueCheckboxes = []
+      for (const group of Array.isArray(model.issueGroups) ? model.issueGroups : []) {
+        const item = document.createElement('li'); item.className = 'issue-group'
+        const label = document.createElement('label'); label.className = 'issue'
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = String(group.id); checkbox.dataset.issueIds = JSON.stringify(group.issueIds || [])
+        const main = document.createElement('span'); main.className = 'issue-main'
+        const title = document.createElement('span'); title.className = 'issue-title'
+        const name = document.createElement('span'); name.className = 'issue-name'; name.textContent = String(group.name)
+        const badge = document.createElement('span'); badge.className = 'issue-badge'; badge.textContent = String(group.severityLabel)
+        title.append(name, badge); main.appendChild(title)
+        const meta = document.createElement('div'); meta.className = 'issue-meta'; meta.textContent = [group.kindLabel, group.countLabel].filter(Boolean).join(' · '); main.appendChild(meta)
+        const action = document.createElement('div'); action.className = 'issue-action'; action.textContent = String(group.actionLabel || ''); main.appendChild(action)
+        label.append(checkbox, main); item.appendChild(label); list.appendChild(item); issueCheckboxes.push(checkbox)
+        const details = document.createElement('details'); details.className = 'issue-details'
+        const detailsSummary = document.createElement('summary'); detailsSummary.textContent = String(group.detailLabel || group.countLabel || '')
+        const findings = document.createElement('ul'); findings.className = 'findings'
+        for (const issue of Array.isArray(group.issues) ? group.issues : []) {
+          const finding = document.createElement('li'); finding.className = 'finding'
+          const findingName = document.createElement('div'); findingName.className = 'finding-name'; findingName.textContent = String(issue.packageName)
+          const findingDetail = document.createElement('div'); findingDetail.className = 'finding-detail'; findingDetail.textContent = [issue.kindLabel, issue.versionLabel, issue.detail].filter(Boolean).join(' · ')
+          finding.append(findingName, findingDetail); findings.appendChild(finding)
+        }
+        details.append(detailsSummary, findings); item.appendChild(details)
+      }
+      const pluginItems = Array.isArray(model.pluginItems)
+        ? model.pluginItems
+        : (Array.isArray(model.plugins) ? model.plugins : []).map((name) => ({ name }))
+      for (const plugin of pluginItems) {
+        const item = document.createElement('li')
+        const label = document.createElement('label'); label.className = 'plugin'
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = String(plugin.name)
+        const copy = document.createElement('span'); copy.className = 'plugin-copy'
+        const title = document.createElement('span'); title.className = 'plugin-title'
+        const name = document.createElement('span'); name.className = 'plugin-name'; name.textContent = String(plugin.name)
+        title.appendChild(name)
+        if (plugin.statusLabel) {
+          const status = document.createElement('span'); status.className = 'plugin-status'; status.textContent = String(plugin.statusLabel)
+          if (plugin.statusTone === 'warning') status.classList.add('warning')
+          title.appendChild(status)
+        }
+        const action = document.createElement('span'); action.className = 'plugin-action'; action.textContent = String(plugin.actionLabel || '')
+        copy.append(title, action)
+        label.append(checkbox, copy); item.appendChild(label); list.appendChild(item); pluginCheckboxes.push(checkbox)
+      }
+      const allCheckboxes = [...issueCheckboxes, ...pluginCheckboxes]
+      if (allCheckboxes.length === 0) empty.classList.add('visible')
+      const updateSelection = () => { apply.disabled = !allCheckboxes.some((checkbox) => checkbox.checked) }
+      for (const checkbox of allCheckboxes) checkbox.addEventListener('change', updateSelection)
+      document.getElementById('select-all').addEventListener('click', () => { const selected = allCheckboxes.every((checkbox) => checkbox.checked); for (const checkbox of allCheckboxes) checkbox.checked = !selected; updateSelection() })
+      apply.addEventListener('click', () => {
+        const plugins = pluginCheckboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value)
+        const issues = issueCheckboxes.filter((checkbox) => checkbox.checked).flatMap((checkbox) => {
+          try { return JSON.parse(checkbox.dataset.issueIds || '[]') } catch { return [] }
+        })
+        if (plugins.length === 0 && issues.length === 0) return
+        apply.disabled = true; apply.textContent = model.applyBusyLabel; agent.disabled = true; restart.disabled = true
+        void window.dshSafeMode.action('apply', { plugins, issues })
+      })
+      recoveryOpen.addEventListener('click', () => { recoveryOpen.disabled = true; void window.dshSafeMode.action('recovery-open', {}) })
+      agent.addEventListener('click', () => { agent.disabled = true; agent.textContent = model.agentBusyLabel; apply.disabled = true; restart.disabled = true; void window.dshSafeMode.action('agent', {}) })
+      restart.addEventListener('click', () => {
+        if (model.restartConfirm && !window.confirm(String(model.restartConfirm))) return
+        restart.disabled = true; restart.textContent = model.restartBusyLabel; apply.disabled = true; agent.disabled = true; void window.dshSafeMode.action('restart', {})
+      })
+      document.getElementById('quit').addEventListener('click', () => void window.dshSafeMode.action('quit', {}))
+    </script>
+  </body>
+</html>

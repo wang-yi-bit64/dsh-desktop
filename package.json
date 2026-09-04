@@ -1,0 +1,27 @@
+{
+  "name": "dsh-desktop-tauri",
+  "version": "0.1.0",
+  "description": "A Rust + Tauri 2.0 desktop shell for DeepSeek Harness.",
+  "private": true,
+  "type": "module",
+  "author": "DataElement",
+  "license": "MIT",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "tauri",
+    "rust",
+    "desktop",
+    "agent"
+  ],
+  "scripts": {
+    "prepare:harness": "node scripts/prepare-harness.mjs",
+    "dev": "npm run prepare:harness && cargo tauri dev",
+    "build": "npm run prepare:harness && cargo tauri build",
+    "tauri": "cargo tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "patch-package": "^8.0.1"
+  }
+}
