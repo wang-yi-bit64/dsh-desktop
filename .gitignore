@@ -26,6 +26,7 @@ Thumbs.db
 .dsh-edit-review.json
 .dsh-edit-review-archive.json
 /.workbuddy/
+.mimosa/
 
 # Local machine-specific linker/toolchain config (see .cargo/config.toml header)
 .cargo/
