@@ -59,7 +59,8 @@ jobs:
           set +e
           out=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1)
           code=$?
-          out=$(printf '%s' "$out" | grep -vE 'cargo:rerun-if-changed|^package.metadata' | tail -160)
+          # 只保留错误/告警相关行，避免被编译进度刷掉。
+          out=$(printf '%s' "$out" | grep -E 'error|warning:|cannot|aborting|-->|note:|help:|= |\^' | head -200)
           out=${out//$'\r'}
           out=${out//%/%25}
           out=${out//$'\n'/%0A}
