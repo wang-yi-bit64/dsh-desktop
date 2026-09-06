@@ -47,7 +47,15 @@ tokio = { version = "1", features = [
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2"
+# updater 的默认 `rustls-tls` 后端会拉入 `ring`（C 源码，编译需要 gcc/clang）。
+# 本机（见 .cargo/config.toml）刻意不装 C 工具链——纯 Rust 依赖树才能构建。
+# 改用 `native-tls`：Windows 上即 schannel（系统证书库，桌面应用更贴切），
+# 全链路零 C 依赖。若目标产物必须保留 rustls/ring，则需先安装 C 编译器。
+tauri-plugin-updater = { version = "2", default-features = false, features = [
+  "native-tls",
+  "system-proxy",
+  "zip",
+] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
