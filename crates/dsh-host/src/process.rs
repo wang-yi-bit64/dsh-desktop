@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 
 use crate::args::HarnessArgs;
+#[cfg(unix)]
+use crate::contracts::SWEEP_KILL_DELAY;
 use crate::contracts::SWEEP_REAP_DELAY;
 use crate::env::HarnessEnv;
 use crate::paths::Layout;
@@ -257,8 +259,6 @@ fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
 
 #[cfg(target_os = "linux")]
 fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
-    use std::os::unix::process::CommandExt;
-
     command.process_group(0);
     unsafe {
         command.pre_exec(|| {
@@ -274,7 +274,6 @@ fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
 
 #[cfg(target_os = "macos")]
 fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
-    use std::os::unix::process::CommandExt;
     // macOS 没有 PDEATHSIG 等价物（风险 R-7）：只能靠进程组 + 启动清扫。
     command.process_group(0);
     Ok(())
@@ -282,7 +281,6 @@ fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
-    use std::os::unix::process::CommandExt;
     command.process_group(0);
     Ok(())
 }

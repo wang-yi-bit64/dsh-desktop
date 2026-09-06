@@ -49,23 +49,19 @@ jobs:
         with:
           node-version: 20
 
+      # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
+      # tauri-build 的 build.rs 要求 bundle.resources 每个 glob 至少匹配一个文件，
+      # 而 src-tauri/resources/ 被 gitignore（全新 checkout 不存在）。这里用
+      # git 已跟踪的 build/ 静态资产搭一个最小资源树（不组装 300MB 运行时），
+      # 让 crate 能编译；真正打包仍由 build job 的 prepare:harness 负责。
+      - name: Stub src-tauri resources (compile-only)
+        run: node scripts/stub-tauri-resources.mjs
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        shell: bash
-        continue-on-error: true
-        run: |
-          set +e
-          out=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1)
-          code=$?
-          # 只保留错误/告警相关行，避免被编译进度刷掉。
-          out=$(printf '%s' "$out" | grep -E 'error|warning:|cannot|aborting|-->|note:|help:|= |\^' | head -200)
-          out=${out//$'\r'}
-          out=${out//%/%25}
-          out=${out//$'\n'/%0A}
-          echo "::error title=cargo-clippy-exit-$code::$out"
-          exit 0
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       # INV-6：主链路单测不依赖 GUI，也不依赖组装好的资源包。
       # T05：先跑无 GUI 两个 crate 的独立快门禁（快反馈；GUI 的 workspace
