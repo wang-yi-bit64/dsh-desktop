@@ -37,23 +37,8 @@ pub enum NavigationDecision {
 /// * `harness_port` — 当前 harness 实例的端口；`None` 表示尚无实例（此时
 ///   一律不放行回环地址，防止旧实例的 URL 残留）。
 ///
-/// # 示例
-///
-/// ```
-/// use url::Url;
-/// use dsh_desktop_lib::navigation::{decide_navigation, NavigationDecision};
-///
-/// let harness = Url::parse("http://127.0.0.1:4173/?token=x").unwrap();
-/// assert_eq!(decide_navigation(&harness, Some(4173)), NavigationDecision::Allow);
-/// // 端口不匹配的旧实例 URL：不放行。
-/// assert_eq!(decide_navigation(&harness, Some(4180)), NavigationDecision::External);
-/// // 外链：转交系统浏览器。
-/// let external = Url::parse("https://example.com").unwrap();
-/// assert_eq!(decide_navigation(&external, Some(4173)), NavigationDecision::External);
-/// // 本地静态页：放行。
-/// let local = Url::parse("http://tauri.localhost/error.html").unwrap();
-/// assert_eq!(decide_navigation(&local, None), NavigationDecision::Allow);
-/// ```
+/// 行为用例见文件末尾 `tests` 模块（`navigation` 是 crate 私有模块，
+/// 不对外暴露，因此不写 doctest 示例）。
 pub fn decide_navigation(url: &Url, harness_port: Option<u16>) -> NavigationDecision {
     // 本地静态页 origin。
     if is_local_page(url) {

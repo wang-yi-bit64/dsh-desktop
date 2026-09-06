@@ -398,7 +398,38 @@ pub fn process_belongs_to(pid: u32, resource_dir: &Path) -> bool {
             !resource.is_empty() && image.starts_with(&resource)
         }
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            return false;
+        };
+        let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
+        let resource = resource_dir.display().to_string();
+        !resource.is_empty() && cmdline.contains(&resource)
+    }
+    // macOS 没有 /proc；用 proc_pidpath 取进程镜像路径，语义与 Windows 分支
+    // 一致（镜像在 resource_dir 下即视为本应用），避免 macos 清扫恒 false
+    // 导致启动期误清本应用进程记录。
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::c_void;
+
+        let mut buffer = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let len = unsafe {
+            libc::proc_pidpath(
+                pid as libc::c_int,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer.len() as u32,
+            )
+        };
+        if len <= 0 {
+            return false;
+        }
+        let image = String::from_utf8_lossy(&buffer[..len as usize]);
+        let resource = resource_dir.display().to_string();
+        !resource.is_empty() && image.starts_with(&resource)
+    }
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
         let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
             return false;
