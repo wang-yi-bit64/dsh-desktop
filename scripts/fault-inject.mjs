@@ -289,7 +289,9 @@ async function scenarioPortInUse(resourceDir, dataDir) {
       // 默认 500ms 在 CLI 100ms 探测间隔下与「子进程退出先于日志泵置位」存在
       // 竞态（会把可重试的端口冲突误判成 ProcessExited → 退出码 8）。拉长到
       // 2s 让宿主稳定观察到 EADDRINUSE → 走换端口重试 → 三次耗尽退出码 7。
-      PORT_IN_USE_KEEPALIVE_MS: '2000'
+      // 墙钟几乎不受保活时长影响：wait_for_ready 判出 PortInUse 后宿主
+      // terminate 提前杀死仍在保活的 mock。
+      DSH_MOCK_PORT_IN_USE_MS: '2000'
     }
   )
   const { code, output } = await cli.exited

@@ -9,7 +9,9 @@ mod fixture;
 
 use std::time::Duration;
 
-use dsh_host::contracts::{EXIT_HARNESS_FAILED, EXIT_PORT_IN_USE, EXIT_READY_TIMEOUT};
+use dsh_host::contracts::{
+    EXIT_HARNESS_FAILED, EXIT_PORT_IN_USE, EXIT_READY_TIMEOUT, MAX_PORT_ATTEMPTS,
+};
 use dsh_host::launch::{LaunchEvent, LaunchOutcome};
 use dsh_host::process::is_process_alive;
 
@@ -164,7 +166,12 @@ async fn no_url_times_out_with_startup_timeout() {
     );
 }
 
-/// port-in-use 故障：EADDRINUSE → 快速失败 + 换端口重试耗尽 → PortInUse（C1 端口策略）。
+/// port-in-use 故障：EADDRINUSE → 快速失败 + 换端口重试**耗尽** → PortInUse（C1 端口策略）。
+///
+/// 架构师裁决（T05 偏差 1）：必须断言重试真实发生——只靠 exit 7 + 耗时无法区分
+/// 「耗尽 MAX_PORT_ATTEMPTS 次」与「重试循环被删 / MAX_PORT_ATTEMPTS 被误改后
+/// 只试 1 次就返回 exit 7」。因此用 `on_event` 对 `LaunchEvent::Spawned` 计数
+/// （lib 层事件，不数日志字符串）。
 #[tokio::test]
 async fn port_in_use_retries_then_fails_fast() {
     let Some(fx) = fixture() else {
@@ -172,15 +179,35 @@ async fn port_in_use_retries_then_fails_fast() {
         return;
     };
 
-    let env = fx.env_with(&[("DSH_MOCK_FAIL", "port-in-use")]);
+    let env = fx.env_with(&[
+        ("DSH_MOCK_FAIL", "port-in-use"),
+        // 把 mock 的 EADDRINUSE 保活时长从默认 500ms 拉到 2s：确保宿主日志泵在
+        // 探测循环里稳定置位 port_in_use（消除「子进程退出先于置位」竞态）。
+        // 保活时长几乎不增加墙钟——wait_for_ready 判出 PortInUse 后宿主
+        // terminate_process_tree 会提前杀死仍在保活的 mock，三次总耗时仍 ≪ 25s。
+        ("DSH_MOCK_PORT_IN_USE_MS", "2000"),
+    ]);
     let launcher = fx.launcher(Duration::from_secs(15));
     let started_at = std::time::Instant::now();
-    let error = match launcher.run(Some(&env), |_event| {}).await {
+    let mut spawned = 0usize;
+    let error = match launcher
+        .run(Some(&env), |event| {
+            if matches!(event, LaunchEvent::Spawned { .. }) {
+                spawned += 1;
+            }
+        })
+        .await
+    {
         Ok(_) => panic!("mock EADDRINUSE 时 run() 不应返回 Ok"),
         Err(error) => error,
     };
 
-    // 快速失败：远小于平台默认 120s 就绪超时（三连退避 + 每轮 500ms keepalive）。
+    // 重试真实发生：spawned 必须等于 MAX_PORT_ATTEMPTS（== 3）。
+    assert_eq!(
+        spawned, MAX_PORT_ATTEMPTS,
+        "应真实重试 MAX_PORT_ATTEMPTS 次后失败（spawned={spawned}）"
+    );
+    // 快速失败：远小于平台默认 120s 就绪超时。
     assert!(
         started_at.elapsed() < Duration::from_secs(25),
         "EADDRINUSE 应快速失败而非干等 120s"

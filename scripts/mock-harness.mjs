@@ -26,7 +26,7 @@
  * 环境变量：
  *   DSH_MOCK_DELAY / DSH_MOCK_FAIL / DSH_MOCK_PORT
  *   DSH_MOCK_AFTER_READY_MS    after-ready 崩溃延迟（默认 5000ms，测试可压短）
- *   PORT_IN_USE_KEEPALIVE_MS   port-in-use 打印 EADDRINUSE 后的存活时长
+ *   DSH_MOCK_PORT_IN_USE_MS    port-in-use 打印 EADDRINUSE 后的存活时长
  *                              （默认 500ms，保证宿主日志泵稳定观察到该行，
  *                              避免「打印后立即退出」被竞态误判成 ProcessExited）
  */
@@ -117,7 +117,7 @@ async function main() {
     )
     // 打印 EADDRINUSE 后**保持存活一小段**再退出：让宿主的日志泵稳定观察到
     // 该行，从而走「换端口重试」而非被竞态误判成 ProcessExited。
-    const keepalive = Number(process.env.PORT_IN_USE_KEEPALIVE_MS ?? '500')
+    const keepalive = Number(process.env.DSH_MOCK_PORT_IN_USE_MS ?? '500')
     await sleep(keepalive)
     process.exit(9)
   }

@@ -29,7 +29,7 @@
 > * 根因修复：CLI/GUI 的 mock 路径此前经 `std::fs::canonicalize` 变成
 >   `\\?\` verbatim 路径，node 的 CJS loader 无法解析主入口（`EISDIR lstat 'D:'`）。
 >   新增 `dsh_host::paths::canonicalize_plain` 在规范化后剥掉 verbatim 前缀。
-> * D 场景注入 `PORT_IN_USE_KEEPALIVE_MS=2000`：CLI 默认 100ms 探测间隔下，
+> * D 场景注入 `DSH_MOCK_PORT_IN_USE_MS=2000`：CLI 默认 100ms 探测间隔下，
 >   500ms 存活窗存在「退出先于日志泵置位」竞态，会误判成 ProcessExited（退出码 8）。
 
 | 场景 | 预期 | Windows 实测 |
@@ -40,6 +40,16 @@
 | D mock EADDRINUSE | 快速失败（远小于 120s），换端口重试 3 次 | ✅ PASS（约 5s 内 3 次换端口重试后退出码 7，`port … in use after 3 attempt(s)`） |
 | E mock after-ready（就绪 5s 后崩溃） | exit watcher 捕获 → 失败归因 | ✅ PASS（`[cli] harness exited: ExitStatus(7)`，宿主退出码 0，无孤儿） |
 | F pidfile 清扫 | 死记录清理、外部 node 不误杀、自家进程被杀 | ✅ PASS（F1 死记录清理 exit 0；F2 外部 node 不误杀 exit 1 且进程存活；F3 自家进程被终止 exit 0） |
+
+### 豁免记录 T05 / stop_leaves_no_orphan
+
+规格原句「断言 `is_process_alive(pid) == false`」在 Windows 上不可作立即断言：
+`OpenProcess` 在目标进程已退出但 tokio `Child` 句柄尚未被调度 drop 的窗口内
+仍会成功，立即 liveness 断言存在确定性 flake。本项为【实现形态豁免】，非
+【语义豁免】，停止语义证据链改为：(a) exit watcher 观察到子进程结束
+（`code.is_some() || !success`）——`child.wait()` 返回即证明进程已退出并 reap；
+(b) INV-3 进程树级孤儿保证由 `scripts/fault-inject.mjs` 场景 A/B/E2 的
+`findOrphans` 权威门禁。
 
 ## 3. GUI 层手工清单（`cargo tauri dev`）
 
