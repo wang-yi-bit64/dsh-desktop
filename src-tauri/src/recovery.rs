@@ -5,6 +5,9 @@
 //! latest launch attempt's stderr for loader failures, duplicate routes, slot
 //! conflicts and pending services, then offers a targeted removal.
 
+// 阶段 5 预留：恢复/安全模式整套检测目前未被调用，待阶段 5 接线时启用。
+#![allow(dead_code)]
+
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 

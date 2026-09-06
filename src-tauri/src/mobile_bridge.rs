@@ -5,6 +5,10 @@
 //! LAN port, pairs phones with a short-lived token + desktop approval, and
 //! forwards an allowlist of RPC methods to the Harness session.
 
+// 阶段 4 预留：LAN 手机桥除 `snapshot()`（mobile_status 命令）外尚未接线，
+// 其余移植自原仓库的函数/常量待阶段 4 完整启用。
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::Mutex;
 
 const PAIRING_TTL_MS: u128 = 5 * 60 * 1000;

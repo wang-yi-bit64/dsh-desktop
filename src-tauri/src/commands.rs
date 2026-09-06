@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use tauri::{State, WebviewWindow};
+use tauri::{Manager, State, WebviewWindow};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::navigation::is_local_page;

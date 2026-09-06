@@ -23,7 +23,7 @@ mod window;
 
 use std::sync::Arc;
 
-use tauri::{Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 use navigation::{decide_navigation, NavigationDecision};
@@ -72,7 +72,6 @@ pub fn run() {
             });
 
             // 主窗口：代码创建，以便挂导航白名单（配置文件创建的窗口无法补挂）。
-            let nav_handle = handle.clone();
             WebviewWindowBuilder::new(
                 &handle,
                 window::MAIN_WINDOW,
@@ -84,42 +83,50 @@ pub fn run() {
             .center()
             .resizable(true)
             // 任务 1.4：导航白名单——只放行本地静态页与当前 harness 实例。
-            .on_navigation(move |url| {
-                let port = nav_handle
-                    .try_state::<Arc<AppState>>()
-                    .and_then(|state| state.supervisor.harness_port());
-                match decide_navigation(url, port) {
-                    NavigationDecision::Allow => true,
-                    NavigationDecision::External => {
-                        // 非可信 http(s)：转交系统浏览器，窗口不放行。
-                        let opener = nav_handle.opener();
-                        let _ = opener.open_url(url.to_string(), None::<&str>);
-                        false
+            .on_navigation({
+                let nav_handle = handle.clone();
+                move |url| {
+                    let port = nav_handle
+                        .try_state::<Arc<AppState>>()
+                        .and_then(|state| state.supervisor.harness_port());
+                    match decide_navigation(url, port) {
+                        NavigationDecision::Allow => true,
+                        NavigationDecision::External => {
+                            // 非可信 http(s)：转交系统浏览器，窗口不放行。
+                            let opener = nav_handle.opener();
+                            let _ = opener.open_url(url.to_string(), None::<&str>);
+                            false
+                        }
+                        NavigationDecision::Block => false,
                     }
-                    NavigationDecision::Block => false,
                 }
             })
             // §2.2 非目标：不做多窗口。window.open / target=_blank 一律拦截，
             // 外部链接交给系统浏览器。
-            .on_new_window(move |url, _features| {
-                let port = nav_handle
-                    .try_state::<Arc<AppState>>()
-                    .and_then(|state| state.supervisor.harness_port());
-                if decide_navigation(&url, port) == NavigationDecision::External {
-                    let opener = nav_handle.opener();
-                    let _ = opener.open_url(url.to_string(), None::<&str>);
+            .on_new_window({
+                let nav_handle = handle.clone();
+                move |url, _features| {
+                    let port = nav_handle
+                        .try_state::<Arc<AppState>>()
+                        .and_then(|state| state.supervisor.harness_port());
+                    if decide_navigation(&url, port) == NavigationDecision::External {
+                        let opener = nav_handle.opener();
+                        let _ = opener.open_url(url.to_string(), None::<&str>);
+                    }
+                    tauri::webview::NewWindowResponse::Deny
                 }
-                tauri::NewWindowResponse::Deny
             })
             .build()?;
 
             // 更新管理器（阶段 6 完整接线；当前为启动 + 6h 轮询）。
             let update_manager = Arc::new(update::UpdateManager::new(handle.clone()));
             {
-                let state = handle.state::<Arc<AppState>>();
+                let app_handle = handle.clone();
                 let manager = Arc::clone(&update_manager);
                 tauri::async_runtime::spawn(async move {
-                    *state.updates.lock().await = Some(manager.clone());
+                    if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                        *state.updates.lock().await = Some(manager.clone());
+                    }
                     manager.start();
                 });
             }

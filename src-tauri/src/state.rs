@@ -117,6 +117,7 @@ impl HarnessSupervisor {
     }
 
     /// 只读布局（命令层打开日志等用）。
+    #[allow(dead_code)] // 命令层直接读 state.layout 字段；此访问器留给后续阶段。
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
@@ -132,6 +133,7 @@ impl HarnessSupervisor {
     }
 
     /// 是否处于 Ready。
+    #[allow(dead_code)] // 阶段 3 UI 逻辑预留。
     pub fn is_ready(&self) -> bool {
         matches!(self.inner.lock().unwrap().phase, HarnessPhase::Ready { .. })
     }
@@ -236,6 +238,7 @@ impl HarnessSupervisor {
     }
 
     /// 清空日志（重启前调用，避免上一次的日志混进本次归因）。
+    #[allow(dead_code)] // 重启路径当前走状态机内部清理；此方法留给后续阶段。
     pub fn clear_logs(&self) {
         self.inner.lock().unwrap().logs.clear();
     }
@@ -304,9 +307,10 @@ impl HarnessSupervisor {
         if let Some(webview) = window::main_window(&self.app) {
             let removed = crate::cookies::clear_auth_cookies(&webview, AUTH_COOKIE_PREFIX);
             if let Ok(removed) = removed {
-                if removed > 0 {
+                if removed.removed > 0 {
                     self.inner.lock().unwrap().push_desktop(format!(
-                        "cleared {removed} stale {AUTH_COOKIE_PREFIX}* cookies"
+                        "cleared {} stale {AUTH_COOKIE_PREFIX}* cookies",
+                        removed.removed
                     ));
                 }
             }
@@ -348,13 +352,10 @@ impl HarnessSupervisor {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.running = None;
-            inner.push(LogLine::new(
-                LogSource::Desktop,
-                match code {
-                    Some(code) => format!("harness exited after ready (exit code {code})"),
-                    None => "harness exited after ready".to_string(),
-                },
-            ));
+            inner.push_desktop(match code {
+                Some(code) => format!("harness exited after ready (exit code {code})"),
+                None => "harness exited after ready".to_string(),
+            });
         }
         let fallback = FailureCause::UnexpectedExit { code };
         let cause = {
@@ -398,6 +399,7 @@ pub struct AppState {
     /// 更新管理器（阶段 6 完整接线）。
     pub updates: Arc<tokio::sync::Mutex<Option<Arc<crate::update::UpdateManager>>>>,
     /// 窗口当前是否在展示 harness UI。
+    #[allow(dead_code)] // 前端 show/hide 逻辑接线时启用（阶段 3）。
     pub harness_loaded: tokio::sync::Mutex<bool>,
 }
 
@@ -418,6 +420,7 @@ impl AppState {
     }
 
     /// 从 Tauri 状态取回（供命令守卫后的各命令使用）。
+    #[allow(dead_code)] // 阶段 3 命令面扩展预留。
     pub fn from_app<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<Self>> {
         app.try_state::<Arc<AppState>>()
             .map(|state| Arc::clone(&state))

@@ -78,23 +78,33 @@ fn clear_cookies_sync(
 ) -> Result<CookieCleanup, String> {
     use std::sync::mpsc;
 
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CookieList;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2CookieList, ICoreWebView2_19,
+    };
     use webview2_com::{take_pwstr, CoTaskMemPWSTR, GetCookiesCompletedHandler};
+    use windows::core::{Interface as _, PWSTR};
 
     let controller = platform_webview.controller();
     let core = unsafe { controller.CoreWebView2() }
         .map_err(|error| format!("CoreWebView2 unavailable: {error}"))?;
+    // webview2-com 0.38 的绑定把 CookieManager 放在 ICoreWebView2_19 上（基础
+    // ICoreWebView2 没有）；用 QueryInterface 升到该子接口再取管理器。
+    let core: ICoreWebView2_19 = core
+        .cast()
+        .map_err(|error| format!("ICoreWebView2_19 unavailable: {error}"))?;
     let manager = unsafe { core.CookieManager() }
         .map_err(|error| format!("CookieManager unavailable: {error}"))?;
 
     // GetCookies 是异步 COM 调用；webview2-com 的 completed-callback 封装会在
-    // 主线程泵消息直到完成回调兑现。
+    // 主线程泵消息直到完成回调兑现。GetCookies 闭包搬走一份 manager，
+    // 循环删除用剩下的这份。
     let (result_tx, result_rx) = mpsc::channel::<Option<ICoreWebView2CookieList>>();
     let uri = CoTaskMemPWSTR::from("http://127.0.0.1");
+    let fetch_manager = manager.clone();
     unsafe {
         GetCookiesCompletedHandler::wait_for_async_operation(
             Box::new(move |handler| {
-                manager
+                fetch_manager
                     .GetCookies(*uri.as_ref().as_pcwstr(), &handler)
                     .map_err(webview2_com::Error::WindowsError)
             }),
@@ -114,7 +124,8 @@ fn clear_cookies_sync(
         .recv()
         .map_err(|_| "cookie list was not delivered".to_string())?
         .ok_or_else(|| "GetCookies reported a failure".to_string())?;
-    let count = unsafe { cookies.Count() }
+    let mut count = 0u32;
+    unsafe { cookies.Count(&mut count) }
         .map_err(|error| format!("could not read cookie count: {error}"))?;
 
     let mut removed = 0usize;
@@ -122,11 +133,13 @@ fn clear_cookies_sync(
         let Ok(cookie) = (unsafe { cookies.GetValueAtIndex(index) }) else {
             continue;
         };
-        let name = unsafe { cookie.Name() }.map(take_pwstr).unwrap_or_default();
-        if name.starts_with(prefix) {
-            if unsafe { manager.DeleteCookie(&cookie) }.is_ok() {
-                removed += 1;
-            }
+        let mut name_buf = PWSTR::null();
+        if unsafe { cookie.Name(&mut name_buf) }.is_err() {
+            continue;
+        }
+        let name = take_pwstr(name_buf);
+        if name.starts_with(prefix) && unsafe { manager.DeleteCookie(&cookie) }.is_ok() {
+            removed += 1;
         }
     }
 
@@ -146,7 +159,7 @@ mod tests {
             removed: 3,
             bridged: true,
         };
-        let json = serde_json::to_value(&report).unwrap();
+        let json = serde_json::to_value(report).unwrap();
         assert_eq!(json["removed"], 3);
         assert_eq!(json["bridged"], true);
     }

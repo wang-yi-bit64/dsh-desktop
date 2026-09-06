@@ -43,6 +43,7 @@ pub fn show_error_page<R: Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 /// 显示插件恢复页（阶段 5）。
+#[allow(dead_code)] // 阶段 5：安全模式/恢复入口接线时启用。
 pub fn show_recovery_page<R: Runtime>(app: &tauri::AppHandle<R>, plugins: &[String]) {
     let Some(webview) = main_window(app) else {
         return;
@@ -53,6 +54,7 @@ pub fn show_recovery_page<R: Runtime>(app: &tauri::AppHandle<R>, plugins: &[Stri
 }
 
 /// 显示安全模式页（阶段 5）。
+#[allow(dead_code)] // 阶段 5：安全模式入口接线时启用。
 pub fn show_safe_mode_page<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(webview) = main_window(app) else {
         return;
@@ -60,6 +62,7 @@ pub fn show_safe_mode_page<R: Runtime>(app: &tauri::AppHandle<R>) {
     let _ = webview.navigate(local_page("safe-mode.html"));
 }
 
+#[allow(dead_code)] // 仅阶段 5 的恢复/安全模式页使用。
 fn urlencoding(input: &str) -> String {
     input
         .bytes()

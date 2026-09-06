@@ -42,3 +42,7 @@ libc.workspace = true
 # Cookie 清理需要与 wry 相同的 WebView2 COM 绑定版本（见 src/cookies.rs）。
 webview2-com = "0.38"
 windows-sys.workspace = true
+# cookies.rs 需要命名 windows::core 的 PWSTR 并通过 Interface::cast 把
+# ICoreWebView2 升到 ICoreWebView2_19（webview2-com 0.38 依赖 windows 0.61，
+# 该版本已存在解析中，仅需显式声明以便直接 use）。
+windows = "0.61"
