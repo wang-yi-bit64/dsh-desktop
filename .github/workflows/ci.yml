@@ -124,7 +124,7 @@ jobs:
           fi
 
       # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
-      # 资源。用 cargo tauri build 直跑而非 tauri-action：tauri-action 在无
-      # release 上传配置时三平台一致以 exit 101 失败，直跑则全部通过。
+      # 资源。直跑 npm run tauri build（package.json 的 tauri script 指向
+      # @tauri-apps/cli 的 tauri 二进制，不需 cargo 子命令）。
       - name: Build installers
         run: npm run tauri build
