@@ -58,7 +58,7 @@ jobs:
       # INV-6：主链路单测不依赖 GUI，也不依赖组装好的资源包。
       # T05：先跑无 GUI 两个 crate 的独立快门禁（快反馈；GUI 的 workspace
       # 测试依赖 tauri-build / 资源 glob，慢且偶发环境问题）。
-      - name: cargo test (headless fast gate: dsh-host + dsh-host-cli)
+      - name: "cargo test (headless fast gate: dsh-host + dsh-host-cli)"
         run: cargo test -p dsh-host -p dsh-host-cli
 
       - name: cargo test
