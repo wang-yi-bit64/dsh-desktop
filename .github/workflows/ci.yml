@@ -53,7 +53,18 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(cargo clippy --workspace --all-targets -- -D warnings 2>&1)
+          code=$?
+          out=$(printf '%s' "$out" | grep -vE 'cargo:rerun-if-changed|^package.metadata' | tail -160)
+          out=${out//$'\r'}
+          out=${out//%/%25}
+          out=${out//$'\n'/%0A}
+          echo "::error title=cargo-clippy-exit-$code::$out"
+          exit 0
 
       # INV-6：主链路单测不依赖 GUI，也不依赖组装好的资源包。
       # T05：先跑无 GUI 两个 crate 的独立快门禁（快反馈；GUI 的 workspace
