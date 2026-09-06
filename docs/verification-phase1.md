@@ -21,14 +21,25 @@
 
 ## 2. 故障注入（`node scripts/fault-inject.mjs`，dsh-host-cli + mock-harness）
 
+> Windows 实测于 T05 修正后：`fault-inject.mjs` 10/10 PASS（退出码 0）。
+> 修正摘要：
+> * E5：mock 资源目录的 node 二进制改自 `process.execPath`（不再依赖已删除的
+>   `src-tauri/resources/node` 占位）。
+> * E6：正常退出场景改为跟踪 CLI 子进程 PID 再外部终止。
+> * 根因修复：CLI/GUI 的 mock 路径此前经 `std::fs::canonicalize` 变成
+>   `\\?\` verbatim 路径，node 的 CJS loader 无法解析主入口（`EISDIR lstat 'D:'`）。
+>   新增 `dsh_host::paths::canonicalize_plain` 在规范化后剥掉 verbatim 前缀。
+> * D 场景注入 `PORT_IN_USE_KEEPALIVE_MS=2000`：CLI 默认 100ms 探测间隔下，
+>   500ms 存活窗存在「退出先于日志泵置位」竞态，会误判成 ProcessExited（退出码 8）。
+
 | 场景 | 预期 | Windows 实测 |
 |---|---|---|
-| A 正常退出 | 子进程被回收，无孤儿 | _待跑_ |
-| B 强杀宿主进程（taskkill /T /F ≈ kill -9） | Job Object 内核兜底，无孤儿 | _待跑_ |
-| C mock startup 失败 | 快速失败 + `DSH entry failed` 归因 | _待跑_ |
-| D mock EADDRINUSE | 快速失败（远小于 120s），换端口重试 3 次 | _待跑_ |
-| E mock after-ready（就绪 5s 后崩溃） | exit watcher 捕获 → 失败归因 | _待跑_ |
-| F pidfile 清扫 | 死记录清理、外部 node 不误杀 | _待跑_ |
+| A 正常退出 | 子进程被回收，无孤儿 | ✅ PASS（Stop-Process 宿主 → Job Object kill-on-close 回收 mock，`findOrphans` 为空） |
+| B 强杀宿主进程（taskkill /T /F ≈ kill -9） | Job Object 内核兜底，无孤儿 | ✅ PASS（taskkill /T /F 后无孤儿） |
+| C mock startup 失败 | 快速失败 + `DSH entry failed` 归因 | ✅ PASS（退出码 8；归因 DshEntryFailed，CLI 文案「Harness 入口加载失败」） |
+| D mock EADDRINUSE | 快速失败（远小于 120s），换端口重试 3 次 | ✅ PASS（约 5s 内 3 次换端口重试后退出码 7，`port … in use after 3 attempt(s)`） |
+| E mock after-ready（就绪 5s 后崩溃） | exit watcher 捕获 → 失败归因 | ✅ PASS（`[cli] harness exited: ExitStatus(7)`，宿主退出码 0，无孤儿） |
+| F pidfile 清扫 | 死记录清理、外部 node 不误杀、自家进程被杀 | ✅ PASS（F1 死记录清理 exit 0；F2 外部 node 不误杀 exit 1 且进程存活；F3 自家进程被终止 exit 0） |
 
 ## 3. GUI 层手工清单（`cargo tauri dev`）
 

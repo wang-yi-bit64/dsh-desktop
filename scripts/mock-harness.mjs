@@ -25,6 +25,10 @@
  *
  * 环境变量：
  *   DSH_MOCK_DELAY / DSH_MOCK_FAIL / DSH_MOCK_PORT
+ *   DSH_MOCK_AFTER_READY_MS    after-ready 崩溃延迟（默认 5000ms，测试可压短）
+ *   PORT_IN_USE_KEEPALIVE_MS   port-in-use 打印 EADDRINUSE 后的存活时长
+ *                              （默认 500ms，保证宿主日志泵稳定观察到该行，
+ *                              避免「打印后立即退出」被竞态误判成 ProcessExited）
  */
 
 import { createServer } from 'node:http'
@@ -50,6 +54,13 @@ function diagnostics() {
     `[arness-node] runtime node=${process.version} platform=${process.platform} arch=${process.arch}`
   )
   console.log(`[arness-node] cwd=${process.cwd()}`)
+  // T05：把真实 argv 提前打到 diagnostics，排障 / 集成测试能直接核对
+  // 「宿主到底传了什么」。
+  console.log(`[harness-node] argv=${JSON.stringify(args)}`)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function page(token) {
@@ -104,6 +115,10 @@ async function main() {
     console.error(
       `Error: listen EADDRINUSE: address already in use ${HOST}:${port || 4173}`
     )
+    // 打印 EADDRINUSE 后**保持存活一小段**再退出：让宿主的日志泵稳定观察到
+    // 该行，从而走「换端口重试」而非被竞态误判成 ProcessExited。
+    const keepalive = Number(process.env.PORT_IN_USE_KEEPALIVE_MS ?? '500')
+    await sleep(keepalive)
     process.exit(9)
   }
 
@@ -119,16 +134,17 @@ async function main() {
   const server = await startServer(token, port)
   const actualPort = server.address().port
 
-  await new Promise((resolve) => setTimeout(resolve, delay))
+  await sleep(delay)
 
   // C3：正则 `\bdsh web:\s*(\S+)` 的匹配目标。
   console.log(`dsh web: http://${HOST}:${actualPort}/?token=${token}`)
 
   if (fail === 'after-ready') {
+    const crashDelay = Number(process.env.DSH_MOCK_AFTER_READY_MS ?? '5000')
     setTimeout(() => {
       console.error('uncaught exception: mock crash after ready')
       process.exit(7)
-    }, 5000)
+    }, crashDelay)
   }
 }
 
