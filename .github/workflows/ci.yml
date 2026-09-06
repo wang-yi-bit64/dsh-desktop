@@ -67,32 +67,10 @@ jobs:
       # T05：先跑无 GUI 两个 crate 的独立快门禁（快反馈；GUI 的 workspace
       # 测试依赖 tauri-build / 资源 glob，慢且偶发环境问题）。
       - name: "cargo test (headless fast gate: dsh-host + dsh-host-cli)"
-        shell: bash
-        continue-on-error: true
-        run: |
-          set +e
-          out=$(cargo test -p dsh-host -p dsh-host-cli 2>&1)
-          code=$?
-          out=$(printf '%s' "$out" | grep -E 'panicked|FAILED|failures:|---- |assert|error|test result|thread|left|right|-->|location' | head -120)
-          out=${out//$'\r'}
-          out=${out//%/%25}
-          out=${out//$'\n'/%0A}
-          echo "::error title=headless-test-exit-$code::$out"
-          exit 0
+        run: cargo test -p dsh-host -p dsh-host-cli
 
       - name: cargo test
-        shell: bash
-        continue-on-error: true
-        run: |
-          set +e
-          out=$(cargo test --workspace 2>&1)
-          code=$?
-          out=$(printf '%s' "$out" | grep -E 'panicked|FAILED|failures:|---- |assert|error|test result|thread|left|right|-->|location|status:' | head -160)
-          out=${out//$'\r'}
-          out=${out//%/%25}
-          out=${out//$'\n'/%0A}
-          echo "::error title=workspace-test-exit-$code::$out"
-          exit 0
+        run: cargo test --workspace
 
   build:
     name: ${{ matrix.os }} / bundle
@@ -145,16 +123,8 @@ jobs:
             ./src-tauri/resources/node/node --version
           fi
 
-      - name: Build bundle (capture diagnostics)
-        shell: bash
-        continue-on-error: true
-        run: |
-          set +e
-          out=$(npm run tauri build 2>&1)
-          code=$?
-          out=$(printf '%s' "$out" | grep -iE 'error|warning: |cannot|aborting|-->|note:|help:|= |\^|panic|failed|exit code|status|thread' | head -200)
-          out=${out//$'\r'}
-          out=${out//%/%25}
-          out=${out//$'\n'/%0A}
-          echo "::error title=tauri-build-exit-$code::$out"
-          exit 0
+      # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
+      # 资源。用 cargo tauri build 直跑而非 tauri-action：tauri-action 在无
+      # release 上传配置时三平台一致以 exit 101 失败，直跑则全部通过。
+      - name: Build installers
+        run: npm run tauri build
