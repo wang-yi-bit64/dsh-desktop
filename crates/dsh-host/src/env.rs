@@ -121,11 +121,18 @@ impl HarnessEnv {
 ///
 /// # 示例
 ///
+/// 合并顺序与去重规则是 Windows 专属（machine/user PATH、`;` 分隔、
+/// 大小写不敏感），故示例只在 Windows 上断言。
+///
 /// ```
 /// use dsh_host::env::merge_path;
 ///
-/// let merged = merge_path(Some("C:\\Windows;C:\\Bin"), Some("C:\\Bin;C:\\Users\\me"), None);
-/// assert_eq!(merged, "C:\\Windows;C:\\Bin;C:\\Users\\me");
+/// #[cfg(windows)]
+/// {
+///     let merged =
+///         merge_path(Some("C:\\Windows;C:\\Bin"), Some("C:\\Bin;C:\\Users\\me"), None);
+///     assert_eq!(merged, "C:\\Windows;C:\\Bin;C:\\Users\\me");
+/// }
 /// ```
 pub fn merge_path(machine: Option<&str>, user: Option<&str>, inherited: Option<&str>) -> String {
     let separator = path_separator();
@@ -626,7 +633,11 @@ mod tests {
         assert!(merged.contains("/extra/bin"), "覆盖项没进去：{merged}");
     }
 
+    /// Windows PATH 合并：machine 优先 + `;` 分隔 + 精确去重。该语义是
+    /// Windows 专属（machine/user PATH、大小写不敏感），POSIX 上分隔符是
+    /// `:` 且无 machine/user 概念，故整组用例仅 Windows 编译运行。
     #[test]
+    #[cfg(windows)]
     fn merge_path_puts_machine_first_and_dedupes() {
         let merged = merge_path(
             Some("C:\\Windows;C:\\Bin"),
@@ -637,18 +648,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn merge_path_is_case_insensitive_on_windows() {
         let merged = merge_path(
             Some("C:\\Windows"),
             Some("c:\\windows"),
             Some("C:\\WINDOWS"),
         );
-        if cfg!(windows) {
-            assert_eq!(merged, "C:\\Windows");
-        } else {
-            // 非 Windows 平台精确去重，三段都保留。
-            assert_eq!(merged, "C:\\Windows:c:\\windows:C:\\WINDOWS");
-        }
+        assert_eq!(merged, "C:\\Windows");
     }
 
     #[test]

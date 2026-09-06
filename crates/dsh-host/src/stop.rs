@@ -192,6 +192,22 @@ mod tests {
             eprintln!("[skip] 未找到 node，跳过停止语义测试");
             return;
         };
+
+        // 先等子进程自行退出（process.exit(7)），再交给 stop_child 观察退出码。
+        // 不等待直接 stop_child 会与 stop_child 内部的 SIGTERM 竞争：unix 上若
+        // 在 node 退出前发信号，ExitStatus 报信号终止（code 为 None）而非 7。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node 未在超时内自行退出"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
         let outcome = stop_child(&mut child, crate::contracts::GRACEFUL_STOP_TIMEOUT).await;
         assert_eq!(outcome, StopOutcome::Exited(Some(7)));
     }

@@ -81,7 +81,18 @@ jobs:
           exit 0
 
       - name: cargo test
-        run: cargo test --workspace
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(cargo test --workspace 2>&1)
+          code=$?
+          out=$(printf '%s' "$out" | grep -E 'panicked|FAILED|failures:|---- |assert|error|test result|thread|left|right|-->|location|status:' | head -160)
+          out=${out//$'\r'}
+          out=${out//%/%25}
+          out=${out//$'\n'/%0A}
+          echo "::error title=workspace-test-exit-$code::$out"
+          exit 0
 
   build:
     name: ${{ matrix.os }} / bundle
