@@ -1,0 +1,55 @@
+sequenceDiagram
+    autonumber
+    participant CLI as dsh-host-cli::start
+    participant L as Launcher
+    participant A as HarnessArgs
+    participant P as process
+    participant E as env
+    participant Pump as line pumps (stdout/stderr)
+    participant R as readiness
+    participant LF as LogFile / AppLog
+
+    CLI->>CLI: clap 解析（-- 之后的 dsh_args 原样收集）
+    CLI->>L: Launcher::new(layout, cfg).with_extra(dsh_args)
+    CLI->>L: run(shell, on_event)
+    L->>L: ensure_dirs() + missing_resources() 校验
+    L->>P: sweep_stale_process(&layout)
+    L->>LF: LogFile::open(log_path) + AppLog::open(app_log_path)
+
+    loop 每次端口尝试（最多 MAX_PORT_ATTEMPTS）
+        L->>L: port = reserve_port() 或 0（Ephemeral）
+        L->>A: HarnessArgs::default_for(layout, port) + extra
+        A-->>L: dsh_arguments() / node_arguments()
+        L->>E: harness_env_with_overrides(layout, shell, path, overrides)
+        E-->>L: HarnessEnv
+        L->>P: spawn_with_args(layout, env, args)
+        P-->>L: HarnessProcess
+        L->>P: write_pid_file(PidRecord)
+        L->>Pump: spawn(stdout) + spawn(stderr) —— 两者都持有 LogFile
+        L->>R: wait_for_ready(cfg, probe, alive, token_known, port_in_use)
+
+        loop 轮询（间隔 cfg.interval）
+            Pump->>Pump: sanitize_line → parse_launch_line
+            Pump->>LF: append_line("[stdout|stderr] …")
+            Pump->>L: AtomicBool 更新 token_known / port_in_use
+            R->>R: probe_status(host, port, cfg.probe_timeout)
+            R-->>L: Some(status)
+        end
+
+        alt Ready（连续稳定窗内健康）
+            R-->>L: ReadinessOutcome::Ready
+            L->>L: 不再 abort 泵，产出 live_logs
+            L-->>CLI: Ok(RunningHarness)
+            CLI->>CLI: 打印 endpoint / --print-argv 快照；exit 0
+        else PortInUse 且未耗尽重试
+            R-->>L: ReadinessOutcome::PortInUse
+            L->>P: terminate_process_tree(pid)
+            L->>L: sleep(PORT_RETRY_BACKOFF)
+        else Timeout / ProcessExited / 重试耗尽
+            R-->>L: 其它 outcome
+            L->>P: terminate_process_tree(pid) + wait_for_exit(EXIT_REAP_TIMEOUT)
+            L->>L: classify(logs.latest_attempt(), fallback) → FailureCause
+            L-->>CLI: Err(HostError::…)
+            CLI->>CLI: eprintln + print_tail + exit(err.exit_code())
+        end
+    end

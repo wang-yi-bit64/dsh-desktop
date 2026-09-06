@@ -1,0 +1,147 @@
+classDiagram
+    class Layout {
+        +PathBuf resource_dir
+        +PathBuf app_data_dir
+        +PathBuf node_executable
+        +PathBuf node_entry
+        +PathBuf dsh_entry
+        +PathBuf patch
+        +PathBuf manifest
+        +PathBuf dsh_home
+        +PathBuf launch_root
+        +PathBuf log_path
+        +PathBuf app_log_path
+        +PathBuf pid_file
+        +resolve(resource_dir, app_data_dir) Layout
+        +ensure_dirs() HostResult~()~
+        +missing_resources() Vec~(&str, &Path)~
+        +ensure_exec_bits() HostResult~()~
+    }
+
+    class HarnessArgs {
+        +Layout layout
+        +u16 port
+        +String host
+        +bool no_open
+        +Vec~String~ extra
+        +default_for(layout, port) HarnessArgs
+        +dsh_arguments() Vec~String~
+        +node_arguments() Vec~String~
+        +argv_snapshot() ArgvSnapshot
+    }
+
+    class HarnessEnv {
+        -BTreeMap~String,String~ entries
+        +get(name) Option~&String~
+        +set(name, value)
+        +path() Option~&String~
+        +as_pairs() Vec~(&str,&str)~
+    }
+
+    class LogLine {
+        +LogSource source
+        +String text
+        +new(source, text) LogLine
+        +parse(text) Option~LogLine~
+    }
+
+    class LogRing {
+        +push(line)
+        +push_desktop(text)
+        +push_with(level, source, text)
+        +tail(count) Vec~String~
+        +latest_attempt() Vec~&LogLine~
+    }
+
+    class LogFile {
+        +open(path) io::Result~LogFile~
+        +append_line(line) io::Result~()~
+        +close()
+    }
+
+    class AppLog {
+        +open(path) Option~AppLog~
+        +log(level, text)
+    }
+
+    class FailureCause {
+        <<enum>>
+        +kind() &str
+        +is_plugin_fault() bool
+        +is_retryable() bool
+    }
+
+    class HostError {
+        <<enum>>
+        +exit_code() i32
+        +to_failure_cause() FailureCause
+        +missing(name, path) HostError
+    }
+
+    class HarnessProcess {
+        +id() Option~u32~
+        +try_wait() io::Result~Option~ExitStatus~~
+        +wait() io::Result~ExitStatus~
+        +into_parts() HarnessParts
+    }
+
+    class Launcher {
+        -Layout layout
+        -LauncherConfig config
+        -Vec~String~ extra
+        +new(layout, config) Launcher
+        +with_extra(extra) Launcher
+        +launch(shell, on_event) HostResult~LaunchOutcome~
+        +run(shell, on_event) HostResult~RunningHarness~
+    }
+
+    class LauncherConfig {
+        +ProbeConfig probe
+        +PortMode port_mode
+        +usize max_port_attempts
+    }
+
+    class RunningHarness {
+        +LaunchEndpoint endpoint
+        +u32 pid
+        +LogRing logs
+        +Arc~Mutex~LogRing~~ live_logs
+        +take_exit() Option~Receiver~
+        +wait_exit() Option~io::Result~ExitStatus~~
+        +live_tail(n) Vec~String~
+        +terminate()
+    }
+
+    class LaunchOutcome {
+        <<enum>>
+        Ready(RunningHarness)
+        Failed(cause, logs)
+    }
+
+    class LaunchEvent {
+        <<enum>>
+        Preparing
+        Spawned
+        TokenFound
+        ReadyChecking
+        Ready
+        Failed
+        Log
+    }
+
+    Launcher --> Layout : uses
+    Launcher --> LauncherConfig : holds
+    Launcher --> HarnessArgs : builds per attempt
+    Launcher ..> LaunchOutcome : returns
+    Launcher ..> RunningHarness : produces
+    Launcher ..> LaunchEvent : emits
+    Launcher ..> HarnessProcess : spawns
+    HarnessArgs --> Layout : uses
+    HarnessArgs ..> HarnessEnv : paired with
+    RunningHarness --> LogRing : snapshot + live
+    LaunchOutcome --> FailureCause : carries
+    LogRing o-- LogLine
+    LogFile ..> LogLine : persists
+    AppLog ..> LogLine : persists (level-prefixed)
+    HostError ..> FailureCause : to_failure_cause
+    FailureCause <.. LogRing : extract_failure_cause
