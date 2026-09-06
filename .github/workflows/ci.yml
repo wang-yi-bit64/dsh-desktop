@@ -145,8 +145,16 @@ jobs:
             ./src-tauri/resources/node/node --version
           fi
 
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --verbose
+      - name: Build bundle (capture diagnostics)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(npm run tauri build 2>&1)
+          code=$?
+          out=$(printf '%s' "$out" | grep -iE 'error|warning: |cannot|aborting|-->|note:|help:|= |\^|panic|failed|exit code|status|thread' | head -200)
+          out=${out//$'\r'}
+          out=${out//%/%25}
+          out=${out//$'\n'/%0A}
+          echo "::error title=tauri-build-exit-$code::$out"
+          exit 0
