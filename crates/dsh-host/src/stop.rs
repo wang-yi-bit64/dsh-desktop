@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use tokio::process::Child;
 
+use crate::contracts::STOP_KILL_DELAY;
 use crate::process::HarnessProcess;
 
 /// 停止结果。
@@ -78,9 +79,9 @@ pub async fn stop(process: &mut HarnessProcess, timeout: Duration) -> StopOutcom
         Ok(Ok(status)) => StopOutcome::Exited(status.code()),
         Ok(Err(_)) => StopOutcome::AlreadyGone,
         Err(_) => {
-            // 宽容期到：强杀进程树。
+            // 宽容期到：强杀进程树（再等 STOP_KILL_DELAY 收尸）。
             signal_tree(pid, Signal::Kill);
-            let _ = tokio::time::timeout(Duration::from_secs(2), process.wait()).await;
+            let _ = tokio::time::timeout(STOP_KILL_DELAY, process.wait()).await;
             StopOutcome::Killed
         }
     }
@@ -105,7 +106,7 @@ pub async fn stop_child(child: &mut Child, timeout: Duration) -> StopOutcome {
         Ok(Err(_)) => StopOutcome::AlreadyGone,
         Err(_) => {
             signal_tree(pid, Signal::Kill);
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            let _ = tokio::time::timeout(STOP_KILL_DELAY, child.wait()).await;
             StopOutcome::Killed
         }
     }

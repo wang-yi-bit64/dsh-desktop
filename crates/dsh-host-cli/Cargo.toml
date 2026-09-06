@@ -5,7 +5,7 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Command-line front end for dsh-host: start / stop / status / tail a Harness instance."
+description = "Command-line front end for dsh-host: start / stop / status / tail / probe / doctor a Harness instance."
 
 [dependencies]
 dsh-host.workspace = true

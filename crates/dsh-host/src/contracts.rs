@@ -15,6 +15,10 @@
 //! | [`FAILURE_PATTERNS`] | C7 失败模式 | `extractFailureCause` |
 //! | [`DSH_ENTRY_RELATIVE`] 等 | C8 包布局 | `prepare-harness.mjs` |
 //! | [`WINDOWS_QUERY_*`] | C12 Windows URL 参数 | `window-navigation.ts` |
+//!
+//! > **C10 / C11 未定义**：《DSH Desktop Tauri 版实施计划 v2》原文未随本仓库
+//! > 提交，C10 / C11 的内容在全仓库（docs / contracts / build / scripts）中均
+//! > 无痕迹。此处不做臆造，待计划原文补全后再回填。
 
 use std::time::Duration;
 
@@ -60,7 +64,8 @@ pub const ENV_PATH: &str = "PATH";
 /// C3 — stdout 中承载启动 token 的 URL 行正则。
 ///
 /// 注意 `\b` 与 `dsh` 的组合：`harness-node-entry.mjs` 打印的是
-/// `[arness-node] …` 诊断行，真正承载 URL 的行以 `dsh web:` 出现。
+/// `[harness-node] …` 诊断行，真正承载 URL 的行以 `dsh web:` 出现。
+/// （诊断行前缀以 `[harness-node]` 为准，见 `build/harness-node-entry.mjs`。）
 pub const TOKEN_LINE_PATTERN: &str = r"\bdsh web:\s*(\S+)";
 
 /// C3 — 换取 30 天 cookie 的 query 参数名。
@@ -125,9 +130,89 @@ pub const LOG_STARTING_MARKER: &str = "[desktop] starting";
 /// 加固补充：ANSI 转义序列清洗正则。
 pub const ANSI_ESCAPE_PATTERN: &str = r"\x1B\[[0-9;]*[a-zA-Z]";
 
+/// CLI 退出码 — 成功。
+pub const EXIT_OK: i32 = 0;
+
+/// CLI 退出码 — 兜底错误（含 `Box<dyn Error>`）。
+pub const EXIT_UNEXPECTED: i32 = 1;
+
+/// CLI 退出码 — 参数用法错误（clap 解析失败 / `InvalidArgument`）。
+pub const EXIT_USAGE: i32 = 2;
+
+/// CLI 退出码 — 缺少捆绑资源（`MissingResource` / doctor 有 FAIL 项）。
+pub const EXIT_MISSING_RESOURCE: i32 = 3;
+
+/// CLI 退出码 — 无法派生子进程（`Spawn` / `ProcessGuard`）。
+pub const EXIT_SPAWN_FAILED: i32 = 4;
+
+/// CLI 退出码 — 超时前未抓到 token 行（C3）。
+pub const EXIT_TOKEN_NOT_FOUND: i32 = 5;
+
+/// CLI 退出码 — 超过就绪总超时（C4）。
+pub const EXIT_READY_TIMEOUT: i32 = 6;
+
+/// CLI 退出码 — 端口被占用且重试耗尽。
+pub const EXIT_PORT_IN_USE: i32 = 7;
+
+/// CLI 退出码 — Harness 自身启动失败 / 就绪前退出（`HarnessFailed` / `ProcessExited`）。
+pub const EXIT_HARNESS_FAILED: i32 = 8;
+
+/// 端口冲突重试之间的退避时长（C1 端口策略）。
+///
+/// 没有退避时三次尝试会背靠背发起，同一瞬间抢占同一端口，重试形同虚设。
+pub const PORT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
+
+/// 失败路径上等待子进程退出的上限。
+pub const EXIT_REAP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 就绪后等日志泵收尾的时长（避免丢掉最后几行）。
+pub const LOG_PUMP_DRAIN_DELAY: Duration = Duration::from_millis(50);
+
+/// C6 — 强杀之后等待进程句柄回收的时长。
+pub const STOP_KILL_DELAY: Duration = Duration::from_secs(2);
+
+/// INV-3 — 陈旧进程清扫中，请求优雅退出后的等待时长。
+pub const SWEEP_REAP_DELAY: Duration = Duration::from_millis(200);
+
+/// INV-3 — 陈旧进程清扫中，优雅退出超时后强杀的等待时长。
+pub const SWEEP_KILL_DELAY: Duration = Duration::from_millis(300);
+
+/// C4 — 排障子命令 `probe` 的默认端口（原为散落在 CLI 里的魔数）。
+pub const DEFAULT_PROBE_PORT: u16 = 4173;
+
+/// C4 — 单次 HTTP 探测的超时。
+///
+/// 作为 [`crate::readiness::ProbeConfig::probe_timeout`] 的默认值；
+/// 之前在 `launch.rs` 里被硬编码，配置项形同虚设。
+pub const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// 日志级别前缀 — error。
+pub const LOG_LEVEL_ERROR: &str = "ERROR";
+
+/// 日志级别前缀 — warn（补空格凑齐 5 字符，便于按列对齐）。
+pub const LOG_LEVEL_WARN: &str = "WARN ";
+
+/// 日志级别前缀 — info（补空格凑齐 5 字符）。
+pub const LOG_LEVEL_INFO: &str = "INFO ";
+
+/// 日志级别前缀 — debug。
+pub const LOG_LEVEL_DEBUG: &str = "DEBUG";
+
+/// 运行 Harness 所需的最低 Node.js 主版本号（低于此值 doctor 报 FAIL）。
+pub const MIN_NODE_MAJOR: u32 = 20;
+
+/// 推荐使用的 Node.js 主版本号（低于此值 doctor 报 WARN）。
+pub const RECOMMENDED_NODE_MAJOR: u32 = 24;
+
+/// **C1 Spike 结论回填位**：`--port 0` 支持性结论的来源与日期。
+///
+/// 只有在 `docs/spike-webview-results.md` 的 C1 复选框被勾选、且证据
+/// （实测平台与结论）写入本常量后，才允许把 [`PORT_ZERO_SUPPORTED`] 改为
+/// `true`。在此之前不得臆测 Spike 结果。
+pub const PORT_ZERO_EVIDENCE: Option<&str> = None;
+
 /// C8 — 资源目录下的 Node.js 可执行文件名（非 Windows）。
 pub const NODE_BIN_NAME_UNIX: &str = "node";
-
 /// C8 — 资源目录下的 Node.js 可执行文件名（Windows）。
 pub const NODE_BIN_NAME_WINDOWS: &str = "node.exe";
 
@@ -261,6 +346,35 @@ mod tests {
         assert!(regex
             .captures("[arness-node] runtime node=v24.9.0")
             .is_none());
+    }
+
+    #[test]
+    fn exit_codes_are_distinct() {
+        let codes = [
+            EXIT_OK,
+            EXIT_UNEXPECTED,
+            EXIT_USAGE,
+            EXIT_MISSING_RESOURCE,
+            EXIT_SPAWN_FAILED,
+            EXIT_TOKEN_NOT_FOUND,
+            EXIT_READY_TIMEOUT,
+            EXIT_PORT_IN_USE,
+            EXIT_HARNESS_FAILED,
+        ];
+        for (index, code) in codes.iter().enumerate() {
+            for other in &codes[index + 1..] {
+                assert_ne!(code, other, "退出码重复：{code}");
+            }
+        }
+    }
+
+    #[test]
+    fn port_zero_evidence_is_empty_until_spike_lands() {
+        // PORT_ZERO_SUPPORTED 为 true 时必须同时给出证据来源，否则视为臆测。
+        assert!(
+            !PORT_ZERO_SUPPORTED || PORT_ZERO_EVIDENCE.is_some(),
+            "PORT_ZERO_SUPPORTED=true 必须有 PORT_ZERO_EVIDENCE 支撑"
+        );
     }
 
     #[test]

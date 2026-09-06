@@ -256,6 +256,54 @@ pub fn harness_env(
     shell: &HarnessEnv,
     inherited_path: Option<&str>,
 ) -> HarnessEnv {
+    harness_env_with_overrides(layout, shell, inherited_path, &[])
+}
+
+/// C2 — 组装子进程环境，并允许调用方覆盖任意条目（`--env K=V`）。
+///
+/// 覆盖项写在**契约项之后**，因此 `--env NO_COLOR=0` 能覆盖契约值 `1`。
+/// 覆盖 `PATH` 时走 [`merge_path`] 而不是整体替换——直接替换会把系统 PATH
+/// 整个冲掉，导致 pnpm / pwsh 之类的子进程起不来。
+///
+/// # 参数
+///
+/// * `layout` — 目录布局（提供 `DSH_HOME`）。
+/// * `shell` — shell 环境快照。
+/// * `inherited_path` — 宿主继承的 PATH（通常传 `None`，内部从 shell 取）。
+/// * `overrides` — 覆盖项；可用 [`crate::args::parse_env_overrides`] 从命令行解析。
+///
+/// # 示例
+///
+/// ```
+/// use std::path::Path;
+/// use dsh_host::env::{harness_env_with_overrides, HarnessEnv};
+/// use dsh_host::paths::Layout;
+///
+/// let layout = Layout::resolve(Path::new("/res"), Path::new("/data"));
+/// let shell = HarnessEnv::default();
+/// let env = harness_env_with_overrides(
+///     &layout,
+///     &shell,
+///     None,
+///     &[("NO_COLOR".to_string(), "0".to_string())],
+/// );
+/// assert_eq!(env.get("NO_COLOR").map(String::as_str), Some("0"));
+/// ```
+pub fn harness_env_with_overrides(
+    layout: &Layout,
+    shell: &HarnessEnv,
+    inherited_path: Option<&str>,
+    overrides: &[(String, String)],
+) -> HarnessEnv {
+    harness_env_inner(layout, shell, inherited_path, overrides)
+}
+
+fn harness_env_inner(
+    layout: &Layout,
+    shell: &HarnessEnv,
+    inherited_path: Option<&str>,
+    overrides: &[(String, String)],
+) -> HarnessEnv {
     let mut entries: BTreeMap<String, String> = shell
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -295,7 +343,31 @@ pub fn harness_env(
         }
     }
 
+    // 覆盖项最后写入，因此能盖掉上面的契约值。
+    apply_overrides(&mut entries, overrides);
+
     HarnessEnv { entries }
+}
+
+/// 把 `--env K=V` 覆盖项写入环境表。
+///
+/// `PATH` 特殊处理：走 [`merge_path`] 合并而不是整体替换，避免冲掉系统 PATH。
+fn apply_overrides(entries: &mut BTreeMap<String, String>, overrides: &[(String, String)]) {
+    for (key, value) in overrides {
+        if is_path_key(key) {
+            let current = entries
+                .iter()
+                .find(|(existing, _)| is_path_key(existing))
+                .map(|(_, existing)| existing.clone())
+                .or_else(|| std::env::var(ENV_PATH).ok());
+            let merged = merge_path(current.as_deref(), None, Some(value));
+            if !merged.is_empty() {
+                entries.insert(path_key().to_string(), merged);
+            }
+            continue;
+        }
+        entries.insert(key.clone(), value.clone());
+    }
 }
 
 /// 当前平台的 PATH 键名（Windows 上 PowerShell 与注册表都可能写成 `Path`）。
@@ -506,6 +578,53 @@ pub fn path_contains(path: &str, candidate: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overrides_win_over_contract_values() {
+        let layout = Layout::resolve(
+            std::path::Path::new("/res-override"),
+            std::path::Path::new("/data-override"),
+        );
+        let shell = HarnessEnv::default();
+        let env = harness_env_with_overrides(
+            &layout,
+            &shell,
+            None,
+            &[("NO_COLOR".to_string(), "0".to_string())],
+        );
+        assert_eq!(env.get("NO_COLOR").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn three_arg_harness_env_is_unchanged() {
+        let layout = Layout::resolve(
+            std::path::Path::new("/res-plain"),
+            std::path::Path::new("/data-plain"),
+        );
+        let shell = HarnessEnv::default();
+        let legacy = harness_env(&layout, &shell, None);
+        let delegated = harness_env_with_overrides(&layout, &shell, None, &[]);
+        assert_eq!(legacy.entries, delegated.entries);
+    }
+
+    #[test]
+    fn env_override_does_not_clobber_path() {
+        let layout = Layout::resolve(
+            std::path::Path::new("/res-path"),
+            std::path::Path::new("/data-path"),
+        );
+        let mut shell = HarnessEnv::default();
+        shell.set(path_key(), "/usr/bin");
+        let env = harness_env_with_overrides(
+            &layout,
+            &shell,
+            None,
+            &[(path_key().to_string(), "/extra/bin".to_string())],
+        );
+        let merged = env.path().map(String::as_str).unwrap_or_default();
+        assert!(merged.contains("/usr/bin"), "系统 PATH 被冲掉了：{merged}");
+        assert!(merged.contains("/extra/bin"), "覆盖项没进去：{merged}");
+    }
 
     #[test]
     fn merge_path_puts_machine_first_and_dedupes() {

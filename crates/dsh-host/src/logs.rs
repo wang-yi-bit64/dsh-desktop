@@ -20,11 +20,50 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ANSI_ESCAPE_PATTERN, LOG_FILE_MAX_BACKUPS, LOG_FILE_MAX_BYTES, LOG_LINE_MAX_BYTES,
-    LOG_PREFIX_DESKTOP, LOG_PREFIX_STDERR, LOG_PREFIX_STDOUT, LOG_RING_CAPACITY,
+    ANSI_ESCAPE_PATTERN, LOG_FILE_MAX_BACKUPS, LOG_FILE_MAX_BYTES, LOG_LEVEL_DEBUG,
+    LOG_LEVEL_ERROR, LOG_LEVEL_INFO, LOG_LEVEL_WARN, LOG_LINE_MAX_BYTES, LOG_PREFIX_DESKTOP,
+    LOG_PREFIX_STDERR, LOG_PREFIX_STDOUT, LOG_RING_CAPACITY, LOG_STARTING_MARKER,
     PATTERN_DSH_ENTRY_FAILED, PATTERN_PORT_IN_USE, PATTERN_UNCAUGHT_EXCEPTION,
     PATTERN_UNHANDLED_REJECTION,
 };
+
+/// 日志级别。
+///
+/// **级别用文本前缀承载，不进 [`LogLine`] 结构**：`LogLine` 是 GUI 直接依赖的
+/// 公开结构（`state.rs` 里按两参构造并序列化给前端），加字段会破坏它的
+/// serde 形状。前缀方案的代价是解析时要切字符串，收益是 GUI、日志回放、
+/// `latest_attempt` 全部零改动。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogLevel {
+    /// 错误：可预期的失败路径。
+    Error,
+    /// 警告：行为异常但不阻断启动（如端口被 dsh 自行改写）。
+    Warn,
+    /// 信息：常规诊断行（默认级别）。
+    #[default]
+    Info,
+    /// 调试：排障才需要看的高频细节。
+    Debug,
+}
+
+impl LogLevel {
+    /// 文本前缀（固定 5 字符，便于按列对齐与 `cut` 切片）。
+    pub fn prefix(self) -> &'static str {
+        match self {
+            LogLevel::Error => LOG_LEVEL_ERROR,
+            LogLevel::Warn => LOG_LEVEL_WARN,
+            LogLevel::Info => LOG_LEVEL_INFO,
+            LogLevel::Debug => LOG_LEVEL_DEBUG,
+        }
+    }
+}
+
+impl fmt::Display for LogLevel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.prefix())
+    }
+}
 
 /// 日志来源。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,9 +164,34 @@ impl LogRing {
         self.lines.push_back(line);
     }
 
-    /// 追加一条宿主诊断行。
+    /// 追加一条宿主诊断行（默认 [`LogLevel::Info`]，不带级别前缀）。
     pub fn push_desktop(&mut self, text: impl Into<String>) {
         self.push(LogLine::new(LogSource::Desktop, text));
+    }
+
+    /// 追加一条**带级别前缀**的日志行。
+    ///
+    /// 渲染结果形如 `[desktop] WARN  port mismatch: reserved 4173, reported 5000`。
+    /// 现有 [`Self::push`] / [`Self::push_desktop`] 的语义保持不变（无级别前缀），
+    /// 因此 GUI 与日志回放链路无需任何改动。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// use dsh_host::logs::{LogLevel, LogRing, LogSource};
+    ///
+    /// let mut ring = LogRing::new();
+    /// ring.push_with(LogLevel::Warn, LogSource::Desktop, "something odd");
+    /// let tail = ring.tail(1);
+    /// assert_eq!(tail[0], "[desktop] WARN  something odd");
+    /// ```
+    pub fn push_with(&mut self, level: LogLevel, source: LogSource, text: impl Into<String>) {
+        self.push(LogLine::new(source, format!("{level} {}", text.into())));
+    }
+
+    /// 追加一条带级别的宿主诊断行（[`Self::push_with`] 的便捷形式）。
+    pub fn push_desktop_with(&mut self, level: LogLevel, text: impl Into<String>) {
+        self.push_with(level, LogSource::Desktop, text);
     }
 
     /// 当前行数。
@@ -158,17 +222,21 @@ impl LogRing {
             .collect()
     }
 
-    /// 「本次尝试」的日志切片：最后一个 `[desktop] starting` 之后的所有行。
+    /// 「本次尝试」的日志切片：最后一个 [`LOG_STARTING_MARKER`] 之后的所有行。
     ///
     /// 重启会在同一个缓冲区里追加新日志，归因时必须只看本次，否则上一次的
     /// 错误会污染本次的失败原因。
+    ///
+    /// 判定必须用契约常量而不是硬编码字符串：两者一旦漂移，归因会**静默失效**
+    /// （看起来在用上次尝试的错误行，却不报错）。
     pub fn latest_attempt(&self) -> Vec<&LogLine> {
         let start = self
             .lines
             .iter()
             .enumerate()
             .filter(|(_, line)| {
-                line.source == LogSource::Desktop && line.text.starts_with("starting")
+                line.source == LogSource::Desktop
+                    && line.to_string().starts_with(LOG_STARTING_MARKER)
             })
             .map(|(index, _)| index + 1)
             .next_back()

@@ -121,12 +121,14 @@ impl Layout {
     /// 创建所有可写目录（DSH_HOME / launch-root / logs）。
     ///
     /// 只创建 `app_data_dir` 下的目录——INV-1 的运行时体现。
+    ///
+    /// `logs` 目录显式创建（而不是靠 `LogFile::open` 顺手建父目录）：
+    /// `app.log` 与 `harness.log` 两个消费者都依赖它，语义上它属于
+    /// 「布局的一部分」，不该由某个写入方隐式补齐。
     pub fn ensure_dirs(&self) -> crate::HostResult<()> {
         create_dir(&self.dsh_home)?;
         create_dir(&self.launch_root)?;
-        if let Some(parent) = self.log_path.parent() {
-            create_dir(parent)?;
-        }
+        create_dir(&self.log_path.parent().unwrap_or(&self.app_data_dir))?;
         Ok(())
     }
 

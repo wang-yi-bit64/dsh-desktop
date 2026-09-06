@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::contracts::{HEALTHY_STATUS_MAX, HEALTHY_STATUS_MIN};
+use crate::contracts::{HEALTHY_STATUS_MAX, HEALTHY_STATUS_MIN, PROBE_TIMEOUT};
 
 /// 就绪探测参数。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub struct ProbeConfig {
     pub interval: Duration,
     /// 稳定窗：连续健康多久才算就绪（默认 500ms）。
     pub stable_window: Duration,
-    /// 单次探测超时（默认 2s）。
+    /// 单次探测超时（默认取 [`crate::contracts::PROBE_TIMEOUT`]，800ms）。
     pub probe_timeout: Duration,
     /// 总超时（默认取 [`crate::contracts::startup_timeout`]）。
     pub total_timeout: Duration,
@@ -37,7 +37,7 @@ impl Default for ProbeConfig {
         Self {
             interval: Duration::from_millis(100),
             stable_window: Duration::from_millis(500),
-            probe_timeout: Duration::from_secs(2),
+            probe_timeout: PROBE_TIMEOUT,
             total_timeout: crate::contracts::startup_timeout(),
         }
     }
@@ -53,6 +53,25 @@ impl ProbeConfig {
             total_timeout,
         }
     }
+}
+
+/// 描述「预留端口与 dsh 自报端口不一致」这一异常（C1 端口策略）。
+///
+/// `Reserved` 模式下我们绑定 `127.0.0.1:0` 预留一个端口再传给 dsh，但 dsh
+/// 有可能自己换了端口并在 stdout 的 URL 里回报。此时**以 stdout 为准**
+/// （那是 dsh 自报的事实），同时记一条 warn 供排障。
+///
+/// # 示例
+///
+/// ```
+/// use dsh_host::readiness::describe_port_mismatch;
+///
+/// let message = describe_port_mismatch(4173, 5000);
+/// assert!(message.contains("4173"));
+/// assert!(message.contains("5000"));
+/// ```
+pub fn describe_port_mismatch(reserved: u16, reported: u16) -> String {
+    format!("port mismatch: reserved {reserved}, reported {reported}")
 }
 
 /// 就绪等待结果。

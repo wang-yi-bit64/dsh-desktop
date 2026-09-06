@@ -17,7 +17,9 @@ version = "0.1.0"
 authors = ["DataElement"]
 edition = "2021"
 license = "MIT"
-rust-version = "1.77"
+# 下界 1.85：传递依赖 `idna_adapter`（`url` → edition 2024）要求 Rust ≥ 1.85，
+# 低于该版本会报 `feature edition2024 is required` 而非可读的 MSRV 提示。
+rust-version = "1.85"
 
 [workspace.dependencies]
 # 本地 crate

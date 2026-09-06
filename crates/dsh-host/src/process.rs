@@ -26,7 +26,8 @@ use std::process::{ExitStatus, Stdio};
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 
-use crate::contracts::{HARNESS_CLI, HARNESS_HOST, HARNESS_NO_OPEN, NODE_EXPOSE_INTERNALS};
+use crate::args::HarnessArgs;
+use crate::contracts::SWEEP_REAP_DELAY;
 use crate::env::HarnessEnv;
 use crate::paths::Layout;
 use crate::HostResult;
@@ -46,30 +47,16 @@ use crate::HostResult;
 /// assert!(args.windows(2).any(|pair| pair == ["--port", "4173"]));
 /// ```
 pub fn build_harness_arguments(layout: &Layout, port: u16) -> Vec<String> {
-    vec![
-        HARNESS_CLI.to_string(),
-        "--patch".to_string(),
-        layout.patch.display().to_string(),
-        // 桌面窗口是唯一展示面：不交给系统浏览器打开。
-        HARNESS_NO_OPEN.to_string(),
-        "--host".to_string(),
-        HARNESS_HOST.to_string(),
-        "--port".to_string(),
-        port.to_string(),
-    ]
+    // 委托给 `args`（C1 的唯一产地），保持输出与签名完全不变——GUI 走的就是
+    // 这条路径，任何漂移都会让桌面端与 CLI 行为分叉。
+    HarnessArgs::default_for(layout.clone(), port).dsh_arguments()
 }
 
 /// C1 — 完整的 node argv：`--expose-internals <entry> <bin.js> <harness args>`。
 ///
 /// `--expose-internals` 是 Cordis HMR 的前提，只授予本子进程，绝不授予 webview。
 pub fn build_node_arguments(layout: &Layout, port: u16) -> Vec<String> {
-    let mut args = vec![
-        NODE_EXPOSE_INTERNALS.to_string(),
-        layout.node_entry.display().to_string(),
-        layout.dsh_entry.display().to_string(),
-    ];
-    args.extend(build_harness_arguments(layout, port));
-    args
+    HarnessArgs::default_for(layout.clone(), port).node_arguments()
 }
 
 /// 已派生的 Harness 子进程（持有平台守护句柄，Drop 即触发内核回收）。
@@ -177,6 +164,47 @@ pub struct HarnessParts {
 /// # }
 /// ```
 pub fn spawn(layout: &Layout, environment: &HarnessEnv, port: u16) -> HostResult<HarnessProcess> {
+    spawn_with_args(layout, environment, &HarnessArgs::default_for(layout.clone(), port))
+}
+
+/// 按给定的 [`HarnessArgs`] 派生 Harness 子进程。
+///
+/// 与 [`spawn`] 的唯一区别是 argv 由调用方提供（可含用户透传段）。
+///
+/// # 参数
+///
+/// * `layout` — 目录布局（提供 node 二进制与入口路径）。
+/// * `environment` — 已组装好的子进程环境（见 [`crate::env::harness_env`]）。
+/// * `args` — 完整参数集（见 [`HarnessArgs::node_arguments`]）。
+///
+/// # 前置条件
+///
+/// 调用方应先用 [`Layout::missing_resources`] 确认资源齐备，否则返回
+/// [`crate::HostError::MissingResource`]。
+///
+/// # 示例
+///
+/// ```no_run
+/// use std::path::Path;
+/// use dsh_host::args::HarnessArgs;
+/// use dsh_host::env::{capture_shell_environment, harness_env};
+/// use dsh_host::paths::Layout;
+/// use dsh_host::process::spawn_with_args;
+///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let layout = Layout::resolve(Path::new("resources"), Path::new("userdata"));
+/// let shell = capture_shell_environment().unwrap();
+/// let env = harness_env(&layout, &shell, None);
+/// let args = HarnessArgs::default_for(layout.clone(), 4173);
+/// let child = spawn_with_args(&layout, &env, &args).unwrap();
+/// # }
+/// ```
+pub fn spawn_with_args(
+    layout: &Layout,
+    environment: &HarnessEnv,
+    args: &HarnessArgs,
+) -> HostResult<HarnessProcess> {
     if let Some((name, path)) = layout.missing_resources().into_iter().next() {
         return Err(crate::HostError::missing(name, path));
     }
@@ -184,7 +212,7 @@ pub fn spawn(layout: &Layout, environment: &HarnessEnv, port: u16) -> HostResult
 
     let mut command = Command::new(&layout.node_executable);
     command
-        .args(build_node_arguments(layout, port))
+        .args(args.node_arguments())
         .current_dir(&layout.launch_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -396,8 +424,8 @@ pub fn sweep_stale_process(layout: &Layout) -> HostResult<Option<u32>> {
     }
 
     terminate_process_tree(record.pid);
-    // 给内核一点回收时间，随后无论如何都清掉 pidfile。
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // 给内核一点回收时间（SWEEP_REAP_DELAY），随后无论如何都清掉 pidfile。
+    std::thread::sleep(SWEEP_REAP_DELAY);
     clear_pid_file(layout);
     Ok(Some(record.pid))
 }
@@ -419,7 +447,7 @@ pub fn terminate_process_tree(pid: u32) {
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::thread::sleep(SWEEP_KILL_DELAY);
         if is_process_alive(pid) {
             unsafe {
                 libc::kill(pid as i32, libc::SIGKILL);
