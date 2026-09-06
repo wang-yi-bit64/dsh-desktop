@@ -164,7 +164,11 @@ pub struct HarnessParts {
 /// # }
 /// ```
 pub fn spawn(layout: &Layout, environment: &HarnessEnv, port: u16) -> HostResult<HarnessProcess> {
-    spawn_with_args(layout, environment, &HarnessArgs::default_for(layout.clone(), port))
+    spawn_with_args(
+        layout,
+        environment,
+        &HarnessArgs::default_for(layout.clone(), port),
+    )
 }
 
 /// 按给定的 [`HarnessArgs`] 派生 Harness 子进程。

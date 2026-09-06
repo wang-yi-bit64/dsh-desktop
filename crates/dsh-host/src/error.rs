@@ -191,9 +191,9 @@ impl HostError {
             // 用法错误与日志 IO 都不属于 Harness 侧故障，保留 Unknown 以免
             // 错误页误判成「插件故障」而给出安全模式入口。
             HostError::InvalidArgument(..) | HostError::LogIo(..) => FailureCause::Unknown,
-            HostError::ReadyTimeout { seconds } => FailureCause::StartupTimeout {
-                seconds: *seconds,
-            },
+            HostError::ReadyTimeout { seconds } => {
+                FailureCause::StartupTimeout { seconds: *seconds }
+            }
             HostError::TokenNotFound => FailureCause::StderrTail {
                 detail: "未在超时前捕获启动 token 行（C3）".to_string(),
             },
@@ -233,7 +233,13 @@ mod tests {
             (HostError::ReadyTimeout { seconds: 120 }, 6),
             (HostError::TokenNotFound, 5),
             (HostError::ProcessExited { code: Some(1) }, 8),
-            (HostError::PortInUse { port: 4173, attempts: 3 }, 7),
+            (
+                HostError::PortInUse {
+                    port: 4173,
+                    attempts: 3,
+                },
+                7,
+            ),
             (
                 HostError::HarnessFailed(FailureCause::DshEntryFailed { detail: "x".into() }),
                 8,
@@ -262,7 +268,10 @@ mod tests {
             HostError::ReadyTimeout { seconds: 120 },
             HostError::TokenNotFound,
             HostError::ProcessExited { code: Some(1) },
-            HostError::PortInUse { port: 4173, attempts: 3 },
+            HostError::PortInUse {
+                port: 4173,
+                attempts: 3,
+            },
             HostError::HarnessFailed(FailureCause::UnexpectedExit { code: None }),
         ];
 

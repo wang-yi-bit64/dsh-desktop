@@ -87,7 +87,12 @@ impl AppLog {
     pub fn log(&self, level: LogLevel, text: impl AsRef<str>) {
         let text = text.as_ref();
         // prefix() 常量已含对齐尾空格（如 "WARN "），此处只需再补一个分隔空格。
-        let line = format!("{} {} {}", LogSource::Desktop.prefix(), level.prefix(), text);
+        let line = format!(
+            "{} {} {}",
+            LogSource::Desktop.prefix(),
+            level.prefix(),
+            text
+        );
 
         if let Ok(mut file) = self.file.lock() {
             let _ = file.append_line(&line);
@@ -161,7 +166,10 @@ mod tests {
                 .unwrap_or(0)
         });
         let root = std::env::temp_dir().join(unique);
-        (root.clone(), Layout::resolve(root.join("res"), root.join("data")))
+        (
+            root.clone(),
+            Layout::resolve(root.join("res"), root.join("data")),
+        )
     }
 
     #[test]
@@ -194,7 +202,10 @@ mod tests {
         }
 
         let content = std::fs::read_to_string(&layout.app_log_path).unwrap();
-        assert!(content.contains("DEBUG"), "落盘不应受级别过滤影响：{content}");
+        assert!(
+            content.contains("DEBUG"),
+            "落盘不应受级别过滤影响：{content}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

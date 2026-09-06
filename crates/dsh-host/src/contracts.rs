@@ -368,9 +368,12 @@ mod tests {
         }
     }
 
+    /// 契约护栏：PORT_ZERO_SUPPORTED 为 true 时必须同时给出证据来源，
+    /// 否则视为臆测。当前常量为 false，断言只对编译期常量求值，故允许
+    /// `assertions_on_constants`——它就是为「Spike 之后翻转常量」这一刻准备的。
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn port_zero_evidence_is_empty_until_spike_lands() {
-        // PORT_ZERO_SUPPORTED 为 true 时必须同时给出证据来源，否则视为臆测。
         assert!(
             !PORT_ZERO_SUPPORTED || PORT_ZERO_EVIDENCE.is_some(),
             "PORT_ZERO_SUPPORTED=true 必须有 PORT_ZERO_EVIDENCE 支撑"

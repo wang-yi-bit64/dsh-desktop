@@ -40,10 +40,7 @@ pub fn apply_mock_if_requested(layout: &mut Layout, force: bool) -> bool {
     }
     let mock = layout.resource_dir.join("mock-harness.mjs");
     let mock = std::fs::canonicalize(&mock).unwrap_or(mock);
-    eprintln!(
-        "[cli] mock 模式 → 入口已替换为 {}",
-        mock.display()
-    );
+    eprintln!("[cli] mock 模式 → 入口已替换为 {}", mock.display());
     layout.node_entry = mock.clone();
     layout.dsh_entry = mock;
     true

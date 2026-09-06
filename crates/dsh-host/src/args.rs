@@ -24,9 +24,7 @@
 
 use std::path::PathBuf;
 
-use crate::contracts::{
-    HARNESS_CLI, HARNESS_HOST, HARNESS_NO_OPEN, NODE_EXPOSE_INTERNALS,
-};
+use crate::contracts::{HARNESS_CLI, HARNESS_HOST, HARNESS_NO_OPEN, NODE_EXPOSE_INTERNALS};
 use crate::paths::Layout;
 use crate::HostResult;
 

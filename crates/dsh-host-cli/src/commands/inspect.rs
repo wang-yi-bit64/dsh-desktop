@@ -2,10 +2,10 @@
 
 use std::time::Duration;
 
-use dsh_host::contracts::{EXIT_OK, EXIT_MISSING_RESOURCE, EXIT_UNEXPECTED};
+use dsh_host::contracts::{EXIT_MISSING_RESOURCE, EXIT_OK, EXIT_UNEXPECTED};
+use dsh_host::logs::LogLine;
 use dsh_host::paths::Layout;
 use dsh_host::readiness::{is_healthy, probe_status};
-use dsh_host::logs::LogLine;
 
 use crate::cli::{ProbeArgs, StatusArgs, TailArgs};
 use crate::commands::ExitCode;

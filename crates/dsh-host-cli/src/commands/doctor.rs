@@ -68,7 +68,10 @@ pub fn run(args: DoctorArgs) -> ExitCode {
         Check {
             status: Status::Warn,
             name: "manifest",
-            detail: format!("{} 不存在（未跑过 prepare:harness？）", layout.manifest.display()),
+            detail: format!(
+                "{} 不存在（未跑过 prepare:harness？）",
+                layout.manifest.display()
+            ),
         }
     });
 
@@ -130,7 +133,7 @@ pub fn run(args: DoctorArgs) -> ExitCode {
     });
 
     // 输出三态表。
-    println!("{:<6} {:<12} {}", "STATE", "CHECK", "DETAIL");
+    println!("{:<6} {:<12} DETAIL", "STATE", "CHECK");
     let mut failed = 0usize;
     let mut warned = 0usize;
     for check in &checks {

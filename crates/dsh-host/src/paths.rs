@@ -128,7 +128,7 @@ impl Layout {
     pub fn ensure_dirs(&self) -> crate::HostResult<()> {
         create_dir(&self.dsh_home)?;
         create_dir(&self.launch_root)?;
-        create_dir(&self.log_path.parent().unwrap_or(&self.app_data_dir))?;
+        create_dir(self.log_path.parent().unwrap_or(&self.app_data_dir))?;
         Ok(())
     }
 

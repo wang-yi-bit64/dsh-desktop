@@ -5,14 +5,13 @@ use std::time::Duration;
 use dsh_host::args::{parse_env_overrides, HarnessArgs};
 use dsh_host::contracts::EXIT_OK;
 use dsh_host::env::{capture_shell_environment, harness_env_with_overrides};
-use dsh_host::launch::{
-    LaunchEvent, Launcher, LauncherConfig, PortMode, RunningHarness,
-};
-use dsh_host::logs::{FailureCause, LogRing};
+use dsh_host::launch::{LaunchEvent, Launcher, LauncherConfig, PortMode, RunningHarness};
 use dsh_host::logging::AppLog;
+use dsh_host::logs::{FailureCause, LogRing};
 use dsh_host::paths::Layout;
-use dsh_host::process::{clear_pid_file, is_process_alive, process_belongs_to, read_pid_file,
-    terminate_process_tree};
+use dsh_host::process::{
+    clear_pid_file, is_process_alive, process_belongs_to, read_pid_file, terminate_process_tree,
+};
 
 use crate::cli::{LogLevelArg, PortModeArg, StartArgs, StopArgs};
 use crate::commands::{apply_mock_if_requested, ExitCode};
@@ -240,7 +239,10 @@ pub fn stop(args: StopArgs, json: bool) -> ExitCode {
     let layout = Layout::resolve(&args.data, &args.data);
     let Some(record) = read_pid_file(&layout) else {
         if json {
-            println!("{}", serde_json::json!({"outcome": "stop", "stopped": false, "reason": "no_pidfile"}));
+            println!(
+                "{}",
+                serde_json::json!({"outcome": "stop", "stopped": false, "reason": "no_pidfile"})
+            );
         } else {
             println!("[cli] 无 pidfile，无需停止：{}", layout.pid_file.display());
         }

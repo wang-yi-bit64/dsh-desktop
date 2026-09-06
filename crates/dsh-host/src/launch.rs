@@ -43,12 +43,12 @@ use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
 use crate::args::HarnessArgs;
 use crate::contracts::{
-    EXIT_REAP_TIMEOUT, LOG_PUMP_DRAIN_DELAY, MAX_PORT_ATTEMPTS,
-    PATTERN_PORT_IN_USE, PORT_RETRY_BACKOFF, PORT_ZERO_SUPPORTED,
+    EXIT_REAP_TIMEOUT, LOG_PUMP_DRAIN_DELAY, MAX_PORT_ATTEMPTS, PATTERN_PORT_IN_USE,
+    PORT_RETRY_BACKOFF, PORT_ZERO_SUPPORTED,
 };
 use crate::env::{capture_shell_environment, HarnessEnv};
 use crate::logs::{
-    extract_failure_cause, FailureCause, LogLevel, LogFile, LogLine, LogRing, LogSource,
+    extract_failure_cause, FailureCause, LogFile, LogLevel, LogLine, LogRing, LogSource,
 };
 use crate::paths::Layout;
 use crate::process::{now_seconds, sweep_stale_process, terminate_process_tree, PidRecord};
@@ -343,11 +343,9 @@ impl Launcher {
     {
         match self.execute(shell, &mut on_event).await? {
             Execution::Ready(running) => Ok(LaunchOutcome::Ready(running)),
-            Execution::Failed { error, logs } => Ok(self.fail(
-                error.to_failure_cause(),
-                logs,
-                &mut on_event,
-            )),
+            Execution::Failed { error, logs } => {
+                Ok(self.fail(error.to_failure_cause(), logs, &mut on_event))
+            }
         }
     }
 
@@ -372,7 +370,11 @@ impl Launcher {
     /// println!("listening on {}", running.endpoint.url);
     /// # }
     /// ```
-    pub async fn run<E>(&self, shell: Option<&HarnessEnv>, mut on_event: E) -> HostResult<RunningHarness>
+    pub async fn run<E>(
+        &self,
+        shell: Option<&HarnessEnv>,
+        mut on_event: E,
+    ) -> HostResult<RunningHarness>
     where
         E: FnMut(LaunchEvent),
     {
@@ -383,7 +385,11 @@ impl Launcher {
     }
 
     /// 单一实现源：`launch()` 与 `run()` 都委托到这里。
-    async fn execute<E>(&self, shell: Option<&HarnessEnv>, on_event: &mut E) -> HostResult<Execution>
+    async fn execute<E>(
+        &self,
+        shell: Option<&HarnessEnv>,
+        on_event: &mut E,
+    ) -> HostResult<Execution>
     where
         E: FnMut(LaunchEvent),
     {
@@ -413,9 +419,8 @@ impl Launcher {
 
         // stderr 与 stdout 共享同一个滚动文件：排障最关键的错误行此前根本
         // 不落盘，`tail` 读不到（C1 缺陷）。
-        let log_file: SharedLogFile = Arc::new(Mutex::new(
-            LogFile::open(&self.layout.log_path).ok(),
-        ));
+        let log_file: SharedLogFile =
+            Arc::new(Mutex::new(LogFile::open(&self.layout.log_path).ok()));
 
         let mut attempts = 0usize;
         loop {
@@ -443,14 +448,16 @@ impl Launcher {
                     .logs
                     .push_desktop(format!("starting attempt {attempts} on port {port}"));
             }
-            push_live(&live, &LogLine::new(
-                LogSource::Desktop,
-                format!("starting attempt {attempts} on port {port}"),
-            ));
+            push_live(
+                &live,
+                &LogLine::new(
+                    LogSource::Desktop,
+                    format!("starting attempt {attempts} on port {port}"),
+                ),
+            );
 
             let args = self.build_args(port);
-            let spawned = match crate::process::spawn_with_args(&self.layout, &environment, &args)
-            {
+            let spawned = match crate::process::spawn_with_args(&self.layout, &environment, &args) {
                 Ok(process) => process,
                 // spawn_with_args 返回 HostResult，错误已是 HostError，直接透传。
                 Err(error) => {
@@ -644,10 +651,7 @@ impl Launcher {
                             ReadinessOutcome::Timeout => HostError::ReadyTimeout {
                                 seconds: self.config.probe.total_timeout.as_secs(),
                             },
-                            ReadinessOutcome::PortInUse => HostError::PortInUse {
-                                port,
-                                attempts,
-                            },
+                            ReadinessOutcome::PortInUse => HostError::PortInUse { port, attempts },
                             ReadinessOutcome::ProcessExited => HostError::ProcessExited {
                                 code: fallback_code(&fallback),
                             },
@@ -783,10 +787,7 @@ async fn reserve_port() -> HostResult<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(HostError::Port)?;
-    let port = listener
-        .local_addr()
-        .map_err(HostError::Port)?
-        .port();
+    let port = listener.local_addr().map_err(HostError::Port)?.port();
     drop(listener);
     Ok(port)
 }
@@ -928,7 +929,11 @@ mod tests {
 
     #[tokio::test]
     async fn missing_resources_surface_as_err_in_run() {
-        let unique = format!("dsh-host-launch-run-{}-{}", std::process::id(), now_seconds());
+        let unique = format!(
+            "dsh-host-launch-run-{}-{}",
+            std::process::id(),
+            now_seconds()
+        );
         let root = std::env::temp_dir().join(unique);
         let layout = Layout::resolve(root.join("res"), root.join("data"));
         let launcher = Launcher::new(layout, LauncherConfig::default());
