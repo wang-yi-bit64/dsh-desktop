@@ -95,7 +95,7 @@
 
 ## 四、未完成事项 / 风险
 
-1. **dsh-desktop 全量 clippy/test 未完成（挂起，非代码阻塞）**：GUI crate 编译受 **windres（windres.exe 缺失）+ 资源组装（`src-tauri/resources/` 需经 `npm run prepare:harness` 生成）** 阻塞，属环境/资源缺口而非代码问题；`docs/api-audit-src-tauri.md` 静态审计确认 GUI 无需代码改动。恢复条件：网络可用后装 MinGW/windres + 组装 resources 后跑 `cargo check -p dsh-desktop`。
+1. **dsh-desktop 全量 clippy/test 未完成（挂起，非代码阻塞）**：GUI crate 编译经实测逐层打通——已解决 `resources/` 缺失（手动从 harness-deps staging 重装 372M）与 windres 缺失（winget 装 LLVM-MinGW，llvm-windres 验证可用）；GUI 依赖 crate 与 Rust 源码均能编译（0 error）。**唯一残留阻塞 = 环境级 `os error 5`（拒绝访问）**：tauri-build 把 `resources/harness/**/*`（1.5 万+ 文件）复制到 target/debug 时，处理 @deepseek-ai 附近确定性报裸 os error 5，`dangerouslyDisableSandbox` 亦无效，判定为环境文件系统访问限制（大量小文件写 target 被拒），host/CLI 不受影响。`docs/api-audit-src-tauri.md` 静态审计确认 GUI 无需代码改动。恢复条件：在资源复制不受限的完整本机环境跑 `npm run prepare:harness` + `cargo check -p dsh-desktop`。
 2. ~~任务 1.6 / T05 fault-inject 场景验证~~ → ✅ 已完成（10/10 PASS），E5/E6 修复已落地。
 3. **Spike（任务 0.2）与 Electron 基线采集（任务 0.5）**：文档模板已建，实际执行为人工 Go-No-Go 步骤。
 4. **阶段 2–7 未开始**（单实例托盘、目录选择原生能力 ADR-4、移动桥接完善、安全模式/恢复页、updater、打包）。
