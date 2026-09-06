@@ -174,6 +174,51 @@ impl Layout {
     }
 }
 
+/// 返回不带 Windows `\\?\` verbatim 前缀的规范化绝对路径。
+///
+/// `std::fs::canonicalize` 在 Windows 上返回扩展长度路径（`\\?\D:\…`）。把这类
+/// 路径原样写进子进程 argv（例如传给 node 的入口脚本）会让 Node.js 的 CJS
+/// main-path 解析崩溃（`EISDIR: illegal operation on a directory, lstat 'D:'`，
+/// 实测 Node v22.22.2：verbatim 路径经 `resolveMainPath → _findPath → toRealPath`
+/// 被还原成盘符 `D:` 后 lstat 抛 EISDIR）。本函数保留 canonicalize 的归一化能力
+/// （消解 `..` / 符号链接），同时把 verbatim 前缀剥回普通 `D:\…` 形式；非
+/// Windows 平台与 `canonicalize` 行为一致。
+///
+/// # 示例
+///
+/// ```
+/// use std::path::Path;
+/// use dsh_host::paths::canonicalize_plain;
+///
+/// let plain = canonicalize_plain(Path::new("."));
+/// assert!(plain.is_absolute());
+/// ```
+pub fn canonicalize_plain(path: impl AsRef<Path>) -> PathBuf {
+    let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.as_ref().to_path_buf());
+    strip_verbatim_prefix(canonical)
+}
+
+/// Windows：剥掉 `\\?\` 前缀（UNC 的 `\\?\UNC\server\share` → `\\server\share`）。
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    const UNC_PREFIX: &str = r"\\?\UNC\";
+    const PREFIX: &str = r"\\?\";
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(UNC_PREFIX) {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(rest) = text.strip_prefix(PREFIX) {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
+/// 非 Windows：canonicalize 不会加 verbatim 前缀，直接返回。
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
+}
+
 fn create_dir(path: &Path) -> crate::HostResult<()> {
     std::fs::create_dir_all(path)
         .map_err(|error| crate::HostError::CreateDir(path.to_path_buf(), error))

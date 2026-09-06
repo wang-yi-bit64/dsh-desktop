@@ -45,7 +45,9 @@ fn apply_mock(layout: &mut Layout) {
         .join("..")
         .join("scripts")
         .join("mock-harness.mjs");
-    let mock = std::fs::canonicalize(&mock).unwrap_or(mock);
+    // canonicalize 会消解 `..`，但 Windows 上返回 `\\?\` verbatim 路径——node 的
+    // CJS loader 无法把它当主入口（EISDIR lstat 'D:'），必须剥回普通盘符形式。
+    let mock = dsh_host::paths::canonicalize_plain(&mock);
 
     // argv 变形为：node --expose-internals <mock> <mock> web --port N …
     // mock 只解析 `--port` / `--delay` / `--fail`，其余参数忽略。
