@@ -2,46 +2,30 @@
 
 > [中文文档 (Chinese)](README.zh-CN.md)
 
-A window shell for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) rebuilt with **Rust + Tauri 2.0**.
+A desktop window shell for [DeepSeek Harness](https://github.com/deepseek-ai/dsh) rebuilt with **Rust + Tauri 2.0**.
 
-This project is a from-scratch Rust/Tauri port of the Electron-based `dataelement/dsh-desktop`
-wrapper. It mimics the original's behavior so the desktop app and the Harness web UI stay
-feature-identical, while replacing the Electron runtime with a much slimmer Tauri shell.
+This project is a from-scratch Rust/Tauri port of the Electron-based `dataelement/dsh-desktop` wrapper. It mimics the original's behavior so the desktop app and the Harness web UI stay feature-identical, while replacing the heavy Electron runtime with a much slimmer, faster Tauri shell.
 
 ## Features
 
-- **Bundled runtime** — ships its own Node.js (v24) and the full `@deepseek-ai/dsh`
-  dependency tree, so no Node.js is required on the host.
-
-- **Harness lifecycle** — spawns Harness on a reserved loopback port, extracts the
-  per-process launch token, and polls until it's HTTP-ready.
-
-- **Shell pages** — splash, error (with retry / open-log / quit), plugin-recovery and
-  safe-mode pages.
-
-- **Desktop customization** — desktop brand assets and UI behavior are applied through
-  `patch-package` patches plus a `patch.yml` layer passed to `web --patch`.
-
-- **Mobile bridge** — LAN HTTP server with pairing token, QR code and RPC forwarding to Harness.
-
-- **Safe mode** — an isolated profile with only the core Harness bundles, for recovering
-  from plugin failures.
-
-- **Plugin recovery** — scans startup logs, pinpoints the failing plugin(s) and offers
-  targeted removal.
-
-- **Automatic updates** — `tauri-plugin-updater` with a generic provider (GitHub releases).
-
-- **Single instance** — a second launch focuses the existing window instead of forking a copy.
+- **Bundled Runtime** — Ships its own Node.js (v24) and the full `@deepseek-ai/dsh` dependency tree, so no Node.js is required on the host system.
+- **Harness Subprocess Lifecycle** — Spawns Harness on a reserved loopback port, extracts per-process launch tokens, and polls HTTP readiness.
+- **Watchdog & Crash Self-Healing (Supervisor)** — Embedded supervisor state machine with heartbeat checks, automatic restarts, and circuit breaking.
+- **Plugin Process Isolation & Safety Guard** — Runs untrusted/external plugins in isolated Node.js `worker_threads` with a safety guard to catch uncaught exceptions and unhandled rejections, eliminating crashes from third-party plugins.
+- **Multi-Model Tool Gateway (Model Gateway)** — Pure Rust crate (`dsh-model-gateway`) offering canonical JSON Schema validation, dialect sanitization, and request payload dispatching across OpenAI, DeepSeek, Google Gemini, and Anthropic Claude.
+- **Shell UI & Diagnostics** — Native splash screen, error pages with structured crash attribution (identifying offending plugins, one-click Safe Mode entry, log inspector), and recovery flows.
+- **Safe Mode & Recovery** — Automatically analyzes failure causes, pinpoints faulty plugins, and generates isolated sandbox profiles for safe recovery.
+- **Multi-Profile & Session Management** — Built-in Session and Profile managers for managing persistent configuration, environment variables, and metadata.
+- **Desktop Customization** — Desktop brand assets and UI behaviors applied through `patch-package` patches and `patch.yml` passed to `web --patch`.
+- **Mobile Bridge** — LAN HTTP server with pairing token, QR code display, and RPC forwarding to Harness.
+- **Automatic Updates** — Powered by `tauri-plugin-updater` with a generic GitHub releases provider.
+- **Single Instance** — Second launches focus the existing window instead of duplicating processes.
 
 ## Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (stable)
-
-- [Node.js](https://nodejs.org/) (v18+; used for the build tooling)
-
-- Platform build prerequisites for [Tauri v2](https://v2.tauri.app/start/prerequisites/)
-  (WebView2 / WebKit / WebKitGTK as appropriate).
+- [Rust toolchain](https://rustup.rs/) (stable, `>= 1.85` recommended)
+- [Node.js](https://nodejs.org/) (v18+; used for build scripts and packaging tooling)
+- Platform build prerequisites for [Tauri v2](https://v2.tauri.app/start/prerequisites/) (WebView2 / WebKit / WebKitGTK as appropriate).
 
 ## Getting Started
 
@@ -50,54 +34,47 @@ npm install
 npm run dev
 ```
 
-`npm run dev` first assembles the Harness runtime into `src-tauri/resources/`
-(see [`scripts/prepare-harness.mjs`](scripts/prepare-harness.mjs)), then starts the app.
+`npm run dev` first assembles the Harness runtime into `src-tauri/resources/` (see [`scripts/prepare-harness.mjs`](scripts/prepare-harness.mjs)), then starts the desktop application.
 
-To build an installer:
+To build an installer or production release:
 
 ```sh
 npm run build
+# or invoke directly:
+npm run tauri build
 ```
 
-## Project Layout
+## Repository & Workspace Layout
 
 ```text
+crates/
+  dsh-host/             # Headless core host library (process management, supervisor, crash diagnostics, log ring buffer, IPC)
+  dsh-host-cli/         # Command-line interface for dsh-host (start / status / stop / tail)
+  dsh-model-gateway/    # Multi-provider tool schema sanitizer, validator, and adapter gateway (OpenAI, Gemini, Claude, DeepSeek)
 src-tauri/
-  resources/      # Assembled Harness runtime + brand assets (gitignored, produced by the build)
-  src/            # Rust source
-    lib.rs        # App wiring: plugins, state, window navigation, lifecycle
-    harness_runtime.rs  # Harness subprocess lifecycle, token extraction, readiness
-    mobile_bridge.rs    # LAN pairing + RPC bridge
-    recovery.rs         # Plugin-failure detection / removal
-    safe_mode.rs        # Isolated profile
-    update.rs           # Auto-update manager
-    window.rs           # Window navigation helper
-    paths.rs            # Data-directory layout
-    resources.rs        # Bundled-resource resolution
-frontend/         # Shell pages (splash, error, plugin-recovery, safe-mode)
-patches/          # patch-package patches applied to the Harness tree
-vendor/           # Local desktop customization packages (dshmarket, etc.)
-packages/         # Vendored tgz overrides for patched packages
-scripts/          # Build helpers (prepare-harness, install-brand-assets, …)
+  frontend/             # Shell web pages (splash, error attribution, safe-mode indicator)
+  resources/            # Assembled Harness runtime + brand assets (gitignored, generated by build scripts)
+  src/                  # Tauri desktop layer (window management, system tray, IPC wiring, updates)
+build/                  # Runtime injection and guard scripts
+  harness-node-entry.mjs    # Node entry adapter for isolated plugins & arguments
+  plugin-safety-guard.mjs   # Global unhandled exception / promise rejection safety guard
+  plugin-worker-host.mjs    # Worker thread isolation host for plugins
+patches/                # patch-package patches applied to the Harness tree
+vendor/                 # Local desktop customization packages (dshmarket, etc.)
+packages/               # Vendored tgz overrides for patched packages
+scripts/                # Build and testing helpers (prepare-harness, stub-tauri-resources, etc.)
+docs/                   # Architecture designs, contract definitions, and specifications
+  system_design.md                  # Core system design & invariant specifications
+  model_gateway_design.md           # Model gateway architecture and tool calling conversions
+  plugin_isolation_architecture.md  # Worker thread plugin isolation architecture and RPC protocol
 ```
 
 ## Notes
 
-- `node_modules/`, `harness-deps/`, `src-tauri/target/` and `src-tauri/resources/` are
-  gitignored; `resources/` is regenerated by the build and would inflate the repo.
+- `node_modules/`, `harness-deps/`, `src-tauri/target/`, and `src-tauri/resources/` are gitignored; `resources/` is generated by the build script to avoid repository bloat.
+- On fresh checkouts without bundled resources, run `node scripts/stub-tauri-resources.mjs` before running `cargo check` or `cargo test` to generate dummy resources for Tauri's compile-time validation.
+- The updater endpoint points at this repo's GitHub release `latest.json`. Publishing a build requires a signing key (see `tauri.conf.json` → `plugins.updater.pubkey`).
 
-- The updater endpoint points at this repo's GitHub release `latest.json`. Publishing a
-  build requires a signing key (see `tauri.conf.json` → `plugins.updater.pubkey`).
+## Security Notes
 
-## Security notes
-
-- **Dependabot / RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g)** — `glib 0.18.5` is flagged for
-  an unsoundness in `glib::VariantStrIter` (`Iterator`/`DoubleEndedIterator` impls,
-  potential undefined behavior). It is a **Linux-only, transitive** dependency pulled in by
-  Tauri's GTK3 backend (`gtk 0.18.2` pins `glib ^0.18`), and our code never calls the
-  affected API. The patched fix (`glib ≥ 0.20.0`) is **not reachable in this tree** until
-  upstream Tauri migrates its Linux backend to gtk-rs 0.20+ (tauri 2.11.5 is already the
-  latest 2.x). The Dependabot alert is therefore dismissed as "not exploitable / not
-  reachable". Re-visit this when a Tauri release pulls `glib >= 0.20.0`, then re-run
-  `cargo update` and verify `cargo tree -i glib` resolves to the patched version.
-
+- **Dependabot / RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g)** — `glib 0.18.5` is flagged for an unsoundness in `glib::VariantStrIter`. It is a **Linux-only, transitive** dependency pulled in by Tauri's GTK3 backend, and our codebase never invokes the affected API. The fix will be automatically resolved once upstream Tauri migrates to gtk-rs 0.20+.

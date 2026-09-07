@@ -50,6 +50,7 @@
       <pre class="logs" id="logs" hidden></pre>
       <div class="actions">
         <button class="primary" id="retry">Retry</button>
+        <button class="secondary" id="safemode" hidden>Safe Mode</button>
         <button class="secondary" id="openlogs">View log</button>
         <button class="secondary" id="quit">Quit</button>
       </div>
@@ -59,12 +60,14 @@
       if (zh) {
         document.getElementById('title').textContent = 'Harness 未能启动';
         document.getElementById('retry').textContent = '重试';
+        document.getElementById('safemode').textContent = '进入安全模式';
         document.getElementById('openlogs').textContent = '查看日志';
         document.getElementById('quit').textContent = '退出';
       }
       const invoke = window.__TAURI__?.core?.invoke;
       const messageEl = document.getElementById('message');
       const logsEl = document.getElementById('logs');
+      const safeModeBtn = document.getElementById('safemode');
 
       function apply(snapshot) {
         if (!snapshot) return;
@@ -72,9 +75,10 @@
         // Failed 相位的结构化归因（任务 1.4）：kind / plugin_fault / retryable。
         if (snapshot.phase === 'failed' && snapshot.plugin_fault) {
           const hint = zh
-            ? '\n（疑似第三方插件故障：可尝试安全模式排查）'
-            : '\n(Plugin fault suspected: try safe mode to recover.)';
+            ? '\n（疑似第三方插件故障：建议进入安全模式禁用故障插件）'
+            : '\n(Plugin fault suspected: recommend entering Safe Mode.)';
           if (!messageEl.textContent.includes(hint)) messageEl.textContent += hint;
+          safeModeBtn.hidden = false;
         }
       }
 
@@ -100,6 +104,9 @@
       }
       document.getElementById('retry').addEventListener('click', () => {
         if (invoke) invoke('harness_restart').catch(console.error);
+      });
+      safeModeBtn.addEventListener('click', () => {
+        if (invoke) invoke('harness_start_safe_mode').catch(console.error);
       });
       document.getElementById('openlogs').addEventListener('click', () => {
         if (invoke) invoke('open_logs').catch(console.error);

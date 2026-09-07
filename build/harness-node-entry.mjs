@@ -2,6 +2,9 @@ import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { enforceWindowsChildProcessHide } from './windows-child-process-hide.mjs'
+import { installPluginSafetyGuards } from './plugin-safety-guard.mjs'
+
+const { formatFaultDetails } = installPluginSafetyGuards()
 
 // On macOS Harness runs inside an Electron utility process (TCC responsibility
 // isolation), so `process.execPath` and `argv0` point at the Electron helper
@@ -22,8 +25,20 @@ function report(label, value) {
   process.stderr.write(`[harness-node] ${label}: ${value}\n`)
 }
 
-process.on('uncaughtException', (error) => report('uncaught exception', error?.stack ?? error))
-process.on('unhandledRejection', (error) => report('unhandled rejection', error?.stack ?? error))
+process.on('uncaughtException', (error) => {
+  const fault = formatFaultDetails(error)
+  if (fault) {
+    process.stderr.write(`[dsh-plugin-fault] ${fault}\n`)
+  }
+  report('uncaught exception', error?.stack ?? error)
+})
+process.on('unhandledRejection', (error) => {
+  const fault = formatFaultDetails(error)
+  if (fault) {
+    process.stderr.write(`[dsh-plugin-fault] ${fault}\n`)
+  }
+  report('unhandled rejection', error?.stack ?? error)
+})
 
 process.stdout.write(
   `[harness-node] runtime node=${process.version} platform=${process.platform} arch=${process.arch}\n`

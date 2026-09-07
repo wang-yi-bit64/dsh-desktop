@@ -10,7 +10,12 @@
 
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/dsh-host", "crates/dsh-host-cli"]
+members = [
+  "src-tauri",
+  "crates/dsh-host",
+  "crates/dsh-host-cli",
+  "crates/dsh-model-gateway",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +29,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 # 本地 crate
 dsh-host = { path = "crates/dsh-host" }
+dsh-model-gateway = { path = "crates/dsh-model-gateway" }
 
 # 通用
 serde = { version = "1", features = ["derive"] }

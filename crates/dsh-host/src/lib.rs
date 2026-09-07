@@ -18,11 +18,13 @@
 //! | [`stop`] | SIGTERM → 4s → SIGKILL 停止语义 | C6 |
 //! | [`logs`] | 日志环形缓冲、滚动落盘、失败归因、级别前缀 | C7 |
 //! | [`logging`] | 宿主日志（`app.log`）落盘门面 + 级别过滤 | C7 |
+//! | [`transport`] | 统一传输协议（Named Pipe / UDS / HTTP）与 JSON-RPC 2.0 模型 | — |
 //! | [`launch`] | 上述模块的编排（spawn → 日志泵 → 就绪等待） | C1–C7 |
 //! | [`error`] | 统一错误类型 + 退出码映射 + 归因降级 | — |
 
 pub mod args;
 pub mod contracts;
+pub mod diagnostics;
 pub mod env;
 pub mod error;
 pub mod launch;
@@ -31,13 +33,30 @@ pub mod logs;
 pub mod paths;
 pub mod process;
 pub mod readiness;
+pub mod safe_mode;
+pub mod session;
 pub mod stop;
+pub mod supervisor;
 pub mod token;
+pub mod transport;
 
 pub use args::{parse_env_overrides, ArgvSnapshot, HarnessArgs};
+pub use diagnostics::{
+    extract_offending_plugins, format_crash_diagnostics, CrashCategory, CrashDiagnostics,
+    DiagnosticReport, DiagnosticsAnalyzer,
+};
 pub use error::{HostError, HostResult};
 pub use launch::{LaunchOutcome, Launcher, LauncherConfig};
 pub use logs::{FailureCause, LogLevel, LogLine, LogRing, LogSource};
 pub use paths::Layout;
 pub use readiness::{ProbeConfig, ReadinessOutcome};
+pub use safe_mode::{
+    ensure_safe_mode_profile, generate_isolated_profile_config, SafeModeContext, SafeModeManager,
+};
+pub use session::{
+    Profile, ProfileManager, ProfileMetadata, Session, SessionManager, SessionMetadata,
+    SessionStore,
+};
+pub use supervisor::{Supervisor, SupervisorConfig, SupervisorState};
 pub use token::LaunchEndpoint;
+pub use transport::{RpcError, RpcId, RpcMessage, RpcRequest, RpcResponse, TransportProtocol};

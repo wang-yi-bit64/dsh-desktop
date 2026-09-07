@@ -23,8 +23,8 @@ use crate::contracts::{
     ANSI_ESCAPE_PATTERN, LOG_FILE_MAX_BACKUPS, LOG_FILE_MAX_BYTES, LOG_LEVEL_DEBUG,
     LOG_LEVEL_ERROR, LOG_LEVEL_INFO, LOG_LEVEL_WARN, LOG_LINE_MAX_BYTES, LOG_PREFIX_DESKTOP,
     LOG_PREFIX_STDERR, LOG_PREFIX_STDOUT, LOG_RING_CAPACITY, LOG_STARTING_MARKER,
-    PATTERN_DSH_ENTRY_FAILED, PATTERN_PORT_IN_USE, PATTERN_UNCAUGHT_EXCEPTION,
-    PATTERN_UNHANDLED_REJECTION,
+    PATTERN_DSH_ENTRY_FAILED, PATTERN_PLUGIN_FAULT, PATTERN_PORT_IN_USE,
+    PATTERN_UNCAUGHT_EXCEPTION, PATTERN_UNHANDLED_REJECTION, PATTERN_WORKER_FAULT,
 };
 
 /// 日志级别。
@@ -244,6 +244,11 @@ impl LogRing {
         self.lines.iter().skip(start).collect()
     }
 
+    /// 全部日志行的克隆（Vec 形式，供诊断分析等场景使用）。
+    pub fn to_vec(&self) -> Vec<LogLine> {
+        self.lines.iter().cloned().collect()
+    }
+
     /// 清空缓冲。
     pub fn clear(&mut self) {
         self.lines.clear();
@@ -368,6 +373,10 @@ pub enum FailureCause {
     SpawnFailed { detail: String },
     /// C7 — `DSH entry failed:`：入口加载期失败，常见于插件不兼容。
     DshEntryFailed { detail: String },
+    /// C7 — `[dsh-plugin-fault]`：插件重复注册/崩溃故障。
+    PluginFault { detail: String },
+    /// C7 — `[dsh-worker-fault]`：插件 Worker 隔离沙盒故障。
+    WorkerFault { detail: String },
     /// C7 — `uncaught exception:`。
     UncaughtException { detail: String },
     /// C7 — `unhandled rejection:`。
@@ -391,6 +400,8 @@ impl FailureCause {
             FailureCause::MissingResource { .. } => "missing_resource",
             FailureCause::SpawnFailed { .. } => "spawn_failed",
             FailureCause::DshEntryFailed { .. } => "dsh_entry_failed",
+            FailureCause::PluginFault { .. } => "plugin_fault",
+            FailureCause::WorkerFault { .. } => "worker_fault",
             FailureCause::UncaughtException { .. } => "uncaught_exception",
             FailureCause::UnhandledRejection { .. } => "unhandled_rejection",
             FailureCause::PortInUse { .. } => "port_in_use",
@@ -409,6 +420,8 @@ impl FailureCause {
         matches!(
             self,
             FailureCause::DshEntryFailed { .. }
+                | FailureCause::PluginFault { .. }
+                | FailureCause::WorkerFault { .. }
                 | FailureCause::UncaughtException { .. }
                 | FailureCause::UnhandledRejection { .. }
         )
@@ -434,6 +447,12 @@ impl fmt::Display for FailureCause {
                     formatter,
                     "Harness 入口加载失败（多为插件不兼容）：{detail}"
                 )
+            }
+            FailureCause::PluginFault { detail } => {
+                write!(formatter, "Harness 插件注册/运行故障：{detail}")
+            }
+            FailureCause::WorkerFault { detail } => {
+                write!(formatter, "Harness 插件 Worker 隔离沙盒故障：{detail}")
             }
             FailureCause::UncaughtException { detail } => {
                 write!(formatter, "Harness 抛出未捕获异常：{detail}")
@@ -480,6 +499,12 @@ pub fn extract_failure_cause(lines: &[LogLine]) -> Option<FailureCause> {
 
     if let Some(detail) = first_capture(&stderr, PATTERN_DSH_ENTRY_FAILED) {
         return Some(FailureCause::DshEntryFailed { detail });
+    }
+    if let Some(detail) = first_capture(&stderr, PATTERN_PLUGIN_FAULT) {
+        return Some(FailureCause::PluginFault { detail });
+    }
+    if let Some(detail) = first_capture(&stderr, PATTERN_WORKER_FAULT) {
+        return Some(FailureCause::WorkerFault { detail });
     }
     if let Some(detail) = first_capture(&stderr, PATTERN_UNCAUGHT_EXCEPTION) {
         return Some(FailureCause::UncaughtException { detail });
@@ -723,6 +748,34 @@ mod tests {
         assert_eq!(cause.kind(), "dsh_entry_failed");
         assert!(cause.is_plugin_fault());
         assert!(cause.to_string().contains("plugin broke"));
+    }
+
+    #[test]
+    fn cause_detects_plugin_fault() {
+        let lines = stderr_lines(&[
+            "[arness-node] boot",
+            "[dsh-plugin-fault] Tool \"recall\" already registered by custom-plugin",
+        ]);
+        let cause = extract_failure_cause(&lines).unwrap();
+        assert_eq!(cause.kind(), "plugin_fault");
+        assert!(cause.is_plugin_fault());
+        assert!(cause
+            .to_string()
+            .contains("Tool \"recall\" already registered"));
+    }
+
+    #[test]
+    fn cause_detects_worker_fault() {
+        let lines = stderr_lines(&[
+            "[arness-node] boot",
+            "[dsh-worker-fault] Worker crashed with exit code 1",
+        ]);
+        let cause = extract_failure_cause(&lines).unwrap();
+        assert_eq!(cause.kind(), "worker_fault");
+        assert!(cause.is_plugin_fault());
+        assert!(cause
+            .to_string()
+            .contains("Worker crashed with exit code 1"));
     }
 
     #[test]

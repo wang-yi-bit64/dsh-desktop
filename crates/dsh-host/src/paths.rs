@@ -149,7 +149,10 @@ impl Layout {
 
         if !force_node && (force_sidecar || self.sidecar_executable.exists()) {
             if !self.sidecar_executable.exists() {
-                return Err(vec![("sidecar_executable", self.sidecar_executable.clone())]);
+                return Err(vec![(
+                    "sidecar_executable",
+                    self.sidecar_executable.clone(),
+                )]);
             }
             let patch = if self.patch.exists() {
                 Some(self.patch.clone())
@@ -246,6 +249,16 @@ impl Layout {
             }
         }
         Ok(())
+    }
+
+    /// Profile 管理根目录（`userData/harness/profiles`）。
+    pub fn profiles_dir(&self) -> PathBuf {
+        self.dsh_home.join(crate::contracts::PROFILES_DIR_NAME)
+    }
+
+    /// 会话管理根目录（`userData/harness/sessions`）。
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.dsh_home.join(crate::contracts::SESSIONS_DIR_NAME)
     }
 }
 

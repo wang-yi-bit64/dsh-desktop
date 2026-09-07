@@ -162,9 +162,7 @@ impl HarnessArgs {
                 args.extend(self.extra.iter().cloned());
                 (executable.clone(), args)
             }
-            LaunchTarget::Node { executable, .. } => {
-                (executable.clone(), self.node_arguments())
-            }
+            LaunchTarget::Node { executable, .. } => (executable.clone(), self.node_arguments()),
         }
     }
 
@@ -314,7 +312,8 @@ mod tests {
             executable: layout.sidecar_executable.clone(),
             patch: Some(layout.patch.clone()),
         };
-        let (prog, args) = HarnessArgs::default_for(layout.clone(), 5000).build_arguments_for_target(&target);
+        let (prog, args) =
+            HarnessArgs::default_for(layout.clone(), 5000).build_arguments_for_target(&target);
         assert_eq!(prog, layout.sidecar_executable);
         assert_eq!(args[0], "web");
         assert_eq!(args[1], "--patch");

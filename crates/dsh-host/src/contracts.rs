@@ -80,6 +80,12 @@ pub const PATTERN_UNCAUGHT_EXCEPTION: &str = r"uncaught exception:\s*(.+)";
 /// C7 — 失败归因：未处理 rejection。
 pub const PATTERN_UNHANDLED_REJECTION: &str = r"unhandled rejection:\s*(.+)";
 
+/// C7 — 失败归因：插件故障（重复工具、重复路由、扩展初始化崩溃等）。
+pub const PATTERN_PLUGIN_FAULT: &str = r"\[dsh-plugin-fault\]\s*(.+)";
+
+/// C7 — 失败归因：插件 Worker 沙盒进程引发的故障或异常退出。
+pub const PATTERN_WORKER_FAULT: &str = r"\[dsh-worker-fault\]\s*(.+)";
+
 /// 端口策略（任务 1.3）：stderr 里出现 `EADDRINUSE` 立即快速失败并换端口重试。
 pub const PATTERN_PORT_IN_USE: &str = "EADDRINUSE";
 
@@ -263,6 +269,42 @@ pub const HARNESS_LOG_FILE: &str = "harness.log";
 /// userData 下的宿主应用日志文件名（阶段 2 引入，与 harness.log 分离）。
 pub const APP_LOG_FILE: &str = "app.log";
 
+/// 任务 P3 / 契约 C10 — Profile 子目录名（`userData/harness/profiles`）。
+pub const PROFILES_DIR_NAME: &str = "profiles";
+
+/// 任务 P3 / 契约 C10 — 会话子目录名（`userData/harness/sessions`）。
+pub const SESSIONS_DIR_NAME: &str = "sessions";
+
+/// 任务 P3 / 契约 C10 — 默认 Profile 标识。
+pub const DEFAULT_PROFILE_ID: &str = "default";
+
+/// 任务 P3 / 契约 C10 — 安全模式 Profile 标识前缀。
+pub const SAFE_MODE_PROFILE_PREFIX: &str = "safe-mode-";
+
+/// 任务 P3 / 契约 C10 — Profile 配置文件名。
+pub const PROFILE_CONFIG_FILE: &str = "profile.json";
+
+/// 任务 P3 / 契约 C10 — 安全模式隔离环境变量名：禁用第三方插件。
+pub const ENV_SAFE_MODE_DISABLE_PLUGINS: &str = "DSH_DISABLE_PLUGINS";
+
+/// 任务 P3 / 契约 C10 — 安全模式隔离环境变量名：安全模式标记。
+pub const ENV_DSH_SAFE_MODE: &str = "DSH_SAFE_MODE";
+
+/// 任务 P3 / 契约 C10 — 重启退避初始间隔。
+pub const SUPERVISOR_BACKOFF_INITIAL: Duration = Duration::from_millis(500);
+
+/// 任务 P3 / 契约 C10 — 重启退避最大间隔。
+pub const SUPERVISOR_BACKOFF_MAX: Duration = Duration::from_secs(10);
+
+/// 任务 P3 / 契约 C10 — 重启退避倍数。
+pub const SUPERVISOR_BACKOFF_MULTIPLIER: f64 = 2.0;
+
+/// 任务 P3 / 契约 C10 — 进程被认定为「稳定运行」的时间阈值（稳定运行后重置退避计数）。
+pub const SUPERVISOR_STABLE_UPTIME: Duration = Duration::from_secs(30);
+
+/// 任务 P3 / 契约 C10 — 状态广播通道容量。
+pub const SUPERVISOR_CHANNEL_CAPACITY: usize = 64;
+
 /// INV-3 — 陈旧进程清扫用的 pidfile 名。
 pub const PID_FILE: &str = "harness.pid";
 
@@ -287,6 +329,34 @@ pub const SHELL_CAPTURE_TIMEOUT_WINDOWS: Duration = Duration::from_secs(15);
 
 /// macOS / Linux login shell 捕获超时。
 pub const SHELL_CAPTURE_TIMEOUT_UNIX: Duration = Duration::from_secs(10);
+
+/// 任务 P3 / 契约 C10 — 诊断分类模式与匹配常量。
+pub const PATTERN_PLUGIN_FAULT: &str = r"\[dsh-plugin-fault\]\s*(.*)";
+pub const PATTERN_WORKER_FAULT: &str = r"\[dsh-worker-fault\]\s*(.*)";
+pub const PATTERN_PORT_IN_USE: &str = "EADDRINUSE";
+pub const PATTERN_UNHANDLED_REJECTION: &str = r"UnhandledPromiseRejection:\s*(.*)";
+pub const PATTERN_GENERIC_PLUGIN: &str =
+    r#"(?:plugin[:\s]+["']?([a-zA-Z0-9_\-@/]+)["']?|\[(?:plugin|ext):([a-zA-Z0-9_\-@/]+)\])"#;
+pub const PATTERN_REQUIRE_PLUGIN: &str =
+    r#"Cannot find module\s+['"]([^'"]*(?:plugin|extension|dsh-)[^'"]*)['"]"#;
+pub const PATTERN_OOM_HEAP: &str = "heap out of memory";
+pub const PATTERN_OOM_ALLOCATION: &str = "allocation failed";
+pub const PATTERN_CANNOT_FIND_MODULE: &str = "cannot find module";
+pub const PATTERN_ERR_EACCES: &str = "eacces";
+pub const PATTERN_ERR_EPERM: &str = "eperm";
+
+/// 统一传输协议（Named Pipe / UDS / RPC）契约常量。
+/// Windows 命名管道前缀。
+pub const NAMED_PIPE_PREFIX: &str = r"\\.\pipe\dsh-runtime-";
+
+/// Unix Domain Socket 默认套接字文件名。
+pub const UDS_SOCKET_FILENAME: &str = "dsh-runtime.sock";
+
+/// 统一 RPC 请求默认超时秒数。
+pub const DEFAULT_RPC_TIMEOUT_SECS: u64 = 30;
+
+/// 统一 RPC 请求默认超时。
+pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(DEFAULT_RPC_TIMEOUT_SECS);
 
 /// 返回当前平台的就绪总超时（C4）。
 ///
