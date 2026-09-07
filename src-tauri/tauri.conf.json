@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "io.dsh.desktop",
   "build": {
-    "frontendDist": "../frontend",
+    "frontendDist": "./frontend",
     "beforeDevCommand": "npm run prepare:harness",
     "beforeBuildCommand": "npm run prepare:harness"
   },

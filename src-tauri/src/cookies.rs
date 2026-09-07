@@ -54,99 +54,71 @@ fn clear_auth_cookies_windows<R: Runtime>(
     webview: &WebviewWindow<R>,
     prefix: &str,
 ) -> Result<CookieCleanup, String> {
-    use std::sync::mpsc;
-
     let prefix = prefix.to_string();
-    let (tx, rx) = mpsc::channel::<Result<CookieCleanup, String>>();
 
-    // with_webview 的闭包运行在主线程；用 channel 把结果带回来。
+    // with_webview 调度到 UI 线程，发起纯异步非阻塞删除，绝不阻塞 UI 消息循环
     webview
         .with_webview(move |platform_webview| {
-            let _ = tx.send(clear_cookies_sync(&platform_webview, &prefix));
+            clear_cookies_async(&platform_webview, &prefix);
         })
         .map_err(|error| format!("with_webview failed: {error}"))?;
 
-    rx.recv()
-        .map_err(|_| "cookie cleanup did not report back".to_string())?
+    Ok(CookieCleanup {
+        removed: 0,
+        bridged: true,
+    })
 }
 
-/// 在 WebView2 控制器上执行枚举 + 精确删除（只动 `dsh-auth-*`）。
+/// 在 WebView2 控制器上发起异步枚举与清理，绝不调用阻塞的 wait_for_async_operation。
 #[cfg(windows)]
-fn clear_cookies_sync(
-    platform_webview: &tauri::webview::PlatformWebview,
-    prefix: &str,
-) -> Result<CookieCleanup, String> {
-    use std::sync::mpsc;
-
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2CookieList, ICoreWebView2_19,
-    };
+fn clear_cookies_async(platform_webview: &tauri::webview::PlatformWebview, prefix: &str) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_19;
     use webview2_com::{take_pwstr, CoTaskMemPWSTR, GetCookiesCompletedHandler};
     use windows::core::{Interface as _, PWSTR};
 
     let controller = platform_webview.controller();
-    let core = unsafe { controller.CoreWebView2() }
-        .map_err(|error| format!("CoreWebView2 unavailable: {error}"))?;
-    // webview2-com 0.38 的绑定把 CookieManager 放在 ICoreWebView2_19 上（基础
-    // ICoreWebView2 没有）；用 QueryInterface 升到该子接口再取管理器。
-    let core: ICoreWebView2_19 = core
-        .cast()
-        .map_err(|error| format!("ICoreWebView2_19 unavailable: {error}"))?;
-    let manager = unsafe { core.CookieManager() }
-        .map_err(|error| format!("CookieManager unavailable: {error}"))?;
+    let Ok(core) = (unsafe { controller.CoreWebView2() }) else {
+        return;
+    };
+    let Ok(core): Result<ICoreWebView2_19, _> = core.cast() else {
+        return;
+    };
+    let Ok(manager) = (unsafe { core.CookieManager() }) else {
+        return;
+    };
 
-    // GetCookies 是异步 COM 调用；webview2-com 的 completed-callback 封装会在
-    // 主线程泵消息直到完成回调兑现。GetCookies 闭包搬走一份 manager，
-    // 循环删除用剩下的这份。
-    let (result_tx, result_rx) = mpsc::channel::<Option<ICoreWebView2CookieList>>();
     let uri = CoTaskMemPWSTR::from("http://127.0.0.1");
-    let fetch_manager = manager.clone();
-    unsafe {
-        GetCookiesCompletedHandler::wait_for_async_operation(
-            Box::new(move |handler| {
-                fetch_manager
-                    .GetCookies(*uri.as_ref().as_pcwstr(), &handler)
-                    .map_err(webview2_com::Error::WindowsError)
-            }),
-            Box::new(move |error_code, cookie_list| {
-                let _ = result_tx.send(if error_code.is_ok() {
-                    cookie_list
-                } else {
-                    None
-                });
-                Ok(())
-            }),
-        )
-        .map_err(|error| format!("GetCookies failed: {error}"))?;
-    }
+    let delete_manager = manager.clone();
+    let prefix_str = prefix.to_string();
 
-    let cookies = result_rx
-        .recv()
-        .map_err(|_| "cookie list was not delivered".to_string())?
-        .ok_or_else(|| "GetCookies reported a failure".to_string())?;
-    let mut count = 0u32;
-    unsafe { cookies.Count(&mut count) }
-        .map_err(|error| format!("could not read cookie count: {error}"))?;
-
-    let mut removed = 0usize;
-    for index in 0..count {
-        let Ok(cookie) = (unsafe { cookies.GetValueAtIndex(index) }) else {
-            continue;
+    let handler = GetCookiesCompletedHandler::create(Box::new(move |error_code, cookie_list| {
+        if error_code.is_err() {
+            return Ok(());
+        }
+        let Some(cookies) = cookie_list else {
+            return Ok(());
         };
-        let mut name_buf = PWSTR::null();
-        if unsafe { cookie.Name(&mut name_buf) }.is_err() {
-            continue;
+        let mut count = 0u32;
+        if unsafe { cookies.Count(&mut count) }.is_err() {
+            return Ok(());
         }
-        let name = take_pwstr(name_buf);
-        if name.starts_with(prefix) && unsafe { manager.DeleteCookie(&cookie) }.is_ok() {
-            removed += 1;
+        for index in 0..count {
+            let Ok(cookie) = (unsafe { cookies.GetValueAtIndex(index) }) else {
+                continue;
+            };
+            let mut name_buf = PWSTR::null();
+            if unsafe { cookie.Name(&mut name_buf) }.is_err() {
+                continue;
+            }
+            let name = take_pwstr(name_buf);
+            if name.starts_with(&prefix_str) {
+                let _ = unsafe { delete_manager.DeleteCookie(&cookie) };
+            }
         }
-    }
+        Ok(())
+    }));
 
-    Ok(CookieCleanup {
-        removed,
-        bridged: true,
-    })
+    let _ = unsafe { manager.GetCookies(*uri.as_ref().as_pcwstr(), &handler) };
 }
 
 #[cfg(test)]

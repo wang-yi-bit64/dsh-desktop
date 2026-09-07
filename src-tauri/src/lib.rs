@@ -34,6 +34,17 @@ use dsh_host::launch::LauncherConfig;
 /// 应用入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 注册崩溃日志钩子，确保 Release .exe 在无控制台环境下也能捕获 panic 根因
+    std::panic::set_hook(Box::new(|panic_info| {
+        let msg = format!("DSH Desktop Panic: {panic_info}\n");
+        eprintln!("{msg}");
+        if let Ok(mut log_path) = std::env::current_exe() {
+            log_path.pop();
+            log_path.push("crash.log");
+            let _ = std::fs::write(log_path, msg);
+        }
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // 二次启动 → 聚焦既有窗口，而不是再开一份。
@@ -147,8 +158,8 @@ pub fn run() {
                     if let Some(state) = app.try_state::<Arc<AppState>>() {
                         let mobile = Arc::clone(&state.mobile);
                         let supervisor = Arc::clone(&state.supervisor);
-                        // 阻塞一小段时间，确保子进程在应用退出前被回收（INV-3）。
-                        tauri::async_runtime::block_on(async move {
+                        // 异步触发停止，配合 JobObject/PDEATHSIG 兜底保护，避免主 UI 线程 block_on 导致操作系统判定为「未响应」
+                        tauri::async_runtime::spawn(async move {
                             mobile.stop().await;
                             supervisor.stop().await;
                         });
