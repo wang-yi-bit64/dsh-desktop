@@ -25,13 +25,13 @@
 use std::path::PathBuf;
 
 use crate::contracts::{HARNESS_CLI, HARNESS_HOST, HARNESS_NO_OPEN, NODE_EXPOSE_INTERNALS};
-use crate::paths::Layout;
+use crate::paths::{LaunchTarget, Layout};
 use crate::HostResult;
 
 /// `--print-argv` 用的纯数据快照（不含任何需要落盘的敏感信息）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArgvSnapshot {
-    /// 可执行文件路径（捆绑的 node）。
+    /// 可执行文件路径（捆绑的 node 或 sidecar）。
     pub program: PathBuf,
     /// 完整 argv。
     pub args: Vec<String>,
@@ -101,11 +101,9 @@ impl HarnessArgs {
     /// assert_eq!(&built[built.len() - 2..], &["--profile", "work"]);
     /// ```
     pub fn dsh_arguments(&self) -> Vec<String> {
-        let mut args = vec![
-            HARNESS_CLI.to_string(),
-            "--patch".to_string(),
-            self.layout.patch.display().to_string(),
-        ];
+        let mut args = vec![HARNESS_CLI.to_string()];
+        args.push("--patch".to_string());
+        args.push(self.layout.patch.display().to_string());
         // 桌面窗口是唯一展示面：不交给系统浏览器打开。
         if self.no_open {
             args.push(HARNESS_NO_OPEN.to_string());
@@ -145,6 +143,31 @@ impl HarnessArgs {
         args
     }
 
+    /// 根据指定的 [`LaunchTarget`] 构建完整的命令参数。
+    pub fn build_arguments_for_target(&self, target: &LaunchTarget) -> (PathBuf, Vec<String>) {
+        match target {
+            LaunchTarget::Sidecar { executable, patch } => {
+                let mut args = vec![HARNESS_CLI.to_string()];
+                if let Some(p) = patch {
+                    args.push("--patch".to_string());
+                    args.push(p.display().to_string());
+                }
+                if self.no_open {
+                    args.push(HARNESS_NO_OPEN.to_string());
+                }
+                args.push("--host".to_string());
+                args.push(self.host.clone());
+                args.push("--port".to_string());
+                args.push(self.port.to_string());
+                args.extend(self.extra.iter().cloned());
+                (executable.clone(), args)
+            }
+            LaunchTarget::Node { executable, .. } => {
+                (executable.clone(), self.node_arguments())
+            }
+        }
+    }
+
     /// 供 `--print-argv` 使用的快照。
     ///
     /// # 示例
@@ -159,10 +182,19 @@ impl HarnessArgs {
     /// assert_eq!(snapshot.args[3], "web");
     /// ```
     pub fn argv_snapshot(&self) -> ArgvSnapshot {
-        ArgvSnapshot {
-            program: self.layout.node_executable.clone(),
-            args: self.node_arguments(),
-            cwd: self.layout.launch_root.clone(),
+        if let Ok(target) = self.layout.resolve_launch_target() {
+            let (program, args) = self.build_arguments_for_target(&target);
+            ArgvSnapshot {
+                program,
+                args,
+                cwd: self.layout.launch_root.clone(),
+            }
+        } else {
+            ArgvSnapshot {
+                program: self.layout.node_executable.clone(),
+                args: self.node_arguments(),
+                cwd: self.layout.launch_root.clone(),
+            }
         }
     }
 }
@@ -273,5 +305,20 @@ mod tests {
     fn env_override_rejects_malformed_pairs() {
         assert!(parse_env_overrides(&["NOEQUALS".into()]).is_err());
         assert!(parse_env_overrides(&["=value".into()]).is_err());
+    }
+
+    #[test]
+    fn build_arguments_for_sidecar_target() {
+        let layout = layout();
+        let target = LaunchTarget::Sidecar {
+            executable: layout.sidecar_executable.clone(),
+            patch: Some(layout.patch.clone()),
+        };
+        let (prog, args) = HarnessArgs::default_for(layout.clone(), 5000).build_arguments_for_target(&target);
+        assert_eq!(prog, layout.sidecar_executable);
+        assert_eq!(args[0], "web");
+        assert_eq!(args[1], "--patch");
+        assert_eq!(args[3], "--no-open");
+        assert!(args.contains(&"5000".to_string()));
     }
 }

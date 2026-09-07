@@ -25,13 +25,15 @@ const resources = join(root, 'src-tauri', 'resources')
 
 rmSync(resources, { recursive: true, force: true })
 mkdirSync(join(resources, 'node'), { recursive: true })
+mkdirSync(join(resources, 'bin'), { recursive: true })
 mkdirSync(join(resources, 'harness', 'node_modules'), { recursive: true })
 
 // tauri-build resolves each bundle.resources glob and fails when a glob
 // matches nothing; empty dirs are ignored by glob, so drop a placeholder file
-// in each of the two runtime dirs (node/, harness/node_modules/) that would
+// in each of the runtime dirs (node/, bin/, harness/node_modules/) that would
 // otherwise stay empty in a compile-only stub.
 writeFileSync(join(resources, 'node', '.gitkeep'), '')
+writeFileSync(join(resources, 'bin', '.gitkeep'), '')
 writeFileSync(join(resources, 'harness', 'node_modules', '.gitkeep'), '')
 
 // Git-tracked static assets (see git ls-files build/). prepare:harness copies

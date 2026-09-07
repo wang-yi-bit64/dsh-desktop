@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "prepare:harness": "node scripts/prepare-harness.mjs",
+    "build:sidecar": "node scripts/build-sidecar.mjs",
     "dev": "npm run prepare:harness && tauri dev",
     "build": "npm run prepare:harness && tauri build",
     "tauri": "tauri"

@@ -37,6 +37,7 @@
       "icons/icon.ico"
     ],
     "resources": [
+      "resources/bin/*",
       "resources/node/*",
       "resources/harness/**/*",
       "resources/MANIFEST.json",

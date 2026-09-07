@@ -29,10 +29,28 @@
 use std::path::{Path, PathBuf};
 
 use crate::contracts::{
-    DSH_ENTRY_RELATIVE, DSH_HOME_DIR, HARNESS_LOG_FILE, HARNESS_MODULES_DIR, LAUNCH_ROOT_DIR,
-    LOG_DIR, MANIFEST_FILE, NODE_ENTRY_FILE, NODE_RESOURCE_DIR, PATCH_FILE, PID_FILE,
-    WINDOWS_HIDE_FILE,
+    DSH_ENTRY_RELATIVE, DSH_HOME_DIR, ENV_DSH_RUNNER, HARNESS_LOG_FILE, HARNESS_MODULES_DIR,
+    LAUNCH_ROOT_DIR, LOG_DIR, MANIFEST_FILE, NODE_ENTRY_FILE, NODE_RESOURCE_DIR, PATCH_FILE,
+    PID_FILE, SIDECAR_RESOURCE_DIR, WINDOWS_HIDE_FILE,
 };
+
+/// 运行目标模式：支持传统的 Node + 模块树模式，或紧凑的 Sidecar 独立单二进制模式。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchTarget {
+    /// 传统 Node 模式（`node --expose-internals harness-node-entry.mjs ...`）
+    Node {
+        executable: PathBuf,
+        node_entry: PathBuf,
+        windows_hide_entry: PathBuf,
+        dsh_entry: PathBuf,
+        patch: PathBuf,
+    },
+    /// Sidecar 独立二进制模式（`dsh-sidecar[.exe] web --patch ...`）
+    Sidecar {
+        executable: PathBuf,
+        patch: Option<PathBuf>,
+    },
+}
 
 /// 一次启动所需的全部路径。
 ///
@@ -54,6 +72,8 @@ pub struct Layout {
     pub dsh_entry: PathBuf,
     /// 桌面 patch 层（`--patch` 参数值）。
     pub patch: PathBuf,
+    /// 独立单二进制/Sidecar 可执行文件路径（若存在）。
+    pub sidecar_executable: PathBuf,
     /// 资源组装清单（运行时 warning 级校验用）。
     pub manifest: PathBuf,
     /// DSH_HOME：profiles / sessions / settings / credentials。
@@ -92,6 +112,7 @@ impl Layout {
         let app_data_dir = app_data_dir.as_ref().to_path_buf();
 
         let node_name = crate::contracts::node_binary_name();
+        let sidecar_name = crate::contracts::sidecar_binary_name();
         let modules = resource_dir.join(HARNESS_MODULES_DIR);
 
         Self {
@@ -100,6 +121,7 @@ impl Layout {
             windows_hide_entry: resource_dir.join(WINDOWS_HIDE_FILE),
             dsh_entry: modules.join(DSH_ENTRY_RELATIVE),
             patch: resource_dir.join(PATCH_FILE),
+            sidecar_executable: resource_dir.join(SIDECAR_RESOURCE_DIR).join(sidecar_name),
             manifest: resource_dir.join(MANIFEST_FILE),
             dsh_home: app_data_dir.join(DSH_HOME_DIR),
             launch_root: app_data_dir.join(LAUNCH_ROOT_DIR),
@@ -111,6 +133,63 @@ impl Layout {
             resource_dir,
             app_data_dir,
         }
+    }
+
+    /// 探测并解析当前可用的运行目标（Sidecar 优先或 Node 模式）。
+    ///
+    /// 决策规则：
+    /// 1. 若设置环境变量 `DSH_RUNNER=node`，强制使用 Node 模式。
+    /// 2. 若设置环境变量 `DSH_RUNNER=sidecar`，强制使用 Sidecar 模式（若文件不存在则报错）。
+    /// 3. 默认情况下，优先检查 `sidecar_executable` 是否存在；若存在则选择 Sidecar 模式；
+    ///    否则回退到传统的 Node 模式。
+    pub fn resolve_launch_target(&self) -> Result<LaunchTarget, Vec<(&'static str, PathBuf)>> {
+        let runner_env = std::env::var(ENV_DSH_RUNNER).ok();
+        let force_node = runner_env.as_deref() == Some("node");
+        let force_sidecar = runner_env.as_deref() == Some("sidecar");
+
+        if !force_node && (force_sidecar || self.sidecar_executable.exists()) {
+            if !self.sidecar_executable.exists() {
+                return Err(vec![("sidecar_executable", self.sidecar_executable.clone())]);
+            }
+            let patch = if self.patch.exists() {
+                Some(self.patch.clone())
+            } else {
+                None
+            };
+            Ok(LaunchTarget::Sidecar {
+                executable: self.sidecar_executable.clone(),
+                patch,
+            })
+        } else {
+            let missing = self.missing_node_resources();
+            if !missing.is_empty() {
+                return Err(missing
+                    .into_iter()
+                    .map(|(k, p)| (k, p.to_path_buf()))
+                    .collect());
+            }
+            Ok(LaunchTarget::Node {
+                executable: self.node_executable.clone(),
+                node_entry: self.node_entry.clone(),
+                windows_hide_entry: self.windows_hide_entry.clone(),
+                dsh_entry: self.dsh_entry.clone(),
+                patch: self.patch.clone(),
+            })
+        }
+    }
+
+    /// 传统 Node 模式下的必需资源检查。
+    pub fn missing_node_resources(&self) -> Vec<(&'static str, &Path)> {
+        let required: [(&'static str, &Path); 4] = [
+            ("node_executable", self.node_executable.as_path()),
+            ("node_entry", self.node_entry.as_path()),
+            ("dsh_entry", self.dsh_entry.as_path()),
+            ("patch", self.patch.as_path()),
+        ];
+        required
+            .into_iter()
+            .filter(|(_, path)| !path.exists())
+            .collect()
     }
 
     /// 依赖树根目录（`resources/harness/node_modules`）。
@@ -134,21 +213,17 @@ impl Layout {
 
     /// 列出缺失的必需资源条目（INV-1：资源缺失只能报错，不能就地生成）。
     ///
+    /// 优先根据当前运行目标进行校验。
     /// 返回 `(契约名, 路径)` 列表；空向量表示资源齐备。
     pub fn missing_resources(&self) -> Vec<(&'static str, &Path)> {
-        let required: [(&'static str, &Path); 4] = [
-            ("node_executable", self.node_executable.as_path()),
-            ("node_entry", self.node_entry.as_path()),
-            ("dsh_entry", self.dsh_entry.as_path()),
-            ("patch", self.patch.as_path()),
-        ];
-        required
-            .into_iter()
-            .filter(|(_, path)| !path.exists())
-            .collect()
+        if self.sidecar_executable.exists() {
+            Vec::new()
+        } else {
+            self.missing_node_resources()
+        }
     }
 
-    /// Unix 下为捆绑的 Node.js 二进制补上执行位。
+    /// Unix 下为捆绑的 Node.js / Sidecar 二进制补上执行位。
     ///
     /// 资源解包（AppImage / tar / NSIS 之外的分发方式）可能丢掉执行位，
     /// 直接 spawn 会拿到 EACCES。Windows 无执行位概念，是空操作。
@@ -156,7 +231,7 @@ impl Layout {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            for path in [&self.node_executable] {
+            for path in [&self.node_executable, &self.sidecar_executable] {
                 if path.exists() {
                     let mut permissions = std::fs::metadata(path)
                         .map_err(|error| crate::HostError::CreateDir(path.clone(), error))?
@@ -371,6 +446,40 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o111, 0o111, "执行位应已补上");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_launch_target_auto_detects_sidecar_and_node() {
+        let unique = format!(
+            "dsh-host-target-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or(0)
+        );
+        let root = std::env::temp_dir().join(unique);
+        let layout = layout(&root);
+
+        // 默认情况下两者皆无，应报错缺失
+        let res = layout.resolve_launch_target();
+        assert!(res.is_err());
+
+        // 创建 sidecar 二进制
+        std::fs::create_dir_all(layout.sidecar_executable.parent().unwrap()).unwrap();
+        std::fs::write(&layout.sidecar_executable, "mock sidecar").unwrap();
+
+        // 探测出 Sidecar 模式
+        let target = layout.resolve_launch_target().expect("应解析为 Sidecar");
+        match target {
+            LaunchTarget::Sidecar { executable, patch } => {
+                assert_eq!(executable, layout.sidecar_executable);
+                assert!(patch.is_none());
+            }
+            _ => panic!("期望 Sidecar 目标"),
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }

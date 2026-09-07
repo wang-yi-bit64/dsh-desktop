@@ -222,6 +222,17 @@ pub const NODE_ENTRY_FILE: &str = "harness-node-entry.mjs";
 /// C8 — 资源目录内 Node.js 的相对路径（`resources/node/`）。
 pub const NODE_RESOURCE_DIR: &str = "node";
 
+/// C8 (Sidecar) — 资源目录内独立单二进制/Sidecar 的相对子目录（`resources/bin/`）。
+pub const SIDECAR_RESOURCE_DIR: &str = "bin";
+
+/// C8 (Sidecar) — 独立单二进制/Sidecar 的默认文件名（非 Windows）。
+pub const SIDECAR_BIN_NAME_UNIX: &str = "dsh-sidecar";
+/// C8 (Sidecar) — 独立单二进制/Sidecar 的默认文件名（Windows）。
+pub const SIDECAR_BIN_NAME_WINDOWS: &str = "dsh-sidecar.exe";
+
+/// 环境变量：显式指定 Harness 运行模式（`"sidecar"` / `"node"`）。
+pub const ENV_DSH_RUNNER: &str = "DSH_RUNNER";
+
 /// C8 — 资源目录内依赖树的相对路径（`resources/harness/node_modules/`）。
 pub const HARNESS_MODULES_DIR: &str = "harness/node_modules";
 
@@ -299,6 +310,15 @@ pub fn node_binary_name() -> &'static str {
         NODE_BIN_NAME_WINDOWS
     } else {
         NODE_BIN_NAME_UNIX
+    }
+}
+
+/// 返回当前平台的 Sidecar 独立二进制文件名（C8 Sidecar）。
+pub fn sidecar_binary_name() -> &'static str {
+    if cfg!(windows) {
+        SIDECAR_BIN_NAME_WINDOWS
+    } else {
+        SIDECAR_BIN_NAME_UNIX
     }
 }
 
