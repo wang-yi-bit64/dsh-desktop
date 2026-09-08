@@ -57,6 +57,9 @@ function diagnostics() {
   // T05：把真实 argv 提前打到 diagnostics，排障 / 集成测试能直接核对
   // 「宿主到底传了什么」。
   console.log(`[harness-node] argv=${JSON.stringify(args)}`)
+  // C2：契约环境变量必须真的到达子进程（DSH_HOME 决定可写状态落在 app_data
+  // 还是用户主目录）。集成测试据此断言 shell=None 路径也走 harness_env。
+  console.log(`[harness-node] DSH_HOME=${process.env.DSH_HOME ?? ''}`)
 }
 
 function sleep(ms) {

@@ -66,6 +66,10 @@ patches/                # 应用到 Harness 依赖树的 patch-package 补丁
 vendor/                 # 本地桌面定制包（dshmarket 等）
 packages/               # 被打补丁包的 vendored tgz 覆盖
 scripts/                # 构建与测试辅助（prepare-harness、stub-tauri-resources 等）
+  prepare-harness.mjs       # 组装运行时到 src-tauri/resources/
+  stub-tauri-resources.mjs  # 全新 checkout / CI 用的仅编译桩资源
+  mock-harness.mjs          # 可注入故障的假 Harness，供集成测试使用
+  fault-inject.mjs          # 孤儿进程与失败归因验证
 docs/                   # 架构设计、契约定义与技术方案
   dsh-desktop-redesign-architecture-and-plan.md  # 架构重构与开发执行完整计划
   system_design.md                  # 系统架构设计与不变量规范
@@ -83,11 +87,31 @@ docs/                   # 架构设计、契约定义与技术方案
 - **阶段 3 (P3) —— 多模型网关 2.0 与基准测试**：支持 OpenAI、DeepSeek、Gemini、Claude 多厂商工具调用 JSON Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）以及微秒级性能基准测试。
 - **阶段 4 (P4) —— 薄壳收敛与诊断系统 2.0**：Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回，支持一键脱敏导出诊断包 (`diagnostics.zip`)。
 
+## 测试
+
+无头门禁无需显示器、也无需组装 300MB 运行时（INV-6）：
+
+```sh
+cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
+```
+
+集成测试会真实派生 Node 进程运行 `scripts/mock-harness.mjs`，因此需要 `PATH` 上有 Node.js（可用 `DSH_TEST_NODE` 指定），找不到时会自行跳过而非失败。各类故障模式（启动失败、不打印 URL、端口占用重试、就绪后崩溃）通过 `mock-harness.mjs` 的 argv 与环境变量注入，而不是在 Rust 侧打桩。`scripts/fault-inject.mjs` 额外针对 `dsh-host-cli` 验证孤儿进程清理与退出码归因。
+
 ## 说明
 
 - `node_modules/`、`harness-deps/`、`src-tauri/target/` 与 `src-tauri/resources/` 均已被 gitignore；其中 `resources/` 由构建脚本按需组装生成，避免增大仓库体积。
 - 在全新拉取的无资源环境中运行 `cargo check` 或 `cargo test` 前，可先执行 `node scripts/stub-tauri-resources.mjs` 生成桩资源以通过 Tauri 编译期校验。
 - 更新源指向本仓库 GitHub 发布页的 `latest.json`。发布构建需要签名密钥（见 `tauri.conf.json` → `plugins.updater.pubkey`）。
+
+## Windows 打包注意事项
+
+此前有三个缺陷会让 Windows 构建产出的安装包启动即失败，现已全部修复。本节记录根因，避免回归。
+
+- **`\\?\` verbatim 路径绝不能传给 Node 子进程。** Tauri 的 `resource_dir()` 来自 `current_exe().canonicalize()`，Windows 上返回扩展长度路径（`\\?\D:\…`）。把它拼进 Node 入口脚本后，CJS loader 会将其还原成裸盘符 `D:`，`lstat` 抛 `EISDIR: illegal operation on a directory, lstat 'D:'`。修复位于 [`crates/dsh-host/src/paths.rs`](crates/dsh-host/src/paths.rs) 的 `Layout::resolve`——所有派生路径的唯一产地，因此没有任何调用点能再泄漏该前缀。
+- **`prepare:harness` 幂等快速路径按完整打包清单校验。** 此前只检查 3 个文件，导致缺 `bin/`、`plugin-safety-guard.mjs` 或 `plugin-worker-host.mjs` 的 `resources/` 被判定为完整并跳过组装。`plugin-safety-guard.mjs` 由 `harness-node-entry.mjs` 直接 import，缺失时 Harness 根本无法启动；缺 `bin/` 还会让 `cargo build` 因 `resources/bin/*` glob 不匹配而失败。完整性检查现已对齐 `tauri.conf.json` → `bundle.resources`。
+- **`shell == None` 时同样要走 `harness_env`。** `Launcher::execute` 此前把 `capture_shell_environment()` 的原始结果直接交给子进程，`DSH_HOME` 等契约变量因此从未注入，Harness 回退到 `~/.dsh`，把可变状态写到了 `app_data_dir` 之外（违反 INV-1）。GUI 与 CLI 两条路径现已都注入契约环境。
+
+要构建真实安装包，`npm run tauri build` 首次运行会下载 NSIS 工具链；在网络无法访问 GitHub releases 的环境下，打包步骤会以 `timeout: global` 失败，但此时 `.exe` 与资源其实已成功产出。
 
 ## 安全与依赖说明
 

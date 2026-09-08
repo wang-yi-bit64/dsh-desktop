@@ -94,7 +94,7 @@ pub async fn run(args: StartArgs, log_level: LogLevelArg, json: bool) -> ExitCod
     println!("[cli] launch    = {}", layout.launch_root.display());
 
     let running = launcher
-        .run(None, |event| match event {
+        .run(Some(&environment), |event| match event {
             LaunchEvent::Log(line) => println!("{line}"),
             LaunchEvent::Spawned { pid, port } => println!("[cli] spawned pid={pid} port={port}"),
             LaunchEvent::TokenFound { endpoint } => {

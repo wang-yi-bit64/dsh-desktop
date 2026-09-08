@@ -395,9 +395,13 @@ impl Launcher {
     {
         on_event(LaunchEvent::Preparing);
 
+        // `shell == None` 时必须走 `harness_env` 而不是直接用捕获结果：契约项
+        // （DSH_HOME / NO_COLOR / NODE_OPTIONS …）只在那一步写入。此前直接把
+        // `capture_shell_environment()` 的结果交给子进程，DSH_HOME 根本没传下去，
+        // harness 回退到 `~/.dsh`，可写状态落在用户主目录而非 app_data（违反 INV-1）。
         let environment = match shell {
             Some(environment) => environment.clone(),
-            None => capture_shell_environment()?,
+            None => crate::env::harness_env(&self.layout, &capture_shell_environment()?, None),
         };
 
         self.layout.ensure_dirs()?;

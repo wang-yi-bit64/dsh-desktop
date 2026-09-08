@@ -287,6 +287,36 @@ async fn failed_launch_leaves_pidfile_for_next_sweep() {
     assert!(stale.pid > 0, "pidfile 应记录本次尝试的 pid");
 }
 
+/// C2 回归：`shell == None` 时宿主也必须走 `harness_env`，让 DSH_HOME 等契约
+/// 环境变量真正到达子进程。此前该路径直接把 `capture_shell_environment()` 的
+/// 结果交给子进程，DSH_HOME 缺失 → harness 回退 `~/.dsh`，可写状态落在用户
+/// 主目录而非 app_data（违反 INV-1）。
+#[tokio::test]
+async fn shell_none_still_injects_contract_environment() {
+    let Some(fx) = fixture() else {
+        eprintln!("[skip] 未找到系统 node / mock 脚本，跳过 shell=None 环境断言");
+        return;
+    };
+
+    let launcher = fx.launcher(Duration::from_secs(20));
+    let mut running = launcher
+        .run(None, |_event| {})
+        .await
+        .expect("mock 应能就绪");
+    assert!(
+        wait_live_contains(
+            &running,
+            &format!("DSH_HOME={}", fx.layout.dsh_home.display())
+        )
+        .await,
+        "shell=None 路径也必须注入契约 DSH_HOME={}",
+        fx.layout.dsh_home.display()
+    );
+
+    running.terminate();
+    let _ = running.wait_exit().await;
+}
+
 /// 平台级退出：显式 terminate 后 exit watcher 观察到子进程结束。
 #[tokio::test]
 async fn terminate_reaps_process_tree() {

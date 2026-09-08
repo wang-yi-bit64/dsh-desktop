@@ -210,16 +210,39 @@ const fingerprint = sha256(
 const nodeBinName = isWindows ? 'node.exe' : 'node'
 const manifestPath = join(resources, 'MANIFEST.json')
 
+// tauri.conf.json 的 bundle.resources 逐条列举了打包所需的文件；build.rs 对每个
+// glob 做硬校验，缺任何一条都会让 cargo 编译失败。幂等快速路径必须按同一份清单
+// 校验，否则残缺的 resources/ 会被当成「完整」复用——实测漏掉 bin/、
+// plugin-safety-guard.mjs、plugin-worker-host.mjs 时打包出来的应用启动即崩
+// （node 入口 import 不到 guard，harness 根本起不来）。
+const REQUIRED_FILES = [
+  'harness-node-entry.mjs',
+  'windows-child-process-hide.mjs',
+  'plugin-safety-guard.mjs',
+  'plugin-worker-host.mjs',
+  'dsh-desktop.patch.yml',
+  'MANIFEST.json',
+  'splash.html',
+  'plugin-recovery.html',
+  'safe-mode.html',
+  'windows-menu.html',
+  'dsh-loader.gif',
+  'dsh-loader-dark.gif',
+  'app-icon.png'
+]
+const REQUIRED_DIRS = ['bin', 'node', join('harness', 'node_modules', '@deepseek-ai')]
+
+function resourcesComplete() {
+  return (
+    REQUIRED_FILES.every((file) => existsSync(join(resources, file))) &&
+    REQUIRED_DIRS.every((dir) => existsSync(join(resources, dir))) &&
+    existsSync(join(resources, 'node', nodeBinName))
+  )
+}
+
 if (!forceRebuild) {
-  // 产物完整性只看资源本体；MANIFEST 缺失由快速路径单独处理。
-  // harness-node-entry.mjs 必须纳入校验：tauri.conf.json 的 build.rs 会对其做
-  // glob 硬校验，缺失时 cargo 直接编译失败。
-  const resourcesComplete =
-    existsSync(join(resources, 'node', nodeBinName)) &&
-    existsSync(join(resources, 'harness', 'node_modules', '@deepseek-ai')) &&
-    existsSync(join(resources, 'harness-node-entry.mjs'))
   let manifestMatches = false
-  if (resourcesComplete && existsSync(manifestPath)) {
+  if (resourcesComplete() && existsSync(manifestPath)) {
     try {
       manifestMatches = JSON.parse(readFileSync(manifestPath, 'utf8')).fingerprint === fingerprint
     } catch {
@@ -235,7 +258,7 @@ if (!forceRebuild) {
   // 但 MANIFEST 缺失或过期 —— 仅重建 MANIFEST，避免整轮 npm install
   // （--force 可强制完整重组）。
   const stagingLockfile = join(staging, 'package-lock.json')
-  if (resourcesComplete && existsSync(stagingLockfile) && stagingInputsMatch()) {
+  if (resourcesComplete() && existsSync(stagingLockfile) && stagingInputsMatch()) {
     writeFileSync(manifestPath, `${JSON.stringify(buildManifest(stagingLockfile), null, 2)}\n`)
     log(`仅重建 MANIFEST.json → ${manifestPath}（--force 可强制完整重组）`)
     process.exit(0)

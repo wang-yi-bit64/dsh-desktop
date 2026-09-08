@@ -108,8 +108,13 @@ impl Layout {
     /// assert!(layout.app_data_dir == Path::new("/data"));
     /// ```
     pub fn resolve(resource_dir: impl AsRef<Path>, app_data_dir: impl AsRef<Path>) -> Self {
-        let resource_dir = resource_dir.as_ref().to_path_buf();
-        let app_data_dir = app_data_dir.as_ref().to_path_buf();
+        // Tauri 的 `resource_dir()` 来自 `current_exe().canonicalize()`，Windows 上
+        // 因此带 `\\?\` verbatim 前缀。这些路径会拼进 node 的 argv（入口脚本、
+        // `@deepseek-ai/dsh/lib/bin.js`），而 node 的 CJS loader 会把 verbatim
+        // 路径还原成盘符 `D:` 后 lstat 抛 EISDIR。在这里统一剥掉前缀，保证
+        // 布局中所有派生路径都是普通形式——这是唯一入口，改一处即可。
+        let resource_dir = strip_verbatim_prefix(resource_dir.as_ref().to_path_buf());
+        let app_data_dir = strip_verbatim_prefix(app_data_dir.as_ref().to_path_buf());
 
         let node_name = crate::contracts::node_binary_name();
         let sidecar_name = crate::contracts::sidecar_binary_name();
@@ -342,6 +347,42 @@ mod tests {
             layout.pid_file,
             root.join("data").join("launch-root").join("harness.pid")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn layout_strips_verbatim_prefix_from_every_derived_path() {
+        // Tauri 的 resource_dir() 来自 canonicalize()，Windows 上带 `\\?\`。
+        // 布局必须剥掉它，否则 node 的 CJS loader 在解析入口脚本时把 verbatim
+        // 路径还原成盘符 `D:` 并 lstat 失败（EISDIR）。
+        let layout = Layout::resolve(
+            Path::new(r"\\?\C:\tmp\dsh\res"),
+            Path::new(r"\\?\C:\tmp\dsh\data"),
+        );
+        for path in [
+            &layout.resource_dir,
+            &layout.app_data_dir,
+            &layout.node_executable,
+            &layout.node_entry,
+            &layout.dsh_entry,
+            &layout.patch,
+        ] {
+            assert!(
+                !path.to_string_lossy().starts_with(r"\\?\"),
+                "{path:?} 不应保留 verbatim 前缀"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_unc_prefix_is_unwrapped_not_mangled() {
+        // `\\?\UNC\server\share` 必须还原成 `\\server\share`，而不是 `UNC\server\share`。
+        let layout = Layout::resolve(
+            Path::new(r"\\?\UNC\server\share\res"),
+            Path::new(r"\\?\C:\tmp\dsh\data"),
+        );
+        assert_eq!(layout.resource_dir, Path::new(r"\\server\share\res"));
     }
 
     #[test]
