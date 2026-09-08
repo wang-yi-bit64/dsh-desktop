@@ -20,12 +20,11 @@ use crate::contracts::{
     SUPERVISOR_BACKOFF_INITIAL, SUPERVISOR_BACKOFF_MAX, SUPERVISOR_BACKOFF_MULTIPLIER,
     SUPERVISOR_CHANNEL_CAPACITY, SUPERVISOR_STABLE_UPTIME,
 };
-use crate::diagnostics::{format_crash_diagnostics, CrashDiagnostics};
-use crate::launch::{
-    LaunchEndpoint, LaunchEvent, LaunchOutcome, Launcher, LauncherConfig, RunningHarness,
-};
-use crate::logs::{FailureCause, LogRing};
+use crate::diagnostics::{DiagnosticReport, DiagnosticsAnalyzer};
+use crate::launch::{LaunchEvent, LaunchOutcome, Launcher, LauncherConfig, RunningHarness};
+use crate::logs::LogRing;
 use crate::paths::Layout;
+use crate::token::LaunchEndpoint;
 
 /// 监管器广播的进程生命周期状态。
 #[derive(Clone, Debug)]
@@ -40,14 +39,14 @@ pub enum SupervisorState {
     Running { endpoint: LaunchEndpoint, pid: u32 },
     /// 发生崩溃或异常退出。
     Crashed {
-        diagnostics: CrashDiagnostics,
+        diagnostics: DiagnosticReport,
         restart_count: usize,
         will_restart: bool,
         next_backoff: Option<Duration>,
     },
     /// 达到最大重试次数或严重不可恢复错误，进入错误终止状态。
     Failed {
-        diagnostics: CrashDiagnostics,
+        diagnostics: DiagnosticReport,
         total_restarts: usize,
     },
     /// 正在主动关闭。
@@ -164,27 +163,29 @@ impl Supervisor {
                     attempt: restart_count + 1,
                 });
 
-                let mut launcher = Launcher::new(layout.clone(), config.launcher_config.clone())
+                let mut launcher = Launcher::new(layout.clone(), config.launcher_config)
                     .with_extra(config.extra_args.clone());
                 if let Some(h) = &config.host {
                     launcher = launcher.with_host(h.clone());
                 }
 
-                // 准备事件广播
-                let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
-                let state_tx_event = state_tx.clone();
-                let forwarder_handle = tokio::spawn(async move {
-                    while let Some(evt) = event_rx.recv().await {
-                        let _ = state_tx_event.send(SupervisorState::LaunchProgress(evt));
-                    }
-                });
-
-                let outcome = launcher.execute(Some(event_tx)).await;
-                let _ = forwarder_handle.await;
+                let outcome = launcher
+                    .launch(None, |evt| {
+                        let _ = state_tx.send(SupervisorState::LaunchProgress(evt));
+                    })
+                    .await;
 
                 if is_stopping.load(Ordering::SeqCst) {
                     break;
                 }
+
+                let outcome = match outcome {
+                    Ok(out) => out,
+                    Err(err) => LaunchOutcome::Failed {
+                        cause: err.to_failure_cause(),
+                        logs: LogRing::new(),
+                    },
+                };
 
                 match outcome {
                     LaunchOutcome::Ready(mut running) => {
@@ -207,7 +208,7 @@ impl Supervisor {
                         }
 
                         // 等待子进程退出
-                        let exit_result = if let Some(rx) = exit_rx.take() {
+                        let _exit_result = if let Some(rx) = exit_rx.take() {
                             rx.await.ok()
                         } else {
                             None
@@ -218,7 +219,7 @@ impl Supervisor {
                             let mut guard = active_instance.lock().await;
                             if let Some(inst) = guard.take() {
                                 match inst.running.live_logs.lock() {
-                                    Ok(ring) => ring.snapshot(),
+                                    Ok(ring) => ring.clone(),
                                     Err(_) => LogRing::new(),
                                 }
                             } else {
@@ -238,13 +239,7 @@ impl Supervisor {
                         }
 
                         // 构建崩溃诊断
-                        let mut diag = format_crash_diagnostics(&live_logs_snapshot);
-                        diag.failure_cause = Some(FailureCause::UnexpectedExit(
-                            exit_result
-                                .and_then(|r| r.ok())
-                                .and_then(|s| s.code())
-                                .unwrap_or(-1),
-                        ));
+                        let diag = DiagnosticsAnalyzer::analyze_log_ring(&live_logs_snapshot);
 
                         restart_count += 1;
                         let will_restart = restart_count <= config.max_restarts;
@@ -272,9 +267,8 @@ impl Supervisor {
                             break;
                         }
                     }
-                    LaunchOutcome::Failed { cause, logs } => {
-                        let mut diag = format_crash_diagnostics(&logs);
-                        diag.failure_cause = Some(cause);
+                    LaunchOutcome::Failed { cause: _, logs } => {
+                        let diag = DiagnosticsAnalyzer::analyze_log_ring(&logs);
 
                         restart_count += 1;
                         let will_restart = restart_count <= config.max_restarts;
@@ -344,12 +338,11 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[tokio::test]
     async fn test_supervisor_config_and_state_channel() {
         let temp = std::env::temp_dir().join("dsh-supervisor-test");
-        let layout = Layout::resolve(&temp.join("res"), &temp.join("user"));
+        let layout = Layout::resolve(temp.join("res"), temp.join("user"));
 
         let supervisor = Supervisor::new(layout, SupervisorConfig::default());
         let mut rx = supervisor.subscribe();

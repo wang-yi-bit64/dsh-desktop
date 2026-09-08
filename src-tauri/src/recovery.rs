@@ -3,6 +3,7 @@
 //! Re-exports and wraps `dsh_host::diagnostics` for use within Tauri.
 
 #![allow(dead_code)]
+#![allow(unused_imports)]
 
 pub use dsh_host::diagnostics::*;
 

@@ -13,6 +13,7 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 - **Watchdog & Crash Self-Healing (Supervisor)** — Embedded supervisor state machine with heartbeat checks, automatic restarts, and circuit breaking.
 - **Plugin Process Isolation & Safety Guard** — Runs untrusted/external plugins in isolated Node.js `worker_threads` with a safety guard to catch uncaught exceptions and unhandled rejections, eliminating crashes from third-party plugins.
 - **Multi-Model Tool Gateway (Model Gateway)** — Pure Rust crate (`dsh-model-gateway`) offering canonical JSON Schema validation, dialect sanitization, and request payload dispatching across OpenAI, DeepSeek, Google Gemini, and Anthropic Claude.
+- **Unified IPC Transport & Channel Abstraction** — Abstract IPC transport layer (`transport.rs`) supporting bidirectional channel communication, mock transports for testing, and standardized envelope serialization.
 - **Shell UI & Diagnostics** — Native splash screen, error pages with structured crash attribution (identifying offending plugins, one-click Safe Mode entry, log inspector), and recovery flows.
 - **Safe Mode & Recovery** — Automatically analyzes failure causes, pinpoints faulty plugins, and generates isolated sandbox profiles for safe recovery.
 - **Multi-Profile & Session Management** — Built-in Session and Profile managers for managing persistent configuration, environment variables, and metadata.
@@ -68,6 +69,15 @@ docs/                   # Architecture designs, contract definitions, and specif
   model_gateway_design.md           # Model gateway architecture and tool calling conversions
   plugin_isolation_architecture.md  # Worker thread plugin isolation architecture and RPC protocol
 ```
+
+## Architecture & Roadmap
+
+The architecture evolves across structured implementation phases:
+
+- **Phase 0 (P0) — Baseline Contracts & Headless Core**: Solidification of contracts (`contracts.rs`), error models, orphan process protection (Win32 Job Objects / POSIX process groups), and zero-GUI core crates (`dsh-host`, `dsh-host-cli`).
+- **Phase 1 (P1) — Subprocess Lifecycle & Diagnostics**: Supervisor state machine, ring buffer log persistence, crash attribution analysis, and Safe Mode recovery profile generation.
+- **Phase 2 (P2) — Plugin Isolation & Safety Guards**: Decoupled worker thread sandbox host (`plugin-worker-host.mjs`), global exception guards (`plugin-safety-guard.mjs`), and bidirectional IPC transport channels.
+- **Phase 3 (P3) — Model Gateway & Tool Calling Sanitization**: Multi-provider tool schema validation, strict mode sanitization, and request adaptation for OpenAI, DeepSeek, Gemini, and Claude (`dsh-model-gateway`).
 
 ## Notes
 

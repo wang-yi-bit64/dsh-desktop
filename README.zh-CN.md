@@ -11,6 +11,7 @@
 - **看门狗与崩溃自愈 (Supervisor)** —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **插件进程级隔离与安全守护** —— 基于 Node.js `worker_threads` 与 `plugin-safety-guard` 将高危插件与主运行时解耦隔离，拦截未捕获异常，防止单点故障引发整体崩溃。
 - **多模型工具网关 (Model Gateway)** —— 提供 `dsh-model-gateway` 原生 Rust 库，支持多厂商（OpenAI、DeepSeek、Gemini、Claude）工具调用 JSON Schema 的校验、清洗与方言适配，彻底解决格式不兼容与严格模式约束报错。
+- **统一 IPC 传输与通道抽象** —— 提供跨平台、支持双向通信与模拟测试的 IPC 抽象层（`transport.rs`），统一消息打包与序列化契约。
 - **壳页面与交互体验** —— 静态启动页 (Splash)、错误页（支持失败归因、一键重试、安全模式切换、查看日志）、插件恢复页。
 - **安全模式与故障恢复** —— 自动检测启动失败原因，定位并隔离崩溃插件，生成独立沙箱 profile 保障基础功能可用。
 - **多 Profile 与会话管理** —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
@@ -66,6 +67,15 @@ docs/                   # 架构设计、契约定义与技术方案
   model_gateway_design.md           # 多模型网关设计与工具转换
   plugin_isolation_architecture.md  # 插件隔离架构与通信契约
 ```
+
+## 架构演进与路线图 (Roadmap)
+
+项目整体架构围绕以下核心阶段演进：
+
+- **阶段 0 (P0) —— 契约基线与无头核心库**：固化契约规范（`contracts.rs`）、错误模型、跨平台孤儿进程防护（Win32 Job Objects / POSIX 进程组）以及纯 Rust 核心宿主库（`dsh-host`、`dsh-host-cli`）。
+- **阶段 1 (P1) —— 进程生命周期与诊断系统**：内置 Supervisor 状态机与自愈机制、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）以及安全模式（Safe Mode）隔离 Profile 生成。
+- **阶段 2 (P2) —— 插件隔离与安全防护**：构建解耦的 Worker 线程沙箱（`plugin-worker-host.mjs`）、全局异常拦截看门狗（`plugin-safety-guard.mjs`）以及统一的 IPC 双向通信传输通道（`transport.rs`）。
+- **阶段 3 (P3) —— 多模型网关与工具调用清洗**：支持 OpenAI、DeepSeek、Gemini、Claude 多厂商工具调用 JSON Schema 清洗、严格模式规范化与 Payload 组装适配（`dsh-model-gateway`）。
 
 ## 说明
 

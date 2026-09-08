@@ -16,6 +16,13 @@ use crate::contracts::{
 };
 use crate::logs::LogRing;
 
+/// 崩溃诊断分析与报告结构。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrashDiagnostics {
+    /// 诊断报告
+    pub report: DiagnosticReport,
+}
+
 /// 崩溃故障类别。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CrashCategory {
@@ -325,9 +332,21 @@ impl DiagnosticsAnalyzer {
 
     /// 分析 `LogRing` 实例。
     pub fn analyze_log_ring(ring: &LogRing) -> DiagnosticReport {
-        let lines = ring.to_vec();
+        let lines: Vec<String> = ring.to_vec().into_iter().map(|l| l.text).collect();
         Self::analyze_lines(&lines)
     }
+}
+
+/// 提取疑似引起故障的插件名称列表。
+pub fn extract_offending_plugins(lines: &[String]) -> Vec<String> {
+    let report = DiagnosticsAnalyzer::analyze_lines(lines);
+    report.offending_plugins
+}
+
+/// 格式化崩溃诊断报告为多行文本字符串。
+pub fn format_crash_diagnostics(lines: &[String]) -> String {
+    let report = DiagnosticsAnalyzer::analyze_lines(lines);
+    report.format_text()
 }
 
 #[cfg(test)]
@@ -346,7 +365,11 @@ mod tests {
         assert_eq!(report.category, CrashCategory::PluginFault);
         assert!(report.recommends_safe_mode);
         assert_eq!(report.offending_plugins, vec!["translator-v2".to_string()]);
-        assert!(report.root_cause.unwrap().contains("translator-v2"));
+        assert!(report
+            .root_cause
+            .as_ref()
+            .unwrap()
+            .contains("translator-v2"));
         assert!(report.format_text().contains("Crash caused by plugin"));
     }
 

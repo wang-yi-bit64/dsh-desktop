@@ -81,10 +81,10 @@ pub const PATTERN_UNCAUGHT_EXCEPTION: &str = r"uncaught exception:\s*(.+)";
 pub const PATTERN_UNHANDLED_REJECTION: &str = r"unhandled rejection:\s*(.+)";
 
 /// C7 — 失败归因：插件故障（重复工具、重复路由、扩展初始化崩溃等）。
-pub const PATTERN_PLUGIN_FAULT: &str = r"\[dsh-plugin-fault\]\s*(.+)";
+pub const PATTERN_PLUGIN_FAULT: &str = r"\[dsh-plugin-fault\]\s*(.*)";
 
 /// C7 — 失败归因：插件 Worker 沙盒进程引发的故障或异常退出。
-pub const PATTERN_WORKER_FAULT: &str = r"\[dsh-worker-fault\]\s*(.+)";
+pub const PATTERN_WORKER_FAULT: &str = r"\[dsh-worker-fault\]\s*(.*)";
 
 /// 端口策略（任务 1.3）：stderr 里出现 `EADDRINUSE` 立即快速失败并换端口重试。
 pub const PATTERN_PORT_IN_USE: &str = "EADDRINUSE";
@@ -331,10 +331,7 @@ pub const SHELL_CAPTURE_TIMEOUT_WINDOWS: Duration = Duration::from_secs(15);
 pub const SHELL_CAPTURE_TIMEOUT_UNIX: Duration = Duration::from_secs(10);
 
 /// 任务 P3 / 契约 C10 — 诊断分类模式与匹配常量。
-pub const PATTERN_PLUGIN_FAULT: &str = r"\[dsh-plugin-fault\]\s*(.*)";
-pub const PATTERN_WORKER_FAULT: &str = r"\[dsh-worker-fault\]\s*(.*)";
-pub const PATTERN_PORT_IN_USE: &str = "EADDRINUSE";
-pub const PATTERN_UNHANDLED_REJECTION: &str = r"UnhandledPromiseRejection:\s*(.*)";
+pub const PATTERN_UNHANDLED_PROMISE_REJECTION: &str = r"UnhandledPromiseRejection:\s*(.*)";
 pub const PATTERN_GENERIC_PLUGIN: &str =
     r#"(?:plugin[:\s]+["']?([a-zA-Z0-9_\-@/]+)["']?|\[(?:plugin|ext):([a-zA-Z0-9_\-@/]+)\])"#;
 pub const PATTERN_REQUIRE_PLUGIN: &str =

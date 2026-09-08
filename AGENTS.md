@@ -96,8 +96,18 @@ cargo test --workspace
 
 ---
 
-## 5. 修改敏感模块前必读文档
+## 5. 架构演进与路线图 (P0~P3)
+
+- **P0（契约基线与无头核心库）**：集中常量契约（`contracts.rs`）、退出码与错误变体映射、无 GUI 核心库设计（`dsh-host`, `dsh-host-cli`）、Win32 JobObject / POSIX 孤儿防护。
+- **P1（生命周期监督与自愈）**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`）与 Safe Mode 隔离 Profile。
+- **P2（插件隔离与统一传输）**：Worker 线程插件沙箱（`plugin-worker-host.mjs`）、全局未捕获异常守护（`plugin-safety-guard.mjs`）、双向 IPC 传输与信道抽象（`crates/dsh-host/src/transport.rs`）。
+- **P3（多模型工具调用网关）**：多厂商 Schema 清洗与校验、方言适配与 Payload 组装（`crates/dsh-model-gateway`）。
+
+---
+
+## 6. 修改敏感模块前必读文档
 - `docs/system_design.md`：核心系统架构设计、缺陷清单与契约细则。
 - `docs/model_gateway_design.md`：大模型工具调用网关架构设计。
 - `docs/plugin_isolation_architecture.md`：插件隔离与进程通信机制。
 - `crates/dsh-host/src/contracts.rs`：Harness 运行时契约常量总表。
+- `crates/dsh-host/src/transport.rs`：IPC 传输抽象与通信信道定义。
