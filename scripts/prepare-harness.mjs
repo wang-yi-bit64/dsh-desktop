@@ -31,10 +31,11 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -211,9 +212,12 @@ const manifestPath = join(resources, 'MANIFEST.json')
 
 if (!forceRebuild) {
   // 产物完整性只看资源本体；MANIFEST 缺失由快速路径单独处理。
+  // harness-node-entry.mjs 必须纳入校验：tauri.conf.json 的 build.rs 会对其做
+  // glob 硬校验，缺失时 cargo 直接编译失败。
   const resourcesComplete =
     existsSync(join(resources, 'node', nodeBinName)) &&
-    existsSync(join(resources, 'harness', 'node_modules', '@deepseek-ai'))
+    existsSync(join(resources, 'harness', 'node_modules', '@deepseek-ai')) &&
+    existsSync(join(resources, 'harness-node-entry.mjs'))
   let manifestMatches = false
   if (resourcesComplete && existsSync(manifestPath)) {
     try {
@@ -297,6 +301,10 @@ if (!existsSync(stagedNodeBin)) {
 mkdirSync(join(resources, 'node'), { recursive: true })
 cpSync(stagedNodeBin, join(resources, 'node', nodeBinName))
 
+// Sidecar binary directory (resources/bin/*)
+mkdirSync(join(resources, 'bin'), { recursive: true })
+writeFileSync(join(resources, 'bin', '.gitkeep'), '')
+
 // Full dependency tree, minus the node runtime package itself (its binary is
 // already extracted above and the package is hundreds of MB of duplicates).
 const harnessTree = join(resources, 'harness', 'node_modules')
@@ -307,13 +315,23 @@ for (const entry of readdirSafe(stagedModules)) {
   cpSync(join(stagedModules, entry), join(harnessTree, entry), { recursive: true })
 }
 
+// 瘦身优化：清理 node_modules 下开发冗余文件（.d.ts / .map / test / docs / markdown 等），
+// 大幅减少 NSIS 需要打包和解压的文件数量（从数万小文件降至核心运行时文件），极大加速安装速度。
+log('pruning dev artifacts and non-runtime files from harness node_modules')
+pruneNodeModules(harnessTree)
+
 // Wrapper entry, hide patch, and patch layer.
-cpSync(join(buildDir, 'harness-node-entry.mjs'), join(resources, 'harness-node-entry.mjs'))
-cpSync(
-  join(buildDir, 'windows-child-process-hide.mjs'),
-  join(resources, 'windows-child-process-hide.mjs')
-)
-cpSync(join(buildDir, 'dsh-desktop.patch.yml'), join(resources, 'dsh-desktop.patch.yml'))
+// plugin-safety-guard.mjs / plugin-worker-host.mjs 是 harness-node-entry.mjs 的
+// 运行时依赖（入口直接 import 前者，后者由 guard 以同级文件 spawn），必须一起打包。
+for (const file of [
+  'harness-node-entry.mjs',
+  'windows-child-process-hide.mjs',
+  'plugin-safety-guard.mjs',
+  'plugin-worker-host.mjs',
+  'dsh-desktop.patch.yml'
+]) {
+  cpSync(join(buildDir, file), join(resources, file))
+}
 
 // Splash/recovery/safe-mode pages and brand assets served as resources.
 for (const file of [
@@ -347,4 +365,75 @@ function readdirSafe(directory) {
   } catch {
     return []
   }
+}
+
+function pruneNodeModules(dir) {
+  const IGNORED_EXTS = new Set([
+    '.d.ts',
+    '.d.ts.map',
+    '.ts.map',
+    '.js.map',
+    '.mjs.map',
+    '.cjs.map',
+    '.md',
+    '.markdown',
+    '.npmignore',
+    '.eslintrc',
+    '.prettierrc',
+    '.travis.yml',
+    '.editorconfig'
+  ])
+
+  const IGNORED_DIRS = new Set([
+    'test',
+    'tests',
+    '__tests__',
+    'docs',
+    'doc',
+    'example',
+    'examples',
+    '.github',
+    '.vscode'
+  ])
+
+  function scan(currentDir) {
+    let entries = []
+    try {
+      entries = readdirSync(currentDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const ent of entries) {
+      const fullPath = join(currentDir, ent.name)
+      if (ent.isDirectory()) {
+        const lower = ent.name.toLowerCase()
+        if (IGNORED_DIRS.has(lower)) {
+          rmSync(fullPath, { recursive: true, force: true })
+        } else {
+          scan(fullPath)
+        }
+      } else if (ent.isFile()) {
+        const name = ent.name.toLowerCase()
+        if (
+          name.endsWith('.d.ts') ||
+          name.endsWith('.d.ts.map') ||
+          name.endsWith('.map') ||
+          name.endsWith('.md') ||
+          name.endsWith('.markdown') ||
+          name === 'license' ||
+          name === 'licence' ||
+          name === 'changelog' ||
+          name.startsWith('readme') ||
+          IGNORED_EXTS.has(extname(name))
+        ) {
+          try {
+            unlinkSync(fullPath)
+          } catch {}
+        }
+      }
+    }
+  }
+
+  scan(dir)
 }

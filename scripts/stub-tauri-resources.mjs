@@ -41,6 +41,8 @@ writeFileSync(join(resources, 'harness', 'node_modules', '.gitkeep'), '')
 const assets = [
   'harness-node-entry.mjs',
   'windows-child-process-hide.mjs',
+  'plugin-safety-guard.mjs',
+  'plugin-worker-host.mjs',
   'dsh-desktop.patch.yml',
   'splash.html',
   'plugin-recovery.html',

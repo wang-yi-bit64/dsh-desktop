@@ -23,7 +23,20 @@ pub fn resolve_layout<R: Runtime>(app: &tauri::AppHandle<R>) -> dsh_host::HostRe
         dsh_host::HostError::MissingResource("app_data_dir", format!("{error}").into())
     })?;
 
-    let mut layout = Layout::resolve(resource_dir, data_dir);
+    // Tauri 2 的资源映射：tauri.conf.json 中的 "resources/…" 条目按相对路径
+    // 原样安装（Windows 上 resource_dir() == exe 目录，资源实际位于
+    // exe_dir/resources/ 下）。因此布局根优先取 resource_dir 的 resources
+    // 子目录；个别平台布局不同（资源直接位于 resource_dir）时回退。
+    let resource_root = {
+        let joined = resource_dir.join("resources");
+        if joined.join(dsh_host::contracts::NODE_ENTRY_FILE).exists() {
+            joined
+        } else {
+            resource_dir
+        }
+    };
+
+    let mut layout = Layout::resolve(resource_root, data_dir);
     if mock_enabled() {
         apply_mock(&mut layout);
     }

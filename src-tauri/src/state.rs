@@ -190,12 +190,17 @@ impl HarnessSupervisor {
             inner.running.take()
         };
         let Some(mut running) = running.take() else {
-            let mut inner = self.inner.lock().unwrap();
-            if matches!(inner.phase, HarnessPhase::Failed { .. }) {
-                inner.message = "Harness is not running.".to_string();
-            } else {
-                inner.phase = HarnessPhase::Idle;
-                inner.message = "Harness is not running.".to_string();
+            // 注意：emit() → snapshot() 会再次 lock 同一 Mutex，这里必须把
+            // guard 的作用域收进块内先释放，否则同线程二次加锁 = 永久死锁，
+            // supervisor.start() 首次调用（running 必为 None）就会挂死。
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if matches!(inner.phase, HarnessPhase::Failed { .. }) {
+                    inner.message = "Harness is not running.".to_string();
+                } else {
+                    inner.phase = HarnessPhase::Idle;
+                    inner.message = "Harness is not running.".to_string();
+                }
             }
             self.emit();
             return;

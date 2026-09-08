@@ -43,6 +43,8 @@
       "resources/MANIFEST.json",
       "resources/harness-node-entry.mjs",
       "resources/windows-child-process-hide.mjs",
+      "resources/plugin-safety-guard.mjs",
+      "resources/plugin-worker-host.mjs",
       "resources/dsh-desktop.patch.yml",
       "resources/splash.html",
       "resources/dsh-loader.gif",
@@ -55,7 +57,8 @@
     "windows": {
       "nsis": {
         "installMode": "both",
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "compression": "lzma"
       }
     }
   }

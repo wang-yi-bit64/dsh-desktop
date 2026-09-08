@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::contracts::{
-    PATTERN_CANNOT_FIND_MODULE, PATTERN_ERR_EACCES, PATTERN_ERR_EPERM, PATTERN_GENERIC_PLUGIN,
+    CORE_BUNDLES, OFFICIAL_BUNDLE_SCOPE, PATTERN_CANNOT_FIND_MODULE, PATTERN_ERR_EACCES,
+    PATTERN_ERR_EPERM, PATTERN_GENERIC_PLUGIN, PATTERN_LOADER_ENTRY_FAILURE,
     PATTERN_OOM_ALLOCATION, PATTERN_OOM_HEAP, PATTERN_PLUGIN_FAULT, PATTERN_PORT_IN_USE,
     PATTERN_REQUIRE_PLUGIN, PATTERN_UNHANDLED_REJECTION, PATTERN_WORKER_FAULT,
 };
@@ -115,6 +116,7 @@ impl DiagnosticsAnalyzer {
         let plugin_fault_re = Regex::new(PATTERN_PLUGIN_FAULT).ok();
         let worker_fault_re = Regex::new(PATTERN_WORKER_FAULT).ok();
         let unhandled_re = Regex::new(PATTERN_UNHANDLED_REJECTION).ok();
+        let loader_entry_re = Regex::new(PATTERN_LOADER_ENTRY_FAILURE).ok();
 
         // 插件名称正则模式（匹配 plugin "xxx" 或 plugin: xxx 或 [plugin-xxx] 或 require('xxx-plugin')）
         let generic_plugin_re = Regex::new(PATTERN_GENERIC_PLUGIN).ok();
@@ -165,7 +167,25 @@ impl DiagnosticsAnalyzer {
                 }
             }
 
-            // 3. 检查端口冲突
+            // 3. 检查 Cordis loader 入口失败（`failed to apply loader entry x (plugin)`）
+            //    官方核心 bundle 随 Harness 分发，不能作为第三方插件隔离，需过滤掉。
+            if let Some(ref re) = loader_entry_re {
+                if let Some(caps) = re.captures(line) {
+                    if let Some(candidate) = caps.get(1) {
+                        let candidate = candidate.as_str().trim();
+                        let is_official = candidate.starts_with(OFFICIAL_BUNDLE_SCOPE)
+                            || CORE_BUNDLES.contains(&candidate);
+                        if !is_official && !candidate.is_empty() {
+                            category = CrashCategory::PluginFault;
+                            root_cause = Some(format!("Loader entry failure: {candidate}"));
+                            offending_plugins.insert(candidate.to_string());
+                        }
+                        matched_logs.push(line.clone());
+                    }
+                }
+            }
+
+            // 4. 检查端口冲突
             if line.contains(PATTERN_PORT_IN_USE) {
                 if category == CrashCategory::Unknown {
                     category = CrashCategory::PortInUse;
@@ -174,14 +194,14 @@ impl DiagnosticsAnalyzer {
                 matched_logs.push(line.clone());
             }
 
-            // 4. 检查 OOM
+            // 5. 检查 OOM
             if lower.contains(PATTERN_OOM_HEAP) || lower.contains(PATTERN_OOM_ALLOCATION) {
                 category = CrashCategory::OutOfMemory;
                 root_cause = Some("Node.js JavaScript heap out of memory".into());
                 matched_logs.push(line.clone());
             }
 
-            // 5. 检查模块丢失
+            // 6. 检查模块丢失
             if lower.contains(PATTERN_CANNOT_FIND_MODULE) {
                 if category == CrashCategory::Unknown {
                     category = CrashCategory::ModuleNotFound;
@@ -198,7 +218,7 @@ impl DiagnosticsAnalyzer {
                 matched_logs.push(line.clone());
             }
 
-            // 6. 检查权限问题
+            // 7. 检查权限问题
             if lower.contains(PATTERN_ERR_EACCES) || lower.contains(PATTERN_ERR_EPERM) {
                 if category == CrashCategory::Unknown {
                     category = CrashCategory::PermissionDenied;
@@ -207,7 +227,7 @@ impl DiagnosticsAnalyzer {
                 matched_logs.push(line.clone());
             }
 
-            // 7. 检查未捕获异常 / rejection
+            // 8. 检查未捕获异常 / rejection
             if let Some(ref re) = unhandled_re {
                 if let Some(caps) = re.captures(line) {
                     if category == CrashCategory::Unknown {
@@ -407,5 +427,30 @@ mod tests {
         let report = DiagnosticsAnalyzer::analyze_lines(&logs);
         assert_eq!(report.category, CrashCategory::PluginFault);
         assert_eq!(report.offending_plugins, vec!["code-runner".to_string()]);
+    }
+
+    #[test]
+    fn test_diagnose_loader_entry_failure() {
+        let logs = vec![
+            "[desktop] starting 1".into(),
+            "[stderr] failed to apply loader entry x (my-plugin)".into(),
+        ];
+
+        let report = DiagnosticsAnalyzer::analyze_lines(&logs);
+        assert_eq!(report.category, CrashCategory::PluginFault);
+        assert!(report.recommends_safe_mode);
+        assert_eq!(report.offending_plugins, vec!["my-plugin".to_string()]);
+    }
+
+    #[test]
+    fn test_diagnose_loader_entry_failure_skips_core_bundles() {
+        let logs = vec![
+            "[stderr] failed to apply loader entry x (@deepseek-ai/dsh-base)".into(),
+            "[stderr] failed to apply loader entry x (dshmarket)".into(),
+        ];
+
+        let report = DiagnosticsAnalyzer::analyze_lines(&logs);
+        assert!(report.offending_plugins.is_empty());
+        assert!(!report.recommends_safe_mode);
     }
 }

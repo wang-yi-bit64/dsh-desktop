@@ -64,6 +64,17 @@ pub const PATTERN_PLUGIN_FAULT: &str = r"\[dsh-plugin-fault\]\s*(.*)";
 /// C7 — 失败归因：插件 Worker 沙盒进程引发的故障或异常退出。
 pub const PATTERN_WORKER_FAULT: &str = r"\[dsh-worker-fault\]\s*(.*)";
 
+/// C7 — 失败归因：Cordis loader 无法应用/导入某个插件入口
+/// （`failed to apply loader entry x (plugin)`），括号内即插件名。
+pub const PATTERN_LOADER_ENTRY_FAILURE: &str =
+    r"failed to (?:apply|import) loader entry [^\s]+ \(([^)]+)\)";
+
+/// C7 — 官方 bundle 作用域前缀：随 Harness 分发，不作为可隔离的第三方插件。
+pub const OFFICIAL_BUNDLE_SCOPE: &str = "@deepseek-ai/";
+
+/// C7 — 非官方作用域但同样随 Harness 分发的核心 bundle，不作为第三方插件隔离。
+pub const CORE_BUNDLES: [&str; 1] = ["dshmarket"];
+
 /// 端口策略：stderr 里出现 `EADDRINUSE` 立即快速失败并换端口重试。
 pub const PATTERN_PORT_IN_USE: &str = "EADDRINUSE";
 

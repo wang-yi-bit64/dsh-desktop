@@ -1,10 +1,10 @@
-use std::time::Instant;
 use dsh_model_gateway::{
     adapters::{ClaudeAdapter, GeminiAdapter, OpenAIAdapter},
     sanitizer::{sanitize_for_claude, sanitize_for_gemini, sanitize_for_openai},
     CanonicalTool, ModelProviderAdapter,
 };
 use serde_json::json;
+use std::time::Instant;
 
 fn main() {
     println!("=== Running dsh-desktop Model Gateway Performance Benchmarks ===");
@@ -28,7 +28,11 @@ fn main() {
     let iterations = 20_000;
     let start = Instant::now();
     for _ in 0..iterations {
-        let tool = CanonicalTool::new("search_data_complex", "Benchmark complex nested tool conversion", tool_params.clone());
+        let tool = CanonicalTool::new(
+            "search_data_complex",
+            "Benchmark complex nested tool conversion",
+            tool_params.clone(),
+        );
         let _ = tool.validate_name();
     }
     let elapsed = start.elapsed();
@@ -61,9 +65,9 @@ fn main() {
         source_plugin: Some("test-plugin".to_string()),
     };
 
-    let openai = OpenAIAdapter::default();
-    let gemini = GeminiAdapter::default();
-    let claude = ClaudeAdapter::default();
+    let openai = OpenAIAdapter::new();
+    let gemini = GeminiAdapter::new();
+    let claude = ClaudeAdapter::new();
 
     let start = Instant::now();
     for _ in 0..iterations {
