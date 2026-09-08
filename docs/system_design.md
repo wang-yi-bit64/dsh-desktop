@@ -98,7 +98,7 @@
 | E5 | **`fault-inject.mjs` 依赖 300MB 资源包**：从 `src-tauri/resources/node/node.exe` 拷 node，而该目录**当前不存在** → 故障注入在干净机器上直接以 exit 2 退出，与 INV-6 冲突 | `fault-inject.mjs:78` + `:239` |
 | E6 | **fault-inject 场景 A 的实现是坏的**：`Stop-Process -Id ${process.exitCode ?? 0}` —— `process.exitCode` 是 Node 自己的退出码（`null → 0`），`Stop-Process -Id 0` 必然失败，整个 A 场景从未真正验证「正常退出」 | `fault-inject.mjs:139-147` |
 | E7 | CI 只有 `cargo test --workspace`（会拉起 24 分钟级的 src-tauri 编译），**没有 `cargo test -p dsh-host -p dsh-host-cli` 的快门禁** | `.github/workflows/ci.yml` |
-| E8 | `docs/verification-phase1.md` 的自动化验证表全部标 ✅，但**当前 `target/` 目录不存在**，说明本 checkout 从未真正跑过；归档文档中的「75 单测 + 19 doctest 全过」需重新验证 | 实测 |
+| E8 | 阶段 1 验证记录（原 `docs/verification-phase1.md`，已在文档清理中移除）的自动化验证表全部标 ✅，但**当前 `target/` 目录不存在**，说明本 checkout 从未真正跑过；归档文档中的「75 单测 + 19 doctest 全过」需重新验证 | 实测 |
 
 #### F. 契约与文档
 
@@ -106,7 +106,7 @@
 |---|---|---|
 | F1 | `contracts.rs:63` 注释说诊断行是 `[arness-node]`，实际 `build/harness-node-entry.mjs:29` 输出的是 **`[harness-node]`**（有 h）。不改变正则行为，但会误导后来人 | `contracts.rs:61-63` vs `build/harness-node-entry.mjs:29` |
 | F2 | 契约表列到 C9 与 C12，**C10 / C11 在全仓库无任何痕迹** | 计划原文不在仓库 |
-| F3 | `PORT_ZERO_SUPPORTED = false` 是 Spike 回填位，但 `docs/spike-webview-results.md` 仍是全空模板 | `contracts.rs:84-90` |
+| F3 | `PORT_ZERO_SUPPORTED = false` 是 Spike 回填位，但 Spike 结论模板（原 `docs/spike-webview-results.md`，已在文档清理中移除）始终未被回填 | `contracts.rs:84-90` |
 
 ---
 
@@ -410,7 +410,7 @@ impl LogRing {
 - **保留** `PortMode` 双模式与 `PORT_ZERO_SUPPORTED` 回填位，**不改默认值**（仍 `false` / `Reserved`）。
 - **回填位处理原则：不臆测 Spike 结果。** 本次**不执行 Spike**，只提供工具位：
   - CLI 新增 `--port-mode reserved|ephemeral`，让工程师能手动试验 `--port 0`。
-  - `contracts.rs` 新增 `PORT_ZERO_EVIDENCE: Option<&'static str>`（记录 Spike 结论来源与日期），`PORT_ZERO_SUPPORTED` 只有在 `docs/spike-webview-results.md` 的 C1 复选框被勾、且证据写入后才能改为 `true`。
+  - `contracts.rs` 新增 `PORT_ZERO_EVIDENCE: Option<&'static str>`（记录 Spike 结论来源与日期），`PORT_ZERO_SUPPORTED` 只有在 DSH 官方确认支持 `--port 0` 的结论来源与日期写入 `PORT_ZERO_EVIDENCE` 后才能改为 `true`。
   - 新增单测 `launch::tests::ephemeral_mode_sends_port_zero`，保证开关真的接到了 argv。
 - **新增契约常量**（消除裸魔数）：
 
@@ -523,8 +523,6 @@ grep -rn "dsh_host::" src-tauri/src    # 逐项对照调用点清单，确认每
 | `Cargo.toml`（根） | 增量 | `rust-version = "1.77"` → `"1.85"` |
 | `scripts/fault-inject.mjs` | 修改 | 用 `process.execPath` 代替资源目录 node（修 E5）；重写场景 A（修 E6）；加退出码断言；加 `--json` |
 | `scripts/mock-harness.mjs` | 增量（P2） | 增加 `--exit-after <ms>` / `--stderr-before-url <msg>`，支撑更细的集成测试 |
-| `docs/verification-phase1.md` | 修改 | 表格从「待跑」回填为实测值 |
-| `docs/spike-webview-results.md` | 不改 | Spike 仍待人工，本次只提供 `--port-mode ephemeral` 工具位 |
 
 ---
 
@@ -634,14 +632,14 @@ grep -rn "dsh_host::" src-tauri/src    # 逐项对照调用点清单，确认每
 
 ### T05 — 测试与验证补齐（集成测试 + fault-inject + 文档）
 
-- **涉及文件**：**新增** `crates/dsh-host/tests/{fixture/mod.rs, args_forwarding.rs, mock_launch.rs, mock_lifecycle.rs}`；改 `scripts/fault-inject.mjs`、`docs/verification-phase1.md`；可选 `scripts/mock-harness.mjs`
+- **涉及文件**：**新增** `crates/dsh-host/tests/{fixture/mod.rs, args_forwarding.rs, mock_launch.rs, mock_lifecycle.rs}`；改 `scripts/fault-inject.mjs`；可选 `scripts/mock-harness.mjs`
 - **依赖**：T04
 - **要做**：
   1. fixture：系统 node + `scripts/mock-harness.mjs`，无资源包可跑
   2. 四组集成测试
   3. 修 E5：`fault-inject.mjs` 改用 `process.execPath`
   4. 修 E6：重写场景 A（Windows `taskkill` 不带 `/F` → 2s 后 `/F`；POSIX `SIGINT`）
-  5. 加退出码断言；回填 `docs/verification-phase1.md`
+  5. 加退出码断言
   6. CI 补快门禁：`cargo test -p dsh-host -p dsh-host-cli` 单独一步（修 E7）
 - **验收（可执行）**：
 
