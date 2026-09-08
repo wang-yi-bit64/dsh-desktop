@@ -31,6 +31,7 @@ pub mod launch;
 pub mod logging;
 pub mod logs;
 pub mod paths;
+pub mod plugin_worker;
 pub mod process;
 pub mod readiness;
 pub mod safe_mode;

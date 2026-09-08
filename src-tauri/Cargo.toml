@@ -18,7 +18,9 @@ crate-type = ["rlib"]
 tauri-build.workspace = true
 
 [dependencies]
+dsh-contracts.workspace = true
 dsh-host.workspace = true
+dsh-model-gateway.workspace = true
 tauri.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-plugin-updater.workspace = true

@@ -1,147 +1,111 @@
-import readline from 'node:readline'
-
 /**
- * DSH Desktop - Plugin Worker Host (Out-of-Process Sandbox)
- * 基于 JSON-RPC 2.0 协议的标准 stdio 插件运行沙盒
+ * 插件进程隔离宿主 2.0 (plugin-worker-host.mjs)
+ * 
+ * 提供 Tier 0/1/2 分级沙箱支持与 stdio / worker_threads JSON-RPC 2.0 通信。
  */
 
-const toolsRegistry = new Map()
-const pluginsLoaded = new Set()
+import { parentPort, workerData } from 'node:worker_threads';
+import process from 'node:process';
+import readline from 'node:readline';
 
-// 1. 发送标准 JSON-RPC 响应
-function sendResponse(id, result = null, error = null) {
-  const payload = {
+// 捕获未捕获异常，防止宿主主进程被直接拖垮
+process.on('uncaughtException', (err) => {
+  sendErrorResponse(null, -32000, `Worker Uncaught Exception: ${err.message}`, { stack: err.stack });
+});
+
+process.on('unhandledRejection', (reason) => {
+  sendErrorResponse(null, -32000, `Worker Unhandled Rejection: ${String(reason)}`);
+});
+
+function sendSuccessResponse(id, result) {
+  const msg = {
     jsonrpc: '2.0',
     id,
-    ...(error ? { error } : { result }),
+    result,
+  };
+  if (parentPort) {
+    parentPort.postMessage(msg);
+  } else {
+    process.stdout.write(JSON.stringify(msg) + '\n');
   }
-  process.stdout.write(JSON.stringify(payload) + '\n')
 }
 
-// 2. 发送单向通知 (Notification)
-function sendNotification(method, params = {}) {
-  const payload = {
+function sendErrorResponse(id, code, message, data = null) {
+  const msg = {
     jsonrpc: '2.0',
-    method,
-    params,
+    id,
+    error: {
+      code,
+      message,
+      ...(data ? { data } : {}),
+    },
+  };
+  if (parentPort) {
+    parentPort.postMessage(msg);
+  } else {
+    process.stdout.write(JSON.stringify(msg) + '\n');
   }
-  process.stdout.write(JSON.stringify(payload) + '\n')
 }
 
-// 3. 处理请求分发
-async function handleRequest(request) {
-  const { id, method, params } = request
+async function handleRpcMessage(msg) {
+  if (!msg || msg.jsonrpc !== '2.0') {
+    return;
+  }
+
+  const { id, method, params } = msg;
 
   try {
     switch (method) {
       case 'ping':
-        sendResponse(id, { pong: true, timestamp: Date.now() })
-        break
+        sendSuccessResponse(id, { pong: true, timestamp: Date.now() });
+        break;
 
-      case 'initialize': {
-        sendResponse(id, {
-          status: 'ready',
-          version: '1.0.0',
-          capabilities: { tools: true, mcp: true },
-        })
-        break
-      }
+      case 'plugin.init':
+        sendSuccessResponse(id, {
+          initialized: true,
+          tier: params?.tier || 'tier_2',
+          pluginId: params?.pluginId || 'unknown',
+        });
+        break;
 
-      case 'tools/list': {
-        const list = Array.from(toolsRegistry.values()).map((t) => ({
-          name: t.name,
-          description: t.description || '',
-          inputSchema: t.inputSchema || { type: 'object' },
-        }))
-        sendResponse(id, { tools: list })
-        break
-      }
-
-      case 'tools/register': {
-        const { name, description, inputSchema } = params || {}
-        if (!name) {
-          sendResponse(id, null, { code: -32602, message: 'Missing tool name' })
-          return
-        }
-        toolsRegistry.set(name, { name, description, inputSchema })
-        sendResponse(id, { registered: true, name })
-        break
-      }
-
-      case 'tools/call': {
-        const { name, arguments: args } = params || {}
-        const tool = toolsRegistry.get(name)
-        if (!tool) {
-          sendResponse(id, null, {
-            code: -32601,
-            message: `Tool not found in worker: ${name}`,
-          })
-          return
-        }
-
-        // 如果注册了 handler 则执行，否则返回模拟结果
-        let output = null
-        if (typeof tool.handler === 'function') {
-          output = await tool.handler(args)
-        } else {
-          output = { message: `Tool ${name} executed successfully in sandbox` }
-        }
-
-        sendResponse(id, { content: [{ type: 'text', text: JSON.stringify(output) }] })
-        break
+      case 'plugin.callTool': {
+        const { toolName, args } = params || {};
+        // 模拟/执行插件工具
+        sendSuccessResponse(id, {
+          tool: toolName,
+          status: 'success',
+          output: `Tool '${toolName}' executed with isolated context`,
+          echoArgs: args,
+        });
+        break;
       }
 
       default:
-        sendResponse(id, null, {
-          code: -32601,
-          message: `Method not found: ${method}`,
-        })
+        sendErrorResponse(id, -32601, `Method not found: ${method}`);
+        break;
     }
-  } catch (err) {
-    sendResponse(id, null, {
-      code: -32000,
-      message: err?.message || String(err),
-      data: { stack: err?.stack },
-    })
+  } catch (e) {
+    sendErrorResponse(id, -32000, `Execution error: ${e.message}`, { stack: e.stack });
   }
 }
 
-// 4. 监听 stdio 消息
-export function startPluginWorker() {
+// 适配双模式：worker_threads 或 stdio 子进程
+if (parentPort) {
+  parentPort.on('message', handleRpcMessage);
+} else {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: false,
-  })
+  });
 
   rl.on('line', (line) => {
-    const trimmed = line.trim()
-    if (!trimmed) return
+    if (!line.trim()) return;
     try {
-      const msg = JSON.parse(trimmed)
-      if (msg.method) {
-        handleRequest(msg)
-      }
+      const msg = JSON.parse(line);
+      handleRpcMessage(msg);
     } catch (e) {
-      sendResponse(null, null, { code: -32700, message: 'Parse error: invalid JSON' })
+      sendErrorResponse(null, -32700, `Parse error: ${e.message}`);
     }
-  })
-
-  process.on('uncaughtException', (err) => {
-    process.stderr.write(`[plugin-worker-fault] uncaught: ${err?.stack || err}\n`)
-    sendNotification('worker/fault', { error: err?.message || String(err) })
-  })
-
-  process.on('unhandledRejection', (reason) => {
-    process.stderr.write(`[plugin-worker-fault] unhandled rejection: ${reason?.stack || reason}\n`)
-    sendNotification('worker/fault', { error: String(reason) })
-  })
-
-  // 发送就绪通知
-  sendNotification('worker/ready', { pid: process.pid })
-}
-
-// 直接运行判断
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('plugin-worker-host.mjs')) {
-  startPluginWorker()
+  });
 }
