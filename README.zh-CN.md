@@ -1,5 +1,7 @@
 # DSH Desktop (Tauri)
 
+> [English Document](README.md)
+
 使用 **Rust + Tauri 2.0** 重新构建的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 桌面套壳。
 
 本仓库是从零开始的 Rust/Tauri 移植版本，目标是替代基于 Electron 的 `dataelement/dsh-desktop` 套壳。它在行为上与原始套壳保持一致，使桌面应用与 Harness Web UI 功能完全对齐，同时用更轻量、更高性能的 Tauri 外壳取代 Electron 运行时。
@@ -7,12 +9,13 @@
 ## 功能特性
 
 - **内置运行时** —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
+- **独立契约库 (`dsh-contracts`)** —— 彻底剥离 UI 依赖，提炼统一常量、标准错误码体系 (`E1001`~`E4002`)、前后端 IPC 封套 (`IpcEnvelope<T>`) 以及 JSON-RPC 2.0 规范定义。
 - **Harness 核心生命周期** —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
-- **插件进程级隔离与安全守护** —— 基于 Node.js `worker_threads` 与 `plugin-safety-guard` 将高危插件与主运行时解耦隔离，拦截未捕获异常，防止单点故障引发整体崩溃。
-- **多模型工具网关 (Model Gateway)** —— 提供 `dsh-model-gateway` 原生 Rust 库，支持多厂商（OpenAI、DeepSeek、Gemini、Claude）工具调用 JSON Schema 的校验、清洗与方言适配，彻底解决格式不兼容与严格模式约束报错。
-- **统一 IPC 传输与通道抽象** —— 提供跨平台、支持双向通信与模拟测试的 IPC 抽象层（`transport.rs`），统一消息打包与序列化契约。
-- **壳页面与交互体验** —— 静态启动页 (Splash)、错误页（支持失败归因、一键重试、安全模式切换、查看日志）、插件恢复页。
+- **插件分级隔离 2.0 (Tier 0/1/2) 与看门狗** —— 基于 Node.js `worker_threads` / 独立沙箱子进程运行不可信插件，通过标准 JSON-RPC 2.0 双向通信，具备超时控制、故障计数与熔断自愈机制。
+- **多模型工具网关 2.0 (Model Gateway)** —— 原生 Rust 库 `dsh-model-gateway`，支持多厂商（OpenAI、DeepSeek、Gemini、Claude）工具调用 JSON Schema 校验、深度嵌套展开、`anyOf`/`oneOf` 降级净化与方言适配。
+- **微秒级性能基准测试** —— 内置 benchmark 测试套件，保障 Schema 清洗与多方言适配转换在 2~20 微秒级内高效完成。
+- **壳页面与诊断系统 2.0** —— 静态启动页 (Splash)、错误页（支持故障归因、一键重试、安全模式切换）、一键脱敏导出诊断包 (`diagnostics.zip`)。
 - **安全模式与故障恢复** —— 自动检测启动失败原因，定位并隔离崩溃插件，生成独立沙箱 profile 保障基础功能可用。
 - **多 Profile 与会话管理** —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
 - **桌面深度定制** —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。
@@ -47,22 +50,24 @@ npm run tauri build
 
 ```text
 crates/
-  dsh-host/             # 无 GUI 核心宿主库（子进程管理、Supervisor 监督器、崩溃诊断、日志环形缓冲、IPC）
-  dsh-host-cli/         # dsh-host 命令行工具（支持 start / status / stop / tail 等）
-  dsh-model-gateway/    # 多模型工具网关（Schema 清洗、OpenAI/Gemini/Claude 适配、请求编排）
+  dsh-contracts/        # 纯 Rust 通用契约库（常量、错误码体系、IPC 封套、JSON-RPC、生命周期与诊断定义）
+  dsh-host/             # 无 GUI 核心宿主库（子进程管理、Supervisor 监督器、崩溃诊断、插件隔离 2.0、日志环形缓冲）
+  dsh-host-cli/         # dsh-host 命令行工具（支持 start / status / stop / tail / doctor 等）
+  dsh-model-gateway/    # 多模型工具网关（Schema 清洗、复杂 union 降级、OpenAI/Gemini/Claude 适配、Benchmark 套件）
 src-tauri/
   frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、安全模式提示）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
-  src/                  # Tauri 桌面应用层（窗口管理、托盘、安全模式切换、IPC 接线、自动更新）
+  src/                  # Tauri 桌面应用层（窗口管理、托盘、IPC 封套接线、安全模式切换、诊断导出、自动更新）
 build/                  # 运行时组装与辅助注入脚本
   harness-node-entry.mjs    # Node 端入口与启动参数适配
   plugin-safety-guard.mjs   # 插件运行异常全局守护网
-  plugin-worker-host.mjs    # 基于 Worker Threads 的插件隔离宿主
+  plugin-worker-host.mjs    # 基于 Worker Threads / 子进程的插件隔离宿主（JSON-RPC 2.0）
 patches/                # 应用到 Harness 依赖树的 patch-package 补丁
 vendor/                 # 本地桌面定制包（dshmarket 等）
 packages/               # 被打补丁包的 vendored tgz 覆盖
 scripts/                # 构建与测试辅助（prepare-harness、stub-tauri-resources 等）
 docs/                   # 架构设计、契约定义与技术方案
+  dsh-desktop-redesign-architecture-and-plan.md  # 架构重构与开发执行完整计划
   system_design.md                  # 系统架构设计与不变量规范
   model_gateway_design.md           # 多模型网关设计与工具转换
   plugin_isolation_architecture.md  # 插件隔离架构与通信契约
@@ -72,10 +77,11 @@ docs/                   # 架构设计、契约定义与技术方案
 
 项目整体架构围绕以下核心阶段演进：
 
-- **阶段 0 (P0) —— 契约基线与无头核心库**：固化契约规范（`contracts.rs`）、错误模型、跨平台孤儿进程防护（Win32 Job Objects / POSIX 进程组）以及纯 Rust 核心宿主库（`dsh-host`、`dsh-host-cli`）。
+- **阶段 0 (P0) —— 契约基线与无头核心库**：提炼独立契约库（`dsh-contracts`）、错误码分类体系、跨平台孤儿进程防护（Win32 Job Objects / POSIX 进程组）以及纯 Rust 核心宿主库（`dsh-host`、`dsh-host-cli`）。
 - **阶段 1 (P1) —— 进程生命周期与诊断系统**：内置 Supervisor 状态机与自愈机制、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）以及安全模式（Safe Mode）隔离 Profile 生成。
-- **阶段 2 (P2) —— 插件隔离与安全防护**：构建解耦的 Worker 线程沙箱（`plugin-worker-host.mjs`）、全局异常拦截看门狗（`plugin-safety-guard.mjs`）以及统一的 IPC 双向通信传输通道（`transport.rs`）。
-- **阶段 3 (P3) —— 多模型网关与工具调用清洗**：支持 OpenAI、DeepSeek、Gemini、Claude 多厂商工具调用 JSON Schema 清洗、严格模式规范化与 Payload 组装适配（`dsh-model-gateway`）。
+- **阶段 2 (P2) —— 插件分级隔离 2.0 (Tier 0/1/2) 与看门狗**：构建解耦的 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`）。
+- **阶段 3 (P3) —— 多模型网关 2.0 与基准测试**：支持 OpenAI、DeepSeek、Gemini、Claude 多厂商工具调用 JSON Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）以及微秒级性能基准测试。
+- **阶段 4 (P4) —— 薄壳收敛与诊断系统 2.0**：Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回，支持一键脱敏导出诊断包 (`diagnostics.zip`)。
 
 ## 说明
 
