@@ -33,9 +33,6 @@ import { resolveEnabledGenerations } from './registry.mjs'
  * not a repair.
  */
 
-/** Packages the desktop shell owns as profile bundles; never projected or pruned. */
-const IN_BOX_BUNDLES = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
-
 /** Substring that marks a symlink target as one this projector wrote. */
 const GENERATION_LINK_MARKER = join('profiles', '.generations', 'live')
 
@@ -421,20 +418,39 @@ async function syncProfileManifest(
     }
   }
 
-  // Bundle entries that survive: in-box bundles, plus any kept dependency that
-  // declares its own `dsh.bundle` (dshmarket). A bundle-declaring dependency
-  // left out of `bundles` makes the consistency check report "installed and
-  // declares a bundle, but is not composed", which the app surfaces as a
-  // restart prompt on every launch.
+  // Reconcile only the entries this projection OWNS — the enabled generations
+  // — plus bundle-declaring dependencies the CLI would have composed itself.
+  // Everything already listed is otherwise left alone: a bundle can resolve
+  // from the dsh installation rather than the profile's node_modules
+  // (#316/#369), and rebuilding the list from scratch would drop those.
+  //
+  // A generation is listed only when it declares its own `dsh.bundle.patch`.
+  // `loadProfile` hard-fails on a listed bundle with no `dsh.bundle` ("profile
+  // bundle … declares no dsh.bundle"), which bricks the whole profile, and
+  // client-only plugins (`dsh.client` without `dsh.bundle`) are exactly that
+  // shape — dsh-market shim-mounts those instead, so they stay ordinary
+  // dependencies here.
   let bundles = [...(manifest.dsh?.profile?.bundles ?? [])]
   if (syncBundles) {
-    const declaredBundles = bundles.filter((name) => IN_BOX_BUNDLES.has(name))
-    for (const name of Object.keys(dependencies)) {
-      if (declaredBundles.includes(name) || enabled.has(name)) continue
-      if (await declaresBundle(join(dir, 'node_modules', name))) declaredBundles.push(name)
+    // `enabled` follows desired.json — install order, which is the order the
+    // loader applies the layers in. Do not sort: a bundle's order rule (and
+    // dsh-better-sidebar's aggregate guard) can depend on it.
+    const ordered = [...enabled.entries()]
+    const declaring = new Set()
+    for (const [name, generation] of ordered) {
+      if (await declaresBundle(join(generation.directory, 'node_modules', name))) declaring.add(name)
     }
-    const pluginNames = [...enabled.keys()].sort()
-    bundles = [...declaredBundles, ...pluginNames]
+    // Drop only generation-owned entries that must not be listed.
+    bundles = bundles.filter((name) => !enabled.has(name) || declaring.has(name))
+    // Kept dependency that declares a bundle but is not generation-managed
+    // (the ordinary CLI path): compose it too, in dependency order.
+    for (const name of Object.keys(dependencies)) {
+      if (enabled.has(name) || bundles.includes(name)) continue
+      if (await declaresBundle(join(dir, 'node_modules', name))) bundles.push(name)
+    }
+    for (const [name] of ordered) {
+      if (declaring.has(name) && !bundles.includes(name)) bundles.push(name)
+    }
   }
 
   const desktop = {

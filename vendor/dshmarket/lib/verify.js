@@ -226,11 +226,34 @@ export function verifyActivation(profile, name, live = new Set(listHotMounts()),
     // Not a profile-layer plugin. Client-only packages never enter bundles
     // (the dsh CLI skips them), so the market shim-mounts them at boot —
     // they still work, but "installed" never means "bundle layer".
-    if (dsh.client !== undefined) {
+    //
+    // The `dsh.bundle === undefined` half of this test is load-bearing. A
+    // package declaring BOTH surfaces (dsh-better-sidebar) has a host patch and
+    // belongs in the bundle layer, so testing `dsh.client` alone reported it as
+    // "declares no dsh.bundle — client-only" and sent its users to a restart
+    // that could never help. Every other test in this file pairs the two.
+    if (dsh.client !== undefined && dsh.bundle === undefined) {
         return {
             state: 'inert',
             reasons: [
                 '未声明 dsh.bundle,不会进入 profile bundle 层(纯客户端插件);重启后由市场自动挂载生效 / no dsh.bundle — client-only plugins never enter the bundle layer; the market shim-mounts them at the next boot',
+            ],
+            bundle: false,
+            hot: false,
+        };
+    }
+    if (dsh.bundle !== undefined) {
+        // Declares a patch layer but the profile does not list it yet. On Desktop
+        // that is the normal shape right after a generation install: the live
+        // session publishes the manifest but defers `dsh.profile.bundles` (and the
+        // generation link) to the next cold start, where the profile projection
+        // composes it. Reported as `restart`, not `inert` — a restart is exactly
+        // what activates it — and never as the client-only case above, whose
+        // remedy is different.
+        return {
+            state: 'restart',
+            reasons: [
+                '已声明 dsh.bundle 但尚未列入 dsh.profile.bundles;下次启动由 profile 投影收录后生效 / declares dsh.bundle but is not listed in dsh.profile.bundles yet — the next boot\'s profile projection composes it',
             ],
             bundle: false,
             hot: false,

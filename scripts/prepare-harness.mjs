@@ -196,6 +196,14 @@ function buildManifest(lockfilePath) {
 const patchesFingerprint = existsSync(join(projectRoot, 'patches'))
   ? directoryFingerprint(join(projectRoot, 'patches'))
   : 'no-patches'
+// `build/` is copied verbatim into resources/ (entry wrapper, guard, patch
+// layer, pages) but is not a dependency, so without its own digest an edit
+// there leaves the fingerprint unchanged — the fast path then reuses the stale
+// copy already in resources/ and the change never ships. That silently dropped
+// a generation-projection hook added to harness-node-entry.mjs. (vendor/ needs
+// no digest here: those entries are symlinked into resources/ and dereferenced
+// at package time, so their content is always current.)
+const buildFingerprint = existsSync(buildDir) ? directoryFingerprint(buildDir) : 'no-build'
 const fingerprint = sha256(
   JSON.stringify({
     dshVersion: DSH_VERSION,
@@ -203,7 +211,8 @@ const fingerprint = sha256(
     pnpmVersion: PNPM_VERSION,
     dependencies,
     overrides,
-    patches: patchesFingerprint
+    patches: patchesFingerprint,
+    build: buildFingerprint
   })
 )
 
@@ -240,6 +249,44 @@ function resourcesComplete() {
   )
 }
 
+/**
+ * Copy `build/`'s runtime files into `resources/`.
+ *
+ * Separate from the main assembly so the fast paths below can refresh them
+ * too: these files are inputs to the shipped app, not dependencies, so a
+ * change here must land in resources/ even when the install tree is reused.
+ * @returns {void}
+ */
+function copyBuildFiles() {
+  // plugin-safety-guard.mjs / plugin-worker-host.mjs 是 harness-node-entry.mjs 的
+  // 运行时依赖（入口直接 import 前者，后者由 guard 以同级文件 spawn），必须一起打包。
+  for (const file of [
+    'harness-node-entry.mjs',
+    'windows-child-process-hide.mjs',
+    'plugin-safety-guard.mjs',
+    'plugin-worker-host.mjs',
+    'dsh-desktop.patch.yml'
+  ]) {
+    cpSync(join(buildDir, file), join(resources, file))
+  }
+
+  // Splash/recovery/safe-mode pages and brand assets served as resources.
+  for (const file of [
+    'splash.html',
+    'plugin-recovery.html',
+    'safe-mode.html',
+    'windows-menu.html',
+    'dsh-loader.gif',
+    'dsh-loader-dark.gif',
+    'app-icon.png',
+    'logo-light.png',
+    'logo-dark.png'
+  ]) {
+    const source = join(buildDir, file)
+    if (existsSync(source)) cpSync(source, join(resources, file))
+  }
+}
+
 if (!forceRebuild) {
   let manifestMatches = false
   if (resourcesComplete() && existsSync(manifestPath)) {
@@ -256,11 +303,13 @@ if (!forceRebuild) {
   // 快速路径：组装产物（resources/）与 staging 的 package.json + lockfile
   // 都完整、且 staging 的 package.json 与当前输入一致时，说明上次运行成功
   // 但 MANIFEST 缺失或过期 —— 仅重建 MANIFEST，避免整轮 npm install
-  // （--force 可强制完整重组）。
+  // （--force 可强制完整重组）。build/ 的产物不参与 install，指纹变化时在此
+  // 单独同步，否则对 harness-node-entry.mjs 之类的修改会被快速路径静默丢掉。
   const stagingLockfile = join(staging, 'package-lock.json')
   if (resourcesComplete() && existsSync(stagingLockfile) && stagingInputsMatch()) {
+    copyBuildFiles()
     writeFileSync(manifestPath, `${JSON.stringify(buildManifest(stagingLockfile), null, 2)}\n`)
-    log(`仅重建 MANIFEST.json → ${manifestPath}（--force 可强制完整重组）`)
+    log(`仅重建 MANIFEST.json 并同步 build/ 产物 → ${manifestPath}（--force 可强制完整重组）`)
     process.exit(0)
   }
   log('输入已变化或产物缺失，重新组装')
@@ -385,31 +434,7 @@ pruneNodeModules(harnessTree)
 // Wrapper entry, hide patch, and patch layer.
 // plugin-safety-guard.mjs / plugin-worker-host.mjs 是 harness-node-entry.mjs 的
 // 运行时依赖（入口直接 import 前者，后者由 guard 以同级文件 spawn），必须一起打包。
-for (const file of [
-  'harness-node-entry.mjs',
-  'windows-child-process-hide.mjs',
-  'plugin-safety-guard.mjs',
-  'plugin-worker-host.mjs',
-  'dsh-desktop.patch.yml'
-]) {
-  cpSync(join(buildDir, file), join(resources, file))
-}
-
-// Splash/recovery/safe-mode pages and brand assets served as resources.
-for (const file of [
-  'splash.html',
-  'plugin-recovery.html',
-  'safe-mode.html',
-  'windows-menu.html',
-  'dsh-loader.gif',
-  'dsh-loader-dark.gif',
-  'app-icon.png',
-  'logo-light.png',
-  'logo-dark.png'
-]) {
-  const source = join(buildDir, file)
-  if (existsSync(source)) cpSync(source, join(resources, file))
-}
+copyBuildFiles()
 
 // ---------------------------------------------------------------------------
 // 6. MANIFEST.json：组装时间、lockfile hash、锁定版本（任务 0.3）。

@@ -61,6 +61,54 @@ if (process.platform === 'win32') {
   process.stdout.write('[harness-node] windowsHide enforcement enabled for child processes\n')
 }
 
+// Materialize DSH Desktop's generation projection before any profile module
+// loads. Market operations run inside a live Harness, so they deliberately
+// publish only the manifest and defer both the node_modules links and
+// `dsh.profile.bundles` to the next cold start (see generations/projection.mjs).
+// This is that cold start: the previous Harness has exited, so nothing holds a
+// handle in the profile tree, and the DSH entry below has not been imported
+// yet, so no profile module is cached. Without this step a generation install
+// stays "installed but never composed" across every restart.
+//
+// Only profiles that actually use generations are touched: with no
+// `desired.json` the profile is left byte-for-byte alone. A projection failure
+// is reported and stepped over — the profile as it stands is still the better
+// thing to boot than nothing.
+if (process.env.DSH_HOME) {
+  try {
+    const { existsSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const desired = join(process.env.DSH_HOME, 'profiles', '.generations', 'desired.json')
+    if (existsSync(desired)) {
+      const { projectGenerations } = await import(
+        './harness/node_modules/dsh-desktop-market-installer/generations/projection.mjs'
+      )
+      const projected = await projectGenerations(process.env.DSH_HOME)
+      process.stdout.write(
+        `[harness-node] generation projection: linked=[${projected.linked.join(', ')}] ` +
+          `unlinked=[${projected.unlinked.join(', ')}] bundles=[${projected.bundles.join(', ')}]\n`
+      )
+      // Sweep staging leftovers and generations no longer referenced by
+      // desired.json. Documented as a cold-start job and safe only here, while
+      // Harness is stopped; never called before, so orphan generations and
+      // interrupted installs accumulated forever. Runs AFTER the projection so
+      // the enabled set is already linked and cannot be swept.
+      const { sweepRegistry } = await import(
+        './harness/node_modules/dsh-desktop-market-installer/generations/registry.mjs'
+      )
+      const swept = await sweepRegistry(process.env.DSH_HOME)
+      if (swept.removed.length > 0 || swept.failed.length > 0) {
+        process.stdout.write(
+          `[harness-node] generation sweep: removed=[${swept.removed.join(', ')}] ` +
+            `failed=[${swept.failed.join(', ')}]\n`
+        )
+      }
+    }
+  } catch (error) {
+    report('generation projection skipped', error?.stack ?? error)
+  }
+}
+
 if (!dshEntryPath) {
   report('startup error', 'missing DSH entry path')
   process.exitCode = 1

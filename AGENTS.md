@@ -120,6 +120,15 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 
 `scripts/prepare-harness.mjs` 的 `assertPickerSurfaceIsHostBacked()` 会在应用补丁后校验该文件不再引用 `window.dshDesktop*` 且仍调用 `ctx.uiWorkspace.pickDirectory()`，违反即构建失败。
 
+### 插件「已安装但未生效」的两类根因（已修复，勿回归）
+
+市场对「安装成功却不在 `dsh.profile.bundles` 里」的包会给出结论，历史上此处出过两个独立缺陷，都会让一个**声明了 `dsh.bundle.patch` 的插件**永远挂载不上：
+
+1. **`dsh.client` 单独作为「纯客户端插件」判据**：`vendor/dshmarket/src/verify.ts` 的 client-only 分支原本只测 `dsh.client !== undefined`。同时声明 `dsh.bundle` **和** `dsh.client` 的包（如 `dsh-better-sidebar`）因此被误判为「未声明 dsh.bundle」，提示用户「重启后由市场自动挂载生效」——而重启永远不会让它生效。判据必须成对：`dsh.client !== undefined && dsh.bundle === undefined`（`hasHostHalf` / `hot.ts` 的 shim 挂载早已如此）。
+2. **cold-start 投影从未被调用**：`generations/projection.mjs` 的 `projectGenerations()` 是唯一会把 generation 插件写入 `dsh.profile.bundles` 并建立 `node_modules` 链接的函数，但整个仓库没有任何调用方——注释里说的「cold-start projector」并不存在。因此 generation 安装只 publish 了 manifest（`syncBundles: false` 是有意的：Harness 运行时不能替换 junction），却再也没有第二次机会把 bundle 层补上。修复在 [`build/harness-node-entry.mjs`](build/harness-node-entry.mjs)：在 import DSH 入口**之前**、且仅当 `$DSH_HOME/profiles/.generations/desired.json` 存在时执行 `projectGenerations()`，随后执行同样从未被调用的 `sweepRegistry()`。投影只收录**自己声明 `dsh.bundle.patch`** 的 generation：`loadProfile` 遇到列入 `bundles` 却没有 `dsh.bundle` 的包会直接抛错，整棵 profile 起不来，而纯客户端插件正是这种形状（它们由市场 shim 挂载）。已列入的条目除 generation 自有项外一律保留（部分 bundle 从 dsh 安装目录解析，重建列表会误删）。
+
+配套：`scripts/prepare-harness.mjs` 的输入指纹此前不含 `build/`，而 `build/` 是原样拷进 `resources/` 的非依赖文件——改了 `harness-node-entry.mjs` 后指纹不变，快速路径复用旧副本，修改被静默丢弃。现在指纹包含 `build/` 摘要，且快速路径会调用 `copyBuildFiles()` 同步产物。（`vendor/` 无需摘要：这些条目以符号链接进入 `resources/`，打包时解引用，内容始终最新。）
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)
