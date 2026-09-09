@@ -111,6 +111,8 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
 - **`prepare:harness` 幂等快速路径按完整打包清单校验。** 此前只检查 3 个文件，导致缺 `bin/`、`plugin-safety-guard.mjs` 或 `plugin-worker-host.mjs` 的 `resources/` 被判定为完整并跳过组装。`plugin-safety-guard.mjs` 由 `harness-node-entry.mjs` 直接 import，缺失时 Harness 根本无法启动；缺 `bin/` 还会让 `cargo build` 因 `resources/bin/*` glob 不匹配而失败。完整性检查现已对齐 `tauri.conf.json` → `bundle.resources`。
 - **`shell == None` 时同样要走 `harness_env`。** `Launcher::execute` 此前把 `capture_shell_environment()` 的原始结果直接交给子进程，`DSH_HOME` 等契约变量因此从未注入，Harness 回退到 `~/.dsh`，把可变状态写到了 `app_data_dir` 之外（违反 INV-1）。GUI 与 CLI 两条路径现已都注入契约环境。
 
+另有工作区目录选择器必须走 Host seam、不得使用 renderer 全局桥：Tauri webview 没有 preload / initialization script，`window.*` 全局无处定义。曾有一个 `patch-package` 补丁把原生目录选择器改成 `window.dshDesktopDirectoryPicker.pick()`，该全局从未被定义，因此导入项目时必然弹出「无法打开文件夹 / DSH Desktop directory picker bridge is unavailable」。现已移除该补丁，恢复上游 stock 路径：客户端 `ctx.uiWorkspace.pickDirectory()` → Host `ctx.directoryPicker` seam → Harness 进程内拉起 Win32 `IFileOpenDialog`。`scripts/prepare-harness.mjs` 的 `assertPickerSurfaceIsHostBacked()` 会在打补丁后校验这一点，违反即构建失败。
+
 要构建真实安装包，`npm run tauri build` 首次运行会下载 NSIS 工具链；在网络无法访问 GitHub releases 的环境下，打包步骤会以 `timeout: global` 失败，但此时 `.exe` 与资源其实已成功产出。
 
 ## 安全与依赖说明

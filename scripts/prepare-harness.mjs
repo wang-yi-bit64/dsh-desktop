@@ -302,6 +302,45 @@ run('npm', ['install', '--no-audit', '--no-fund'], staging)
 // ---------------------------------------------------------------------------
 log('applying desktop patches')
 run('npx', ['patch-package'], staging)
+assertPickerSurfaceIsHostBacked()
+
+/**
+ * The Tauri webview has no preload/initialization script, so a renderer global
+ * is never defined for the Harness page. A patch once routed the native
+ * directory picker through `window.dshDesktopDirectoryPicker`; that global did
+ * not exist anywhere, so every workspace pick failed with "directory picker
+ * bridge is unavailable". The stock surface calls the Host seam instead
+ * (`ctx.uiWorkspace.pickDirectory()`), which reaches the Win32 chooser without
+ * any renderer IPC. Fail the build rather than ship that regression again.
+ *
+ * @returns {void}
+ */
+function assertPickerSurfaceIsHostBacked() {
+  const clientPath = join(
+    staging,
+    'node_modules',
+    '@deepseek-ai',
+    'dsh-client-ui-directory-picker-native',
+    'lib',
+    'client.js'
+  )
+  if (!existsSync(clientPath)) {
+    throw new Error(`directory-picker client surface missing at ${clientPath}`)
+  }
+  const source = readFileSync(clientPath, 'utf8')
+  const bridge = source.match(/window\.(dshDesktop[A-Za-z]*)/)
+  if (bridge !== null) {
+    throw new Error(
+      `directory-picker client surface references window.${bridge[1]}, which no preload defines; ` +
+        'route picks through ctx.uiWorkspace.pickDirectory() instead'
+    )
+  }
+  if (!source.includes('ctx.uiWorkspace.pickDirectory()')) {
+    throw new Error(
+      `directory-picker client surface no longer calls ctx.uiWorkspace.pickDirectory() at ${clientPath}`
+    )
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 4. Inject the brand assets into the Harness web frontend dist.
