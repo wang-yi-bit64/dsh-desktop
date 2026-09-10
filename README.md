@@ -25,6 +25,7 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 - **Mobile Bridge** ✅ — LAN HTTP server with a pairing page (QR code + pairing token) forwarding RPC to Harness. It does **not** listen by default: you must start it explicitly from the application menu ("Phone Pairing (LAN)"). Access is constrained by the Harness `dsh-auth-*` cookie handshake plus a session token, both revoked on stop. The menu's `Phone` submenu shows live bridge state (off / listening / paired) — note the app has **no system tray yet**.
 - **Desktop Customization** ✅ — Desktop brand assets and UI behaviors applied through `patch-package` patches and `patch.yml` passed to `web --patch`. Patches are tiered as `functional` / `ui-behavior` / `brand` (see [`patches/LAYERS.md`](patches/LAYERS.md)); failures degrade by default and are recorded per-patch in `MANIFEST.json` → `patches[]`, while `--strict` restores full fail-fast behaviour.
 - **Single Instance** ✅ — Second launches focus the existing window instead of duplicating processes.
+- **Automatic Updates** ✅ — `tauri-plugin-updater` is registered and the whole check → download → restart-to-install path is wired, including the in-app update page (`frontend/updates.html`, opened from the application menu's "Check for Updates"). Releases are read from **this** repository (`wang-yi-bit64/dsh-desktop`) and signed with **this project's own** minisign key. Read [Auto-update and the signing key](#auto-update-and-the-signing-key) before shipping a release.
 - **Microsecond Benchmark Suite** ✅ — The `dsh-model-gateway` benchmark measures schema sanitization and multi-provider dialect conversion at ~2–20 µs (runnable, but see the "not wired" note below).
 
 ### Not wired / not implemented (experimental — do not claim as usable)
@@ -32,7 +33,6 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 - **Tier 0/1/2 Plugin Process Isolation 2.0** ⚠️ **not wired** — The tiered sandbox host (`plugin-worker-host.mjs`), JSON-RPC 2.0 transport, execution timeouts, error trip-wires, and circuit breaker (`plugin_worker.rs`) are **all implemented and unit-tested**, but **nothing in this repository calls them**: the Node-side `PluginWorkerClient` is deliberately discarded, and the Rust-side `call_tool` now returns an identifiable `ISOLATION_NOT_WIRED` error instead of forging success. **The only plugin protection actually in effect is the in-process guard listed above** — a crash inside that process can still take Harness down. Wiring prerequisites and exit criteria: [`docs/plugin_isolation_architecture.md`](docs/plugin_isolation_architecture.md).
 - **Multi-Model Tool Gateway 2.0 (`dsh-model-gateway`)** ⚠️ **not wired** — Schema validation, `anyOf`/`oneOf` sanitization, and multi-provider (OpenAI/DeepSeek/Gemini/Claude) dialect adaptation are implemented and tested, but there is **no runtime consumer**; since 2026-09-10 it is **no longer a dependency of `src-tauri`**. It is retained as an independently testable asset — see the status table at the top of [`docs/model_gateway_design.md`](docs/model_gateway_design.md) for the wire-it-or-freeze-it criteria.
 - **Shell UI & Error Attribution** 🟡 **partial** — The splash screen and error page (fault attribution, one-click retry, Safe Mode switch) **are** wired; however **one-click redacted diagnostic exports (`diagnostics.zip`) are not implemented** — no such code exists in the repository. The two available ways to collect diagnostic evidence today are `dsh-host-cli doctor` and the shell log `desktop.log`.
-- **Automatic Updates** 🟡 **wired, but the release source must change** — `tauri-plugin-updater` is registered and the check/download/restart-to-install flow works; but `tauri.conf.json` → `plugins.updater.endpoints` **still points at the upstream `dataelement/dsh-desktop` releases**, and the `pubkey` is not ours. Until it points at this repository with our own signing key, **do not ship a release build with the updater enabled**.
 
 ## Prerequisites
 
@@ -105,12 +105,11 @@ The left column is the **design scope**; the right column is **whether it is cur
 | P1 | Supervisor state machine and self-healing, ring-buffer log persistence, crash attribution analysis, Safe Mode recovery profiles | ✅ wired |
 | P2 | Decoupled worker/subprocess sandbox host (`plugin-worker-host.mjs`), JSON-RPC 2.0 transport, error trip-wires, circuit breaker (`plugin_worker.rs`) | ⚠️ **not wired** — implemented and unit-tested, but no runtime caller; `call_tool` returns `ISOLATION_NOT_WIRED` instead of forging success |
 | P3 | Multi-provider schema sanitization, complex union normalization (`anyOf`/`oneOf`), payload adaptation (`dsh-model-gateway`), microsecond benchmarks | ⚠️ **not wired** — removed from `src-tauri` dependencies; no runtime consumer |
-| P4 | Unified `IpcEnvelope<T>` responses in Tauri commands; one-click redacted diagnostic exports (`diagnostics.zip`) | 🟡 envelope ⚠️ **not wired** (contract defined, 16 commands still return `Result<T, String>`); **diagnostics export ❌ not implemented** |
+| P4 | Unified `IpcEnvelope<T>` responses in Tauri commands; one-click redacted diagnostic exports (`diagnostics.zip`) | 🟡 envelope ⚠️ **not wired** (contract defined, 14 commands still return `Result<T, String>`); **diagnostics export ❌ not implemented** |
 
 ### Planned (not started)
 
 - **P2/P3 wire-or-freeze decision** — give plugin isolation and the model gateway an explicit verdict ("integrate into the runtime" or "freeze as an asset") instead of leaving them indefinitely in the "implemented but unused" middle state.
-- **Release source switch** — repoint the updater endpoint from upstream `dataelement/dsh-desktop` to this repository and generate our own minisign key pair.
 - **Diagnostics bundle** — build redacted packaging (logs + attribution verdict + environment snapshot + `MANIFEST.json`) on top of the existing `dsh-host-cli doctor` capability.
 
 ## Testing
@@ -127,7 +126,24 @@ Integration tests spawn a real Node process running `scripts/mock-harness.mjs`, 
 
 - `node_modules/`, `harness-deps/`, `src-tauri/target/`, and `src-tauri/resources/` are gitignored; `resources/` is generated by the build script to avoid repository bloat.
 - On fresh checkouts without bundled resources, run `node scripts/stub-tauri-resources.mjs` before running `cargo check` or `cargo test` to generate dummy resources for Tauri's compile-time validation.
-- **Updater source (🔴 must change)**: `tauri.conf.json` → `plugins.updater.endpoints` **currently points at the upstream `dataelement/dsh-desktop` releases**, and the `pubkey` belongs to that project, not to us. In other words, as shipped today the auto-updater would check another project's release artifacts — **do not rely on that channel, and do not ship a release build with the updater enabled, until it points at this repository with our own minisign key pair.**
+- **Updater endpoint & signing key** — the updater reads releases from **this** repository and verifies them against **this project's own** minisign public key. The operational details (where the private key lives, how CI receives it, what breaks if it is lost) are in [Auto-update and the signing key](#auto-update-and-the-signing-key).
+
+## Auto-update and the signing key
+
+The updater endpoint is `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`, and `tauri.conf.json` → `bundle.createUpdaterArtifacts` is `true`, so `npm run build` emits the signed artifacts **and** the `latest.json` manifest that this endpoint serves. Publishing a release therefore needs no separate release action beyond uploading the build output.
+
+Update integrity rests on a single minisign key pair:
+
+| Item | Where it is |
+|------|-------------|
+| Public key | `src-tauri/tauri.conf.json` → `plugins.updater.pubkey` (safe to commit — it only verifies) |
+| Private key | `~/.tauri/dsh-desktop.key` — **never commit**, never copy into the repository |
+| Offline backup | `~/.tauri/backup/dsh-desktop.key.<timestamp>`, with the matching `.pub` beside it |
+| CI access | GitHub Actions secret `TAURI_SIGNING_PRIVATE_KEY` on `wang-yi-bit64/dsh-desktop`, used **without a password** |
+
+A build without signing credentials still produces a bundle, but such a bundle cannot be installed by an already-released client — the signature check rejects it. CI therefore verifies the secret exists *before* starting the expensive build and fails early with an explicit `::error::` when it is missing, rather than discovering the problem at the end.
+
+**Losing the private key is unrecoverable for existing users.** The public key is compiled into every shipped binary; a new key pair means a new public key, and installed clients will keep rejecting updates signed by it. Treat `~/.tauri/dsh-desktop.key` as release-critical infrastructure rather than as a local developer file.
 
 ## Bundle Size & Expectation Management
 

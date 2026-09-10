@@ -249,9 +249,9 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 | LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]` |
-| **统一 IPC 封套 `IpcEnvelope<T>`** | ⚠️ **未接线** | 契约定义在 `crates/dsh-contracts/src/ipc.rs:7` | **无**：`src-tauri/src/commands.rs` 的 13 个命令全部返回 `Result<T, String>` |
-| **自动更新链路** | ⚠️ **未接线**（五处断链） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`） | **无 UI**：`updates_*` 5 个命令与 `updates://status` 事件在 `frontend/` 中零调用、零监听；且 endpoint/pubkey 指上游、`createUpdaterArtifacts` 未开、CI 无签名私钥 |
-| ↳ 更新源归属 | 🔴 **风险项** | `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints` 当前指向 `github.com/dataelement/dsh-desktop`（**上游仓库**），`pubkey` 非本项目所有 | 待定（需自有签名密钥） |
+| **统一 IPC 封套 `IpcEnvelope<T>`** | ⚠️ **未接线** | 契约定义在 `crates/dsh-contracts/src/ipc.rs:7` | **无**：`src-tauri/src/commands.rs` 的 14 个命令全部返回 `Result<T, String>` |
+| **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
+| ↳ 更新源归属与签名密钥 | ✅ 已闭环（2026-09-10） | `plugins.updater.endpoints` 指向 `github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`；配置里的 `pubkey` 与 `~/.tauri/dsh-desktop.key.pub` **逐字节一致** | 私钥经 CI Secret `TAURI_SIGNING_PRIVATE_KEY` 注入（无口令），本地离线备份在 `~/.tauri/backup/` |
 | **应用内日志查看器** | ❌ **未实现** | 无 `frontend/logs.html`；`harness-view-log` 仅调用 `opener` 打开系统文件管理器 | **无** |
 | **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复调用名；同日补完启动链路） | `src-tauri/frontend/error.html` 调 `safe_mode_action`（`action: "restart"`），失败经 `fail()` 可见上报 | 错误页按钮 → `commands::safe_mode_action` → `HarnessSupervisor::restart_in_safe_mode`（此前调 `restart()`，实际只是**普通重启**——按钮曾是谎话） |
 | **恢复页交互** | ❌ **未接线** | `recovery_action` / `safe_mode_action`（restart/quit）已定义且注册 | **无**：`plugin-recovery.html` 与 `safe-mode.html` 零 `invoke`、零事件监听（`plugin-recovery.html` 甚至无 `local_page` 指向，不可达） |

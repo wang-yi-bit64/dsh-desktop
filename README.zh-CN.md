@@ -19,12 +19,13 @@
 - **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
 - **插件运行异常守护（进程内）** ✅ —— `plugin-safety-guard.mjs` 拦截未捕获异常与未处理 Promise 拒绝，产出 `[dsh-plugin-fault]` 归因信息，避免单个插件把整个 Harness 拖崩。
-- **安全模式与故障恢复** ✅ —— 自动检测启动失败原因，生成独立隔离 profile 保障基础功能可用。
+- **安全模式与故障恢复** ✅ —— 自动检测启动失败原因并写入独立隔离 profile，随后**真正以该 profile 启动 Harness**（`--profile desktop-safe-mode` 搭配 `dsh-desktop-safe.patch.yml`，后者会摘掉常规补丁层挂载的产品插件），保障基础功能可用。注意：壳层在界面上**没有任何**「当前处于安全模式」的提示。
 - **多 Profile 与会话管理** ✅ —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
 - **壳层结构化日志** ✅ —— `tauri-plugin-log` 落盘到 `app_data_dir/desktop.log`（5 MB × 2 轮转，含本地时区），与 Harness 侧 `harness.log` / `app.log` 分离，便于归因「是壳的问题还是 Harness 的问题」。
 - **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从应用菜单「Phone Pairing (LAN)…」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。菜单的 `Phone` 子菜单会实时显示桥状态（off / listening / paired）——注意本应用**尚无系统托盘**。
 - **桌面深度定制** ✅ —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。补丁按 `functional` / `ui-behavior` / `brand` 三层分级（见 [`patches/LAYERS.md`](patches/LAYERS.md)），失败时默认降级并在 `MANIFEST.json` 的 `patches[]` 逐条留证；`--strict` 可恢复全量 fail-fast。
 - **单实例锁定** ✅ —— 第二次启动时聚焦已有窗口，避免重复拉起多实例。
+- **自动更新** ✅ —— `tauri-plugin-updater` 已注册，检查 → 下载 → 择机重启安装的完整链路均已接线，并配有应用内更新页（`frontend/updates.html`，由应用菜单「检查更新」打开）。更新源为**本仓库**（`wang-yi-bit64/dsh-desktop`），验签使用**本项目自有**的 minisign 密钥。发布正式包前请先读[自动更新与签名密钥](#自动更新与签名密钥)。
 - **微秒级性能基准测试** ✅ —— `dsh-model-gateway` 内置 benchmark 套件，保障 Schema 清洗与多方言适配转换在 2~20 微秒级内完成（基准可运行，但见下方「未接线」说明）。
 
 ### 未接线 / 未实现（实验性，勿对外宣称可用）
@@ -32,7 +33,6 @@
 - **插件分级隔离 2.0 (Tier 0/1/2)** ⚠️ **未接线** —— Tier 0/1/2 分级沙箱宿主（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、超时控制、故障计数与熔断断路器（`plugin_worker.rs`）**均已实现并有单元测试**，但整个仓库**没有任何运行时调用方**：Node 侧 `PluginWorkerClient` 被刻意丢弃，Rust 侧 `call_tool` 现在直接返回可辨识的 `ISOLATION_NOT_WIRED` 错误而非伪造成功。因此**当前生效的插件防护仅为上文的进程内守护**（同进程崩溃仍可能带走 Harness）。接线前置与退出条件见 [`docs/plugin_isolation_architecture.md`](docs/plugin_isolation_architecture.md)。
 - **多模型工具网关 2.0 (`dsh-model-gateway`)** ⚠️ **未接线** —— 该 crate 的 Schema 校验、`anyOf`/`oneOf` 降级净化、多厂商（OpenAI/DeepSeek/Gemini/Claude）方言适配均已实现并测试通过，但**无任何运行时消费者**，自 2026-09-10 起**不再是 `src-tauri` 的依赖**。保留为可独立测试的资产，接线或冻结的判据见 [`docs/model_gateway_design.md`](docs/model_gateway_design.md) 顶部状态表。
 - **壳页面与错误归因** 🟡 **部分** —— 静态启动页 (Splash) 与错误页（故障归因、一键重试、安全模式切换）**已接线**；但**一键脱敏导出诊断包 (`diagnostics.zip`) 未实现**，代码库中不存在对应实现。当前获取诊断证据的两条可用路径是 `dsh-host-cli doctor` 与壳层日志 `desktop.log`。
-- **自动更新** 🟡 **已接线，发布源待改** —— `tauri-plugin-updater` 已注册，检查/下载/择机重启安装流程可用；但 `tauri.conf.json` → `plugins.updater.endpoints` **当前仍指向上游 `dataelement/dsh-desktop` 的 releases**，且 `pubkey` 非本项目所有。在改指本仓库发布页并换用自有签名密钥之前，**不得发布带 updater 的正式包**。
 
 ## 环境要求
 
@@ -107,12 +107,11 @@ docs/                   # 架构设计、契约定义与技术方案
 | P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
 | P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | ⚠️ **未接线**：实现与单测俱在，但无运行时调用方；`call_tool` 返回 `ISOLATION_NOT_WIRED` 而非伪造成功 |
 | P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | ⚠️ **未接线**：已从 `src-tauri` 依赖移除，无运行时消费者 |
-| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`) | 🟡 封套 ⚠️ **未接线**（契约已定义，13 个命令仍返回 `Result<T, String>`）；**诊断包 ❌ 未实现** |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`) | 🟡 封套 ⚠️ **未接线**（契约已定义，14 个命令仍返回 `Result<T, String>`）；**诊断包 ❌ 未实现** |
 
 ### 后续计划（尚未开工）
 
 - **P2/P3 接线或冻结裁定**：为插件隔离与模型网关给出明确的「接入运行时」或「标记为冻结资产」结论，避免无限期停留在「实现了但没人用」的中间态。
-- **发布源切换**：将 updater endpoint 由上游 `dataelement/dsh-desktop` 改指本仓库，并生成自有 minisign 密钥对。
 - **诊断包落地**：在 `dsh-host-cli doctor` 现有归因能力之上补齐脱敏打包（日志 + 归因结论 + 环境快照 + `MANIFEST.json`）。
 
 ## 测试
@@ -129,7 +128,24 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
 
 - `node_modules/`、`harness-deps/`、`src-tauri/target/` 与 `src-tauri/resources/` 均已被 gitignore；其中 `resources/` 由构建脚本按需组装生成，避免增大仓库体积。
 - 在全新拉取的无资源环境中运行 `cargo check` 或 `cargo test` 前，可先执行 `node scripts/stub-tauri-resources.mjs` 生成桩资源以通过 Tauri 编译期校验。
-- **更新源（🔴 待改）**：`tauri.conf.json` → `plugins.updater.endpoints` **当前指向上游 `dataelement/dsh-desktop` 的 releases**，`pubkey` 亦非本项目所有。这意味着现阶段的自动更新会去检查另一个项目的发布物——**在改指本仓库发布页并换成自有 minisign 密钥对之前，不得依赖该通道，也不得发布带 updater 的正式包**。
+- **更新端点与签名密钥**：自动更新的更新源为**本仓库**发布页，验签使用**本项目自有**的 minisign 公钥。密钥私钥的存放位置、CI 如何取得、以及一旦丢失会怎样，见[自动更新与签名密钥](#自动更新与签名密钥)。
+
+## 自动更新与签名密钥
+
+更新端点为 `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`，且 `tauri.conf.json` → `bundle.createUpdaterArtifacts` 已置 `true`，因此 `npm run build` 会同时产出**已签名的安装包**与该端点所服务的 `latest.json` 清单——发布一个版本无需再额外做发布动作，上传构建产物即可。
+
+更新的可信度完全落在同一对 minisign 密钥上：
+
+| 项目 | 位置 |
+|------|------|
+| 公钥 | `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`（可入库，它只用于验签） |
+| 私钥 | `~/.tauri/dsh-desktop.key` —— **严禁入库**，严禁复制进仓库 |
+| 离线备份 | `~/.tauri/backup/dsh-desktop.key.<时间戳>`，同目录存放配对的 `.pub` |
+| CI 获取方式 | `wang-yi-bit64/dsh-desktop` 仓库的 GitHub Actions Secret `TAURI_SIGNING_PRIVATE_KEY`，**无口令**使用 |
+
+没有签名凭据时构建仍能产出安装包，但这种包无法被已发布的客户端安装——验签会直接拒绝。因此 CI 会在**开始昂贵的构建之前**先校验该 Secret 是否存在，缺失时以显式 `::error::` 提前失败，而不是等到最后才发现问题。
+
+**私钥一旦丢失，对已安装用户而言不可挽回。** 公钥被编译进每一个已发布的二进制；换新密钥对就意味着换新公钥，而已安装的客户端会持续拒绝由新公钥签名的更新。请把 `~/.tauri/dsh-desktop.key` 当作发布关键基础设施，而不是本地开发文件。
 
 ## 体积现状与期望管理
 
