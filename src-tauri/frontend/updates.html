@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>DSH Desktop · Updates</title>
+    <style>
+      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { color: #17181a; background: #f8f8f6; }
+      main {
+        position: fixed; inset: 0;
+        display: grid; align-content: center; justify-items: center;
+        gap: 12px; padding: 32px; text-align: center;
+      }
+      .icon { font-size: 34px; }
+      .title { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+      .version { margin: 0; color: #9ca0a8; font-size: 12px; font-variant-numeric: tabular-nums; }
+      .message { margin: 0; color: #777a80; font-size: 13px; max-width: 520px; white-space: pre-wrap; word-break: break-word; }
+      /* 进度条只在 downloading 相位出现；用值型 width 而非动画，便于测试断言。 */
+      .bar { width: 320px; height: 6px; border-radius: 999px; background: rgba(127,127,127,.18); overflow: hidden; }
+      .bar > span { display: block; height: 100%; width: 0; background: #4d6bfe; transition: width .2s ease; }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
+      button {
+        appearance: none; border: 0; cursor: pointer; font: inherit;
+        min-height: 34px; padding: 7px 18px; border-radius: 999px;
+        font-size: 13px; font-weight: 600;
+      }
+      button[disabled] { opacity: .55; cursor: progress; }
+      button[hidden] { display: none; }
+      .primary { color: #fff; background: #4d6bfe; }
+      .primary:hover { background: #3e5de7; }
+      .secondary { color: #3f3f46; background: #ececee; border: 1px solid rgba(32,33,36,.14); }
+      .secondary:hover { background: #e2e2e5; }
+      /* 失败必须落在页面上：更新流程的用户不会开 DevTools（与 error.html 同理由）。 */
+      .notice {
+        margin: 0; padding: 8px 14px; max-width: 640px;
+        color: #8a2c2c; background: rgba(220,38,38,.10);
+        border: 1px solid rgba(220,38,38,.28); border-radius: 8px;
+        font-size: 12px; text-align: left; white-space: pre-wrap; word-break: break-word;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { color: #f3f4f6; background: #141416; }
+        .message { color: #9ca0a8; }
+        .secondary { color: #e4e4e7; background: #2a2a2e; border-color: rgba(255,255,255,.16); }
+        .secondary:hover { background: #34343a; }
+        .notice { color: #fca5a5; background: rgba(220,38,38,.16); border-color: rgba(248,113,113,.32); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="icon" aria-hidden="true">⤓</div>
+      <h1 class="title" id="title">Software update</h1>
+      <p class="version" id="version" hidden></p>
+      <p class="message" id="message"></p>
+      <div class="bar" id="bar" hidden><span id="barfill"></span></div>
+      <p class="notice" id="notice" hidden></p>
+      <div class="actions">
+        <button class="primary" id="check">Check for updates</button>
+        <button class="primary" id="download" hidden>Download</button>
+        <button class="primary" id="install" hidden>Restart and install</button>
+        <button class="secondary" id="skip" hidden>Skip this version</button>
+        <button class="secondary" id="back">Back to Harness</button>
+      </div>
+    </main>
+    <script>
+      const zh = navigator.language.toLowerCase().startsWith('zh');
+      const TEXT = {
+        en: {
+          title: 'Software update',
+          check: 'Check for updates',
+          download: 'Download',
+          install: 'Restart and install',
+          skip: 'Skip this version',
+          back: 'Back to Harness',
+          phase: {
+            idle: 'Check for a new version of DSH Desktop.',
+            checking: 'Checking for updates…',
+            'up-to-date': 'You are on the latest version.',
+            downloading: 'Downloading update…',
+            downloaded: 'Update downloaded. Restart to finish installing.',
+            error: 'The update check failed.'
+          },
+          available: (v) => `Version ${v} is available.`,
+          actions: { check: 'Update check', download: 'Download', install: 'Install', skip: 'Skip', back: 'Back' }
+        },
+        zh: {
+          title: '软件更新',
+          check: '检查更新',
+          download: '下载',
+          install: '重启并安装',
+          skip: '跳过此版本',
+          back: '返回 Harness',
+          phase: {
+            idle: '检查 DSH Desktop 是否有新版本。',
+            checking: '正在检查更新…',
+            'up-to-date': '当前已是最新版本。',
+            downloading: '正在下载更新…',
+            downloaded: '更新已下载，重启后完成安装。',
+            error: '检查更新失败。'
+          },
+          available: (v) => `发现新版本 ${v}。`,
+          actions: { check: '检查更新', download: '下载', install: '安装', skip: '跳过', back: '返回' }
+        }
+      };
+      const t = zh ? TEXT.zh : TEXT.en;
+      const el = (id) => document.getElementById(id);
+      const invoke = window.__TAURI__?.core?.invoke;
+      /** 当前可用版本（来自快照）。跳过时要用它，且必须来自快照字段——
+          从展示文案里正则抠版本号会随本地化文案漂移。 */
+      let availableVersion = '';
+      const messageEl = el('message');
+      const noticeEl = el('notice');
+      const barEl = el('bar');
+      const barFillEl = el('barfill');
+      const versionEl = el('version');
+      const buttons = {
+        check: el('check'),
+        download: el('download'),
+        install: el('install'),
+        skip: el('skip'),
+        back: el('back')
+      };
+
+      el('title').textContent = t.title;
+      buttons.check.textContent = t.check;
+      buttons.download.textContent = t.download;
+      buttons.install.textContent = t.install;
+      buttons.skip.textContent = t.skip;
+      buttons.back.textContent = t.back;
+      document.title = `DSH Desktop · ${t.title}`;
+
+      /**
+       * 显示动作失败原因（与 error.html 同一约定：不依赖 DevTools）。
+       * @param {string} label 动作名（已本地化）
+       * @param {unknown} error 失败原因
+       */
+      function fail(label, error) {
+        const detail = error && error.message ? error.message : String(error);
+        noticeEl.textContent = zh ? `${label}失败：${detail}` : `${label} failed: ${detail}`;
+        noticeEl.hidden = false;
+      }
+
+      function clearNotice() {
+        noticeEl.hidden = true;
+        noticeEl.textContent = '';
+      }
+
+      /**
+       * 执行一个壳命令，失败时在页面上可见。
+       *
+       * 成功路径没有导航副作用（更新流程都在本页内推进），因此**恢复按钮**：
+       * 用户可能想重试，把按钮永久禁用在成功路径上是错的。
+       * @param {string} command 已注册的 Tauri 命令名
+       * @param {string} label 本地化动作名
+       * @param {object} [args] 命令参数
+       * @param {HTMLButtonElement} button 触发按钮
+       */
+      function run(command, label, args, button) {
+        if (!invoke) return;
+        clearNotice();
+        button.disabled = true;
+        invoke(command, args)
+          .then(() => { button.disabled = false; })
+          .catch((error) => { button.disabled = false; fail(label, error); });
+      }
+
+      /**
+       * 按快照渲染界面。
+       *
+       * 按钮可见性是相位的函数，不是历史的函数——每次渲染都从相位完全重算，
+       * 这样 `updates_status` 的冷启动结果与事件推送走同一条渲染路径，
+       * 不会出现「刚进页面按钮状态不对，收到一次事件才对」的错位。
+       * @param {{phase?: string, manual?: boolean, available_version?: string|null, percent?: number|null, message?: string|null}} snapshot
+       */
+      function apply(snapshot) {
+        if (!snapshot || !snapshot.phase) return;
+        const phase = snapshot.phase;
+        const version = snapshot.available_version || '';
+        availableVersion = version;
+        messageEl.textContent =
+          phase === 'available' ? t.available(version) : (t.phase[phase] || '');
+        if (snapshot.message) messageEl.textContent += `\n${snapshot.message}`;
+
+        const downloading = phase === 'downloading';
+        const available = phase === 'available';
+        const downloaded = phase === 'downloaded';
+
+        barEl.hidden = !downloading && !downloaded;
+        const percent = downloaded ? 100 : (typeof snapshot.percent === 'number' ? snapshot.percent : 0);
+        barFillEl.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+
+        buttons.download.hidden = !available;
+        buttons.skip.hidden = !available;
+        buttons.install.hidden = !downloaded;
+        // 检查按钮在「有更新待下载」「下载中」「已下载」时没有意义。
+        buttons.check.hidden = available || downloading || downloaded;
+        buttons.check.disabled = phase === 'checking';
+        if (phase === 'checking') buttons.check.textContent = t.phase.checking;
+        else buttons.check.textContent = t.check;
+      }
+
+      if (window.__TAURI__?.event) {
+        window.__TAURI__.event.listen('updates://status', (event) => {
+          apply(event.payload || {});
+        });
+      }
+
+      // 进入页面立即拉取快照，不等第一次推送（周期检查间隔 6 小时）。
+      if (invoke) {
+        invoke('updates_status').then(apply).catch((error) => fail(t.actions.check, error));
+        // 版本号取自壳自身，失败就不显示——它不是本页的核心信息。
+        window.__TAURI__?.app?.getVersion?.()
+          .then((v) => {
+            if (!v) return;
+            versionEl.textContent = zh ? `当前版本 ${v}` : `Current version ${v}`;
+            versionEl.hidden = false;
+          })
+          .catch(() => {});
+      }
+
+      buttons.check.addEventListener('click', () => {
+        run('updates_check', t.actions.check, undefined, buttons.check);
+      });
+      buttons.download.addEventListener('click', () => {
+        run('updates_download', t.actions.download, undefined, buttons.download);
+      });
+      buttons.install.addEventListener('click', () => {
+        // Windows 上安装阶段会直接结束进程（安装器限制），按钮不再恢复属预期。
+        run('updates_install', t.actions.install, undefined, buttons.install);
+      });
+      buttons.skip.addEventListener('click', () => {
+        run('updates_skip', t.actions.skip, { version: availableVersion }, buttons.skip);
+      });
+      buttons.back.addEventListener('click', () => {
+        // `harness_open` 在 Harness 未就绪时返回 `false` 而**不是**报错（见其
+        // Rust 文档：未就绪是正常状态，不是失败）。因此这里必须自己处理这个
+        // 返回值——否则按钮看起来「点了没反应」，用户会以为应用卡住了。
+        if (!invoke) return;
+        clearNotice();
+        buttons.back.disabled = true;
+        invoke('harness_open')
+          .then((opened) => {
+            buttons.back.disabled = false;
+            if (opened) return;
+            noticeEl.textContent = zh
+              ? 'Harness 尚未就绪，暂时无处可返回。请稍后重试，或从菜单重启 Harness。'
+              : 'Harness is not ready yet, so there is nothing to return to. Try again shortly, or restart Harness from the menu.';
+            noticeEl.hidden = false;
+          })
+          .catch((error) => {
+            buttons.back.disabled = false;
+            fail(t.actions.back, error);
+          });
+      });
+    </script>
+  </body>
+</html>

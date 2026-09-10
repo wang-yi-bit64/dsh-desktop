@@ -216,10 +216,17 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 log::info!("mobile bridge stopped");
                 refresh_bridge_status(&app, &state.mobile.snapshot().await);
             }
+            // 打开更新页并立即触发一次手动检查：菜单项叫「Check for
+            // Updates…」，用户的期望就是「点了就开始查」，而不是「点了给我
+            // 一个还得再点一次的页面」。页面进入时自会拉取最新快照，
+            // 因此这里不必关心检查是否已经跑完。
             "updates-check" => {
+                crate::window::show_updates_page(&app);
                 let manager = state.updates.lock().await.clone();
                 if let Some(manager) = manager {
                     manager.check(true).await;
+                } else {
+                    log::warn!("updater is not available; update page opened without a check");
                 }
             }
             "app-quit" => app.exit(0),

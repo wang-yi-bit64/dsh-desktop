@@ -210,6 +210,7 @@ pub fn run() {
             commands::app_quit,
             commands::recovery_action,
             commands::safe_mode_action,
+            commands::harness_open,
             commands::updates_status,
             commands::updates_check,
             commands::updates_download,

@@ -63,15 +63,12 @@ const strict = argv.includes('--strict')
  * 必须写清「为什么暂时留着」，否则应直接删除命令——死代码要么接上，要么删掉。
  */
 const ALLOW_UNUSED_COMMANDS = {
-  // 更新命令：批次 B2 会新增 frontend/updates.html 接线，届时移除本条。
-  updates_status: '批次 B2 更新 UI 待接线',
-  updates_check: '批次 B2 更新 UI 待接线',
-  updates_download: '批次 B2 更新 UI 待接线',
-  updates_install: '批次 B2 更新 UI 待接线',
-  updates_skip: '批次 B2 更新 UI 待接线',
+  // 更新命令（updates_*）与 safe_mode_action 的条目已在批次 B2（2026-09-10）销账：
+  // 前者由 frontend/updates.html 全部 5 条接线，后者由 error.html 的「安全模式」
+  // 按钮接线。**销账不是可选的美化**——留在清单里的已接线条目会变成一句过期的
+  // 谎话，让下一个读者以为这些命令仍然没有 UI。
   // 恢复动作：批次 C 会接线 plugin-recovery / safe-mode 两页，届时移除本条。
   recovery_action: '批次 C 恢复页待接线',
-  safe_mode_action: '批次 C 恢复页待接线（error.html 已在用 action=restart 分支）',
   // 通用外链：为插件体系预留，当前无壳内调用方。
   open_external: '为 Harness 侧外链转交预留，当前无壳内调用方'
 }
@@ -91,8 +88,9 @@ const ALLOW_UNREACHABLE_PAGES = {
  * 允许「无监听方」的事件。留空即为不允许。
  */
 const ALLOW_UNLISTENED_EVENTS = {
-  // updates://status 在批次 B2 前确实没有 UI。这不是「允许」，是「已知并已登记」。
-  'updates://status': '批次 B2 更新 UI 待接线'
+  // 批次 B2（2026-09-10）已接线：`frontend/updates.html` 监听 `updates://status`。
+  // 此清单的依据是「有没有监听方」，接线后必须销账，否则它会变成一句过期的
+  // 谎话——下一个读到这里的人会以为事件仍然没人听。
 }
 
 /**

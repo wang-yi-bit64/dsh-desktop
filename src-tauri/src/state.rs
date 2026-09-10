@@ -139,6 +139,24 @@ impl HarnessSupervisor {
         }
     }
 
+    /// 就绪时导航用过的完整 URL（含 C12 的 Windows 平台参数与首航 token）。
+    ///
+    /// 供「从壳内页面返回 Harness 界面」使用（`commands::harness_open`）。
+    /// 刻意复用状态机**自身记下的那一个 URL**，而不是重新拼一个：C12 的
+    /// query 参数只有 `on_ready` 知道，重新拼就会漂移成「非桌面模式」的界面。
+    ///
+    /// 注意语义：这是**重放**同一个 URL，其中的首航 token 可能已被 Harness
+    /// 消费（契约 C5：token 只在首次 `GET /?token=` 出现）。稳态鉴权走
+    /// `dsh-auth-*` cookie，因此正常情况下重放可用；若 Harness 侧已使该
+    /// token 失效，本方法不负责补救——用户仍可通过原生菜单重启或退出。
+    pub fn ready_url(&self) -> Option<String> {
+        let inner = self.inner.lock().unwrap();
+        match &inner.phase {
+            HarnessPhase::Ready { url } => Some(url.clone()),
+            _ => None,
+        }
+    }
+
     /// 启动 Harness（若已有实例先停止）。
     pub async fn start(self: &Arc<Self>) {
         self.start_with_profile(None).await;

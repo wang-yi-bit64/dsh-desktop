@@ -176,6 +176,28 @@ pub async fn safe_mode_action(
     }
 }
 
+/// 回到 Harness 界面（壳内页面 → Harness）。
+///
+/// 存在的理由：更新页（`frontend/updates.html`）占用了主窗口，返回 Harness 的
+/// **唯一**路径原本只有原生菜单里的「Restart Harness」——那会真的重启 Harness
+/// 进程（新端口、新 token、会话中断），拿它当「返回」用是错误的语义。
+///
+/// 语义是**重放**状态机记下的那个 URL（见 `HarnessSupervisor::ready_url`），
+/// 不是重新启动。未就绪时返回 `false`，由页面自行决定如何提示。
+#[tauri::command]
+pub async fn harness_open(
+    webview: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    ensure_local_origin(&webview)?;
+    let Some(url) = state.supervisor.ready_url() else {
+        return Ok(false);
+    };
+    let url = url::Url::parse(&url).map_err(|error| error.to_string())?;
+    webview.navigate(url).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn updates_status(
     webview: WebviewWindow,

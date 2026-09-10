@@ -53,6 +53,17 @@ pub fn show_recovery_page<R: Runtime>(app: &tauri::AppHandle<R>, plugins: &[Stri
     let _ = webview.navigate(local_page(&target));
 }
 
+/// 显示更新页（批次 B2）。
+///
+/// 由菜单「Check for Updates…」指向：更新流程（检查 → 下载 → 重启安装）需要
+/// 一个能持续展示进度与失败原因的落点，原生菜单项做不到这件事。
+pub fn show_updates_page<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(webview) = main_window(app) else {
+        return;
+    };
+    let _ = webview.navigate(local_page("updates.html"));
+}
+
 /// 显示安全模式页（阶段 5）。
 #[allow(dead_code)] // 阶段 5：安全模式入口接线时启用。
 pub fn show_safe_mode_page<R: Runtime>(app: &tauri::AppHandle<R>) {
