@@ -4,10 +4,20 @@ import path from 'node:path'
 import readline from 'node:readline'
 
 /**
- * 插件注册防护、懒加载与沙盒代理
- * 1. 捕获并降级插件冲突（重复工具/路由注册）
- * 2. 支持将高危插件代理调度到独立 Worker 进程（Out-of-Process）
- * 3. 输出结构化 [dsh-plugin-fault] 与 [dsh-worker-fault] 标识
+ * 插件注册防护与故障归因
+ *
+ * ⚠️ 状态（2026-09-10）：**部分接线**。
+ * - ✅ `formatFaultDetails` —— 已接线：由 `harness-node-entry.mjs` 的
+ *   `uncaughtException` / `unhandledRejection` 处理器消费，产出
+ *   `[dsh-plugin-fault]` 结构化标识。
+ * - ❌ `PluginWorkerClient` —— **未接线（experimental）**：无任何调用方。
+ *   它可按需 spawn `plugin-worker-host.mjs` 建立进程外 JSON-RPC 通道，但插件
+ *   隔离不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系），
+ *   启用它会凭空引入常驻子进程。启用前须先一并接通 Rust 侧
+ *   `dsh_host::plugin_worker::PluginIsolationManager`，并更新
+ *   `docs/plugin_isolation_architecture.md` 的状态说明。
+ * - 因此本文件**不会**主动输出 `[dsh-worker-fault]`：该标识只在
+ *   `PluginWorkerClient` 被使用时才可能产生。
  */
 
 export function installPluginSafetyGuards() {
@@ -38,6 +48,7 @@ export function installPluginSafetyGuards() {
   }
 
   // 2. 插件 Worker 客户端代理类 (Out-of-process client)
+  //    ⚠️ 未接线：见文件顶部状态说明。保留实现以待接线，勿在无消费方时启用。
   class PluginWorkerClient {
     constructor() {
       this.child = null

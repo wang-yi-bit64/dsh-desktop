@@ -4,6 +4,14 @@ import { pathToFileURL } from 'node:url'
 import { enforceWindowsChildProcessHide } from './windows-child-process-hide.mjs'
 import { installPluginSafetyGuards } from './plugin-safety-guard.mjs'
 
+// 只取用故障归因格式化：本进程需要的是「把 uncaughtException / unhandledRejection
+// 归类成 [dsh-plugin-fault] 并写日志」这一项能力。
+//
+// 同一次调用还会返回 `workerClient`（可按需 spawn plugin-worker-host.mjs 的
+// 进程外 RPC 客户端），此处**刻意不接线**：插件隔离尚未成为任何真实插件挂载
+// 路径（真实挂载发生在 Harness 进程内的官方 Cordis 体系），提前拉起沙箱进程
+// 会凭空引入一个常驻子进程与一条没有消费方的 RPC 通道。请勿在未一并接通
+// Rust 侧 PluginIsolationManager 之前启用它。
 const { formatFaultDetails } = installPluginSafetyGuards()
 
 // On macOS Harness runs inside an Electron utility process (TCC responsibility
