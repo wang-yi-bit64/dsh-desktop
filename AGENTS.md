@@ -8,31 +8,37 @@
 
 `dsh-desktop` 是基于 **Tauri 2.0** 与 **Rust** 构建的 DeepSeek Harness 跨平台桌面外壳程序。它负责打包内置 Node.js + DeepSeek Harness 服务运行时的生命周期管理，并提供 GUI 窗口承载与崩溃自愈。
 
-> ⚠️ **能力口径**：文档中每个特性都必须区分「已接线」与「未接线/实验性」。本文件与 README 中列为**未接线**的项（插件分级隔离、诊断包导出）在代码中确有实现或部分实现，但**不在运行时路径上**，不得对外呈现为可用能力。判据与证据位置见 §7 宣称纪律。
+> ⚠️ **能力口径**：文档中每个特性都必须区分五种状态——**已接线 / 未接线 / 未实现 / 计划中 / 已归档**（词表见 §7.3）。凡不在「已接线」之列的，**不得对外呈现为可用能力**；状态词的判据与代码证据位置见 §7 宣称纪律。
+>
+> 截至 2026-09-10 批次 A~G 收尾，§7.2 表里**已无「未接线」条目**：能接的都接了（IPC 封套、诊断导出、日志查看器、恢复页），接不上的都裁定归档并删除了（插件隔离、模型网关）。剩下两个 🕓 计划中（Safe Mode 界面横幅、插件卸载/禁用）都是**明确决策**而非欠债，各自的依据写在该行里。
 
 ### 目录划分
 - **`crates/dsh-contracts`**：无 GUI / 无平台绑定的通用契约库。
-  - 核心职责：集中定义常量与契约标识（`CX-1` ~ `CX-9`）、标准错误分类码（`E1001` ~ `E4002`）、前后端统一 IPC 封套（`IpcEnvelope<T>`）、JSON-RPC 2.0 规范（唯一契约源，`dsh-host` 等下游 crate 仅 re-export）、生命周期阶段与崩溃诊断类型。
+  - 核心职责：集中定义常量与契约标识（`CX-1` ~ `CX-9`）、**标准错误码总表（`E1xxx`~`E7xxx`，见 `src/errors.rs` 的 `codes` 模块）**、前后端统一 IPC 封套（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）、JSON-RPC 2.0 规范（唯一契约源，`dsh-host` 等下游 crate 仅 re-export）、生命周期阶段与崩溃诊断类型。
+  - **错误码按族号对应类别**：`E1xxx` 环境 / `E2xxx` 网络 / `E3xxx` 进程 / `E4xxx` 鉴权 / `E5xxx` 插件 / `E6xxx` 模型网关 / `E7xxx` 内部。族号与类别的对应关系有测试守着（`errors.rs::every_code_family_maps_to_its_category`），改一处必须改另一处。
 - **`crates/dsh-host`**：无 GUI 依赖的纯 Rust 核心宿主库。
-  - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断、Safe Mode 隔离 Profile、多 Profile/Session 管理、插件分级隔离的**状态机与断路器逻辑**（`plugin_worker.rs`，⚠️ **未接线**，见 §7）。
+  - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断（`diagnostics.rs`）、**脱敏诊断包导出（`diagnostics_export.rs`，批次 D）**、**日志尾部读取（`logs_view.rs`，批次 D）**、Safe Mode 隔离 Profile、多 Profile/Session 管理。
   - **严格保持无 GUI / Headless 状态（不变量 INV-6）**。
 - **`crates/dsh-host-cli`**：`dsh-host` 的命令行工具前端（支持 `dsh-host start | status | stop | tail | doctor`）。
-- **`crates/dsh-model-gateway`**：无 GUI 依赖的多模型工具调用清洗与适配网关库。⚠️ **未接线**：无任何运行时消费者，**不是** `src-tauri` 的依赖（2026-09-10 移除声明）；保留为独立可测资产。
-  - 核心职责：统一 `CanonicalTool` 抽象、复杂 Schema 降级与净化（`anyOf`/`oneOf` 规范化、深度超限保护）、多模型提供方（OpenAI、DeepSeek、Gemini、Claude）方言转换与严格模式适配、微秒级性能基准测试（`examples/benchmark.rs`）。
-  - 定位、接线前置与**退出条件**见 [`docs/model_gateway_design.md`](docs/model_gateway_design.md) 顶部状态表。
-- **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志）。⚠️ 一键脱敏导出诊断包（`diagnostics.zip`）**未实现**，见 §7。
-  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 13 个）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`，理由与例外清单见 `commands.rs` 模块文档。
-  - **`src-tauri/frontend/`**：轻量静态 Loading / Splash 启动页、Error 结构化错误页（支持插件故障归因提示）与安全模式恢复页。
+- **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志、一键脱敏诊断包导出、应用内日志查看器）。
+  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 17 个，**全部有前端调用方**）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`（其 `ALLOW_UNUSED_COMMANDS` 现在是**空表**，这是目标状态），理由与例外清单见 `commands.rs` 模块文档。
+  - **命令返回形态**：所有命令返回 `CommandResult<T>` = `Result<IpcEnvelope<T>, String>`；**外层 `Result` 恒为 `Ok`**（仅为满足 Tauri 对 async 命令的编译要求），成败与错误码全在内层封套。**不要返回 `Err`**——那会让封套连同错误码一起丢失。细节见 `commands.rs` 模块文档。
+  - **`src-tauri/frontend/`**：本地静态页共 5 个——`index.html`（启动屏）、`error.html`（结构化错误页 + 插件故障归因 + 诊断包导出 + 恢复页入口）、`plugin-recovery.html`（恢复页）、`updates.html`（更新页）、`logs.html`（日志查看器）。**均已接线、均可达**（`safe-mode.html` 已于 2026-09-10 删除，理由见批次 C）。
+> 🗄️ **已归档并删除（2026-09-10，批次 F）**：`crates/dsh-model-gateway`（多模型工具调用网关）
+> 与 `crates/dsh-host` 的插件隔离模块。两者均无运行时消费者，按 §7.3 的裁定「冻结并归档」处理——
+> 代码删除，设计文档移入 [`docs/archive/`](docs/archive/)。**不要在未重新裁定的情况下把它们加回来**：
+> 见 §7.2 表的归档行与 §3 批次 F。
 - **`build/`**：运行时启动脚本与安全防护注入。
   - `harness-node-entry.mjs`：支持隔离参数（`--dsh-isolated-plugins`）与环境引导；同时是 cold-start 投影（`projectGenerations` / `sweepRegistry`）与 `[dsh-plugin-fault]` 归因的接线点。
-  - `plugin-worker-host.mjs`：基于 Node.js `worker_threads` 与子进程的插件分级隔离宿主（JSON-RPC 2.0 通信）。⚠️ **未接线**：只能由 `PluginWorkerClient` 拉起，而后者当前无调用方（见 §7）。
-  - `plugin-safety-guard.mjs`：`formatFaultDetails` **已接线**（被 `harness-node-entry.mjs` 的未捕获异常/拒绝处理器消费）；`PluginWorkerClient` **未接线**。
+  - `plugin-safety-guard.mjs`：`formatFaultDetails` **已接线**（被 `harness-node-entry.mjs` 的未捕获异常/拒绝处理器消费）。**这是当前唯一生效的插件防护，且只在进程内**——同进程的插件崩溃仍可能带走 Harness。
+  - `plugin-worker-host.mjs` 已于 2026-09-10 随批次 F 删除（连同 `PluginWorkerClient`）：它实现完整但从未接线，且不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系）。理由见该文件删除时的提交与 §7.2 归档行。
 - **`scripts/`**：
   - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
   - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证（6 类故障场景 / 10 项断言）；`npm run fault-inject`，CI 中 Windows 为硬门禁。
   - `verify-ipc-surface.mjs`：壳接口面一致性静态检查（命令定义 ↔ 注册 ↔ 前端 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记）。这类断线 `dead_code` 看不见，见 §7.3。
+  - `verify-shell-pages.mjs`：壳内页面的**运行时**冒烟（DOM 桩里真跑内联脚本 + 逐个点按钮），检查 P1~P6：引用可解析 / 脚本不抛错 / 命令已注册 / **按钮都挂了监听** / 模板 id 前缀可解析 / **命令结果解包了封套**。抓 `verify-ipc-surface` 看不见的两类缺陷：`getElementById` 拿到 `null` 导致整页监听失效；HTML 留了按钮但脚本忘了绑。它曾当场抓到批次 E 引入的「`updates.html` 把封套当载荷用、整页永远不渲染」。
   - `verify-target.mjs`：打包目标守卫（构建主机 vs 目标平台）。目标来源优先级：argv → `TAURI_ENV_TARGET_TRIPLE` → `rustc -vV` host；`--self-test` 跑纯逻辑自检。
   - `generate-app-icons.mjs`：**macOS 手工工具**（依赖 `sips` / `iconutil`），刻意无 npm 入口、不进 CI；定位与产物去向见其文件头注释。
   - `smoke-launch.mjs`：CI 分层烟雾（L1 无头 / L2 GUI），见 §2。
@@ -41,8 +47,7 @@
 - **`docs/`**：架构设计、契约定义、不变量与技术规范：
   - `dsh-desktop-redesign-architecture-and-plan.md`：最新系统架构重构设计与执行计划。
   - `system_design.md`：核心系统架构设计、契约定义与不变量清单。
-  - `model_gateway_design.md`：多厂商大模型工具调用转换网关设计（含未接线状态与退出条件）。
-  - `plugin_isolation_architecture.md`：插件分级隔离机制、看门狗与 RPC 协议设计（含未接线状态）。
+  - `archive/`：**已归档的设计文档**（`model_gateway_design.md`、`plugin_isolation_architecture.md`）。归档 ≠ 计划中：这些方案已被裁定不做，代码已删除，文档仅留作设计意图的追溯。每份文首都有归档说明。
   - `dsh-upgrade-checklist.md`：DSH 官方版本升级清单（补丁重生成 → 断言 → 门禁 → 三平台烟雾 → 体积对比）。
   - `harness-packaging-and-compatibility.md`：产物瘦身与补丁脆弱性治理的长期方案（A/B/C）。
 
@@ -64,54 +69,60 @@ npm run tauri build
 ### 快速测试与校验门禁
 ```bash
 # 1. 快速无头测试门禁（无需 GUI，无需组装资源包 - INV-6）
-cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
+cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 
 # 2. 编译 src-tauri 前生成桩资源（全新 checkout 缺少 resources/ 时必跑）
 node scripts/stub-tauri-resources.mjs
 
-# 3. 运行模型网关性能基准测试
-cargo run --release -p dsh-model-gateway --example benchmark
-
-# 4. 格式化与 Clippy 静态检查
+# 3. 格式化与 Clippy 静态检查
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 
-# 5. 全 Workspace 编译检查
+# 4. 全 Workspace 编译检查
 cargo check --workspace
 
-# 6. 补丁分级自检（patches/ 与 patch-layers.mjs 登记表一致性）
+# 5. 补丁分级自检（patches/ 与 patch-layers.mjs 登记表一致性）
 npm run verify:patches
 
-# 7. 壳接口面一致性（命令定义 ↔ 注册 ↔ 前端 invoke/listen ↔ 页面可达性）
+# 6. 壳接口面一致性（命令定义 ↔ 注册 ↔ 前端 invoke/listen ↔ 页面可达性）
 #    这是唯一能捕获「写了但没人调用」类断线的门禁——见 §7.3
 npm run verify:ipc-surface
 
-# 8. 打包目标守卫（构建主机 vs 目标平台；自动推断，亦可 `-- self-test` 自检）
+# 7. 壳内页面运行时冒烟（DOM 桩执行内联脚本 + 点一遍所有按钮）
+npm run verify:shell-pages
+
+# 8. Harness 页注入脚本行为自测（19 项断言 + 可证伪性检查）
+npm run verify:harness-inject
+
+# 9. 打包目标守卫（构建主机 vs 目标平台；自动推断，亦可 `-- self-test` 自检）
 npm run verify:target
 npm run verify:target -- --self-test
 
-# 9. 故障注入（孤儿进程清理 + 退出码归因，10 项断言）
+# 10. 故障注入（孤儿进程清理 + 退出码归因，10 项断言）
 #    前置：cargo build -p dsh-host-cli
 npm run fault-inject
 
-# 10. 分层烟雾（L1 无头硬门禁；L2 需已构建产物，缺失则 SKIP）
+# 11. 分层烟雾（L1 无头硬门禁；L2 需已构建产物，缺失则 SKIP）
 npm run smoke:headless
 npm run smoke
 
-# 11. 产物体积三口径（壳二进制 / 安装包 / 资源树）
+# 12. 产物体积三口径（壳二进制 / 安装包 / 资源树）
 npm run size:report
 ```
 
 集成测试（`crates/dsh-host/tests/`）会真实派生 Node 进程运行 `scripts/mock-harness.mjs`，需要 `PATH` 上有 Node.js（可用 `DSH_TEST_NODE` 指定）；找不到时测试自行跳过而非失败。故障模式经 `mock-harness.mjs` 的 argv / 环境变量注入，不在 Rust 侧打桩。
 
-#### ⚠️ 已知环境限制：GNU 工具链下 Clippy 在 `dsh-model-gateway` 上 ICE
+#### ⚠️ 已知环境限制：GNU 工具链下 Clippy 在旧 `dsh-model-gateway` 上 ICE（该 crate 已归档，条目仅留档）
 
-同一台 `x86_64-pc-windows-gnu` 宿主机上，`cargo clippy --workspace` 会在编译
+同一台 `x86_64-pc-windows-gnu` 宿主机上，`cargo clippy --workspace` 曾在编译
 `dsh-model-gateway` 时**编译器内部错误**（`the compiler unexpectedly panicked`，
 rustc 1.97.1 / clippy 0.1.97），停在 `codegen_and_build_linker`。
 
 - **性质**：clippy 自身缺陷（环境相关），与本仓库源码无关：同一命令在 `cargo check --workspace` 下完全通过。
-- **怎么办**：
+- **现状**：该 crate 已于 2026-09-10 随批次 F 从 workspace 移除，因此本机现在
+  `cargo clippy --workspace` 大概率不再触发该 ICE。**但这并不改变下面两条建议**——
+  触发它的是一类「某个 crate 恰好触到 clippy 代码生成路径」的环境问题，将来任何新
+  crate 都可能复现：
   1. 本地用 `cargo check --workspace --all-targets` 替代（能报出全部真实 warning，包括 CI `-D warnings` 会拦下的 `unused_imports`）；
   2. clippy 的权威执行者是 CI（MSVC 工具链，三个平台都跑）。
 
@@ -139,13 +150,14 @@ api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
 
 ## 3. 架构边界与核心不变量
 
-1. **无头核心库隔离（`crates/dsh-contracts`, `crates/dsh-host`, `crates/dsh-model-gateway`）**：
+1. **无头核心库隔离（`crates/dsh-contracts`, `crates/dsh-host`）**：
    - 严禁依赖 Tauri、UI 框架或窗口系统。
    - 所有核心库测试必须能在无显示器、无预组装资源包的 CI 环境下独立通过。
+   - 判定一条「这个逻辑该放哪」的简单问题：**它能不能在没有窗口系统的机器上被测试？** 能，就放无头 crate；不能，才放 `src-tauri`。`dsh-host` 里的诊断导出、日志尾部读取（批次 D）都是照这条标准从壳层下沉下来的。
 2. **契约与常量集中管理（`crates/dsh-contracts`）**：
    - 所有硬编码字符串、超时时间、重试退避间隔、缓冲区大小、正则模式与探测常量，**必须**统一定义在 `crates/dsh-contracts/src/constants.rs` 中，并带有 `CX-` 契约编号注释。
    - 严禁在业务逻辑中硬编码超时、路径常量或 URL。
-   - JSON-RPC 2.0 消息模型（`RpcId` / `RpcRequest` / `RpcResponse` / `RpcError` / `RpcMessage`）的**唯一定义点**是 `crates/dsh-contracts/src/rpc.rs`；`dsh-host/src/transport.rs` 仅 re-export，`dsh-host/src/contracts.rs` 的 glob re-export 与之指向同一组类型。**严禁在任何 crate 内重复定义协议类型**，否则会形成同名异型冲突（该问题已于 2026-09 修复）。Node 侧 `build/plugin-worker-host.mjs` 按同一协议手写实现，错误码语义必须与契约保持一致。
+   - JSON-RPC 2.0 消息模型（`RpcId` / `RpcRequest` / `RpcResponse` / `RpcError` / `RpcMessage`）的**唯一定义点**是 `crates/dsh-contracts/src/rpc.rs`；`dsh-host/src/transport.rs` 仅 re-export，`dsh-host/src/contracts.rs` 的 glob re-export 与之指向同一组类型。**严禁在任何 crate 内重复定义协议类型**，否则会形成同名异型冲突（该问题已于 2026-09 修复）。⚠️ **当前该协议没有运行时消费者**：原先按同一协议手写实现的 Node 侧 `build/plugin-worker-host.mjs` 已随批次 F 删除，`TransportProtocol` 服务的进程间通道从未接线。保留的是纯类型契约，不要把它当作「本仓有可用 RPC 基础设施」的证据。
 3. **孤儿进程防护与进程管理（INV-3）**：
    - Windows 采用 Win32 `JobObject`（`KILL_ON_JOB_CLOSE`）。
    - Linux 采用 `PR_SET_PDEATHSIG` + 进程组。
@@ -173,7 +185,7 @@ api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
 ### Windows 产物启动失败的三类根因（已修复，勿回归）
 
 1. **`\\?\` verbatim 路径泄漏进子进程 argv**：Tauri 的 `resource_dir()` 来自 `current_exe().canonicalize()`，Windows 上带 `\\?\` 前缀。拼进 Node 入口脚本后 CJS loader 还原成裸盘符并抛 `EISDIR: lstat 'D:'`。修复点在 [`crates/dsh-host/src/paths.rs`](crates/dsh-host/src/paths.rs) 的 `Layout::resolve`——所有派生路径的唯一产地，禁止在别处再拼 `resource_dir` 原始值。
-2. **`prepare:harness` 幂等检查漏项**：只校验 3 个文件时，缺 `bin/` / `plugin-safety-guard.mjs` / `plugin-worker-host.mjs` 的资源树会被当作完整而跳过组装（前者是 `harness-node-entry.mjs` 的直接依赖，缺失则 Harness 起不来；缺 `bin/` 则 `cargo build` 的 glob 校验直接失败）。修改 `tauri.conf.json` → `bundle.resources` 时必须同步更新 `scripts/prepare-harness.mjs` 的 `REQUIRED_FILES` / `REQUIRED_DIRS`。
+2. **`prepare:harness` 幂等检查漏项**：只校验 3 个文件时，缺 `bin/` / `plugin-safety-guard.mjs` 的资源树会被当作完整而跳过组装（前者是 `harness-node-entry.mjs` 的直接依赖，缺失则 Harness 起不来；缺 `bin/` 则 `cargo build` 的 glob 校验直接失败）。修改 `tauri.conf.json` → `bundle.resources` 时必须同步更新 `scripts/prepare-harness.mjs` 的 `REQUIRED_FILES` / `REQUIRED_DIRS`。
 3. **契约环境变量未注入**：`Launcher::execute` 在 `shell == None` 时也必须经 `harness_env()`，否则 `DSH_HOME` 等变量缺失，Harness 回退 `~/.dsh`，把可变状态写到 `app_data_dir` 之外（违反 INV-1）。
 
 另：`npm run tauri build` 首次打包需下载 NSIS 工具链；网络不可达 GitHub releases 时打包步骤报 `timeout: global`，但 `.exe` 与资源此时已成功产出。
@@ -211,42 +223,66 @@ Harness 页面运行在 Tauri webview 中。**此处曾有一处机制误判，�
 
 配套：`scripts/prepare-harness.mjs` 的输入指纹此前不含 `build/`，而 `build/` 是原样拷进 `resources/` 的非依赖文件——改了 `harness-node-entry.mjs` 后指纹不变，快速路径复用旧副本，修改被静默丢弃。现在指纹包含 `build/` 摘要，且快速路径会调用 `copyBuildFiles()` 同步产物。（`vendor/` 无需摘要：这些条目以符号链接进入 `resources/`，打包时解引用，内容始终最新。）
 
+### 统一 IPC 封套（`IpcEnvelope`）改造会**静默**打断页面（已修复，勿回归）
+
+2026-09-10 批次 E 把 17 个命令从 `Result<T, String>` 改成 `IpcEnvelope<T>`。改动本身是正确的（前端因此能按错误类别分派），但它**当场打断了 `frontend/updates.html`**，而且没有任何编译错误、没有异常、没有日志：
+
+```js
+// 改前：拿到快照
+invoke('updates_status').then(apply)
+// apply 的第一行
+if (!snapshot || !snapshot.phase) return
+```
+
+加上封套之后 `apply` 拿到的是**封套**而非快照，`snapshot.phase` 恒为 `undefined`，于是**每次调用都静默早退，整页永不渲染**。同一批里 `run()` 还漏判了 `success`，把「没有可用更新」这类业务失败当成了成功。
+
+这是跨语言契约问题的第二种形态（第一种见上一节）：**形状变了，消费方不报错，只是安静地不工作**。三条纪律由此确立：
+
+1. **命令不返回 `Err`**。外层 `Result` 恒为 `Ok`（只为满足 Tauri 对 `async` 命令的编译要求）；返回 `Err` 会让封套连同 `error.code` / `error.category` 一起丢掉，消费方退回读字符串。
+2. **页面必须解包 `success`**，并把 `envelope.data` 当载荷用（`updates://status` 这类**事件**给的才是裸快照——同一页面两种载荷形态，别弄混）。
+3. **改命令返回形态属于破坏性变更，必须过 `npm run verify:shell-pages`**。该守卫在 DOM 桩里真跑每个页面的内联脚本并点一遍按钮，P6 专查「调用了命令却没解包封套」。上面两处缺陷就是它抓到的。
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)
 
-> 下表描述**设计目标**，不等于当前可用能力。阶段名后标注的状态以 §7 的代码证据为准；
-> 凡标 ⚠️ 者，代码存在但未接线，不得按「已完成」对外表述。
+> 下表描述**设计目标**，不等于当前可用能力。阶段名后标注的状态以 §7 的代码证据为准。
+> **状态词表见 §7.3**：⚠️ 未接线（有代码无调用方）、🕓 计划中（无代码且刻意不做）、
+> 🗄️ 已归档（曾实现，现已删除并裁定不做）。
 
-- **P0（契约基线与无头核心库）✅ 已接线**：独立通用契约库（`dsh-contracts`）、集中常量契约、退出码与错误码变体映射（`E1001`~`E4002`）、无 GUI 核心库设计（`dsh-host`, `dsh-host-cli`）、Win32 JobObject / POSIX 孤儿防护。
-- **P1（生命周期监督与自愈）✅ 已接线**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`，输出归因结论而非压缩包）与 Safe Mode 隔离 Profile。
-- **P2（插件分级隔离与看门狗）⚠️ 未接线**：Tier 0/1/2 分级沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 通信、连续错误断路器（`plugin_worker.rs`）均已实现且有单测，但**没有任何运行时调用方**——`PluginWorkerClient` 无消费者，`call_tool` 现返回显式错误而非伪造成功。当前生效的插件防护只有 `plugin-safety-guard.mjs` 的进程内 `formatFaultDetails` 归因。接线前置见 `docs/plugin_isolation_architecture.md`。
-- **P3（多模型工具网关与基准测试）⚠️ 未接线**：复杂 Schema 深度嵌套/`anyOf`/`oneOf` 降级清洗、多厂商方言适配（OpenAI/Gemini/Claude）、微秒级基准测试套件（`dsh-model-gateway`）均已实现并测试通过，但无运行时消费者，已从 `src-tauri` 依赖中移除。退出条件见 `docs/model_gateway_design.md`。
-- **P4（薄壳收敛与诊断系统 2.0）🟡 部分**：前端结构化错误归因已接线；**统一 IPC 封套（`IpcEnvelope<T>`）尚未接线**（契约已定义，16 个命令仍返回 `Result<T, String>`）；**一键脱敏导出诊断压缩包（`diagnostics.zip`）未实现**，当前只有 `dsh-host-cli doctor` 与壳层日志（`desktop.log`）两条可用的证据获取路径。
-
----
+- **P0（契约基线与无头核心库）✅ 已接线**：独立通用契约库（`dsh-contracts`）、集中常量契约、**标准错误码总表**（`E1xxx`~`E7xxx`，见 §7.2）、无 GUI 核心库设计（`dsh-host`, `dsh-host-cli`）、Win32 JobObject / POSIX 孤儿防护。
+- **P1（生命周期监督与自愈）✅ 已接线**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`）与 Safe Mode 隔离 Profile。
+- **P2（插件分级隔离与看门狗）🗄️ 已归档（2026-09-10，批次 F）**：Tier 0/1/2 分级沙箱、JSON-RPC 2.0 通信、连续错误断路器曾实现且有单测，但**从未有任何运行时调用方**，且不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系）。按 `docs/dev-plan-disconnected-points.md` §4 决策点 3 裁定「冻结并归档」：`plugin_worker.rs`、`plugin-worker-host.mjs`、`PluginWorkerClient` 全部删除，设计文档移入 `docs/archive/`。**当前生效的插件防护只有 `plugin-safety-guard.mjs` 的进程内 `formatFaultDetails` 归因**——同进程的插件崩溃仍可能带走 Harness。
+- **P3（多模型工具网关与基准测试）🗄️ 已归档（2026-09-10，批次 F）**：Schema 降级清洗、多厂商方言适配、微秒级基准均已实现并测试通过，但无运行时消费者。按同一裁定从 workspace 移除（目录 + members + `[workspace.dependencies]`），设计文档移入 `docs/archive/model_gateway_design.md`。恢复前置条件仍见该文档的「退出条件」段。
+- **P4（薄壳收敛与诊断系统 2.0）✅ 已接线（2026-09-10 批次 D/E 闭环）**：前端结构化错误归因、**统一 IPC 封套（`IpcEnvelope<T>`，17 个命令全部收敛）**、**一键脱敏导出诊断包（`diagnostics_export`，5 类脱敏规则 + 正反用例）**、**应用内日志查看器（`logs.html`）**、**插件恢复页（可操作、有状态反馈）** 均已接线。证据获取路径现为四条：错误页 / 恢复页 / 日志页 / 原生菜单「Export Diagnostics…」。
 
 ## 6. 修改敏感模块前必读文档
 - `docs/dev-plan-disconnected-points.md`：**当前主计划**——断线点清单（D1~D11）与批次 A~G 的施工计划、进度快照与需裁决的决策点。**开工前先看它的「进度快照」表与 §4 决策点。**
 - `docs/dsh-desktop-redesign-architecture-and-plan.md`：系统重构设计与开发全流程计划。
 - `docs/system_design.md`：核心系统架构设计、缺陷清单与契约细则。
-- `docs/model_gateway_design.md`：大模型工具调用网关架构设计。
-- `docs/plugin_isolation_architecture.md`：插件隔离与进程通信机制。
+- `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**（裁定不做，代码已删）的两份设计文档；只在需要追溯设计意图或评估「要不要恢复」时读。
 - `crates/dsh-contracts/src/constants.rs`：Harness 运行时通用契约常量总表。
-- `crates/dsh-contracts/src/rpc.rs`：JSON-RPC 2.0 消息模型唯一契约源（Rust 侧）。
+- `crates/dsh-contracts/src/errors.rs`：**错误码总表**（`E1xxx`~`E7xxx`）与 `AppError`；IPC 封套的错误形状在这里。
+- `crates/dsh-contracts/src/ipc.rs`：`IpcEnvelope<T>` 封套定义 + 跨语言字段形状测试。
+- `crates/dsh-host/src/diagnostics_export.rs`：**脱敏诊断包**（新增脱敏规则时必须补正反用例）。
+- `src-tauri/src/commands.rs`：**IPC 命令面模块文档**——准入纪律、`CommandResult` 的两层结构、为什么外层 `Result` 恒为 `Ok`。动任何命令前先读它。
+- `scripts/verify-shell-pages.mjs`：改动 `src-tauri/frontend/` 下任何页面后必跑。它的头部注释写清了「它查什么、不查什么」，新增检查项要照同一格式登记。
+- `crates/dsh-contracts/src/rpc.rs`：JSON-RPC 2.0 消息模型唯一契约源（Rust 侧）。⚠️ 当前**无运行时消费者**，见该文件模块文档。
 - `crates/dsh-host/src/transport.rs`：IPC 传输抽象与通信信道定义；RPC 类型 re-export 自 `dsh-contracts::rpc`。
 
 ---
 
 ## 7. 宣称纪律（Claim Discipline）
 
-**背景**：外部评审（2026-09）指出 README / 文档宣称的能力与实际代码存在落差。逐项核对后有 4 项宣称在代码中**没有运行时路径**：插件分级隔离、多模型工具网关、一键诊断包、LAN 手机桥（本轮已接线）。这不是「文档写早了」的程度问题——`plugin_worker.rs::call_tool` 当时会**返回伪造的成功结果**（`success: true`），即上层无法通过任何观测手段发现插件工具其实根本没被执行。
+**背景**：外部评审（2026-09）指出 README / 文档宣称的能力与实际代码存在落差。逐项核对后有 4 项宣称在代码中**没有运行时路径**：插件分级隔离、多模型工具网关、一键诊断包、LAN 手机桥（批次 A~G 已全部处置）。这不是「文档写早了」的程度问题——`plugin_worker.rs::call_tool` 当时会**返回伪造的成功结果**（`success: true`），即上层无法通过任何观测手段发现插件工具其实根本没被执行。
+
+> 📌 **该文件已删除**（2026-09-10 批次 F 冻结并归档）。上面这段保留为**历史记录**：它记录的是这套纪律为什么存在，不是当前代码状态。查当前状态请看 §7.2。
 
 ### 7.1 三条硬规则
 
 1. **未接线的能力必须显式标注**。任何「已实现但无运行时调用方」的模块，必须在其模块文档头部加 `⚠️ 状态：未接线` 横幅，并在本表登记。禁止用「已实现」「已支持」等词描述未接线能力。
-2. **禁止伪造成功**。桩实现若被调用，必须返回**可辨识的错误**（错误串含 `ISOLATION_NOT_WIRED` 之类的稳定标识），不得返回 `Ok` / `success: true` / 空数组等合理默认值。判据：调用方能否从返回值区分「成功」与「未接线」。
-3. **禁止无声降级**。允许降级（如补丁分级失败策略），但必须把降级事实写进产物：`MANIFEST.json` 的 `patches[]` 逐条记录 `applied / skipped / failed`，缺记录即视为未应用。
+2. **禁止伪造成功**。桩实现若被调用，必须返回**可辨识的错误**，不得返回 `Ok` / `success: true` / 空数组等合理默认值。判据：调用方能否从返回值区分「成功」与「未接线」。**2026-09-10 起这条同时约束 IPC 面**：失败必须是封套里的 `success: false` + 稳定 `error.code`，而不是裸 `false`——恢复页四个按钮「点了没反应」的根因就是静默的 `false`（改为 `E7002` 后页面才能如实报错）。
+3. **禁止无声降级**。允许降级（如补丁分级失败策略），但必须把降级事实写进产物：`MANIFEST.json` 的 `patches[]` 逐条记录 `applied / skipped / failed`，缺记录即视为未应用。**同一规则适用于诊断包与日志查看器**：脱敏命中次数写进包内 `README.txt`；日志被截断时 `truncated` 必须如实上报。
 
 ### 7.2 宣称能力 ↔ 代码证据对照表
 
@@ -260,18 +296,22 @@ Harness 页面运行在 Tauri webview 中。**此处曾有一处机制误判，�
 | ↳ Safe Mode 的界面反馈（横幅） | 🕓 **计划中**（刻意后置） | 上游靠 preload 往 Harness 页注入安全模式横幅（`mountSafeModeBanner`，含「卸载插件 / 退出安全模式」两个按钮）；本仓界面**看不出**当前处于安全模式 | 无（**待软件功能稳定后再开发**，非阻塞项） |
 | 崩溃归因诊断（**结论**，非压缩包） | ✅ 已接线 | `crates/dsh-host/src/diagnostics.rs` | `dsh-host-cli doctor`、错误页 |
 | 插件故障归因（进程内） | ✅ 已接线 | `build/plugin-safety-guard.mjs:formatFaultDetails`（:25，export :154） | `build/harness-node-entry.mjs:15,37,44` |
-| **插件分级隔离 Tier 0/1/2** | ⚠️ **未接线** | `crates/dsh-host/src/plugin_worker.rs`（`call_tool` :191 返回 `ISOLATION_NOT_WIRED`）、`build/plugin-worker-host.mjs`、`build/plugin-safety-guard.mjs:PluginWorkerClient`（:52） | **无**（`PluginWorkerClient` 无消费者） |
-| **多模型工具网关** | ⚠️ **未接线** | `crates/dsh-model-gateway/**` | **无**（2026-09-10 从 `src-tauri/Cargo.toml` 移除） |
-| **一键脱敏诊断包 `diagnostics.zip`** | ❌ **未实现** | 无对应代码 | **无** |
+| **插件分级隔离 Tier 0/1/2** | 🗄️ **已归档（2026-09-10 批次 F：冻结并归档）** | 代码已删除（`plugin_worker.rs`、`plugin-worker-host.mjs`、`PluginWorkerClient`）；设计文档在 `docs/archive/plugin_isolation_architecture.md`。它此前**从未接线**，且不在真实插件挂载路径上 | **无**（且永远不会走这条路：真实挂载在 Harness 进程内的官方 Cordis 体系） |
+| ↳ 插件安全（**当前实际生效的那一条**） | ✅ 已接线，**但只在进程内** | `build/plugin-safety-guard.mjs:formatFaultDetails` | `build/harness-node-entry.mjs` 的未捕获异常/拒绝处理器。**同进程的插件崩溃仍可能带走 Harness**——不得表述为「插件崩溃不拖垮主程序」 |
+| **多模型工具网关** | 🗄️ **已归档（2026-09-10 批次 F）** | crate 已从 workspace 删除；设计文档在 `docs/archive/model_gateway_design.md`（文首有归档说明与恢复判据） | **无** |
+| **一键脱敏诊断包 `diagnostics.zip`** | ✅ **已接线（2026-09-10 批次 D）** | `crates/dsh-host/src/diagnostics_export.rs`（5 类脱敏规则：launch token / `dsh-auth-*` cookie / 路径用户名段 / API key / 代理口令；每条有正反用例 + 端到端「产物内无原文」断言）；产物落 `app_data_dir/exports/` | 命令 `diagnostics_export` ← 错误页「导出诊断包」按钮、`logs.html` 同功能按钮、菜单「Harness → Export Diagnostics…」（三者都显示产物路径） |
 | LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]` |
-| **统一 IPC 封套 `IpcEnvelope<T>`** | ⚠️ **未接线** | 契约定义在 `crates/dsh-contracts/src/ipc.rs:7` | **无**：`src-tauri/src/commands.rs` 的 14 个命令全部返回 `Result<T, String>` |
+| **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **17 个命令全部**返回 `CommandResult<T>`；四个页面（error / plugin-recovery / logs / updates）均解包 `success` |
+| ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
 | **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
 | ↳ 更新源归属与签名密钥 | ✅ 已闭环（2026-09-10） | `plugins.updater.endpoints` 指向 `github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`；配置里的 `pubkey` 与 `~/.tauri/dsh-desktop.key.pub` **逐字节一致** | 私钥经 CI Secret `TAURI_SIGNING_PRIVATE_KEY` 注入（无口令），本地离线备份在 `~/.tauri/backup/` |
-| **应用内日志查看器** | ❌ **未实现** | 无 `frontend/logs.html`；`harness-view-log` 仅调用 `opener` 打开系统文件管理器 | **无** |
+| **应用内日志查看器** | ✅ **已接线（2026-09-10 批次 D）** | `frontend/logs.html` + `crates/dsh-host/src/logs_view.rs`（三来源，尾部读取，**截断如实上报 `truncated`**） | 菜单「Harness → View Logs…」→ `window::show_logs_page`；页面调 `logs_read` / `open_logs` / `diagnostics_export` / `harness_open`。「Reveal Log Folder」保留为次入口 |
 | **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复调用名；同日补完启动链路） | `src-tauri/frontend/error.html` 调 `safe_mode_action`（`action: "restart"`），失败经 `fail()` 可见上报 | 错误页按钮 → `commands::safe_mode_action` → `HarnessSupervisor::restart_in_safe_mode`（此前调 `restart()`，实际只是**普通重启**——按钮曾是谎话） |
-| **恢复页交互** | ❌ **未接线** | `recovery_action` / `safe_mode_action`（restart/quit）已定义且注册 | **无**：`plugin-recovery.html` 与 `safe-mode.html` 零 `invoke`、零事件监听（`plugin-recovery.html` 甚至无 `local_page` 指向，不可达） |
+| **恢复页交互** | ✅ **已接线（2026-09-10 批次 C）** | `plugin-recovery.html` 调 `recovery_status` / `recovery_action`（`restart` / `safe-mode` / `show-log` / `quit`）并**检查封套 `success`**；监听 `harness://status` 反映恢复进度 | 错误页「插件恢复…」按钮 → `recovery_open` → `show_recovery_page`。数据来自 `dsh_host::diagnostics`（此前零消费者的那条链） |
+| ↳ 插件卸载 / 禁用 | 🕓 **计划中**（依据上游是否提供停用语义） | **无代码，且刻意不实现**：经核验，市场安装的插件没有真正的可逆解除挂载方式——改名会被冷启动投影还原，改 `desired.json` 会触发 `sweepRegistry()` 真删目录（证据链见 `docs/dev-plan-disconnected-points.md` §3 批次 C） | **无**。恢复页只提供非破坏性动作；未知动作返回 `E7002` 而非静默 `false` |
+| **`safe-mode.html`** | 🗄️ **已删除（2026-09-10 批次 C）** | 页面 + 资源 + 配置项一并移除；`window::show_safe_mode_page` 同步删除 | **无**。它的每处交互都要求「插件移除」后端（上文已裁定不做），接上只会交出「其余按钮仍读空气」的页面；其独有能力（进安全模式）已由错误页 / 恢复页 / 原生菜单三处覆盖 |
 | 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label`；`MobileBridge::on_connected_change`（镜像上游 `onConnectedChange`）在配对状态翻转时回调 | 菜单构建时初始化，**手机侧 `POST /pair` 成功**、菜单配对/停止时均经 `refresh_bridge_status` 刷新（`lib.rs` setup 注册监听器） |
 | ↳ 页内手机状态指示器（Harness 侧边栏） | ✅ 已接线（2026-09-10） | `harness_ui.rs::INJECT_SCRIPT`（`include_str!` 内嵌 `frontend/harness-ui-inject.js`），挂在 `[data-dsh-sidebar-settings]` 下；状态下发 `push_phone_status` 走 `webview.eval`，**不新增 IPC 命令** | 两个推送点：连接翻转（`on_connected_change`）与页面加载完成（`on_page_load`）。**只做状态指示、不可点击**——配对/停止仍只走原生 `Phone` 菜单，因此它不渲染成按钮 |
 | **Harness 页注入机制（preload 等价物）** | ✅ 已接线（2026-09-10；同期更正「无初始化脚本」的误判） | 主窗口 builder 的 `initialization_script`（`lib.rs`）+ `frontend/harness-ui-inject.js`；脚本按 origin 自我早退（本地页与子框架不注入） | 无头行为自测 `npm run verify:harness-inject`（19 项断言 + 可证伪性检查，已进 CI） |
@@ -279,15 +319,19 @@ Harness 页面运行在 Tauri webview 中。**此处曾有一处机制误判，�
 ### 7.3 维护方式
 
 - 新增能力时：先写代码，再在本表补一行——**顺序不可颠倒**。
-- 状态词只有四种，含义互不重叠，**不得混用**：
+- 状态词只有五种，含义互不重叠，**不得混用**：
   | 状态 | 含义 |
   |------|------|
   | ✅ 已接线 | 有代码、有运行时调用方，用户可见 |
-  | ⚠️ 未接线 | **代码已写但无运行时调用方**（如 `plugin_worker.rs`）——这是「欠债」，必须登记销账批次 |
+  | ⚠️ 未接线 | **代码已写但无运行时调用方**——这是「欠债」，必须登记销账批次 |
   | ❌ 未实现 | **代码不存在**——这是「缺口」，不得对外宣称 |
   | 🕓 计划中 | **代码不存在，且刻意不现在做**——这是「决策」，不是欠债。必须写明后置理由（通常是为等前置能力稳定） |
+  | 🗄️ 已归档 | **曾实现，现已删除并裁定不做**——这是「结论」。必须写明归档判据；文档保留在 `docs/archive/` 供追溯设计意图 |
   「未接线」与「计划中」的区别是**有没有代码**：前者是写了没接（欠债），后者是还没写（决策）。把计划中说成未接线会误导读者去找不存在的代码；把未接线说成计划中则是在给欠债打掩护。
-- 修改未接线模块（如把 `plugin_worker.rs` 接入运行时）时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态、更新 `docs/plugin_isolation_architecture.md` 的状态段。
-- 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线**的条目。
+  「已归档」与「未接线」的区别是**代码还在不在**：归档是欠债已销账（删了，并给出不做的理由），未接线是债还挂着。**归档不是「计划中」**——不要用「以后可能做」来软化一个已经裁定不做的决定。
+- 修改未接线模块时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态。
+- **归档一个模块时**：代码删除、文档移入 `docs/archive/` 并在文首写归档说明（判据 + 恢复前提），本表状态改 🗄️，`README` 对应表述同步收敛。**删除的文件名要写进本表**——否则下一个人只会看到「某个能力不见了」。
+- 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线/未实现**的条目（归档项不在其中，它们改用 🗄️）。
+- **跨语言断言必须可证伪**：新增「X 一定会发生」这类关于页面 / 脚本行为的断言时，按 `scripts/verify-harness-inject.mjs` 的模式配一段**变体回退检查**——把被守护的行为打回旧写法，断言必须变红，否则断言是装饰。同时守卫**不得依赖检出配置**（行尾、路径分隔符）：CRLF 检出下必须与 LF 表现一致。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
 - **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。

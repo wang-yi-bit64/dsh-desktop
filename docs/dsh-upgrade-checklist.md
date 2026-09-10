@@ -99,7 +99,7 @@
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
+cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 cargo test --workspace          # 见下方平台说明
 ```
 
@@ -119,7 +119,8 @@ npm run smoke                     # L2：GUI 真实启动（Linux 下走 xvfb）
 
 - [ ] L1 全绿（硬门禁）
 - [ ] L2 三平台结果记录（Linux 无显示环境为已知限制，不作为硬门禁，但**结果必须留档**）
-- [ ] 检查启动日志无 `[dsh-plugin-fault]` 归因、无 `ISOLATION_NOT_WIRED`
+- [ ] 检查启动日志无 `[dsh-plugin-fault]` 归因（插件注册冲突 / 加载失败）
+      ——注：`ISOLATION_NOT_WIRED` 自 2026-09-10 起不会再出现，产生它的插件隔离模块已归档删除
 
 ### Step 6 — 体积与包体对比
 
