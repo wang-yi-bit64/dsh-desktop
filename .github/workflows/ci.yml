@@ -75,6 +75,13 @@ jobs:
       - name: Verify target guard self-test
         run: npm run verify:target -- --self-test
 
+      # Harness 页注入脚本的行为自测（无头 + DOM 桩）。注入脚本的工作对象是真浏览器
+      # DOM，若只靠「装进应用里手点一遍」验证，最容易被改坏的两处——可见性规则与
+      # 「元素带着未定态漏出」这个上游回归——就没有自动化防线。
+      # 脚本自带**可证伪性检查**：把上游行为打回一份变体，断言必须变红，否则报错。
+      - name: Verify Harness UI injection behaviour
+        run: npm run verify:harness-inject
+
       # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
       # tauri-build 的 build.rs 要求 bundle.resources 每个 glob 至少匹配一个文件，
       # 而 src-tauri/resources/ 被 gitignore（全新 checkout 不存在）。这里用

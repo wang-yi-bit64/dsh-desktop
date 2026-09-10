@@ -20,6 +20,7 @@
     "verify:patches": "node scripts/patch-layers.mjs --self-test",
     "verify:ipc-surface": "node scripts/verify-ipc-surface.mjs",
     "verify:target": "node scripts/verify-target.mjs",
+    "verify:harness-inject": "node scripts/verify-harness-inject.mjs",
     "fault-inject": "node scripts/fault-inject.mjs",
     "smoke": "node scripts/smoke-launch.mjs",
     "smoke:headless": "node scripts/smoke-launch.mjs --level=1",
