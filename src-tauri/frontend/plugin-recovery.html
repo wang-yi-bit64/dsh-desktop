@@ -24,6 +24,7 @@
         --button-hover: #303034;
         --primary-ink: #ffffff;
         --danger: #c33b38;
+        --success: #267a4a;
         --shadow: 0 12px 34px rgba(24, 24, 27, 0.1);
       }
 
@@ -80,6 +81,7 @@
       }
       .progress { color: var(--ink); border: 1px solid var(--line); background: var(--surface-soft); }
       .notice { color: var(--danger); background: rgba(195, 59, 56, 0.08); }
+      .notice.success { color: var(--success); background: rgba(38, 122, 74, 0.09); }
       .progress.visible, .notice.visible { display: block; }
       h1 {
         margin: 0;
@@ -97,7 +99,6 @@
         line-height: 1.6;
       }
       .summary:empty { display: none; }
-      .summary:empty + .conflict-card { margin-top: 30px; }
 
       .conflict-card {
         overflow: hidden;
@@ -105,9 +106,7 @@
         border-radius: 14px;
         background: var(--surface-soft);
       }
-      .reason {
-        padding: 17px 19px 16px;
-      }
+      .reason { padding: 17px 19px 16px; }
       .reason-label {
         margin: 0 0 7px;
         color: var(--ink);
@@ -218,7 +217,7 @@
         background: var(--button);
       }
       .button.primary:hover { border-color: var(--button-hover); background: var(--button-hover); }
-      .button[disabled] { opacity: 0.64; cursor: wait; transform: none; }
+      .button[disabled] { opacity: 0.64; cursor: progress; transform: none; }
 
       .advanced {
         margin-top: 24px;
@@ -264,6 +263,7 @@
         overflow-wrap: anywhere;
         white-space: pre-wrap;
       }
+      .technical { max-height: 260px; overflow: auto; }
       .advanced-actions { display: flex; flex-wrap: wrap; gap: 8px; }
       .text-button {
         min-height: 32px;
@@ -343,8 +343,8 @@
     <main class="shell" aria-labelledby="heading">
       <header class="header">
         <div class="brand">
-          <img id="icon" alt="" />
-          <span class="brand-name" id="brand"></span>
+          <img id="icon" src="assets/app-icon.png" alt="" />
+          <span class="brand-name" id="brand">DSH Desktop</span>
           <span class="badge" id="badge"></span>
         </div>
       </header>
@@ -376,11 +376,10 @@
         <details class="advanced">
           <summary id="advanced-label"></summary>
           <div class="advanced-body">
-            <p class="meta-label" id="launch-directory-label"></p>
-            <p class="path" id="launch-directory"></p>
             <p class="meta-label" id="error-label"></p>
             <pre class="technical" id="technical"></pre>
             <div class="advanced-actions">
+              <button class="text-button" id="restart" type="button"></button>
               <button class="text-button" id="show-log" type="button"></button>
             </div>
           </div>
@@ -393,77 +392,237 @@
     </main>
 
     <script>
-      const params = new URLSearchParams(location.search)
-      const model = JSON.parse(params.get('state') || '{}')
-      document.documentElement.lang = model.locale === 'zh' ? 'zh-CN' : 'en'
-      document.documentElement.dataset.theme = params.get('theme') || 'system'
-      document.title = model.badge || 'DSH Desktop'
+      const zh = navigator.language.toLowerCase().startsWith('zh');
+      document.documentElement.lang = zh ? 'zh-CN' : 'en';
 
+      const copy = zh
+        ? {
+            badge: '插件恢复',
+            heading: '有一个插件可能阻止了 Harness 启动',
+            summary: '进入安全模式后，第三方插件会被隔离，应用可以先起来。',
+            reasonTitle: '启动失败的归因',
+            reasonDetail: '以下结论来自本次启动的日志分析。',
+            pluginsTitle: '疑似故障插件',
+            safetyNote: '本页不会删除或改动你的任何插件数据。',
+            primary: '进入安全模式',
+            primaryBusy: '正在进入安全模式…',
+            advanced: '技术细节',
+            errorLabel: '归因报告',
+            restart: '重启 Harness',
+            showLog: '打开日志目录',
+            quit: '退出 DSH Desktop',
+            running: 'Harness 状态：',
+            progress: '已请求进入安全模式，正在重启…',
+            noPlugins: '未能从日志中定位到具体插件，可先按下面的按钮进入安全模式并在市场里逐个排查。',
+            failed: '操作失败',
+          }
+        : {
+            badge: 'Plugin recovery',
+            heading: 'A plugin may have prevented Harness from starting',
+            summary:
+              'Safe Mode isolates third-party plugins so the app can start again.',
+            reasonTitle: 'What the logs say',
+            reasonDetail: 'This conclusion comes from analysing the current startup logs.',
+            pluginsTitle: 'Suspected plugins',
+            safetyNote: 'Nothing on this page deletes or modifies your plugin data.',
+            primary: 'Enter Safe Mode',
+            primaryBusy: 'Entering Safe Mode…',
+            advanced: 'Technical details',
+            errorLabel: 'Attribution report',
+            restart: 'Restart Harness',
+            showLog: 'Open log folder',
+            quit: 'Quit DSH Desktop',
+            running: 'Harness status: ',
+            progress: 'Safe Mode requested — restarting…',
+            noPlugins:
+              'No specific plugin could be identified from the logs. Enter Safe Mode below, then narrow it down in the market.',
+            failed: 'Action failed',
+          }
+
+      const invoke = window.__TAURI__?.core?.invoke
       const setText = (id, value) => {
         const node = document.getElementById(id)
         if (node) node.textContent = value || ''
       }
+      const progressEl = document.getElementById('progress')
+      const noticeEl = document.getElementById('notice')
+      const primaryBtn = document.getElementById('primary')
 
-      document.getElementById('icon').src = params.get('icon') || 'icon.png'
-      setText('brand', model.brand)
-      setText('badge', model.badge)
-      setText('heading', model.heading)
-      setText('summary', model.summary)
-      setText('reason-title', model.reasonTitle)
-      setText('reason-detail', model.reasonDetail)
-      setText('safety-note', model.safetyNote)
-      setText('primary', model.primaryLabel)
-      setText('advanced-label', model.advancedLabel)
-      setText('launch-directory-label', model.launchDirectoryLabel)
-      setText('launch-directory', model.launchDirectory || '—')
-      setText('error-label', model.errorLabel)
-      setText('technical', model.rawError)
-      setText('show-log', model.logLabel)
-      setText('quit', model.quitLabel)
+      setText('badge', copy.badge)
+      setText('heading', copy.heading)
+      setText('summary', copy.summary)
+      setText('reason-title', copy.reasonTitle)
+      setText('reason-detail', copy.reasonDetail)
+      setText('safety-note', copy.safetyNote)
+      setText('primary', copy.primary)
+      setText('advanced-label', copy.advanced)
+      setText('error-label', copy.errorLabel)
+      setText('restart', copy.restart)
+      setText('show-log', copy.showLog)
+      setText('quit', copy.quit)
 
-      const progress = document.getElementById('progress')
-      if (model.progress) {
-        progress.textContent = model.progress
-        progress.classList.add('visible')
+      /**
+       * 显示动作失败原因。
+       *
+       * 恢复页是「应用已经起不来」的场景，用户不会开 DevTools：任何失败都
+       * 必须落在页面上。命令面现在返回封套（`success=false` 时带 `error.code`
+       * / `error.category`），因此这里读的是结构化错误，不是字符串匹配。
+       */
+      function fail(label, error) {
+        const detail =
+          error && error.message ? error.message : String(error)
+        const code = error && error.code ? `${error.code}: ` : ''
+        noticeEl.textContent = `${label} — ${code}${detail}`
+        noticeEl.classList.remove('success')
+        noticeEl.classList.add('visible')
       }
-      const notice = document.getElementById('notice')
-      if (model.notice) {
-        notice.textContent = model.notice
-        notice.classList.add('visible')
+
+      function succeed(message) {
+        noticeEl.textContent = message
+        noticeEl.classList.add('success', 'visible')
       }
 
-      const pluginList = document.getElementById('plugins')
-      if (Array.isArray(model.plugins) && model.plugins.length > 0) {
-        pluginList.classList.add('visible')
-        for (const plugin of model.plugins) {
-          const item = document.createElement('li')
-          const mark = document.createElement('span')
-          mark.className = 'plugin-mark'
-          mark.setAttribute('aria-hidden', 'true')
-          mark.textContent = '!'
-          const name = document.createElement('span')
-          name.className = 'plugin-name'
-          name.textContent = String(plugin)
-          item.append(mark, name)
-          pluginList.appendChild(item)
+      function clearNotice() {
+        noticeEl.classList.remove('visible', 'success')
+        noticeEl.textContent = ''
+      }
+
+      /**
+       * 执行一个壳命令并**检查封套结果**。
+       *
+       * 这里必须解包 `envelope.success`：命令面刻意用「成功返回里的失败」
+       * （而不是 reject）表达业务失败，若只看 promise 有没有 reject，
+       * 未知动作这类错误会被当成成功——那正是原页面按钮「点了没反应」的
+       * 成因之一。
+       * @param {string} command 已注册的 Tauri 命令名
+       * @param {string} label 本地化动作名
+       * @param {object} [args] 命令参数
+       * @param {HTMLButtonElement} [button] 触发按钮
+       * @param {(data: unknown) => void} [onSuccess] 成功回调
+       */
+      function run(command, label, args, button, onSuccess) {
+        if (!invoke) {
+          fail(label, zh ? '宿主桥不可用' : 'host bridge unavailable')
+          return
         }
+        clearNotice()
+        if (button) button.disabled = true
+        invoke(command, args)
+          .then((envelope) => {
+            if (envelope && envelope.success === false) {
+              if (button) button.disabled = false
+              fail(label, envelope.error || {})
+              return
+            }
+            if (button) button.disabled = false
+            if (onSuccess) onSuccess(envelope ? envelope.data : undefined)
+          })
+          .catch((error) => {
+            if (button) button.disabled = false
+            fail(label, error)
+          })
       }
 
-      const navigate = (action) => {
-        if (window.dshRecovery && typeof window.dshRecovery.action === 'function') {
-          void window.dshRecovery.action(action)
+      function render(status) {
+        if (!status) return
+        const plugins = Array.isArray(status.plugins) ? status.plugins : []
+        const list = document.getElementById('plugins')
+        list.textContent = ''
+        if (plugins.length > 0) {
+          list.classList.add('visible')
+          for (const plugin of plugins) {
+            const item = document.createElement('li')
+            const mark = document.createElement('span')
+            mark.className = 'plugin-mark'
+            mark.setAttribute('aria-hidden', 'true')
+            mark.textContent = '!'
+            const name = document.createElement('span')
+            name.className = 'plugin-name'
+            name.textContent = String(plugin)
+            item.append(mark, name)
+            list.appendChild(item)
+          }
         } else {
-          location.href = `dsh-recovery://${action}`
+          list.classList.remove('visible')
+        }
+        setText(
+          'summary',
+          plugins.length > 0
+            ? zh
+              ? `疑似 ${plugins.length} 个第三方插件导致了启动失败。进入安全模式后它们会被隔离。`
+              : `${plugins.length} third-party plugin(s) may have caused the failure. Safe Mode isolates them.`
+            : copy.noPlugins
+        )
+        setText('technical', status.report || '')
+      }
+
+      /**
+       * 反映 Harness 的实时状态（D11）。
+       *
+       * 原页面不监听任何事件，因此恢复过程中页面完全静止——点了按钮之后
+       * 用户看不到「正在重启」。这条监听补上这个反馈。
+       */
+      function applySnapshot(snapshot) {
+        if (!snapshot || !snapshot.phase) return
+        const phase = snapshot.phase
+        progressEl.textContent = `${copy.running}${phase}${
+          snapshot.message ? ` — ${snapshot.message}` : ''
+        }`
+        progressEl.classList.add('visible')
+        if (phase === 'ready') {
+          // Harness 起来了：恢复页的使命结束，回到界面。
+          run('harness_open', copy.running)
         }
       }
-      const primary = document.getElementById('primary')
-      primary.addEventListener('click', () => {
-        primary.disabled = true
-        primary.textContent = model.primaryBusyLabel
-        navigate(model.canUninstall ? 'uninstall' : 'safe-mode')
+
+      if (window.__TAURI__?.event) {
+        window.__TAURI__.event.listen('harness://status', (event) => {
+          applySnapshot(event.payload || {})
+        })
+      }
+
+      if (invoke) {
+        // 一次调用拿齐全部数据：`recovery_status` 的载荷里已经带了相位快照
+        // （`snapshot`），因此**不需要**再单独调 `harness_status`——同一份数据
+        // 走两个命令只会让「哪个是权威」变得含糊。事件监听负责后续更新。
+        run('recovery_status', copy.reasonTitle, undefined, undefined, (status) => {
+          render(status)
+          if (status) applySnapshot(status.snapshot)
+        })
+      }
+
+      primaryBtn.addEventListener('click', () => {
+        primaryBtn.disabled = true
+        primaryBtn.textContent = copy.primaryBusy
+        progressEl.textContent = copy.progress
+        progressEl.classList.add('visible')
+        // 主按钮：以安全模式启动（隔离第三方插件）。
+        //
+        // 原按钮的文案是「卸载插件」并调用 `window.dshRecovery.action('uninstall')`
+        // ——一个从未存在过的桥。**卸载/禁用能力刻意未实现**：改动插件目录会在
+        // 冷启动投影时被还原（挂载状态由 `profiles/.generations/desired.json`
+        // 单一权威描述），而真删除不可逆。理由与证据见 `commands.rs`
+        // 的 `recovery_action` 文档。
+        run(
+          'recovery_action',
+          copy.primary,
+          { action: 'safe-mode' },
+          primaryBtn,
+          () => {
+            progressEl.textContent = copy.progress
+            progressEl.classList.add('visible')
+          }
+        )
       })
-      document.getElementById('show-log').addEventListener('click', () => navigate('show-log'))
-      document.getElementById('quit').addEventListener('click', () => navigate('quit'))
+      document.getElementById('restart').addEventListener('click', (event) => {
+        run('recovery_action', copy.restart, { action: 'restart' }, event.currentTarget)
+      })
+      document.getElementById('show-log').addEventListener('click', (event) => {
+        run('recovery_action', copy.showLog, { action: 'show-log' }, event.currentTarget)
+      })
+      document.getElementById('quit').addEventListener('click', (event) => {
+        run('recovery_action', copy.quit, { action: 'quit' }, event.currentTarget)
+      })
     </script>
   </body>
 </html>

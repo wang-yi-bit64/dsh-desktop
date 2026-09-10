@@ -9,11 +9,11 @@
 // checkout none of it exists, so compiling src-tauri fails.
 //
 // This script mirrors ONLY the git-tracked static assets from build/ (splash /
-// recovery / safe-mode pages, brand gifs, wrapper entries, patch layer) plus
-// empty node/ and harness/node_modules/ dirs and a stub MANIFEST.json — enough
-// for tauri-build's resource globs to resolve and the crate to compile. It is
-// intentionally NOT the real runtime; `prepare:harness` still produces that for
-// bundling (CI build job) and for real `npm run dev/build` runs.
+// recovery pages, brand gifs, wrapper entries, patch layer) plus empty node/ and
+// harness/node_modules/ dirs and a stub MANIFEST.json — enough for tauri-build's
+// resource globs to resolve and the crate to compile. It is intentionally NOT
+// the real runtime; `prepare:harness` still produces that for bundling (CI build
+// job) and for real `npm run dev/build` runs.
 
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -42,12 +42,10 @@ const assets = [
   'harness-node-entry.mjs',
   'windows-child-process-hide.mjs',
   'plugin-safety-guard.mjs',
-  'plugin-worker-host.mjs',
   'dsh-desktop.patch.yml',
   'dsh-desktop-safe.patch.yml',
   'splash.html',
   'plugin-recovery.html',
-  'safe-mode.html',
   'windows-menu.html',
   'dsh-loader.gif',
   'dsh-loader-dark.gif',

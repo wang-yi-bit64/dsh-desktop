@@ -1,5 +1,30 @@
 # DSH Desktop 插件隔离沙盒与治理架构规范 (Plugin Isolation Architecture)
 
+> ## 🗄️ 已归档（2026-09-10）
+>
+> **本文档描述的进程外插件沙箱方案已整体移除并归档。** 执行的是
+> `docs/dev-plan-disconnected-points.md` §4 决策点 3 的裁定：**冻结并归档**。
+>
+> | 归档时的事实 | 归档动作 |
+> |---|---|
+> | `crates/dsh-host/src/plugin_worker.rs`（Tier 0/1/2 状态机 + 断路器）从未接线，`call_tool` 一律返回 `ISOLATION_NOT_WIRED` | 文件删除 |
+> | `build/plugin-worker-host.mjs`（进程外 JSON-RPC 宿主）只被同样未接线的 `PluginWorkerClient` spawn | 文件删除；`plugin-safety-guard.mjs` 里的客户端类一并删除 |
+>
+> **为什么是归档而不是接线**：真实插件挂载发生在 Harness 进程内的官方 Cordis
+> 体系里（`dsh.profile.bundles` 投影 + dshmarket shim），本方案够不着那个加载器。
+> 「要拦什么、失败语义是什么」从未定义——那不是接线工作量问题，是需求未定义。
+> 先写代码再找问题，只会得到一个看起来能跑、实际不解决任何问题的影子进程。
+>
+> **当前生效的插件防护**：只剩 `build/plugin-safety-guard.mjs::formatFaultDetails`
+> 的**进程内**归因（把插件注册冲突 / 加载失败归类成 `[dsh-plugin-fault]` 供错误页
+> 与恢复页使用）。同进程的插件崩溃仍可能带走 Harness——这一点在 `AGENTS.md` §7.2
+> 有明确记载，不得对外表述为「插件崩溃不拖垮主程序」。
+>
+> **若将来要重启这项工作**：接线点应是**官方接口**（Harness 提供的插件停用 / 隔离
+> 能力），而不是重建一套与官方并行的进程外体系。
+>
+> 下文为归档时的原始设计文本，保留以便追溯设计意图。
+
 > RFC 编号: RFC-20260907-PLUGIN-ISOLATION  
 > 状态: Draft -> Approved (Phase 1)  
 > 适用版本: dsh-desktop >= 0.2.0  

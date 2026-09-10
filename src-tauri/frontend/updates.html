@@ -153,6 +153,10 @@
        *
        * 成功路径没有导航副作用（更新流程都在本页内推进），因此**恢复按钮**：
        * 用户可能想重试，把按钮永久禁用在成功路径上是错的。
+       *
+       * **必须解包封套**：命令面现在一律返回 `{success, data, error}`，业务失败
+       * 也是成功返回（`success=false`）而不是 reject。只看 promise 有没有 reject，
+       * 会把「下载失败 / 无可用版本」当成成功——按钮亮着，什么都没发生。
        * @param {string} command 已注册的 Tauri 命令名
        * @param {string} label 本地化动作名
        * @param {object} [args] 命令参数
@@ -163,7 +167,10 @@
         clearNotice();
         button.disabled = true;
         invoke(command, args)
-          .then(() => { button.disabled = false; })
+          .then((envelope) => {
+            button.disabled = false;
+            if (envelope && envelope.success === false) fail(label, envelope.error || {});
+          })
           .catch((error) => { button.disabled = false; fail(label, error); });
       }
 
@@ -173,6 +180,11 @@
        * 按钮可见性是相位的函数，不是历史的函数——每次渲染都从相位完全重算，
        * 这样 `updates_status` 的冷启动结果与事件推送走同一条渲染路径，
        * 不会出现「刚进页面按钮状态不对，收到一次事件才对」的错位。
+       *
+       * ⚠️ 这里有**两个入口、两种载荷**，别把它们弄混：
+       * - `updates://status` 事件直接给**快照本身**（Rust `emit` 的就是它）；
+       * - `updates_status` 命令给的是**封套**，快照在 `envelope.data` 里。
+       * 命令那条路径必须在调用处拆封套（见下方 `invoke`），不能指望本函数兼容两种形状。
        * @param {{phase?: string, manual?: boolean, available_version?: string|null, percent?: number|null, message?: string|null}} snapshot
        */
       function apply(snapshot) {
@@ -210,7 +222,16 @@
 
       // 进入页面立即拉取快照，不等第一次推送（周期检查间隔 6 小时）。
       if (invoke) {
-        invoke('updates_status').then(apply).catch((error) => fail(t.actions.check, error));
+        // `updates_status` 返回封套，快照在 `data` 里；事件那条路径给的是裸快照。
+        invoke('updates_status')
+          .then((envelope) => {
+            if (envelope && envelope.success === false) {
+              fail(t.actions.check, envelope.error || {});
+              return;
+            }
+            apply(envelope ? envelope.data : undefined);
+          })
+          .catch((error) => fail(t.actions.check, error));
         // 版本号取自壳自身，失败就不显示——它不是本页的核心信息。
         window.__TAURI__?.app?.getVersion?.()
           .then((v) => {
@@ -235,19 +256,20 @@
         run('updates_skip', t.actions.skip, { version: availableVersion }, buttons.skip);
       });
       buttons.back.addEventListener('click', () => {
-        // `harness_open` 在 Harness 未就绪时返回 `false` 而**不是**报错（见其
-        // Rust 文档：未就绪是正常状态，不是失败）。因此这里必须自己处理这个
-        // 返回值——否则按钮看起来「点了没反应」，用户会以为应用卡住了。
+        // `harness_open` 在 Harness 未就绪时返回**失败封套**（`E3003`）而不是报错
+        // （见其 Rust 文档：未就绪是正常状态，不是故障）。因此这里必须检查
+        // `success`——否则按钮看起来「点了没反应」，用户会以为应用卡住了。
         if (!invoke) return;
         clearNotice();
         buttons.back.disabled = true;
         invoke('harness_open')
-          .then((opened) => {
+          .then((envelope) => {
             buttons.back.disabled = false;
-            if (opened) return;
+            if (!envelope || envelope.success !== false) return;
+            const error = envelope.error || {};
             noticeEl.textContent = zh
-              ? 'Harness 尚未就绪，暂时无处可返回。请稍后重试，或从菜单重启 Harness。'
-              : 'Harness is not ready yet, so there is nothing to return to. Try again shortly, or restart Harness from the menu.';
+              ? `Harness 尚未就绪，暂时无处可返回（${error.code || ''}）。请稍后重试，或从菜单重启 Harness。`
+              : `Harness is not ready yet, so there is nothing to return to (${error.code || ''}). Try again shortly, or restart Harness from the menu.`;
             noticeEl.hidden = false;
           })
           .catch((error) => {

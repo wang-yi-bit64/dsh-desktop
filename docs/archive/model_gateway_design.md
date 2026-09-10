@@ -1,5 +1,22 @@
 # Model Gateway 设计备忘录 (RFC & Architecture Memo)
 
+> ## 🗄️ 已归档（2026-09-10）
+>
+> **该 crate 已从 workspace 移除并归档。** 执行的是
+> `docs/dev-plan-disconnected-points.md` §4 决策点 3 的裁定：**冻结并归档**，不接线。
+>
+> | 归档时的事实 | 归档动作 |
+> |---|---|
+> | `crates/dsh-model-gateway/**` 实现完整、有单测与 benchmark，但**零运行时消费者** | crate 目录删除；`Cargo.toml` 的 members 与 `[workspace.dependencies]` 条目一并移除 |
+> | 官方 dsh 自带模型适配器 | 本文档移入 `docs/archive/` |
+>
+> **为什么删而不是留**：不在 workspace 里的 crate 既不会被编译也不会被测试，
+> 它的 Schema 方言适配会随官方接口演进而静默腐烂；而「代码写得不错，先留着」
+> 正是本轮在清理的那类欠债。**恢复它的判断标准见下方原文的「退出条件」段**——
+> 那三条依然有效，只是判定结果从「待定」变成了「归档」。
+>
+> 下文为归档时的原始设计文本，保留以便追溯设计意图。
+
 > **状态（2026-09-10 校准）**：crate **已实现**（`crates/dsh-model-gateway`，含单测与
 > `examples/benchmark.rs`），但**未接线、不在默认运行时路径上**。
 >

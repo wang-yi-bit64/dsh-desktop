@@ -284,20 +284,18 @@ const manifestPath = join(resources, 'MANIFEST.json')
 
 // tauri.conf.json 的 bundle.resources 逐条列举了打包所需的文件；build.rs 对每个
 // glob 做硬校验，缺任何一条都会让 cargo 编译失败。幂等快速路径必须按同一份清单
-// 校验，否则残缺的 resources/ 会被当成「完整」复用——实测漏掉 bin/、
-// plugin-safety-guard.mjs、plugin-worker-host.mjs 时打包出来的应用启动即崩
-// （node 入口 import 不到 guard，harness 根本起不来）。
+// 校验，否则残缺的 resources/ 会被当成「完整」复用——实测漏掉 bin/ 与
+// plugin-safety-guard.mjs 时打包出来的应用启动即崩（node 入口 import 不到
+// guard，harness 根本起不来）。
 const REQUIRED_FILES = [
   'harness-node-entry.mjs',
   'windows-child-process-hide.mjs',
   'plugin-safety-guard.mjs',
-  'plugin-worker-host.mjs',
   'dsh-desktop.patch.yml',
   'dsh-desktop-safe.patch.yml',
   'MANIFEST.json',
   'splash.html',
   'plugin-recovery.html',
-  'safe-mode.html',
   'windows-menu.html',
   'dsh-loader.gif',
   'dsh-loader-dark.gif',
@@ -322,13 +320,15 @@ function resourcesComplete() {
  * @returns {void}
  */
 function copyBuildFiles() {
-  // plugin-safety-guard.mjs / plugin-worker-host.mjs 是 harness-node-entry.mjs 的
-  // 运行时依赖（入口直接 import 前者，后者由 guard 以同级文件 spawn），必须一起打包。
+  // plugin-safety-guard.mjs 是 harness-node-entry.mjs 的**直接**运行时依赖
+  // （入口 import 它），必须一起打包。
+  //
+  // `plugin-worker-host.mjs` 曾在此列表中，2026-09-10 随批次 F「冻结并归档」
+  // 移除：它只被同样被移除的 `PluginWorkerClient` spawn，而后者从未接线。
   for (const file of [
     'harness-node-entry.mjs',
     'windows-child-process-hide.mjs',
     'plugin-safety-guard.mjs',
-    'plugin-worker-host.mjs',
     'dsh-desktop.patch.yml',
     // 安全模式的 --patch 层。缺失会让「Restart in Safe Mode」在启动时
     // 硬失败（C10：安全模式不做静默降级）。
@@ -337,11 +337,10 @@ function copyBuildFiles() {
     cpSync(join(buildDir, file), join(resources, file))
   }
 
-  // Splash/recovery/safe-mode pages and brand assets served as resources.
+  // Splash/recovery pages and brand assets served as resources.
   for (const file of [
     'splash.html',
     'plugin-recovery.html',
-    'safe-mode.html',
     'windows-menu.html',
     'dsh-loader.gif',
     'dsh-loader-dark.gif',
@@ -667,8 +666,8 @@ log('pruning dev artifacts and non-runtime files from harness node_modules')
 pruneNodeModules(harnessTree)
 
 // Wrapper entry, hide patch, and patch layer.
-// plugin-safety-guard.mjs / plugin-worker-host.mjs 是 harness-node-entry.mjs 的
-// 运行时依赖（入口直接 import 前者，后者由 guard 以同级文件 spawn），必须一起打包。
+// plugin-safety-guard.mjs 是 harness-node-entry.mjs 的运行时依赖（入口直接
+// import 它），必须一起打包。copyBuildFiles 自己维护文件清单。
 copyBuildFiles()
 
 // ---------------------------------------------------------------------------

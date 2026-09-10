@@ -7,7 +7,7 @@ use dsh_host::contracts::EXIT_OK;
 use dsh_host::env::{capture_shell_environment, harness_env_with_overrides};
 use dsh_host::launch::{LaunchEvent, Launcher, LauncherConfig, PortMode, RunningHarness};
 use dsh_host::logging::AppLog;
-use dsh_host::logs::{FailureCause, LogRing};
+use dsh_host::logs::LogRing;
 use dsh_host::paths::Layout;
 use dsh_host::process::{
     clear_pid_file, is_process_alive, process_belongs_to, read_pid_file, terminate_process_tree,
@@ -293,14 +293,4 @@ pub fn stop(args: StopArgs, json: bool) -> ExitCode {
         return dsh_host::contracts::EXIT_UNEXPECTED;
     }
     EXIT_OK
-}
-
-/// 保留给未来：把 [`FailureCause`] 映射成 doctor 提示。
-#[allow(dead_code)]
-fn cause_hint(cause: &FailureCause) -> &'static str {
-    if cause.is_plugin_fault() {
-        "疑似插件故障：可尝试安全模式（阶段 5）或移除最近安装的插件"
-    } else {
-        "核心故障：查看 harness.log 尾部与 MANIFEST 校验结果"
-    }
 }

@@ -25,13 +25,14 @@
 pub mod args;
 pub mod contracts;
 pub mod diagnostics;
+pub mod diagnostics_export;
 pub mod env;
 pub mod error;
 pub mod launch;
 pub mod logging;
 pub mod logs;
+pub mod logs_view;
 pub mod paths;
-pub mod plugin_worker;
 pub mod process;
 pub mod readiness;
 pub mod safe_mode;
@@ -46,9 +47,11 @@ pub use diagnostics::{
     extract_offending_plugins, format_crash_diagnostics, CrashCategory, CrashDiagnostics,
     DiagnosticReport, DiagnosticsAnalyzer,
 };
+pub use diagnostics_export::{export as export_diagnostics, ExportSummary, RedactionHit};
 pub use error::{HostError, HostResult};
 pub use launch::{LaunchOutcome, Launcher, LauncherConfig};
 pub use logs::{FailureCause, LogLevel, LogLine, LogRing, LogSource};
+pub use logs_view::{LogFile, LogSlice};
 pub use paths::Layout;
 pub use readiness::{ProbeConfig, ReadinessOutcome};
 pub use safe_mode::{

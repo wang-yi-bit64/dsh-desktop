@@ -63,20 +63,13 @@ pub fn decide_navigation(url: &Url, harness_port: Option<u16>) -> NavigationDeci
     }
 }
 
-/// URL 是否指向本地静态页（splash / error / recovery / safe-mode）。
+/// URL 是否指向本地静态页（splash / error / recovery / updates / logs）。
 pub fn is_local_page(url: &Url) -> bool {
     match url.scheme() {
         "tauri" => true,
         "http" | "https" => LOCAL_PAGE_HOSTS.contains(&url.host_str().unwrap_or("")),
         _ => false,
     }
-}
-
-/// 外链是否值得交给系统浏览器（放行前再校验一次 scheme）。
-pub fn is_openable_external(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https")
-        && url.host_str() != Some("127.0.0.1")
-        && url.host_str() != Some("localhost")
 }
 
 #[cfg(test)]
@@ -160,13 +153,5 @@ mod tests {
         assert!(is_local_page(&parse("http://localhost:5173/index.html")));
         assert!(is_local_page(&parse("https://tauri.localhost/")));
         assert!(!is_local_page(&parse("http://127.0.0.1:4173/")));
-    }
-
-    #[test]
-    fn external_openability() {
-        assert!(is_openable_external(&parse("https://example.com")));
-        assert!(!is_openable_external(&parse("http://127.0.0.1:4173/")));
-        assert!(!is_openable_external(&parse("http://localhost:1/")));
-        assert!(!is_openable_external(&parse("file:///etc/passwd")));
     }
 }

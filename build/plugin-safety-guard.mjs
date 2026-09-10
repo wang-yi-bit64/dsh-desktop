@@ -1,27 +1,34 @@
-import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
-import readline from 'node:readline'
-
 /**
  * 插件注册防护与故障归因
  *
- * ⚠️ 状态（2026-09-10）：**部分接线**。
- * - ✅ `formatFaultDetails` —— 已接线：由 `harness-node-entry.mjs` 的
- *   `uncaughtException` / `unhandledRejection` 处理器消费，产出
- *   `[dsh-plugin-fault]` 结构化标识。
- * - ❌ `PluginWorkerClient` —— **未接线（experimental）**：无任何调用方。
- *   它可按需 spawn `plugin-worker-host.mjs` 建立进程外 JSON-RPC 通道，但插件
- *   隔离不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系），
- *   启用它会凭空引入常驻子进程。启用前须先一并接通 Rust 侧
- *   `dsh_host::plugin_worker::PluginIsolationManager`，并更新
- *   `docs/plugin_isolation_architecture.md` 的状态说明。
- * - 因此本文件**不会**主动输出 `[dsh-worker-fault]`：该标识只在
- *   `PluginWorkerClient` 被使用时才可能产生。
+ * # 状态（2026-09-10，批次 F 裁定后）
+ *
+ * ✅ `formatFaultDetails` —— 已接线：由 `harness-node-entry.mjs` 的
+ *    `uncaughtException` / `unhandledRejection` 处理器消费，产出
+ *    `[dsh-plugin-fault]` 结构化标识。**这是当前唯一生效的插件防护**（进程内），
+ *    同进程的插件崩溃仍可能带走 Harness——这一点在 `AGENTS.md` §7.2 有明确记载。
+ *
+ * # 已移除：`PluginWorkerClient` 与 `plugin-worker-host.mjs`
+ *
+ * 这两个文件实现了「把插件跑在进程外、用 JSON-RPC 通信」的完整方案，但**从未
+ * 接线**，批次 F 据此裁定为「冻结并归档」（决策记录见
+ * `docs/dev-plan-disconnected-points.md` §4 决策点 3）。删掉而不是留着的原因：
+ *
+ * 1. **它不在插件挂载路径上**。真实挂载发生在 Harness 进程内的官方 Cordis
+ *    体系里（`dsh.profile.bundles` 投影 + dshmarket shim），本文件够不着那个
+ *    加载器。启用它得到的不是「隔离」，而是一个与官方体系并行的影子进程。
+ * 2. **需求从未定义**。要拦什么、失败语义是什么都还没有答案；先写代码再找
+ *    问题，只会得到一个看起来能跑、实际不解决任何问题的组件。
+ * 3. **留着就是会腐烂的重量**：进程外 RPC 必须与 `dsh-contracts` 的 JSON-RPC
+ *    契约同步演进，没有消费者时无人会发现它已经漂移。
+ *
+ * 因此本文件不会输出 `[dsh-worker-fault]`——那个标识随上述实现一起消失。
+ * 若将来官方提供了插件停用 / 隔离的接口，接线点是**官方接口**，不是这里。
  */
 
 export function installPluginSafetyGuards() {
-  // 1. 结构化错误诊断提取
+  // 结构化错误诊断提取：把常见插件注册冲突 / 加载失败模式归一成一句可归因的
+  // 文本。输出经 Harness 侧日志进入 `[dsh-plugin-fault]` 归因链。
   function formatFaultDetails(error) {
     const message = error?.message || String(error)
 
@@ -47,111 +54,7 @@ export function installPluginSafetyGuards() {
     return null
   }
 
-  // 2. 插件 Worker 客户端代理类 (Out-of-process client)
-  //    ⚠️ 未接线：见文件顶部状态说明。保留实现以待接线，勿在无消费方时启用。
-  class PluginWorkerClient {
-    constructor() {
-      this.child = null
-      this.requestId = 0
-      this.pendingRequests = new Map()
-      this.isReady = false
-      this.registeredTools = new Map()
-    }
-
-    start() {
-      if (this.child) return
-
-      const currentDir = path.dirname(fileURLToPath(import.meta.url))
-      const workerScript = path.join(currentDir, 'plugin-worker-host.mjs')
-
-      this.child = spawn(process.execPath, [workerScript], {
-        stdio: ['pipe', 'pipe', 'inherit'],
-        env: { ...process.env, DSH_WORKER_MODE: 'isolated' },
-      })
-
-      const rl = readline.createInterface({
-        input: this.child.stdout,
-        terminal: false,
-      })
-
-      rl.on('line', (line) => {
-        try {
-          const msg = JSON.parse(line.trim())
-          if (msg.method === 'worker/ready') {
-            this.isReady = true
-            return
-          }
-          if (msg.id && this.pendingRequests.has(msg.id)) {
-            const { resolve, reject } = this.pendingRequests.get(msg.id)
-            this.pendingRequests.delete(msg.id)
-            if (msg.error) {
-              reject(new Error(msg.error.message || 'Worker RPC error'))
-            } else {
-              resolve(msg.result)
-            }
-          }
-        } catch {
-          // ignore non-json
-        }
-      })
-
-      this.child.on('error', (err) => {
-        process.stderr.write(`[dsh-worker-fault] process error: ${err.message}\n`)
-      })
-
-      this.child.on('exit', (code) => {
-        process.stderr.write(`[dsh-worker-fault] worker exited with code ${code}\n`)
-        this.child = null
-        this.isReady = false
-      })
-    }
-
-    sendRequest(method, params = {}, timeoutMs = 30000) {
-      this.start()
-      return new Promise((resolve, reject) => {
-        const id = ++this.requestId
-        const timer = setTimeout(() => {
-          this.pendingRequests.delete(id)
-          reject(new Error(`Worker RPC timeout for method ${method}`))
-        }, timeoutMs)
-
-        this.pendingRequests.set(id, {
-          resolve: (val) => {
-            clearTimeout(timer)
-            resolve(val)
-          },
-          reject: (err) => {
-            clearTimeout(timer)
-            reject(err)
-          },
-        })
-
-        const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'
-        this.child.stdin.write(payload)
-      })
-    }
-
-    async registerToolProxy(name, description, inputSchema) {
-      this.registeredTools.set(name, { name, description, inputSchema })
-      return this.sendRequest('tools/register', { name, description, inputSchema })
-    }
-
-    async callTool(name, args) {
-      return this.sendRequest('tools/call', { name, arguments: args })
-    }
-
-    stop() {
-      if (this.child) {
-        this.child.kill()
-        this.child = null
-      }
-    }
-  }
-
-  const workerClient = new PluginWorkerClient()
-
   return {
     formatFaultDetails,
-    workerClient,
   }
 }

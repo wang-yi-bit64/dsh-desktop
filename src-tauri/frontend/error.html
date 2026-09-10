@@ -23,7 +23,7 @@
         color: #9ca0a8; background: rgba(127,127,127,.08); border-radius: 10px;
         white-space: pre-wrap; word-break: break-all;
       }
-      .actions { display: flex; gap: 10px; margin-top: 8px; }
+      .actions { display: flex; gap: 10px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
       button {
         appearance: none; border: 0; cursor: pointer; font: inherit;
         min-height: 34px; padding: 7px 18px; border-radius: 999px;
@@ -42,6 +42,10 @@
         border: 1px solid rgba(220,38,38,.28); border-radius: 8px;
         font-size: 12px; white-space: pre-wrap; word-break: break-word;
       }
+      .notice.success {
+        color: #1c6b42; background: rgba(38,122,74,.10);
+        border-color: rgba(38,122,74,.30);
+      }
       :root[data-theme='dark'] body, @media (prefers-color-scheme: dark) { }
       @media (prefers-color-scheme: dark) {
         body { color: #f3f4f6; background: #141416; }
@@ -49,6 +53,7 @@
         .secondary { color: #e4e4e7; background: #2a2a2e; border-color: rgba(255,255,255,.16); }
         .secondary:hover { background: #34343a; }
         .notice { color: #fca5a5; background: rgba(220,38,38,.16); border-color: rgba(248,113,113,.32); }
+        .notice.success { color: #8ee0ae; background: rgba(38,122,74,.18); border-color: rgba(38,122,74,.40); }
       }
     </style>
   </head>
@@ -62,6 +67,8 @@
       <div class="actions">
         <button class="primary" id="retry">Retry</button>
         <button class="secondary" id="safemode" hidden>Safe Mode</button>
+        <button class="secondary" id="recovery" hidden>Plugin recovery…</button>
+        <button class="secondary" id="export">Export diagnostics</button>
         <button class="secondary" id="openlogs">View log</button>
         <button class="secondary" id="quit">Quit</button>
       </div>
@@ -72,6 +79,8 @@
         document.getElementById('title').textContent = 'Harness 未能启动';
         document.getElementById('retry').textContent = '重试';
         document.getElementById('safemode').textContent = '进入安全模式';
+        document.getElementById('recovery').textContent = '插件恢复…';
+        document.getElementById('export').textContent = '导出诊断包';
         document.getElementById('openlogs').textContent = '查看日志';
         document.getElementById('quit').textContent = '退出';
       }
@@ -91,14 +100,26 @@
        * @param {unknown} error 失败原因
        */
       function fail(label, error) {
+        const code = error && error.code ? `${error.code}: ` : '';
         const detail = error && error.message ? error.message : String(error);
-        noticeEl.textContent = zh ? `${label}失败：${detail}` : `${label} failed: ${detail}`;
+        noticeEl.textContent = zh
+          ? `${label}失败：${code}${detail}`
+          : `${label} failed: ${code}${detail}`;
+        noticeEl.classList.remove('success');
         noticeEl.hidden = false;
       }
 
       function clearNotice() {
         noticeEl.hidden = true;
         noticeEl.textContent = '';
+        noticeEl.classList.remove('success');
+      }
+
+      /** 成功回执（如导出诊断包：没有导航副作用，必须给可见回执）。 */
+      function succeed(message) {
+        noticeEl.textContent = message;
+        noticeEl.classList.add('success');
+        noticeEl.hidden = false;
       }
 
       /**
@@ -106,19 +127,34 @@
        *
        * 成功路径通常会导致页面被导航覆盖（重启/退出），因此只在失败时恢复按钮，
        * 避免与即将消失的页面抢状态。
+       *
+       * **必须解包封套**：命令面现在一律返回 `{success, data, error}`，
+       * 业务失败也是成功返回（`success=false`）而不是 reject。只看 promise
+       * 有没有 reject，会把这类失败当成成功——页面照样「点了没反应」。
        * @param {string} command 已注册的 Tauri 命令名
        * @param {string} label 本地化动作名
        * @param {object} [args] 命令参数
        * @param {HTMLButtonElement} [button] 触发按钮（用于禁用与恢复）
+       * @param {(data: unknown) => void} [onSuccess] 成功回调（拿到 `data`）
        */
-      function run(command, label, args, button) {
+      function run(command, label, args, button, onSuccess) {
         if (!invoke) return;
         clearNotice();
         if (button) button.disabled = true;
-        invoke(command, args).catch((error) => {
-          if (button) button.disabled = false;
-          fail(label, error);
-        });
+        invoke(command, args)
+          .then((envelope) => {
+            if (envelope && envelope.success === false) {
+              if (button) button.disabled = false;
+              fail(label, envelope.error || {});
+              return;
+            }
+            if (button) button.disabled = false;
+            if (onSuccess) onSuccess(envelope ? envelope.data : undefined);
+          })
+          .catch((error) => {
+            if (button) button.disabled = false;
+            fail(label, error);
+          });
       }
 
       function apply(snapshot) {
@@ -134,16 +170,22 @@
         // `snapshot_json_keeps_the_phase_tag_flat` 在 CI 中守护它。
         if (snapshot.phase === 'failed' && snapshot.plugin_fault) {
           const hint = zh
-            ? '\n（疑似第三方插件故障：建议进入安全模式禁用故障插件）'
-            : '\n(Plugin fault suspected: recommend entering Safe Mode.)';
+            ? '\n（疑似第三方插件故障：建议进入安全模式或打开插件恢复页）'
+            : '\n(Plugin fault suspected: enter Safe Mode, or open the plugin recovery page.)';
           if (!messageEl.textContent.includes(hint)) messageEl.textContent += hint;
           safeModeBtn.hidden = false;
+          // 恢复页（批次 C1）：展示嫌疑插件清单与归因报告，并提供安全模式 /
+          // 重启 / 打开日志。错误页仍是插件故障的**第一落点**——恢复页从这里的
+          // 按钮进入，而不是由 `state.rs::on_failed` 自动跳过去：那会让
+          // error.html 刚修好的插件故障分支立刻变成新的死 UI。
+          recoveryBtn.hidden = false;
         }
       }
 
       function loadLogs() {
         if (!invoke) return;
-        invoke('harness_logs_tail', { count: 30 }).then((lines) => {
+        invoke('harness_logs_tail', { count: 30 }).then((envelope) => {
+          const lines = envelope && envelope.success !== false ? envelope.data : undefined;
           if (Array.isArray(lines) && lines.length) {
             logsEl.textContent = lines.join('\n');
             logsEl.hidden = false;
@@ -158,12 +200,35 @@
       }
       // 进入页面立即拉取最新快照与日志尾部。
       if (invoke) {
-        invoke('harness_status').then(apply).catch(() => {});
+        invoke('harness_status')
+          .then((envelope) => {
+            if (envelope && envelope.success !== false) apply(envelope.data);
+          })
+          .catch(() => {});
         loadLogs();
       }
       const retryBtn = document.getElementById('retry');
       const openLogsBtn = document.getElementById('openlogs');
       const quitBtn = document.getElementById('quit');
+      const exportBtn = document.getElementById('export');
+      const recoveryBtn = document.getElementById('recovery');
+
+      // 诊断包导出（批次 D3）：产物落在 userData/exports/ 下，按钮的回执里
+      // 必须把**路径**显示出来，否则用户找不到刚导出的东西。
+      exportBtn.addEventListener('click', () => {
+        run('diagnostics_export', zh ? '导出诊断包' : 'Export diagnostics', undefined, exportBtn, (data) => {
+          const where = data && data.path ? data.path : '';
+          const redactions = Array.isArray(data && data.redactions) ? data.redactions.length : 0;
+          succeed(
+            zh
+              ? `诊断包已导出：${where}\n已按 ${redactions} 类规则脱敏（token / cookie / 用户名 / API key）。`
+              : `Diagnostics bundle exported: ${where}\nRedacted with ${redactions} rule class(es) (tokens, cookies, user names, API keys).`
+          );
+        });
+      });
+      recoveryBtn.addEventListener('click', () => {
+        run('recovery_open', zh ? '插件恢复' : 'Plugin recovery', undefined, recoveryBtn);
+      });
 
       retryBtn.addEventListener('click', () => {
         run('harness_restart', zh ? '重试' : 'Retry', undefined, retryBtn);

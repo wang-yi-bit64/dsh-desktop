@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use dsh_host::contracts::{codes, ErrorCategory, IpcEnvelope};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
@@ -154,17 +155,28 @@ impl UpdateManager {
     }
 
     /// Download the available update (user consented).
-    pub async fn download(&self) -> Result<(), String> {
-        let updater = self
-            .app
-            .updater_builder()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let update = updater
-            .check()
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no update available".to_string())?;
+    ///
+    /// # 返回形态
+    ///
+    /// 返回封套而不是 `Result<(), String>`：更新失败的原因（网络不通 / 校验
+    /// 不过 / 无可用版本）必须能被页面**分类**处理，而不是显示一个字符串。
+    pub async fn download(&self) -> IpcEnvelope<()> {
+        let updater = match self.app.updater_builder().build() {
+            Ok(updater) => updater,
+            Err(error) => return Self::failure(error),
+        };
+        let update = match updater.check().await {
+            Ok(Some(update)) => update,
+            Ok(None) => {
+                return IpcEnvelope::failure(
+                    codes::UPDATER_UNAVAILABLE,
+                    ErrorCategory::Environment,
+                    "no update is available to download",
+                )
+                .with_action("Run a check first; the release may have been withdrawn.")
+            }
+            Err(error) => return Self::failure(error),
+        };
 
         let version = update.version.clone();
         let app = self.app.clone();
@@ -221,7 +233,7 @@ impl UpdateManager {
                     message: None,
                 })
                 .await;
-                Ok(())
+                IpcEnvelope::ok(())
             }
             Err(error) => {
                 self.set_status(UpdateStatus {
@@ -232,14 +244,36 @@ impl UpdateManager {
                     message: Some(error.to_string()),
                 })
                 .await;
-                Err(error.to_string())
+                Self::failure(error)
             }
         }
     }
 
     /// Restart the app and install the downloaded update.
-    pub async fn install(&self) -> Result<(), String> {
+    ///
+    /// 始终成功：`restart()` 不返回失败信息，而进程随之退出——没有可上报的
+    /// 失败面。若将来出现「下载了但装不上」的路径，改成真实判定，不要在这里
+    /// 补一个恒真的成功（`AGENTS.md` §7.1 规则 2）。
+    pub async fn install(&self) -> IpcEnvelope<()> {
+        // `restart()` 在返回前不会真的返回（进程即将被替换），因此后面的语句
+        // 在编译期就是不可达的——留着是为了让返回类型显式。
         self.app.restart();
+        #[allow(unreachable_code)]
+        IpcEnvelope::ok(())
+    }
+
+    /// 把更新器的错误映射为封套。
+    ///
+    /// 归为「环境」而非「网络」：`updater_builder().build()` 的失败多为**未配置
+    /// 更新源 / 签名公钥不匹配**（配置问题），而 `check()` 的网络失败也常由代理
+    /// 或证书引起——两者都不该让页面只建议用户「检查网络」了事。类别只表达
+    /// 归因族，具体原因在 `message` 里。
+    fn failure(error: impl std::fmt::Display) -> IpcEnvelope<()> {
+        IpcEnvelope::failure(
+            codes::UPDATER_UNAVAILABLE,
+            ErrorCategory::Environment,
+            error.to_string(),
+        )
     }
 
     /// Skip a specific version for automatic checks.

@@ -17,7 +17,6 @@ mod logging;
 mod menu;
 mod mobile_bridge;
 mod navigation;
-mod recovery;
 mod safe_mode;
 mod state;
 mod update;
@@ -234,12 +233,15 @@ pub fn run() {
             commands::harness_status,
             commands::harness_restart,
             commands::harness_logs_tail,
+            commands::logs_read,
             commands::open_logs,
-            commands::open_external,
             commands::app_quit,
+            commands::recovery_status,
+            commands::recovery_open,
             commands::recovery_action,
             commands::safe_mode_action,
             commands::harness_open,
+            commands::diagnostics_export,
             commands::updates_status,
             commands::updates_check,
             commands::updates_download,

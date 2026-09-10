@@ -1,12 +1,19 @@
 # DSH Desktop — Cargo workspace (阶段 0 任务 0.1)
 #
-# 三个成员：
-#   crates/dsh-host      无 GUI 依赖的宿主库（进程 / 就绪 / token / 路径 / env / 日志）
-#   crates/dsh-host-cli  命令行排障入口（start / stop / status / tail）
-#   src-tauri            Tauri 2 应用壳（只做窗口、事件、IPC 接线）
+# 四个成员：
+#   crates/dsh-contracts  通用契约库（常量 / 错误码 / IPC 封套 / JSON-RPC 类型）
+#   crates/dsh-host       无 GUI 依赖的宿主库（进程 / 就绪 / token / 路径 / env / 日志 / 诊断导出）
+#   crates/dsh-host-cli   命令行排障入口（start / stop / status / tail / doctor）
+#   src-tauri             Tauri 2 应用壳（只做窗口、事件、IPC 接线）
 #
 # 依赖版本在 [workspace.dependencies] 统一收敛，成员 crate 用 `workspace = true`
 # 引用，避免同一依赖在三个 crate 里漂移成多个版本。
+#
+# 已退出 workspace（2026-09-10，批次 F「冻结并归档」的裁定）：
+#   crates/dsh-model-gateway — 多厂商工具调用方言网关。无任何运行时消费者，已
+#   连同设计文档一起归档（见 docs/archive/model_gateway_design.md 顶部的归档说明）。
+#   不要因为「代码写得不错」把它加回来：不在 workspace 里的 crate 既不会被编译
+#   也不会被测试，留着就是会腐烂的死重量。
 
 [workspace]
 resolver = "2"
@@ -15,7 +22,6 @@ members = [
   "crates/dsh-contracts",
   "crates/dsh-host",
   "crates/dsh-host-cli",
-  "crates/dsh-model-gateway",
 ]
 
 [workspace.package]
@@ -31,7 +37,6 @@ rust-version = "1.85"
 # 本地 crate
 dsh-contracts = { path = "crates/dsh-contracts" }
 dsh-host = { path = "crates/dsh-host" }
-dsh-model-gateway = { path = "crates/dsh-model-gateway" }
 
 # 通用
 serde = { version = "1", features = ["derive"] }

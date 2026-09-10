@@ -87,6 +87,8 @@ pub struct Layout {
     pub log_path: PathBuf,
     /// 宿主应用日志落盘路径（阶段 2）。
     pub app_log_path: PathBuf,
+    /// 桌面壳层日志落盘路径（`desktop.log`，`tauri-plugin-log` 写入）。
+    pub desktop_log_path: PathBuf,
     /// 陈旧进程清扫用的 pidfile。
     pub pid_file: PathBuf,
 }
@@ -138,6 +140,9 @@ impl Layout {
             app_log_path: app_data_dir
                 .join(LOG_DIR)
                 .join(crate::contracts::APP_LOG_FILE),
+            desktop_log_path: app_data_dir
+                .join(LOG_DIR)
+                .join(crate::contracts::DESKTOP_LOG_FILE),
             pid_file: app_data_dir.join(LAUNCH_ROOT_DIR).join(PID_FILE),
             resource_dir,
             app_data_dir,
@@ -365,6 +370,11 @@ mod tests {
         assert_eq!(
             layout.app_log_path,
             root.join("data").join("logs").join("app.log")
+        );
+        assert_eq!(
+            layout.desktop_log_path,
+            root.join("data").join("logs").join("desktop.log"),
+            "壳层日志与宿主日志必须同目录但不同文件，否则两者会互相覆盖"
         );
         assert_eq!(
             layout.pid_file,

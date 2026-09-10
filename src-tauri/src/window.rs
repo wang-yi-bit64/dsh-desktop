@@ -42,15 +42,18 @@ pub fn show_error_page<R: Runtime>(app: &tauri::AppHandle<R>) {
     let _ = webview.navigate(local_page("error.html"));
 }
 
-/// 显示插件恢复页（阶段 5）。
-#[allow(dead_code)] // 阶段 5：安全模式/恢复入口接线时启用。
-pub fn show_recovery_page<R: Runtime>(app: &tauri::AppHandle<R>, plugins: &[String]) {
+/// 显示插件恢复页（批次 C1 接线）。
+///
+/// 由 `commands::recovery_open` 指向——错误页的「插件恢复…」按钮。
+///
+/// 刻意**不接收**插件列表参数（页面改用 `recovery_status` 命令取数）：经 URL
+/// 传参既受长度限制、又要自己写百分号编码（原实现就为此带了一个 `urlencoding`
+/// 函数），而这些数据本来就必须经命令面校验 origin，绕一道路没有收益。
+pub fn show_recovery_page<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(webview) = main_window(app) else {
         return;
     };
-    let joined = plugins.join(",");
-    let target = format!("plugin-recovery.html?plugins={}", urlencoding(&joined));
-    let _ = webview.navigate(local_page(&target));
+    let _ = webview.navigate(local_page("plugin-recovery.html"));
 }
 
 /// 显示更新页（批次 B2）。
@@ -64,24 +67,10 @@ pub fn show_updates_page<R: Runtime>(app: &tauri::AppHandle<R>) {
     let _ = webview.navigate(local_page("updates.html"));
 }
 
-/// 显示安全模式页（阶段 5）。
-#[allow(dead_code)] // 阶段 5：安全模式入口接线时启用。
-pub fn show_safe_mode_page<R: Runtime>(app: &tauri::AppHandle<R>) {
+/// 显示日志页（批次 D3 / D10）。
+pub fn show_logs_page<R: Runtime>(app: &tauri::AppHandle<R>) {
     let Some(webview) = main_window(app) else {
         return;
     };
-    let _ = webview.navigate(local_page("safe-mode.html"));
-}
-
-#[allow(dead_code)] // 仅阶段 5 的恢复/安全模式页使用。
-fn urlencoding(input: &str) -> String {
-    input
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
-            }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+    let _ = webview.navigate(local_page("logs.html"));
 }

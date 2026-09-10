@@ -260,6 +260,24 @@ pub const APP_LOG_FILE: &str = "app.log";
 /// 前者记录**壳自身**的启动、导航、菜单动作与 panic，后者记录宿主面事件。
 pub const DESKTOP_LOG_FILE: &str = "desktop.log";
 
+/// userData 下诊断导出包的目录名。
+///
+/// 与日志目录并列（`userData/exports/`）：导出物是**用户要拿去分享的产物**，
+/// 与运行期日志的生命周期不同（日志会轮转、会被覆盖，导出包不会），因此不
+/// 混在 `logs/` 里。
+pub const EXPORTS_DIR_NAME: &str = "exports";
+
+/// 诊断导出包文件名前缀（完整名形如 `diagnostics-<时间戳>.zip`）。
+pub const DIAGNOSTICS_PREFIX: &str = "diagnostics-";
+
+/// 日志查看器单次读取的字节上限。
+///
+/// 日志文件可能很大（`harness.log` 无硬上限），而查看器只展示尾部：一次
+/// 读取整个文件既浪费内存也可能卡住界面。超过此值只读文件末尾这一段，
+/// 并在返回结果里标记 `truncated`——**截断必须可见**，不能让用户以为
+/// 「这就是全部日志」（`AGENTS.md` §7.1 禁止无声降级）。
+pub const LOG_TAIL_MAX_BYTES: u64 = 512 * 1024;
+
 /// 桌面壳层日志单文件上限（字节），超过即按 [`DESKTOP_LOG_ROTATIONS`] 轮转。
 pub const DESKTOP_LOG_MAX_BYTES: u128 = 5 * 1024 * 1024;
 

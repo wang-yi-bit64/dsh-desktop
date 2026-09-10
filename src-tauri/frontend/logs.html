@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>DSH Desktop · Logs</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #141416;
+        --panel: #1c1c1f;
+        --line: #2e2e33;
+        --ink: #e8e8ea;
+        --muted: #9a9aa2;
+        --accent: #4d6bfe;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; }
+      body { display: flex; flex-direction: column; color: var(--ink); background: var(--bg); }
+      header {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+      }
+      h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+      .spacer { flex: 1 1 auto; }
+      .tabs { display: flex; gap: 4px; }
+      .tab {
+        min-height: 30px; padding: 5px 12px; border: 1px solid transparent; border-radius: 8px;
+        color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+      }
+      .tab:hover { color: var(--ink); background: rgba(255,255,255,.06); }
+      .tab[aria-selected="true"] { color: var(--ink); background: rgba(255,255,255,.10); border-color: var(--line); }
+      .action {
+        min-height: 30px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px;
+        color: var(--ink); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+      }
+      .action:hover { background: rgba(255,255,255,.06); }
+      .action.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+      .action[disabled] { opacity: .55; cursor: default; }
+      .meta {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        padding: 7px 16px; border-bottom: 1px solid var(--line);
+        color: var(--muted); font-size: 11px;
+      }
+      .flag {
+        padding: 2px 8px; border-radius: 999px; font-weight: 650;
+        color: #ffd08a; background: rgba(255,176,32,.14);
+      }
+      .flag.hidden { display: none; }
+      .notice { margin: 0; padding: 8px 16px; color: #fca5a5; background: rgba(220,38,38,.12); font-size: 12px; }
+      .notice[hidden] { display: none; }
+      main { flex: 1 1 auto; overflow: auto; }
+      pre {
+        margin: 0; padding: 12px 16px;
+        font: 12px/1.55 Consolas, "Courier New", ui-monospace, monospace;
+        white-space: pre-wrap; word-break: break-word;
+      }
+      .empty { padding: 40px 16px; color: var(--muted); text-align: center; font-size: 13px; }
+      .empty[hidden] { display: none; }
+      @media (max-width: 620px) {
+        header { gap: 8px; }
+        h1 { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1 id="title">Harness logs</h1>
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" id="tab-harness" data-source="harness" aria-selected="true"></button>
+        <button class="tab" role="tab" id="tab-desktop" data-source="desktop" aria-selected="false"></button>
+        <button class="tab" role="tab" id="tab-app" data-source="app" aria-selected="false"></button>
+      </div>
+      <span class="spacer"></span>
+      <button class="action" id="refresh"></button>
+      <button class="action" id="export"></button>
+      <button class="action" id="reveal"></button>
+      <button class="action primary" id="back"></button>
+    </header>
+    <div class="meta">
+      <span id="file"></span>
+      <span id="size"></span>
+      <span class="flag hidden" id="truncated"></span>
+    </div>
+    <p class="notice" id="notice" hidden></p>
+    <main>
+      <pre id="content"></pre>
+      <p class="empty" id="empty" hidden></p>
+    </main>
+
+    <script>
+      const zh = navigator.language.toLowerCase().startsWith('zh');
+      const copy = zh
+        ? {
+            title: '日志',
+            tabs: { harness: 'Harness 输出', desktop: '桌面壳层', app: '宿主应用' },
+            refresh: '刷新',
+            export: '导出诊断包',
+            reveal: '在文件管理器中打开',
+            back: '返回 Harness',
+            truncated: '仅显示尾部（文件较大）',
+            empty: '这个日志文件还没有内容。',
+            missing: '这个日志文件还不存在（应用可能刚安装）。',
+            lines: (n) => `${n} 行`,
+            exported: (path, rules) =>
+              `诊断包已导出：${path}\n已按 ${rules} 类规则脱敏（token / cookie / 用户名 / API key）。`,
+            noReturn: 'Harness 尚未就绪，暂时无处可返回。',
+            failed: '操作失败',
+          }
+        : {
+            title: 'Logs',
+            tabs: { harness: 'Harness output', desktop: 'Desktop shell', app: 'Host app' },
+            refresh: 'Refresh',
+            export: 'Export diagnostics',
+            reveal: 'Reveal in file manager',
+            back: 'Back to Harness',
+            truncated: 'Showing the tail only (large file)',
+            empty: 'This log file has no content yet.',
+            missing: 'This log file does not exist yet (fresh install?).',
+            lines: (n) => `${n} lines`,
+            exported: (path, rules) =>
+              `Diagnostics bundle exported: ${path}\nRedacted with ${rules} rule class(es) (tokens, cookies, user names, API keys).`,
+            noReturn: 'Harness is not ready yet, so there is nothing to return to.',
+            failed: 'Action failed',
+          }
+
+      const invoke = window.__TAURI__?.core?.invoke
+      const contentEl = document.getElementById('content')
+      const emptyEl = document.getElementById('empty')
+      const fileEl = document.getElementById('file')
+      const sizeEl = document.getElementById('size')
+      const truncatedEl = document.getElementById('truncated')
+      const noticeEl = document.getElementById('notice')
+      const buttons = {
+        refresh: document.getElementById('refresh'),
+        export: document.getElementById('export'),
+        reveal: document.getElementById('reveal'),
+        back: document.getElementById('back'),
+      }
+
+      document.getElementById('title').textContent = copy.title
+      buttons.refresh.textContent = copy.refresh
+      buttons.export.textContent = copy.export
+      buttons.reveal.textContent = copy.reveal
+      buttons.back.textContent = copy.back
+      truncatedEl.textContent = copy.truncated
+      for (const [source, label] of Object.entries(copy.tabs)) {
+        document.getElementById(`tab-${source}`).textContent = label
+      }
+
+      let current = 'harness'
+
+      /** 显示失败原因；错误页/日志页的用户不会开 DevTools。 */
+      function fail(label, error) {
+        const code = error && error.code ? `${error.code}: ` : ''
+        const detail = error && error.message ? error.message : String(error)
+        noticeEl.textContent = `${label} — ${code}${detail}`
+        noticeEl.hidden = false
+      }
+
+      function clearNotice() {
+        noticeEl.hidden = true
+        noticeEl.textContent = ''
+      }
+
+      function succeed(message) {
+        noticeEl.textContent = message
+        noticeEl.hidden = false
+      }
+
+      /**
+       * 执行一个壳命令并解包封套。
+       *
+       * 与 error.html / plugin-recovery.html 同一约定：命令面把业务失败表达成
+       * `success=false` 的**成功返回**，只看 promise 是否 reject 会把失败当成功。
+       */
+      function run(command, label, args, button, onSuccess) {
+        if (!invoke) {
+          fail(label, zh ? '宿主桥不可用' : 'host bridge unavailable')
+          return
+        }
+        clearNotice()
+        if (button) button.disabled = true
+        invoke(command, args)
+          .then((envelope) => {
+            if (button) button.disabled = false
+            if (envelope && envelope.success === false) {
+              fail(label, envelope.error || {})
+              return
+            }
+            if (onSuccess) onSuccess(envelope ? envelope.data : undefined)
+          })
+          .catch((error) => {
+            if (button) button.disabled = false
+            fail(label, error)
+          })
+      }
+
+      function render(slice) {
+        contentEl.textContent = ''
+        if (!slice) return
+        fileEl.textContent = slice.file || ''
+        const size = typeof slice.total_bytes === 'number' ? slice.total_bytes : 0
+        const lines = Array.isArray(slice.lines) ? slice.lines : []
+        sizeEl.textContent = `· ${copy.lines(lines.length)} · ${size} B`
+        // 截断必须显式标出来（后端已如实上报，页面不能把它吞掉）。
+        truncatedEl.classList.toggle('hidden', !slice.truncated)
+        if (slice.missing || lines.length === 0) {
+          emptyEl.textContent = slice.missing ? copy.missing : copy.empty
+          emptyEl.hidden = false
+          return
+        }
+        emptyEl.hidden = true
+        contentEl.textContent = lines.join('\n')
+      }
+
+      function load() {
+        run('logs_read', copy.refresh, { source: current, count: 800 }, buttons.refresh, render)
+      }
+
+      function select(source) {
+        current = source
+        for (const tab of document.querySelectorAll('.tab')) {
+          tab.setAttribute('aria-selected', String(tab.dataset.source === source))
+        }
+        load()
+      }
+
+      for (const tab of document.querySelectorAll('.tab')) {
+        tab.addEventListener('click', () => select(tab.dataset.source))
+      }
+      buttons.refresh.addEventListener('click', load)
+      buttons.reveal.addEventListener('click', () => {
+        run('open_logs', copy.reveal, undefined, buttons.reveal)
+      })
+      buttons.export.addEventListener('click', () => {
+        run('diagnostics_export', copy.export, undefined, buttons.export, (data) => {
+          const where = data && data.path ? data.path : ''
+          const rules = Array.isArray(data && data.redactions) ? data.redactions.length : 0
+          succeed(copy.exported(where, rules))
+        })
+      })
+      buttons.back.addEventListener('click', () => {
+        run('harness_open', copy.back, undefined, buttons.back, undefined)
+      })
+
+      if (invoke) load()
+    </script>
+  </body>
+</html>

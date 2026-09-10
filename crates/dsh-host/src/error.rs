@@ -85,6 +85,19 @@ pub enum HostError {
     #[error("could not write the log file {0}: {1}")]
     LogIo(PathBuf, std::io::Error),
 
+    /// 诊断导出包写入失败。
+    ///
+    /// 与 [`HostError::LogIo`] 分开是刻意的：导出是**用户显式发起**的动作，
+    /// 失败必须让用户看见（「导不出来」不能表现成「点了没反应」），因此
+    /// 调用方按可上报的错误处理，而不是像日志那样静默降级。
+    #[error("could not write the diagnostics bundle ({context}): {source}")]
+    Export {
+        /// 失败发生在哪一步（哪个条目 / 哪个目录）。
+        context: String,
+        /// 底层 IO 错误。
+        source: std::io::Error,
+    },
+
     /// C4 — 超过就绪总超时。
     #[error("harness did not become ready within {seconds}s")]
     ReadyTimeout { seconds: u64 },
@@ -146,7 +159,8 @@ impl HostError {
             HostError::CreateDir(..)
             | HostError::Port(..)
             | HostError::Environment(..)
-            | HostError::LogIo(..) => EXIT_UNEXPECTED,
+            | HostError::LogIo(..)
+            | HostError::Export { .. } => EXIT_UNEXPECTED,
         }
     }
 
@@ -188,9 +202,11 @@ impl HostError {
             HostError::Environment(detail) => FailureCause::SpawnFailed {
                 detail: format!("环境变量捕获失败：{detail}"),
             },
-            // 用法错误与日志 IO 都不属于 Harness 侧故障，保留 Unknown 以免
-            // 错误页误判成「插件故障」而给出安全模式入口。
-            HostError::InvalidArgument(..) | HostError::LogIo(..) => FailureCause::Unknown,
+            // 用法错误、日志 IO 与导出 IO 都不属于 Harness 侧故障，保留 Unknown
+            // 以免错误页误判成「插件故障」而给出安全模式入口。
+            HostError::InvalidArgument(..) | HostError::LogIo(..) | HostError::Export { .. } => {
+                FailureCause::Unknown
+            }
             HostError::ReadyTimeout { seconds } => {
                 FailureCause::StartupTimeout { seconds: *seconds }
             }

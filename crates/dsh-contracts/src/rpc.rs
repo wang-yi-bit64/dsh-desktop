@@ -1,18 +1,26 @@
 //! # 统一 RPC 消息模型与 JSON-RPC 2.0 规范（唯一契约源）
 //!
 //! 本模块是整个 workspace 中 JSON-RPC 2.0 消息模型的**唯一定义点**：
-//! - `dsh-host` 的 [`crate::transport`] 通过 re-export 引用本模块，不得重复定义；
-//! - `build/plugin-worker-host.mjs`（Node 侧）按同一协议手写实现，错误码与
-//!   字段语义必须与本模块保持一致（参见各类型的文档注释）。
+//! - `dsh-host` 的 [`crate::transport`] 通过 re-export 引用本模块，不得重复定义。
+//!
+//! # 当前没有消费者（2026-09-10）
+//!
+//! 原先这里还有一句「`build/plugin-worker-host.mjs`（Node 侧）按同一协议手写
+//! 实现」——**那份 Node 实现已随批次 F「冻结并归档」删除**，`TransportProtocol`
+//! 目前也没有运行时消费者（它服务的进程间通道从未接线）。
+//!
+//! 保留本模块的理由是它**零成本且可独立测试**：纯类型 + 序列化规则，不依赖
+//! 任何运行时。但请如实看待它的状态——**它描述的是一个尚未存在的通道**，
+//! 不要把它当作「本仓有 RPC 基础设施」的证据。将来若要重启进程外通信，
+//! 这里是协议定义点，而不是某个具体实现的附属品。
 //!
 //! 规范要点（RFC 参照 JSON-RPC 2.0 官方规范）：
 //! - 请求：`jsonrpc` 固定 `"2.0"`；Notification（无 `id`）不期望回复，
 //!   `id` 与 `params` 缺省时不序列化（与 Node 侧 `sendSuccessResponse` 对齐）。
 //! - 响应：`result` 与 `error` **互斥**，构造器强制其一；`id` 永远序列化
 //!   （即使检测失败也必须为 `null`，规范要求响应必须携带 `id` 成员）。
-//! - 错误码：`-32700` / `-32600` / `-32601` / `-32602` / `-32603` 为标准码，
-//!   Node 侧 `plugin-worker-host.mjs` 另用 `-32000`（Server error 区间）上报
-//!   未捕获异常，两端语义一致。
+//! - 错误码：`-32700` / `-32600` / `-32601` / `-32602` / `-32603` 为标准码；
+//!   `-32000`（Server error 区间）留给实现自定义错误（见 [`RpcError::server_error`]）。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -148,8 +156,9 @@ impl RpcError {
         Self::new(-32603, "Internal error", data)
     }
 
-    /// Server error 区间 (-32000 ~ -32099)：实现自定义错误，
-    /// Node 侧 `plugin-worker-host.mjs` 用 `-32000` 上报未捕获异常/拒绝。
+    /// Server error 区间 (-32000 ~ -32099)：实现自定义错误。
+    ///
+    /// 预留的用途是上报未捕获异常 / 拒绝——**当前无调用方**（见模块文档）。
     pub fn server_error(message: impl Into<String>, data: Option<Value>) -> Self {
         Self::new(-32000, message, data)
     }

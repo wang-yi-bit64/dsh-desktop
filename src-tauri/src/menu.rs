@@ -51,7 +51,16 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     let restart = MenuItemBuilder::with_id("harness-restart", "Restart Harness").build(app)?;
     let safe_mode =
         MenuItemBuilder::with_id("harness-safe-mode", "Restart in Safe Mode").build(app)?;
-    let view_log = MenuItemBuilder::with_id("harness-view-log", "View Harness Log").build(app)?;
+    // 「View Harness Log」打开**应用内日志页**（批次 D3/D10）。此前它只调
+    // `opener` 打开系统文件管理器——在「应用起不来 / 界面卡住」时那条路径
+    // 恰好最没用：用户要的是能看到日志，而不是被丢进一个文件夹自己找。
+    let view_log = MenuItemBuilder::with_id("harness-view-log", "View Logs…").build(app)?;
+    let export_diagnostics =
+        MenuItemBuilder::with_id("harness-export-diagnostics", "Export Diagnostics…").build(app)?;
+    // 保留「在文件管理器中打开」为**次**入口（仍有用途：用户要把整个目录
+    // 拷走，或日志页本身打不开时）。
+    let reveal_logs =
+        MenuItemBuilder::with_id("harness-reveal-logs", "Reveal Log Folder").build(app)?;
     // LAN 手机桥是显式动作：菜单点击才监听，避免每次启动都在局域网暴露端口。
     let mobile_pair = MenuItemBuilder::with_id("mobile-pair", "Phone Pairing (LAN)…").build(app)?;
     let mobile_stop = MenuItemBuilder::with_id("mobile-stop", "Stop Phone Bridge").build(app)?;
@@ -72,6 +81,8 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         .item(&safe_mode)
         .separator()
         .item(&view_log)
+        .item(&reveal_logs)
+        .item(&export_diagnostics)
         .build()?;
 
     let mobile_submenu = SubmenuBuilder::with_id(app, PHONE_SUBMENU_ID, "Phone")
@@ -164,10 +175,44 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 log::info!("harness restarting in safe mode");
             }
             "harness-view-log" => {
+                // 应用内日志页：能选来源、刷新、导出诊断包，并且**在应用起不来
+                // 时也打不开**——那种情况下的入口是错误页的「查看日志」与
+                // 「导出诊断包」按钮。
+                crate::window::show_logs_page(&app);
+            }
+            // 「在文件管理器中打开」：次入口，保留给「要把整个目录拷走」以及
+            // 「日志页本身加载不出来」两种场景。
+            "harness-reveal-logs" => {
                 if let Some(dir) = state.layout.log_path.parent() {
                     let _ = app
                         .opener()
                         .open_path(dir.display().to_string(), None::<&str>);
+                }
+            }
+            // 导出脱敏诊断包：菜单入口（错误页另有同功能按钮）。
+            //
+            // 结果要**可见**：导出是显式用户动作，失败不能表现成「点了没反应」。
+            // 这里用日志与错误页按钮之外的最轻回执——导出成功后打开 exports
+            // 目录，用户立刻看到产物；失败则记 error 日志。
+            "harness-export-diagnostics" => {
+                match dsh_host::diagnostics_export::export(
+                    &state.layout,
+                    &state.supervisor.logs_tail(500),
+                ) {
+                    Ok(summary) => {
+                        log::info!(
+                            "diagnostics bundle exported: {} ({} bytes, {} redaction rule(s) fired)",
+                            summary.path,
+                            summary.bytes,
+                            summary.redactions.len()
+                        );
+                        if let Some(dir) = std::path::Path::new(&summary.path).parent() {
+                            let _ = app
+                                .opener()
+                                .open_path(dir.display().to_string(), None::<&str>);
+                        }
+                    }
+                    Err(error) => log::error!("diagnostics export failed: {error}"),
                 }
             }
             // 启动 LAN 桥并在系统浏览器打开配对页（桌面端显示二维码供手机扫描）。
