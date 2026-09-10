@@ -1,8 +1,14 @@
 name: CI
 
 # 阶段 0 任务 0.4：三平台兜底。
-# PR   → 静态检查 + 单测（不组装 300MB 资源，快反馈）
-# main/nightly → 额外跑资源组装与打包，验证打包不缺资源
+# PR   → 静态检查 + 单测 + 补丁分级自检 + L1 烟雾（不组装 300MB 资源，快反馈）
+# main/nightly → 额外组装资源、跑真实资源树的 L1 烟雾、打包、L2 GUI 烟雾、体积采集
+#
+# 门禁分层（为什么这样分）：
+#   cargo test/clippy 测的是壳自己的逻辑，Harness 对它是黑盒，**覆盖不到**
+#   Harness 侧行为变更与资源组装缺陷。smoke 的 L1/L2 补这一段。
+#   L1 用 mock 资源树即可验证「宿主 → 子进程 → 就绪 → 服务页面 → 关闭 → 无孤儿」
+#   这条链路，因此可以在 PR 上便宜地跑；真实资源树的 L1 放在 build job。
 
 on:
   push:
@@ -49,6 +55,12 @@ jobs:
         with:
           node-version: 20
 
+      # 补丁分级自检：patches/ 目录与 scripts/patch-layers.mjs 的登记表必须一致，
+      # 且每个补丁文件名都能推导出包名。这是纯静态检查（不装依赖），放在最前面
+      # 快速失败——补丁登记缺失会让 prepare:harness 在打包时才报错，代价高得多。
+      - name: Verify patch layer manifest
+        run: npm run verify:patches
+
       # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
       # tauri-build 的 build.rs 要求 bundle.resources 每个 glob 至少匹配一个文件，
       # 而 src-tauri/resources/ 被 gitignore（全新 checkout 不存在）。这里用
@@ -72,6 +84,48 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+  # L1 无头烟雾：证伪「宿主能派生 → 能就绪 → 真的在服务页面 → 关得干净」。
+  # 用 mock 资源树（DSH_MOCK=1），因此不需要 npm install，也不需要显示器。
+  smoke-headless:
+    name: ${{ matrix.os }} / smoke L1
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build host CLI
+        run: cargo build -p dsh-host-cli
+
+      - name: Smoke L1 (mock resource tree)
+        run: node scripts/smoke-launch.mjs --level=1 --resource-mode=stub
+
+      # 失败时把烟雾报告留档——这一层的失败通常只在日志里可读
+      # （就绪超时 / 页面取不到 / 退出码不对），不留档就得本地复现。
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-l1-logs-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: target/smoke/**
+
   build:
     name: ${{ matrix.os }} / bundle
     runs-on: ${{ matrix.os }}
@@ -84,6 +138,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # L2 在 Linux 上走 xvfb-run，需要 xvfb；其余构建依赖同 test job。
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -92,7 +147,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            xvfb
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -110,7 +166,8 @@ jobs:
       - name: Install build tooling
         run: npm ci
 
-      # 任务 0.3：资源组装必须可复现（内部会写 MANIFEST.json）。
+      # 任务 0.3：资源组装必须可复现（内部会写 MANIFEST.json），且补丁分级
+      # 策略记录在 MANIFEST.patches[] 里逐条留证。
       - name: Prepare harness resources
         run: npm run prepare:harness
 
@@ -123,8 +180,37 @@ jobs:
             ./src-tauri/resources/node/node --version
           fi
 
+      - name: Build host CLI
+        run: cargo build -p dsh-host-cli
+
+      # 真实资源树上的 L1：这是**唯一**能发现「资源组装缺文件 / Harness 起不来 /
+      # 补丁把入口改坏」的门禁。硬门禁，失败即阻断。
+      - name: Smoke L1 (assembled resource tree)
+        run: node scripts/smoke-launch.mjs --level=1 --resource-mode=assembled
+
       # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
       # 资源。直跑 npm run tauri build（package.json 的 tauri script 指向
       # @tauri-apps/cli 的 tauri 二进制，不需 cargo 子命令）。
       - name: Build installers
         run: npm run tauri build
+
+      # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。
+      # 软门禁（continue-on-error）：GUI 在 CI 上受窗口管理器 / WebKit 版本影响，
+      # 偶发失败不应伪装成产品缺陷；结果留档，由人判断是否回归。
+      - name: Smoke L2 (GUI launch)
+        continue-on-error: true
+        run: node scripts/smoke-launch.mjs --level=2
+
+      # 体积采集写入 job summary。README 不再维护会失真的手写数字。
+      - name: Report bundle size
+        run: node scripts/report-bundle-size.mjs --markdown
+
+      - name: Upload smoke and size logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: target/smoke/**
+

@@ -38,6 +38,14 @@ import { createHash } from 'node:crypto'
 import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import {
+  CRITICAL_LAYER,
+  auditPatchLayers,
+  layerOf,
+  listPatchFiles,
+  packageNameFromPatchFile
+} from './patch-layers.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const staging = join(projectRoot, 'harness-deps')
 const resources = join(projectRoot, 'src-tauri', 'resources')
@@ -51,6 +59,13 @@ const PNPM_VERSION = '10.34.5'
 // 任务 0.3：连续两次运行，第二次必须因「输入未变」而跳过（lockfile hash
 // 一致），保证构建可复现。`--force` 可跳过这一检查。
 const forceRebuild = process.argv.includes('--force')
+
+// 补丁失败策略：默认按 patches/LAYERS.md 的分级（functional 才中断构建）；
+// `--strict` 让所有层都 fail-fast，等价于分级引入前的行为。
+const strictPatches = process.argv.includes('--strict')
+
+// 补丁应用结果（由 applyTieredPatches 填充，buildManifest 消费）。
+let patchReport = []
 
 const isWindows = process.platform === 'win32'
 
@@ -175,7 +190,13 @@ function stagingInputsMatch() {
 
 // 任务 0.3：MANIFEST 记录组装时间、lockfile hash、锁定版本。运行时在
 // src-tauri 侧做 warning 级比对（阶段 7 的 build.rs 不做硬校验）。
+//
+// `patches` 记录**逐个补丁的真实结果**（applied / skipped / failed + 层名）。
+// 此前这里写的是 `patchesApplied: <patches/ 下的文件数>`——那是「存在多少个
+// 补丁文件」，不是「应用成功多少个」，名字与语义不符，会掩盖「补丁全部没打上」
+// 这类事故。现在两者分开记录，且不再使用误导性的 `patchesApplied` 字段。
 function buildManifest(lockfilePath) {
+  const patchFiles = readdirSafe(join(staging, 'patches')).length
   return {
     fingerprint,
     generatedAt: new Date().toISOString(),
@@ -186,7 +207,9 @@ function buildManifest(lockfilePath) {
       pnpm: PNPM_VERSION
     },
     overrides: Object.keys(overrides).sort(),
-    patchesApplied: readdirSafe(join(staging, 'patches')).length
+    patchFilesPresent: patchFiles,
+    patchesStrict: strictPatches,
+    patches: patchReport
   }
 }
 
@@ -287,6 +310,26 @@ function copyBuildFiles() {
   }
 }
 
+/**
+ * Read the per-patch outcome record out of an existing MANIFEST.json.
+ *
+ * The fast path below reuses an install tree that was *already* patched by an
+ * earlier full assembly, so it never calls `applyTieredPatches()`. Without
+ * this, `patchReport` would still be its empty default and rebuilding the
+ * MANIFEST would silently rewrite a truthful `patches: [...]` into `patches: []`
+ * — i.e. the fast path would erase the evidence of which patches landed, which
+ * is exactly the accident B1 exists to make visible.
+ * @returns {object[]} The prior record, or `[]` when absent/unreadable.
+ */
+function priorPatchReport() {
+  try {
+    const prior = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    return Array.isArray(prior.patches) ? prior.patches : []
+  } catch {
+    return []
+  }
+}
+
 if (!forceRebuild) {
   let manifestMatches = false
   if (resourcesComplete() && existsSync(manifestPath)) {
@@ -308,6 +351,15 @@ if (!forceRebuild) {
   const stagingLockfile = join(staging, 'package-lock.json')
   if (resourcesComplete() && existsSync(stagingLockfile) && stagingInputsMatch()) {
     copyBuildFiles()
+    // node_modules 是上次完整组装时打过补丁的，本路径不重新打补丁，
+    // 因此继承旧 MANIFEST 的逐补丁记录（而非默认空数组）。
+    const inherited = priorPatchReport()
+    if (inherited.length > 0) {
+      patchReport = inherited
+      log(`沿用既有补丁记录（${inherited.length} 条）；如需重新打补丁请加 --force`)
+    } else {
+      log('既有 MANIFEST 无补丁记录，本次重建的 patches 将为空数组')
+    }
     writeFileSync(manifestPath, `${JSON.stringify(buildManifest(stagingLockfile), null, 2)}\n`)
     log(`仅重建 MANIFEST.json 并同步 build/ 产物 → ${manifestPath}（--force 可强制完整重组）`)
     process.exit(0)
@@ -347,11 +399,150 @@ log('installing Harness dependency tree (this can take a while)')
 run('npm', ['install', '--no-audit', '--no-fund'], staging)
 
 // ---------------------------------------------------------------------------
-// 3. Reapply the tracked desktop patches.
+// 3. Reapply the tracked desktop patches (tiered failure policy).
 // ---------------------------------------------------------------------------
 log('applying desktop patches')
-run('npx', ['patch-package'], staging)
+applyTieredPatches()
 assertPickerSurfaceIsHostBacked()
+
+/**
+ * Apply every tracked patch individually and decide by layer whether a failure
+ * is fatal.
+ *
+ * `patch-package` is invoked once per patched package (`npx patch-package
+ * <pkg>`) rather than once for the whole tree: only the per-package form tells
+ * us *which* patch broke, and that is what the tiered policy needs to decide
+ * between "warn and ship without this enhancement" and "stop the build".
+ *
+ * Policies (see `patches/LAYERS.md`, single source of truth in
+ * `scripts/patch-layers.mjs`):
+ *   - `functional`  → fail the build;
+ *   - `brand` / `ui-behavior` → log a warning, record `failed`, continue;
+ *   - unregistered   → same as `ui-behavior`, but the report marks it
+ *     `unclassified` so it can never drift silently;
+ *   - `--strict`     → every layer fails the build.
+ *
+ * Two guards make the degradation path safe to trust:
+ *   1. **Zero-applied is always fatal.** If nothing applied while patches are
+ *      present, either the CLI form is wrong or the tree is untouched — shipping
+ *      an unpatched Harness would break desktop plugin loading outright.
+ *   2. Every outcome is recorded in `MANIFEST.json` and printed, so there is no
+ *      "patched but nobody noticed" state.
+ *
+ * @returns {void}
+ */
+function applyTieredPatches() {
+  const files = listPatchFiles()
+  if (files.length === 0) {
+    log('patches/ 为空，跳过补丁阶段')
+    return
+  }
+
+  for (const problem of auditPatchLayers()) {
+    // 分级表漂移不阻断组装（CI 的 `--self-test` 才是硬门禁），但必须可见。
+    log(`⚠️ 分级表问题：${problem}`)
+  }
+
+  const records = []
+  for (const file of files) {
+    const info = layerOf(file)
+    const pkg = packageNameFromPatchFile(file)
+    const fatal = strictPatches || info.layer === CRITICAL_LAYER
+
+    if (pkg === null) {
+      records.push({
+        file,
+        package: null,
+        layer: info.layer,
+        status: 'failed',
+        detail: 'cannot derive package name from patch file name'
+      })
+      if (fatal) throw new Error(`补丁 ${file} 的文件名无法推导包名，且其层为 ${info.layer}`)
+      continue
+    }
+
+    const result = runCaptured('npx', ['patch-package', pkg], staging)
+    if (result.ok) {
+      records.push({ file, package: pkg, layer: info.layer, status: 'applied', detail: null })
+      continue
+    }
+
+    const detail = tailLines(result.output, 12)
+    records.push({ file, package: pkg, layer: info.layer, status: 'failed', detail })
+    if (fatal) {
+      throw new Error(
+        `补丁应用失败（层 ${info.layer}${info.classified ? '' : '，未登记'}）：${file}\n` +
+          `包：${pkg}\n$(npx patch-package ${pkg} 输出末尾)\n${detail}`
+      )
+    }
+    log(`⚠️ 补丁未应用（层 ${info.layer}，按策略降级继续）：${file}`)
+    if (!info.classified) {
+      log(`   该补丁未在 scripts/patch-layers.mjs 中登记，请补充分类`)
+    }
+  }
+
+  const applied = records.filter((record) => record.status === 'applied').length
+  patchReport = records
+  printPatchReport(records)
+
+  if (applied === 0) {
+    throw new Error(
+      `${files.length} 个补丁全部未应用。这通常是 npx patch-package <pkg> 调用形式失效，` +
+        '或 node_modules 未安装；无论分级如何，交付未打补丁的 Harness 都是不可接受的。'
+    )
+  }
+}
+
+/** Print the per-patch outcome table (always, so degradation is never silent). */
+function printPatchReport(records) {
+  const width = Math.max(...records.map((record) => record.file.length))
+  for (const record of records) {
+    const flag = record.status === 'applied' ? '✔' : '✘'
+    log(`  ${flag} [${record.layer}] ${record.file.padEnd(width)}  ${record.status}`)
+  }
+  const failed = records.filter((record) => record.status !== 'applied')
+  log(
+    `补丁结果：${records.length - failed.length}/${records.length} 应用成功` +
+      (failed.length > 0 ? `，${failed.length} 未应用（已记入 MANIFEST.json）` : '')
+  )
+}
+
+/** Last `count` non-empty lines of captured output (for diagnostics). */
+function tailLines(output, count) {
+  const lines = String(output)
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+  return lines.slice(Math.max(0, lines.length - count)).join('\n')
+}
+
+/**
+ * Run a command and capture its output instead of inheriting stdio.
+ *
+ * `run()` cannot be used here: `execFileSync` with `stdio: 'inherit'` throws on
+ * a non-zero exit, and the tiered policy needs the failure *and* its output so
+ * a degraded patch can be reported rather than aborting the process.
+ *
+ * @param {string} command Executable name.
+ * @param {string[]} args Arguments.
+ * @param {string} cwd Working directory.
+ * @returns {{ ok: boolean, output: string }}
+ */
+function runCaptured(command, args, cwd) {
+  try {
+    const output = execFileSync(command, args, {
+      cwd,
+      shell: isWindows,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8'
+    })
+    return { ok: true, output: output ?? '' }
+  } catch (error) {
+    const stdout = error?.stdout ?? ''
+    const stderr = error?.stderr ?? ''
+    return { ok: false, output: `${stdout}${stderr}` || String(error?.message ?? error) }
+  }
+}
 
 /**
  * The Tauri webview has no preload/initialization script, so a renderer global
