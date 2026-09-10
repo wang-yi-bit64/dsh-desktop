@@ -6,7 +6,18 @@
 //! # `Phone` 子菜单的状态行（2026-09-10 接入）
 //!
 //! 菜单第一项是**禁用**的信息项，文案由 [`refresh_bridge_status`] 在桥状态
-//! 变化时刷新（当前有三处调用：启动建菜单、配对成功/失败、停止桥）。
+//! 变化时刷新。有四处调用：
+//!
+//! 1. 启动建菜单（同步，初值 `off`）；
+//! 2. 菜单发起配对成功 / 失败（`mobile-pair`）；
+//! 3. 菜单停止桥（`mobile-stop`）；
+//! 4. **手机侧配对成功**——经 `MobileBridge::on_connected_change` 回调
+//!    （在 `lib.rs` setup 注册）。这一条容易漏：`POST /pair` 发生在手机的
+//!    浏览器里，宿主没有本地事件可挂钩，所以只能靠桥回调通知。
+//!
+//! 上游对应物是 `onConnectedChange → broadcastMobileStatus`，但它广播进的
+//! 是 Harness 网页（preload 注入的侧栏浮动按钮），本仓无 preload 通道，
+//! 因此落点换成原生菜单。差别见 `mobile_bridge` 模块文档的「展示面」一节。
 //!
 //! 为什么不做成「重建整个菜单」或「把句柄存进托管状态」：
 //!
@@ -139,9 +150,18 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 state.supervisor.restart().await;
             }
             "harness-safe-mode" => {
-                let _ = crate::safe_mode::ensure_safe_mode_profile(&state.layout.dsh_home);
+                // 顺序不能反：profile 目录先落盘，再以该 profile 启动。
+                // `restart_in_safe_mode` 会传 `--profile desktop-safe-mode`
+                // 并把 `--patch` 换成 dsh-desktop-safe.patch.yml（C10）。
+                if let Err(error) =
+                    crate::safe_mode::ensure_safe_mode_profile(&state.layout.dsh_home)
+                {
+                    log::error!("cannot materialise the safe-mode profile: {error}");
+                    return;
+                }
                 crate::window::show_splash(&app);
-                state.supervisor.restart().await;
+                state.supervisor.restart_in_safe_mode().await;
+                log::info!("harness restarting in safe mode");
             }
             "harness-view-log" => {
                 if let Some(dir) = state.layout.log_path.parent() {

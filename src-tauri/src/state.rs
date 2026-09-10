@@ -141,9 +141,32 @@ impl HarnessSupervisor {
 
     /// 启动 Harness（若已有实例先停止）。
     pub async fn start(self: &Arc<Self>) {
+        self.start_with_profile(None).await;
+    }
+
+    /// 以**安全模式**启动：隔离 profile + 隔离 patch 层（契约 C10）。
+    ///
+    /// 与 [`HarnessSupervisor::start`] 的唯一差别是启动器多带了
+    /// `--profile desktop-safe-mode`，并因此改用 `dsh-desktop-safe.patch.yml`。
+    /// profile 目录本体由 `safe_mode::ensure_safe_mode_profile` 事先落盘。
+    pub async fn start_in_safe_mode(self: &Arc<Self>) {
+        self.start_with_profile(Some(dsh_host::safe_mode::SAFE_MODE_PROFILE))
+            .await;
+    }
+
+    /// 启动的单一实现源：`start` 与 `start_in_safe_mode` 只差一个 profile。
+    ///
+    /// # 参数
+    ///
+    /// * `profile` — `None` 用契约默认 profile（`web`）；`Some(name)` 走
+    ///   `--profile <name>` 并切换到对应的 patch 层。
+    async fn start_with_profile(self: &Arc<Self>, profile: Option<&str>) {
         self.stop().await;
 
-        let launcher = Launcher::new(self.layout.clone(), self.config);
+        let mut launcher = Launcher::new(self.layout.clone(), self.config);
+        if let Some(profile) = profile {
+            launcher = launcher.with_profile(profile);
+        }
         let supervisor = Arc::clone(self);
         let outcome = launcher
             .launch(None, move |event| supervisor.apply_launch_event(event))
@@ -223,6 +246,15 @@ impl HarnessSupervisor {
     /// 重启（菜单 / 错误页「重试」）。
     pub async fn restart(self: &Arc<Self>) {
         self.start().await;
+    }
+
+    /// 重启进安全模式（菜单「Restart in Safe Mode」/ 错误页「安全模式」）。
+    ///
+    /// 调用方须**先**确保 profile 文件已落盘（见
+    /// `crate::safe_mode::ensure_safe_mode_profile`）：本方法只负责「以该
+    /// profile 启动」，不负责生成它——两件事都放在这里会让「启动」隐式写盘。
+    pub async fn restart_in_safe_mode(self: &Arc<Self>) {
+        self.start_in_safe_mode().await;
     }
 
     /// 取最近 `count` 行日志。

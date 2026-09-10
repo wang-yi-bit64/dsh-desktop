@@ -113,6 +113,13 @@ pub struct StartArgs {
     /// 端口分配策略（与 `--port` 互斥使用；`--port` 优先）。
     #[arg(long, value_enum, default_value_t = PortModeArg::Reserved)]
     pub port_mode: PortModeArg,
+    /// 启动 profile（C10）。省略等价于 `web`：裸子命令 + 普通 patch。
+    ///
+    /// 传 `desktop-safe-mode` 时走 `--profile desktop-safe-mode` 并把 `--patch`
+    /// 换成 `dsh-desktop-safe.patch.yml`——这正是 GUI「Restart in Safe Mode」
+    /// 的启动路径，故可用于无头复现与 `--print-argv` 取证。
+    #[arg(long)]
+    pub profile: Option<String>,
     /// `--` 之后的全部内容原样透传给底层 dsh。
     #[arg(last = true, allow_hyphen_values = true)]
     pub dsh_args: Vec<String>,

@@ -44,6 +44,7 @@ const assets = [
   'plugin-safety-guard.mjs',
   'plugin-worker-host.mjs',
   'dsh-desktop.patch.yml',
+  'dsh-desktop-safe.patch.yml',
   'splash.html',
   'plugin-recovery.html',
   'safe-mode.html',

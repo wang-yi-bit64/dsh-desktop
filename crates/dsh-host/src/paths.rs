@@ -12,6 +12,7 @@
 //!   harness-node-entry.mjs                Node 包装入口
 //!   windows-child-process-hide.mjs        包装入口的兄弟文件
 //!   dsh-desktop.patch.yml                 --patch 层
+//!   dsh-desktop-safe.patch.yml            安全模式的 --patch 层（C10）
 //!   MANIFEST.json                         组装清单（任务 0.3）
 //!   harness/node_modules/...              完整 @deepseek-ai/dsh 依赖树
 //! ```
@@ -31,7 +32,7 @@ use std::path::{Path, PathBuf};
 use crate::contracts::{
     DSH_ENTRY_RELATIVE, DSH_HOME_DIR, ENV_DSH_RUNNER, HARNESS_LOG_FILE, HARNESS_MODULES_DIR,
     LAUNCH_ROOT_DIR, LOG_DIR, MANIFEST_FILE, NODE_ENTRY_FILE, NODE_RESOURCE_DIR, PATCH_FILE,
-    PID_FILE, SIDECAR_RESOURCE_DIR, WINDOWS_HIDE_FILE,
+    PID_FILE, SAFE_PATCH_FILE, SIDECAR_RESOURCE_DIR, WINDOWS_HIDE_FILE,
 };
 
 /// 运行目标模式：支持传统的 Node + 模块树模式，或紧凑的 Sidecar 独立单二进制模式。
@@ -72,6 +73,8 @@ pub struct Layout {
     pub dsh_entry: PathBuf,
     /// 桌面 patch 层（`--patch` 参数值）。
     pub patch: PathBuf,
+    /// 安全模式 patch 层（安全模式下替代 [`Layout::patch`]）。
+    pub safe_patch: PathBuf,
     /// 独立单二进制/Sidecar 可执行文件路径（若存在）。
     pub sidecar_executable: PathBuf,
     /// 资源组装清单（运行时 warning 级校验用）。
@@ -126,6 +129,7 @@ impl Layout {
             windows_hide_entry: resource_dir.join(WINDOWS_HIDE_FILE),
             dsh_entry: modules.join(DSH_ENTRY_RELATIVE),
             patch: resource_dir.join(PATCH_FILE),
+            safe_patch: resource_dir.join(SAFE_PATCH_FILE),
             sidecar_executable: resource_dir.join(SIDECAR_RESOURCE_DIR).join(sidecar_name),
             manifest: resource_dir.join(MANIFEST_FILE),
             dsh_home: app_data_dir.join(DSH_HOME_DIR),
@@ -198,6 +202,25 @@ impl Layout {
             .into_iter()
             .filter(|(_, path)| !path.exists())
             .collect()
+    }
+
+    /// 安全模式 patch 层是否就位（C10）。
+    ///
+    /// 刻意**不**并进 [`Layout::missing_resources`]：安全模式 patch 只在安全
+    /// 模式启动时才被使用，正常启动缺它不应阻断应用。判定权交给调用方
+    /// （`Launcher` 仅在 profile 为安全模式时检查）。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use dsh_host::paths::Layout;
+    ///
+    /// let layout = Layout::resolve(Path::new("/missing-res"), Path::new("/data"));
+    /// assert!(!layout.has_safe_patch());
+    /// ```
+    pub fn has_safe_patch(&self) -> bool {
+        self.safe_patch.exists()
     }
 
     /// 依赖树根目录（`resources/harness/node_modules`）。
@@ -366,6 +389,7 @@ mod tests {
             &layout.node_entry,
             &layout.dsh_entry,
             &layout.patch,
+            &layout.safe_patch,
         ] {
             assert!(
                 !path.to_string_lossy().starts_with(r"\\?\"),
@@ -399,6 +423,7 @@ mod tests {
             &layout.node_entry,
             &layout.dsh_entry,
             &layout.patch,
+            &layout.safe_patch,
             &layout.manifest,
         ] {
             assert!(
@@ -430,6 +455,14 @@ mod tests {
         assert!(layout.node_entry.ends_with("harness-node-entry.mjs"));
         assert!(layout.dsh_entry.ends_with("@deepseek-ai/dsh/lib/bin.js"));
         assert!(layout.patch.ends_with("dsh-desktop.patch.yml"));
+        // 两份 patch 必须落在同一资源目录、文件名互不相同：安全模式靠
+        // 「换文件」实现隔离，路径写重了就会静默退化成普通启动。
+        assert!(
+            layout.safe_patch.ends_with("dsh-desktop-safe.patch.yml"),
+            "{:?}",
+            layout.safe_patch
+        );
+        assert_ne!(layout.patch, layout.safe_patch);
     }
 
     #[test]

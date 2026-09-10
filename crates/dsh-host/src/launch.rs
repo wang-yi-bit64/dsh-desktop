@@ -231,6 +231,8 @@ pub struct Launcher {
     no_open: bool,
     /// 用户透传段（`--` 之后的原始参数），追加在契约参数之后。
     extra: Vec<String>,
+    /// 启动使用的 profile；默认契约默认值（`web`）。
+    profile: String,
 }
 
 impl Launcher {
@@ -242,6 +244,7 @@ impl Launcher {
             host: None,
             no_open: true,
             extra: Vec::new(),
+            profile: crate::contracts::HARNESS_CLI.to_string(),
         }
     }
 
@@ -255,6 +258,74 @@ impl Launcher {
     pub fn with_no_open(mut self, no_open: bool) -> Self {
         self.no_open = no_open;
         self
+    }
+
+    /// 指定启动 profile（镜像上游 `runtime.start(dir, profile)`）。
+    ///
+    /// 非默认 profile 会同时切换 `--patch` 层，见
+    /// [`HarnessArgs::profile_patch`]。安全模式请直接用
+    /// [`Launcher::with_safe_mode`]，避免把 profile 名拼错成「看起来像安全
+    /// 模式、其实不是」的字符串。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use dsh_host::launch::{Launcher, LauncherConfig};
+    /// use dsh_host::paths::Layout;
+    ///
+    /// let layout = Layout::resolve(Path::new("/res"), Path::new("/data"));
+    /// let launcher = Launcher::new(layout, LauncherConfig::default())
+    ///     .with_profile("work");
+    /// assert_eq!(launcher.build_args(4173).profile, "work");
+    /// ```
+    pub fn with_profile(mut self, profile: impl Into<String>) -> Self {
+        self.profile = profile.into();
+        self
+    }
+
+    /// 以**安全模式**启动：隔离 profile + 隔离 patch 层。
+    ///
+    /// # 示例
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use dsh_host::launch::{Launcher, LauncherConfig};
+    /// use dsh_host::paths::Layout;
+    /// use dsh_host::safe_mode::SAFE_MODE_PROFILE;
+    ///
+    /// let layout = Layout::resolve(Path::new("/res"), Path::new("/data"));
+    /// let launcher = Launcher::new(layout, LauncherConfig::default()).with_safe_mode();
+    /// let args = launcher.build_args(4173);
+    /// assert_eq!(args.profile, SAFE_MODE_PROFILE);
+    /// assert!(args.is_safe_mode());
+    /// ```
+    pub fn with_safe_mode(self) -> Self {
+        self.with_profile(crate::safe_mode::SAFE_MODE_PROFILE)
+    }
+
+    /// 当前 profile 是否为安全模式。
+    pub fn is_safe_mode(&self) -> bool {
+        self.profile != crate::contracts::HARNESS_CLI
+    }
+
+    /// 安全模式下追加 C10 声明的隔离环境变量。
+    ///
+    /// **这不是隔离的实现手段**——真正的隔离来自 `desktop-safe-mode` profile
+    /// 与 `dsh-desktop-safe.patch.yml`（上游同此）。这三个变量是防御性的：
+    /// 万一 profile 传递环节将来出了偏差，Harness 侧（若支持）仍能据此收敛
+    /// 插件装载。契约 C10 把「注入 `DSH_SAFE_MODE` / `DSH_DISABLE_PLUGINS`」
+    /// 写成了承诺，这里把承诺兑现，而不是让文档单方面宣称。
+    fn apply_profile_env(&self, mut environment: HarnessEnv) -> HarnessEnv {
+        if !self.is_safe_mode() {
+            return environment;
+        }
+        for (key, value) in crate::safe_mode::SafeModeManager::generate_safe_mode_env(
+            &crate::safe_mode::SafeModeOptions::default(),
+        ) {
+            environment.set(key, value);
+        }
+        environment
     }
 
     /// 附加用户透传参数（builder 风格）。
@@ -308,6 +379,7 @@ impl Launcher {
                 .clone()
                 .unwrap_or_else(|| crate::contracts::HARNESS_HOST.to_string()),
             no_open: self.no_open,
+            profile: self.profile.clone(),
             extra: self.extra.clone(),
         }
     }
@@ -403,11 +475,26 @@ impl Launcher {
             Some(environment) => environment.clone(),
             None => crate::env::harness_env(&self.layout, &capture_shell_environment()?, None),
         };
+        let environment = self.apply_profile_env(environment);
 
         self.layout.ensure_dirs()?;
         if let Some((name, path)) = self.layout.missing_resources().into_iter().next() {
             return Ok(Execution::Failed {
                 error: HostError::missing(name, path),
+                logs: LogRing::new(),
+            });
+        }
+
+        // C10：安全模式必须换用隔离 patch。上游在这里是**硬失败**
+        // （`DSH Desktop patch was not found: …`），我们保持一致。
+        //
+        // 为什么不能降级成 warn 后继续：安全模式的唯一机制就是「换 profile +
+        // 换 patch」，若安全 patch 缺失仍照常启动，用户会得到一个**看起来
+        // 进了安全模式、实际照旧加载全部产品插件**的进程——比直接报错更难
+        // 排查，也让错误页的按钮变成谎话。
+        if self.is_safe_mode() && !self.layout.has_safe_patch() {
+            return Ok(Execution::Failed {
+                error: HostError::missing("safe_patch", &self.layout.safe_patch),
                 logs: LogRing::new(),
             });
         }
@@ -973,6 +1060,125 @@ mod tests {
 
         let outcome = launcher.launch(None, |_| {}).await.unwrap();
         assert!(!outcome.is_ready());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 在临时目录里铺一份「资源齐备」的假资源树（不派生任何真实进程）。
+    ///
+    /// 只用于让 `missing_resources()` 通过，从而把断言推进到 profile/patch
+    /// 这一层。返回的 `node_executable` 是假文件，因此**不能**真启动。
+    fn fake_complete_layout(root: &std::path::Path) -> Layout {
+        let layout = Layout::resolve(root.join("res"), root.join("data"));
+        std::fs::create_dir_all(layout.node_executable.parent().unwrap()).unwrap();
+        std::fs::write(&layout.node_executable, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&layout.node_entry, "// wrapper\n").unwrap();
+        std::fs::create_dir_all(layout.dsh_entry.parent().unwrap()).unwrap();
+        std::fs::write(&layout.dsh_entry, "// bin\n").unwrap();
+        std::fs::write(&layout.patch, "[]\n").unwrap();
+        layout
+    }
+
+    /// 启动器把 profile 带进 argv（安全模式的核心机制）。
+    #[test]
+    fn safe_mode_launcher_carries_profile_and_patch_into_args() {
+        let root = std::env::temp_dir().join(format!("dsh-safe-launcher-{}", std::process::id()));
+        let layout = fake_complete_layout(&root);
+        let launcher = Launcher::new(layout.clone(), LauncherConfig::default()).with_safe_mode();
+
+        assert!(launcher.is_safe_mode());
+        let args = launcher.build_args(4173);
+        assert_eq!(args.profile, crate::safe_mode::SAFE_MODE_PROFILE);
+        assert_eq!(args.profile_patch(), layout.safe_patch);
+
+        let built = args.dsh_arguments();
+        assert_eq!(
+            &built[..2],
+            &[
+                "--profile".to_string(),
+                crate::safe_mode::SAFE_MODE_PROFILE.to_string()
+            ]
+        );
+        assert_eq!(built[3], layout.safe_patch.display().to_string());
+
+        // 默认启动器不受影响。
+        let normal = Launcher::new(layout.clone(), LauncherConfig::default());
+        assert!(!normal.is_safe_mode());
+        assert_eq!(
+            normal.build_args(4173).profile_patch(),
+            layout.patch,
+            "默认 profile 必须继续用普通 patch"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 回归护栏：安全 patch 缺失时**必须快速失败**，不得静默回退到普通 patch。
+    ///
+    /// 静默回退会让「点了安全模式」的用户得到一个照旧加载全部产品插件的
+    /// 进程——按钮等于说谎。上游在这里也是硬失败。
+    #[tokio::test]
+    async fn safe_mode_fails_fast_when_safe_patch_is_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "dsh-safe-missing-{}-{}",
+            std::process::id(),
+            now_seconds()
+        ));
+        let layout = fake_complete_layout(&root);
+        assert!(!layout.has_safe_patch(), "前置：安全 patch 故意不存在");
+
+        let launcher = Launcher::new(layout, LauncherConfig::default()).with_safe_mode();
+        let mut events = Vec::new();
+        let outcome = launcher
+            .launch(None, |event| events.push(event))
+            .await
+            .unwrap();
+
+        assert!(!outcome.is_ready(), "安全 patch 缺失时不得就绪");
+        let failed = events.iter().any(|event| {
+            matches!(
+                event,
+                LaunchEvent::Failed { cause }
+                    if matches!(
+                        cause,
+                        FailureCause::MissingResource { name, .. } if name.as_str() == "safe_patch"
+                    )
+            )
+        });
+        assert!(failed, "必须以 safe_patch 缺失归因失败：{events:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 安全模式的环境注入：`DSH_SAFE_MODE` / `DSH_DISABLE_PLUGINS` / `DSH_PROFILE`
+    /// 三个 C10 承诺项必须真的落到子进程环境里；默认 profile 下不得出现。
+    #[test]
+    fn safe_mode_injects_isolation_env_only_when_requested() {
+        let root = std::env::temp_dir().join(format!("dsh-safe-env-{}", std::process::id()));
+        let layout = fake_complete_layout(&root);
+        let shell = HarnessEnv::default();
+
+        let safe = Launcher::new(layout.clone(), LauncherConfig::default())
+            .with_safe_mode()
+            .apply_profile_env(shell.clone());
+        assert_eq!(
+            safe.get(crate::contracts::ENV_DSH_SAFE_MODE)
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            safe.get(crate::contracts::ENV_SAFE_MODE_DISABLE_PLUGINS)
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            safe.get("DSH_PROFILE").map(String::as_str),
+            Some(crate::safe_mode::SAFE_MODE_PROFILE)
+        );
+
+        let normal = Launcher::new(layout, LauncherConfig::default()).apply_profile_env(shell);
+        assert!(normal.get(crate::contracts::ENV_DSH_SAFE_MODE).is_none());
+        assert!(normal.get("DSH_PROFILE").is_none());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }

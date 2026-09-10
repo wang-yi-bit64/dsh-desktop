@@ -226,6 +226,16 @@ pub const WINDOWS_HIDE_FILE: &str = "windows-child-process-hide.mjs";
 /// C9 — 桌面 patch 层文件名。
 pub const PATCH_FILE: &str = "dsh-desktop.patch.yml";
 
+/// C10 — 安全模式专用 patch 层文件名。
+///
+/// 与 [`PATCH_FILE`] **必须分开**：安全模式要隔离的正是普通 patch 会挂载的
+/// 产品插件（PPT / 市场安装 / 预设迁移），沿用普通 patch 会让「安全模式」
+/// 名义上生效、实际照旧加载全部产品插件。
+///
+/// 上游对应物是 `dsh-desktop-safe.patch.yml`（`dshSafePatchPath`），
+/// 选择逻辑见 `harness-runtime.ts::start(launchDirectory, profile)`。
+pub const SAFE_PATCH_FILE: &str = "dsh-desktop-safe.patch.yml";
+
 /// 资源组装清单文件名。
 pub const MANIFEST_FILE: &str = "MANIFEST.json";
 

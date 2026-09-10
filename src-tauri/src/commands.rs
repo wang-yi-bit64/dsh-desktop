@@ -158,9 +158,14 @@ pub async fn safe_mode_action(
     let dsh_home = state.layout.dsh_home.clone();
     match action.as_str() {
         "restart" => {
+            // 错误页的「安全模式」按钮：profile 落盘 → 以该 profile 启动。
+            //
+            // 此前这里写了 profile 却调 `restart()`（永远 `web` profile +
+            // 普通 patch），于是按钮的实际效果是「照常重启」——安全模式没有
+            // 生效，而用户以为进去了。
             crate::safe_mode::ensure_safe_mode_profile(&dsh_home).map_err(|e| e.to_string())?;
             window::show_splash(&app);
-            state.supervisor.restart().await;
+            state.supervisor.restart_in_safe_mode().await;
             Ok(true)
         }
         "quit" => {

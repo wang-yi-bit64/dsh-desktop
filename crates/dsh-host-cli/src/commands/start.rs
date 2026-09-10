@@ -78,6 +78,9 @@ pub async fn run(args: StartArgs, log_level: LogLevelArg, json: bool) -> ExitCod
     }
 
     let mut launcher = Launcher::new(layout.clone(), config);
+    if let Some(profile) = args.profile.clone() {
+        launcher = launcher.with_profile(profile);
+    }
     if let Some(host) = args.host.clone() {
         launcher = launcher.with_host(host);
     }
@@ -140,6 +143,12 @@ fn build_preview_args(
             .clone()
             .unwrap_or_else(|| dsh_host::contracts::HARNESS_HOST.to_string()),
         no_open: !args.open,
+        // `--print-argv` 必须看到与真实启动**同一份** profile/patch 组合，
+        // 否则取证本身就会失真（安全模式的 patch 选择正是靠 profile 决定）。
+        profile: args
+            .profile
+            .clone()
+            .unwrap_or_else(|| dsh_host::contracts::HARNESS_CLI.to_string()),
         extra: args.dsh_args.clone(),
     }
 }

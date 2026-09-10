@@ -16,6 +16,7 @@
  *        resources/harness-node-entry.mjs          wrapper entry
  *        resources/windows-child-process-hide.mjs  sibling of the wrapper
  *        resources/dsh-desktop.patch.yml           --patch layer
+ *        resources/dsh-desktop-safe.patch.yml      --patch layer (safe mode, C10)
  *        resources/<pages & brand assets>
  *
  * The node_modules tree keeps its npm layout so `bin.js` resolves its
@@ -292,6 +293,7 @@ const REQUIRED_FILES = [
   'plugin-safety-guard.mjs',
   'plugin-worker-host.mjs',
   'dsh-desktop.patch.yml',
+  'dsh-desktop-safe.patch.yml',
   'MANIFEST.json',
   'splash.html',
   'plugin-recovery.html',
@@ -327,7 +329,10 @@ function copyBuildFiles() {
     'windows-child-process-hide.mjs',
     'plugin-safety-guard.mjs',
     'plugin-worker-host.mjs',
-    'dsh-desktop.patch.yml'
+    'dsh-desktop.patch.yml',
+    // 安全模式的 --patch 层。缺失会让「Restart in Safe Mode」在启动时
+    // 硬失败（C10：安全模式不做静默降级）。
+    'dsh-desktop-safe.patch.yml'
   ]) {
     cpSync(join(buildDir, file), join(resources, file))
   }

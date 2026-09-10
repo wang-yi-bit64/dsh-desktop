@@ -1,0 +1,24 @@
+# 恢复组合（安全模式）：只保留桌面品牌与打包运行所必需的运行时适配层。
+#
+# 与 `dsh-desktop.patch.yml` **刻意分开**，不是它的精简版：安全模式要隔离的
+# 正是普通 patch 会挂载的产品插件（PPT / 市场安装 / 预设迁移），它们中的任何
+# 一个在故障场景下都可能成为「起不来」的原因。
+#
+# 上游原注释（`dsh-desktop-safe.patch.yml`）说得更直白：
+#   Do not import the normal Desktop patch here: PPT, market installation and
+#   preset transfer must not block safe-mode boot.
+#
+# `ui-brand-official` 保持禁用：它是官方品牌层，会在安全模式的最小组合里
+# 抢走品牌位，让恢复页与正常产品界面看起来一样——用户无法分辨自己是否真的
+# 进入了安全模式。对应的桌面品牌由下面 insert 的 client-ui 提供。
+- id: ui-brand-official
+  disabled: true
+
+# 只插入两个运行时适配包：
+# * `dsh-desktop-client-ui`  — 打包 Electron/Tauri 外壳所需的客户端 UI 适配；
+# * `dsh-desktop-hmr-fallback` — 无 HMR 时的回退，保证 profile 能起来。
+- insert:
+    - id: dsh-desktop-client-ui
+      name: dsh-desktop-client-ui
+    - id: dsh-desktop-hmr-fallback
+      name: dsh-desktop-hmr-fallback

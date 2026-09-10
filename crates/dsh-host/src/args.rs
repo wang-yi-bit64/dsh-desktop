@@ -12,6 +12,13 @@
 //! [用户透传]  <extra...>
 //! ```
 //!
+//! 安全模式下第一段换成 `--profile desktop-safe-mode`，且 `<P>` 换成
+//! [`Layout::safe_patch`]（见 [`HarnessArgs::profile_patch`]）：
+//!
+//! ```text
+//! [契约固定]  --profile desktop-safe-mode --patch <dsh-desktop-safe.patch.yml> ...
+//! ```
+//!
 //! 透传段**放在最后**：dsh 用 yargs 解析参数，语义是「后者胜」，因此
 //! `dsh-host-cli start -- --port 5000` 与「手工跑 dsh 并追加 `--port 5000`」
 //! 的结果完全一致。反过来若把透传插在契约参数之前，宿主就会静默覆盖用户意图。
@@ -50,6 +57,12 @@ pub struct HarnessArgs {
     pub host: String,
     /// 是否禁止 dsh 把 URL 交给系统浏览器，默认 `true`（C1）。
     pub no_open: bool,
+    /// 启动使用的 profile 名；[`HARNESS_CLI`]（`web`）表示默认 profile。
+    ///
+    /// 非默认值时 argv 走 `--profile <name>` 而不是裸子命令，且 `--patch`
+    /// 换成 [`Layout::safe_patch`]——这正是「安全模式真的生效」的全部机制
+    /// （镜像上游 `buildHarnessArguments` 与 `start(dir, profile)`）。
+    pub profile: String,
     /// 用户通过 `--` 透传的原始参数，原样追加在契约参数之后。
     pub extra: Vec<String>,
 }
@@ -78,7 +91,38 @@ impl HarnessArgs {
             port,
             host: HARNESS_HOST.to_string(),
             no_open: true,
+            profile: HARNESS_CLI.to_string(),
             extra: Vec::new(),
+        }
+    }
+
+    /// 是否安全模式（profile 不是契约默认的 `web`）。
+    pub fn is_safe_mode(&self) -> bool {
+        self.profile != HARNESS_CLI
+    }
+
+    /// 本次启动实际生效的 `--patch` 层。
+    ///
+    /// 按 profile 选择，镜像上游 `harness-runtime.ts::start`：
+    /// `profile === SAFE_MODE_PROFILE ? dshSafePatchPath : dshPatchPath`。
+    /// 安全模式**必须**换文件——沿用普通 patch 会把市场安装 / 预设迁移等
+    /// 产品插件原样挂回来，安全模式就只剩名字。
+    pub fn profile_patch(&self) -> PathBuf {
+        if self.is_safe_mode() {
+            self.layout.safe_patch.clone()
+        } else {
+            self.layout.patch.clone()
+        }
+    }
+
+    /// profile 选择段：默认 profile 是裸子命令，其余走 `--profile`。
+    ///
+    /// 镜像上游 `(profile === 'web' ? ['web'] : ['--profile', profile])`。
+    fn profile_arguments(&self) -> Vec<String> {
+        if self.is_safe_mode() {
+            vec!["--profile".to_string(), self.profile.clone()]
+        } else {
+            vec![HARNESS_CLI.to_string()]
         }
     }
 
@@ -101,9 +145,9 @@ impl HarnessArgs {
     /// assert_eq!(&built[built.len() - 2..], &["--profile", "work"]);
     /// ```
     pub fn dsh_arguments(&self) -> Vec<String> {
-        let mut args = vec![HARNESS_CLI.to_string()];
+        let mut args = self.profile_arguments();
         args.push("--patch".to_string());
-        args.push(self.layout.patch.display().to_string());
+        args.push(self.profile_patch().display().to_string());
         // 桌面窗口是唯一展示面：不交给系统浏览器打开。
         if self.no_open {
             args.push(HARNESS_NO_OPEN.to_string());
@@ -147,8 +191,15 @@ impl HarnessArgs {
     pub fn build_arguments_for_target(&self, target: &LaunchTarget) -> (PathBuf, Vec<String>) {
         match target {
             LaunchTarget::Sidecar { executable, patch } => {
-                let mut args = vec![HARNESS_CLI.to_string()];
-                if let Some(p) = patch {
+                let mut args = self.profile_arguments();
+                // 安全模式覆盖目标自带的 patch：`resolve_launch_target` 只认识
+                // 普通 patch，直接沿用它会让安全模式静默失效。
+                let effective = if self.is_safe_mode() {
+                    Some(self.layout.safe_patch.clone())
+                } else {
+                    patch.clone()
+                };
+                if let Some(p) = effective {
                     args.push("--patch".to_string());
                     args.push(p.display().to_string());
                 }
@@ -319,5 +370,63 @@ mod tests {
         assert_eq!(args[1], "--patch");
         assert_eq!(args[3], "--no-open");
         assert!(args.contains(&"5000".to_string()));
+    }
+
+    /// C10 — 安全模式的 argv 形状：profile 段换成 `--profile <name>`，
+    /// patch 换成安全模式 patch。
+    ///
+    /// 这条断言是「安全模式是否真的生效」的**唯一静态证据**：profile 目录被
+    /// 写出来并不代表它被启动时选中（此前正是如此——`ensure_safe_mode_profile`
+    /// 写了文件，而 argv 永远是 `web`）。
+    #[test]
+    fn safe_mode_selects_profile_and_safe_patch() {
+        let layout = layout();
+        let mut args = HarnessArgs::default_for(layout.clone(), 4173);
+        args.profile = crate::safe_mode::SAFE_MODE_PROFILE.to_string();
+
+        assert!(args.is_safe_mode());
+        assert_eq!(args.profile_patch(), layout.safe_patch);
+
+        let built = args.dsh_arguments();
+        assert_eq!(
+            &built[..2],
+            &["--profile", crate::safe_mode::SAFE_MODE_PROFILE]
+        );
+        assert_eq!(built[2], "--patch");
+        assert_eq!(built[3], layout.safe_patch.display().to_string());
+        // 普通 patch 绝不能同时出现：两个 --patch 的语义由 dsh 定义，
+        // 我们只保证不发出这种自相矛盾的 argv。
+        assert!(!built.contains(&layout.patch.display().to_string()));
+        assert!(!built.contains(&HARNESS_CLI.to_string()));
+    }
+
+    /// 默认 profile 必须仍是裸 `web` 子命令且用普通 patch——这是既有行为的
+    /// 逐字节护栏，配合 [`matches_legacy_argv`] 一起防回归。
+    #[test]
+    fn default_profile_keeps_web_and_normal_patch() {
+        let layout = layout();
+        let args = HarnessArgs::default_for(layout.clone(), 4173);
+        assert!(!args.is_safe_mode());
+        assert_eq!(args.profile_patch(), layout.patch);
+        let built = args.dsh_arguments();
+        assert_eq!(built[0], HARNESS_CLI);
+        assert_eq!(built[2], layout.patch.display().to_string());
+    }
+
+    /// sidecar 目标在安全模式下必须改用安全 patch，而不是沿用目标里的普通 patch。
+    #[test]
+    fn safe_mode_overrides_sidecar_patch() {
+        let layout = layout();
+        let target = LaunchTarget::Sidecar {
+            executable: layout.sidecar_executable.clone(),
+            patch: Some(layout.patch.clone()),
+        };
+        let mut args = HarnessArgs::default_for(layout.clone(), 5000);
+        args.profile = crate::safe_mode::SAFE_MODE_PROFILE.to_string();
+
+        let (_, built) = args.build_arguments_for_target(&target);
+        assert_eq!(built[0], "--profile");
+        assert_eq!(built[2], "--patch");
+        assert_eq!(built[3], layout.safe_patch.display().to_string());
     }
 }

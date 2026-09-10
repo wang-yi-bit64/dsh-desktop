@@ -114,6 +114,11 @@ function buildMockResourceDir() {
   cpSync(process.execPath, join(dir, 'node', nodeBinName))
   cpSync(join(projectRoot, 'scripts', 'mock-harness.mjs'), join(dir, 'mock-harness.mjs'))
   cpSync(join(projectRoot, 'build', 'dsh-desktop.patch.yml'), join(dir, 'dsh-desktop.patch.yml'))
+  // 安全模式的 --patch 层：故障注入场景同样要能走安全模式启动路径。
+  cpSync(
+    join(projectRoot, 'build', 'dsh-desktop-safe.patch.yml'),
+    join(dir, 'dsh-desktop-safe.patch.yml')
+  )
   cpSync(join(projectRoot, 'build', 'harness-node-entry.mjs'), join(dir, 'harness-node-entry.mjs'))
   return dir
 }

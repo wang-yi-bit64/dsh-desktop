@@ -46,6 +46,7 @@
       "resources/plugin-safety-guard.mjs",
       "resources/plugin-worker-host.mjs",
       "resources/dsh-desktop.patch.yml",
+      "resources/dsh-desktop-safe.patch.yml",
       "resources/splash.html",
       "resources/dsh-loader.gif",
       "resources/dsh-loader-dark.gif",

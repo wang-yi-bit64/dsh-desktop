@@ -323,7 +323,8 @@ function buildMockResourceDir() {
     'plugin-safety-guard.mjs',
     'plugin-worker-host.mjs',
     'windows-child-process-hide.mjs',
-    'dsh-desktop.patch.yml'
+    'dsh-desktop.patch.yml',
+    'dsh-desktop-safe.patch.yml'
   ]) {
     const source = join(projectRoot, 'build', file)
     if (existsSync(source)) cpSync(source, join(dir, file))
