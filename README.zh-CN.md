@@ -22,7 +22,7 @@
 - **安全模式与故障恢复** ✅ —— 自动检测启动失败原因，生成独立隔离 profile 保障基础功能可用。
 - **多 Profile 与会话管理** ✅ —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
 - **壳层结构化日志** ✅ —— `tauri-plugin-log` 落盘到 `app_data_dir/desktop.log`（5 MB × 2 轮转，含本地时区），与 Harness 侧 `harness.log` / `app.log` 分离，便于归因「是壳的问题还是 Harness 的问题」。
-- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从托盘菜单「手机配对/局域网」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。
+- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从应用菜单「Phone Pairing (LAN)…」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。菜单的 `Phone` 子菜单会实时显示桥状态（off / listening / paired）——注意本应用**尚无系统托盘**。
 - **桌面深度定制** ✅ —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。补丁按 `functional` / `ui-behavior` / `brand` 三层分级（见 [`patches/LAYERS.md`](patches/LAYERS.md)），失败时默认降级并在 `MANIFEST.json` 的 `patches[]` 逐条留证；`--strict` 可恢复全量 fail-fast。
 - **单实例锁定** ✅ —— 第二次启动时聚焦已有窗口，避免重复拉起多实例。
 - **微秒级性能基准测试** ✅ —— `dsh-model-gateway` 内置 benchmark 套件，保障 Schema 清洗与多方言适配转换在 2~20 微秒级内完成（基准可运行，但见下方「未接线」说明）。
@@ -68,7 +68,7 @@ crates/
 src-tauri/
   frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、安全模式提示）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
-  src/                  # Tauri 桌面应用层（窗口管理、托盘、IPC 封套接线、安全模式切换、LAN 手机桥、壳层日志、自动更新）
+  src/                  # Tauri 桌面应用层（窗口管理、应用菜单、IPC 命令、安全模式切换、LAN 手机桥、壳层日志、自动更新）
     logging.rs              # 壳层结构化日志（desktop.log，5MB × 2 轮转）
     mobile_bridge.rs        # 局域网手机桥（配对页 + dsh-auth-* cookie 握手 + RPC 转发）
 build/                  # 运行时组装与辅助注入脚本
@@ -107,7 +107,7 @@ docs/                   # 架构设计、契约定义与技术方案
 | P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
 | P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | ⚠️ **未接线**：实现与单测俱在，但无运行时调用方；`call_tool` 返回 `ISOLATION_NOT_WIRED` 而非伪造成功 |
 | P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | ⚠️ **未接线**：已从 `src-tauri` 依赖移除，无运行时消费者 |
-| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`) | 🟡 封套✅ 已接线；**诊断包 ❌ 未实现** |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`) | 🟡 封套 ⚠️ **未接线**（契约已定义，13 个命令仍返回 `Result<T, String>`）；**诊断包 ❌ 未实现** |
 
 ### 后续计划（尚未开工）
 

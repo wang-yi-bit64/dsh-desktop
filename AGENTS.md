@@ -21,6 +21,7 @@
   - 核心职责：统一 `CanonicalTool` 抽象、复杂 Schema 降级与净化（`anyOf`/`oneOf` 规范化、深度超限保护）、多模型提供方（OpenAI、DeepSeek、Gemini、Claude）方言转换与严格模式适配、微秒级性能基准测试（`examples/benchmark.rs`）。
   - 定位、接线前置与**退出条件**见 [`docs/model_gateway_design.md`](docs/model_gateway_design.md) 顶部状态表。
 - **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志）。⚠️ 一键脱敏导出诊断包（`diagnostics.zip`）**未实现**，见 §7。
+  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 13 个）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`，理由与例外清单见 `commands.rs` 模块文档。
   - **`src-tauri/frontend/`**：轻量静态 Loading / Splash 启动页、Error 结构化错误页（支持插件故障归因提示）与安全模式恢复页。
 - **`build/`**：运行时启动脚本与安全防护注入。
   - `harness-node-entry.mjs`：支持隔离参数（`--dsh-isolated-plugins`）与环境引导；同时是 cold-start 投影（`projectGenerations` / `sweepRegistry`）与 `[dsh-plugin-fault]` 归因的接线点。
@@ -30,7 +31,10 @@
   - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
-  - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证。
+  - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证（6 类故障场景 / 10 项断言）；`npm run fault-inject`，CI 中 Windows 为硬门禁。
+  - `verify-ipc-surface.mjs`：壳接口面一致性静态检查（命令定义 ↔ 注册 ↔ 前端 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记）。这类断线 `dead_code` 看不见，见 §7.3。
+  - `verify-target.mjs`：打包目标守卫（构建主机 vs 目标平台）。目标来源优先级：argv → `TAURI_ENV_TARGET_TRIPLE` → `rustc -vV` host；`--self-test` 跑纯逻辑自检。
+  - `generate-app-icons.mjs`：**macOS 手工工具**（依赖 `sips` / `iconutil`），刻意无 npm 入口、不进 CI；定位与产物去向见其文件头注释。
   - `smoke-launch.mjs`：CI 分层烟雾（L1 无头 / L2 GUI），见 §2。
   - `report-bundle-size.mjs`：采集壳/安装包/资源树体积，写入 CI job summary（§7 期望管理）。
 - **`patches/`**：`patch-package` 补丁 + [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。
@@ -78,15 +82,38 @@ cargo check --workspace
 # 6. 补丁分级自检（patches/ 与 patch-layers.mjs 登记表一致性）
 npm run verify:patches
 
-# 7. 分层烟雾（L1 无头硬门禁；L2 需已构建产物，缺失则 SKIP）
+# 7. 壳接口面一致性（命令定义 ↔ 注册 ↔ 前端 invoke/listen ↔ 页面可达性）
+#    这是唯一能捕获「写了但没人调用」类断线的门禁——见 §7.3
+npm run verify:ipc-surface
+
+# 8. 打包目标守卫（构建主机 vs 目标平台；自动推断，亦可 `-- self-test` 自检）
+npm run verify:target
+npm run verify:target -- --self-test
+
+# 9. 故障注入（孤儿进程清理 + 退出码归因，10 项断言）
+#    前置：cargo build -p dsh-host-cli
+npm run fault-inject
+
+# 10. 分层烟雾（L1 无头硬门禁；L2 需已构建产物，缺失则 SKIP）
 npm run smoke:headless
 npm run smoke
 
-# 8. 产物体积三口径（壳二进制 / 安装包 / 资源树）
+# 11. 产物体积三口径（壳二进制 / 安装包 / 资源树）
 npm run size:report
 ```
 
 集成测试（`crates/dsh-host/tests/`）会真实派生 Node 进程运行 `scripts/mock-harness.mjs`，需要 `PATH` 上有 Node.js（可用 `DSH_TEST_NODE` 指定）；找不到时测试自行跳过而非失败。故障模式经 `mock-harness.mjs` 的 argv / 环境变量注入，不在 Rust 侧打桩。
+
+#### ⚠️ 已知环境限制：GNU 工具链下 Clippy 在 `dsh-model-gateway` 上 ICE
+
+同一台 `x86_64-pc-windows-gnu` 宿主机上，`cargo clippy --workspace` 会在编译
+`dsh-model-gateway` 时**编译器内部错误**（`the compiler unexpectedly panicked`，
+rustc 1.97.1 / clippy 0.1.97），停在 `codegen_and_build_linker`。
+
+- **性质**：clippy 自身缺陷（环境相关），与本仓库源码无关：同一命令在 `cargo check --workspace` 下完全通过。
+- **怎么办**：
+  1. 本地用 `cargo check --workspace --all-targets` 替代（能报出全部真实 warning，包括 CI `-D warnings` 会拦下的 `unused_imports`）；
+  2. clippy 的权威执行者是 CI（MSVC 工具链，三个平台都跑）。
 
 #### ⚠️ 已知环境限制：GNU 工具链下 `dsh-desktop` 的测试二进制无法加载
 
@@ -179,7 +206,7 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 - **P1（生命周期监督与自愈）✅ 已接线**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`，输出归因结论而非压缩包）与 Safe Mode 隔离 Profile。
 - **P2（插件分级隔离与看门狗）⚠️ 未接线**：Tier 0/1/2 分级沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 通信、连续错误断路器（`plugin_worker.rs`）均已实现且有单测，但**没有任何运行时调用方**——`PluginWorkerClient` 无消费者，`call_tool` 现返回显式错误而非伪造成功。当前生效的插件防护只有 `plugin-safety-guard.mjs` 的进程内 `formatFaultDetails` 归因。接线前置见 `docs/plugin_isolation_architecture.md`。
 - **P3（多模型工具网关与基准测试）⚠️ 未接线**：复杂 Schema 深度嵌套/`anyOf`/`oneOf` 降级清洗、多厂商方言适配（OpenAI/Gemini/Claude）、微秒级基准测试套件（`dsh-model-gateway`）均已实现并测试通过，但无运行时消费者，已从 `src-tauri` 依赖中移除。退出条件见 `docs/model_gateway_design.md`。
-- **P4（薄壳收敛与诊断系统 2.0）🟡 部分**：统一 IPC 封套（`IpcEnvelope<T>`）已接线；前端结构化错误归因已接线；**一键脱敏导出诊断压缩包（`diagnostics.zip`）未实现**，当前只有 `dsh-host-cli doctor` 与壳层日志（`desktop.log`）两条可用的证据获取路径。
+- **P4（薄壳收敛与诊断系统 2.0）🟡 部分**：前端结构化错误归因已接线；**统一 IPC 封套（`IpcEnvelope<T>`）尚未接线**（契约已定义，16 个命令仍返回 `Result<T, String>`）；**一键脱敏导出诊断压缩包（`diagnostics.zip`）未实现**，当前只有 `dsh-host-cli doctor` 与壳层日志（`desktop.log`）两条可用的证据获取路径。
 
 ---
 
@@ -218,11 +245,16 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 | **插件分级隔离 Tier 0/1/2** | ⚠️ **未接线** | `crates/dsh-host/src/plugin_worker.rs`（`call_tool` :191 返回 `ISOLATION_NOT_WIRED`）、`build/plugin-worker-host.mjs`、`build/plugin-safety-guard.mjs:PluginWorkerClient`（:52） | **无**（`PluginWorkerClient` 无消费者） |
 | **多模型工具网关** | ⚠️ **未接线** | `crates/dsh-model-gateway/**` | **无**（2026-09-10 从 `src-tauri/Cargo.toml` 移除） |
 | **一键脱敏诊断包 `diagnostics.zip`** | ❌ **未实现** | 无对应代码 | **无** |
-| LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 托盘菜单 `mobile-pair` / `mobile-stop` |
+| LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]` |
-| 自动更新（检查/下载/重启安装） | 🟡 已接线，**发布源待改** | `src-tauri/src/update.rs`、`tauri-plugin-updater`（`lib.rs:58`） | 启动后 + 每 6h |
+| **统一 IPC 封套 `IpcEnvelope<T>`** | ⚠️ **未接线** | 契约定义在 `crates/dsh-contracts/src/ipc.rs:7` | **无**：`src-tauri/src/commands.rs` 的 13 个命令全部返回 `Result<T, String>` |
+| **自动更新链路** | ⚠️ **未接线**（五处断链） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`） | **无 UI**：`updates_*` 5 个命令与 `updates://status` 事件在 `frontend/` 中零调用、零监听；且 endpoint/pubkey 指上游、`createUpdaterArtifacts` 未开、CI 无签名私钥 |
 | ↳ 更新源归属 | 🔴 **风险项** | `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints` 当前指向 `github.com/dataelement/dsh-desktop`（**上游仓库**），`pubkey` 非本项目所有 | 待定（需自有签名密钥） |
+| **应用内日志查看器** | ❌ **未实现** | 无 `frontend/logs.html`；`harness-view-log` 仅调用 `opener` 打开系统文件管理器 | **无** |
+| **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复） | `src-tauri/frontend/error.html` 改调已注册的 `safe_mode_action`（`action: "restart"`），且失败经 `fail()` 可见上报，不再被 `.catch` 吞掉 | 错误页按钮 → `commands::safe_mode_action` |
+| **恢复页交互** | ❌ **未接线** | `recovery_action` / `safe_mode_action`（restart/quit）已定义且注册 | **无**：`plugin-recovery.html` 与 `safe-mode.html` 零 `invoke`、零事件监听（`plugin-recovery.html` 甚至无 `local_page` 指向，不可达） |
+| 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label` | 菜单构建时初始化，配对成功/失败与停止时经 `refresh_bridge_status` 刷新 |
 
 ### 7.3 维护方式
 
@@ -230,3 +262,4 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 - 修改未接线模块（如把 `plugin_worker.rs` 接入运行时）时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态、更新 `docs/plugin_isolation_architecture.md` 的状态段。
 - 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线**的条目。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
+- **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
