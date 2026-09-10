@@ -239,7 +239,8 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 | 孤儿进程防护（INV-3） | ✅ 已接线 | `crates/dsh-host/src/process.rs`（Win32 JobObject / POSIX） | `launch.rs` 派生路径 |
 | URL / Token 捕获与就绪探测 | ✅ 已接线 | `readiness.rs`、`token.rs` | `state.rs::on_ready` |
 | Supervisor 自愈与退避 | ✅ 已接线 | `crates/dsh-host/src/supervisor.rs` | `state.rs` 生命周期回调 |
-| Safe Mode 隔离 Profile | ✅ 已接线 | `crates/dsh-host/src/safe_mode.rs` + `src-tauri/src/safe_mode.rs` | 崩溃归因分支 |
+| Safe Mode 隔离 Profile | ✅ 已接线（2026-09-10 补完启动链路） | `crates/dsh-host/src/safe_mode.rs`（profile 落盘）+ `args.rs::profile_patch` / `launch.rs::with_safe_mode`（**启动时选中**：`--profile desktop-safe-mode` + `build/dsh-desktop-safe.patch.yml`） | 错误页 `/safe_mode_action` → `commands.rs`、菜单 `harness-safe-mode` → `menu.rs` |
+| ↳ Safe Mode 的界面反馈 | ⚠️ **缺口** | 上游靠 preload 往 Harness 页注入安全模式横幅（`mountSafeModeBanner`）+ 切换存储 profile；本仓无 preload 通道，进安全模式后**用户界面看不出差别** | 待定（原生菜单加模式指示是可行方向） |
 | 崩溃归因诊断（**结论**，非压缩包） | ✅ 已接线 | `crates/dsh-host/src/diagnostics.rs` | `dsh-host-cli doctor`、错误页 |
 | 插件故障归因（进程内） | ✅ 已接线 | `build/plugin-safety-guard.mjs:formatFaultDetails`（:25，export :154） | `build/harness-node-entry.mjs:15,37,44` |
 | **插件分级隔离 Tier 0/1/2** | ⚠️ **未接线** | `crates/dsh-host/src/plugin_worker.rs`（`call_tool` :191 返回 `ISOLATION_NOT_WIRED`）、`build/plugin-worker-host.mjs`、`build/plugin-safety-guard.mjs:PluginWorkerClient`（:52） | **无**（`PluginWorkerClient` 无消费者） |
@@ -252,9 +253,9 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 | **自动更新链路** | ⚠️ **未接线**（五处断链） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`） | **无 UI**：`updates_*` 5 个命令与 `updates://status` 事件在 `frontend/` 中零调用、零监听；且 endpoint/pubkey 指上游、`createUpdaterArtifacts` 未开、CI 无签名私钥 |
 | ↳ 更新源归属 | 🔴 **风险项** | `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints` 当前指向 `github.com/dataelement/dsh-desktop`（**上游仓库**），`pubkey` 非本项目所有 | 待定（需自有签名密钥） |
 | **应用内日志查看器** | ❌ **未实现** | 无 `frontend/logs.html`；`harness-view-log` 仅调用 `opener` 打开系统文件管理器 | **无** |
-| **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复） | `src-tauri/frontend/error.html` 改调已注册的 `safe_mode_action`（`action: "restart"`），且失败经 `fail()` 可见上报，不再被 `.catch` 吞掉 | 错误页按钮 → `commands::safe_mode_action` |
+| **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复调用名；同日补完启动链路） | `src-tauri/frontend/error.html` 调 `safe_mode_action`（`action: "restart"`），失败经 `fail()` 可见上报 | 错误页按钮 → `commands::safe_mode_action` → `HarnessSupervisor::restart_in_safe_mode`（此前调 `restart()`，实际只是**普通重启**——按钮曾是谎话） |
 | **恢复页交互** | ❌ **未接线** | `recovery_action` / `safe_mode_action`（restart/quit）已定义且注册 | **无**：`plugin-recovery.html` 与 `safe-mode.html` 零 `invoke`、零事件监听（`plugin-recovery.html` 甚至无 `local_page` 指向，不可达） |
-| 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label` | 菜单构建时初始化，配对成功/失败与停止时经 `refresh_bridge_status` 刷新 |
+| 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label`；`MobileBridge::on_connected_change`（镜像上游 `onConnectedChange`）在配对状态翻转时回调 | 菜单构建时初始化，**手机侧 `POST /pair` 成功**、菜单配对/停止时均经 `refresh_bridge_status` 刷新（`lib.rs` setup 注册监听器） |
 
 ### 7.3 维护方式
 
