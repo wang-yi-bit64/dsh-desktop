@@ -81,7 +81,10 @@ const ALLOW_UNUSED_COMMANDS = {
  */
 const ALLOW_UNREACHABLE_PAGES = {
   // index.html 由窗口初始 WebviewUrl::App("index.html") 加载，不经 local_page。
-  'index.html': '作为窗口初始 WebviewUrl::App 加载，非 local_page 导航'
+  'index.html': '作为窗口初始 WebviewUrl::App 加载，非 local_page 导航',
+  // 页面 + `window::show_recovery_page` 都在，缺的是「谁来决定跳过去」：
+  // 崩溃归因目前一律走 error.html，插件故障分支要等批次 C 才接。
+  'plugin-recovery.html': '批次 C：崩溃归因的插件故障分支接线后由 show_recovery_page 指向'
 }
 
 /**
