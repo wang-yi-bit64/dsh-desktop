@@ -71,6 +71,14 @@ jobs:
       - name: Verify shell IPC surface
         run: npm run verify:ipc-surface
 
+      # 壳内页面的**运行时**冒烟。上一条只比对命令名；这一条把每个页面的内联脚本
+      # 放进 DOM 桩里真跑一遍，并逐个点一遍按钮，因此能抓到 E1~E6 看不见的两类缺陷：
+      #   ① `getElementById` 拿到 null → 脚本自上而下执行、一抛就停，**整页监听全部失效**；
+      #   ② HTML 留了按钮但脚本忘了绑监听（页面显示完全正常，按钮却是死的）。
+      # 它从「实际调用点」一侧复查命令名，与上一条形成交叉。
+      - name: Verify shell pages load and their buttons are wired
+        run: npm run verify:shell-pages
+
       # 守卫脚本自己的自检：一个写错了却静默放行的守卫比没有守卫更危险。
       - name: Verify target guard self-test
         run: npm run verify:target -- --self-test

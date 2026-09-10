@@ -53,6 +53,26 @@ const INJECT_PATH =
   process.env.DSH_INJECT_PATH ?? join(projectRoot, 'src-tauri', 'frontend', 'harness-ui-inject.js')
 const ELEMENT_ID = 'dsh-desktop-phone-indicator'
 
+/**
+ * 读取注入脚本源码，并把行尾统一成 `\n`。
+ *
+ * # 为什么必须归一化
+ *
+ * 本文件存进 git 的是 LF（blob 无 CR），但 `core.autocrlf=true` 的 Windows
+ * 检出会把工作区文件变成 CRLF。而「可证伪性」一节靠**字面量替换**定位实现中的
+ * 两处锚点（它们写作 `'…hidden = true\n'` 这种形式）：CRLF 下两处锚点一个都
+ * 匹配不上，脚本报「回退未能命中」并以退出码 1 结束。
+ *
+ * 后果不是「Windows 上多一条红」那么简单——它让人以为是**断言**坏了，而真正
+ * 出问题的是**守卫自己的文本匹配方式**依赖了检出配置。守卫检查的是行为，不是
+ * 字节，因此必须与行尾无关。
+ * @param {string} path 脚本路径
+ * @returns {string} 以 `\n` 为行尾的源码
+ */
+function readInjectSource(path) {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+}
+
 // ---------------------------------------------------------------------------
 // 最小 DOM 桩
 // ---------------------------------------------------------------------------
@@ -247,7 +267,7 @@ function load(options = {}) {
   navigator.language = options.language ?? 'en-US'
 
   const window = createWindow(options)
-  const source = activeSource ?? readFileSync(INJECT_PATH, 'utf8')
+  const source = activeSource ?? readInjectSource(INJECT_PATH)
   const factory = new Function(
     'window',
     'document',
@@ -548,7 +568,7 @@ function report(label, rows) {
   return failed
 }
 
-const source = readFileSync(INJECT_PATH, 'utf8')
+const source = readInjectSource(INJECT_PATH)
 activeSource = source
 resetResults()
 runCases()

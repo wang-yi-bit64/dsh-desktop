@@ -61,27 +61,26 @@ const strict = argv.includes('--strict')
  *
  * 注意：把命令加到这里**不是**修复，只是承认它当前没有 UI。任何新增条目都
  * 必须写清「为什么暂时留着」，否则应直接删除命令——死代码要么接上，要么删掉。
+ *
+ * **现在是空的，这是目标状态**。历史销账记录（保留以防有人想把它们加回来）：
+ *
+ * - `updates_*` / `safe_mode_action` —— 批次 B2 接线（updates.html、error.html）。
+ * - `recovery_action` / `recovery_status` / `recovery_open` —— 批次 C1 接线
+ *   （plugin-recovery.html）。
+ * - `open_external` —— 批次 G **删除**，不是接线。它的职责（把外部链接交给系统
+ *   浏览器）已由导航白名单在 Rust 侧完成：`lib.rs` 的 `on_navigation` /
+ *   `on_new_window` 命中 `NavigationDecision::External` 时直接 `opener.open_url`。
+ *   命令面再留一个入口等于同一能力开两条路，且这两条路的放行规则还要各自维护
+ *   （`is_openable_external` vs `decide_navigation`）——留下它是负债不是资产。
  */
-const ALLOW_UNUSED_COMMANDS = {
-  // 更新命令（updates_*）与 safe_mode_action 的条目已在批次 B2（2026-09-10）销账：
-  // 前者由 frontend/updates.html 全部 5 条接线，后者由 error.html 的「安全模式」
-  // 按钮接线。**销账不是可选的美化**——留在清单里的已接线条目会变成一句过期的
-  // 谎话，让下一个读者以为这些命令仍然没有 UI。
-  // 恢复动作：批次 C 会接线 plugin-recovery / safe-mode 两页，届时移除本条。
-  recovery_action: '批次 C 恢复页待接线',
-  // 通用外链：为插件体系预留，当前无壳内调用方。
-  open_external: '为 Harness 侧外链转交预留，当前无壳内调用方'
-}
+const ALLOW_UNUSED_COMMANDS = {}
 
 /**
  * 未被任何 `local_page(...)` 指向的页面。
  */
 const ALLOW_UNREACHABLE_PAGES = {
   // index.html 由窗口初始 WebviewUrl::App("index.html") 加载，不经 local_page。
-  'index.html': '作为窗口初始 WebviewUrl::App 加载，非 local_page 导航',
-  // 页面 + `window::show_recovery_page` 都在，缺的是「谁来决定跳过去」：
-  // 崩溃归因目前一律走 error.html，插件故障分支要等批次 C 才接。
-  'plugin-recovery.html': '批次 C：崩溃归因的插件故障分支接线后由 show_recovery_page 指向'
+  'index.html': '作为窗口初始 WebviewUrl::App 加载，非 local_page 导航'
 }
 
 /**
@@ -102,14 +101,12 @@ const ALLOW_UNLISTENED_EVENTS = {
  *
  * 判据：能接线就接线，**不能接线就删除**。「留给后续阶段」不是保留理由——
  * 那正是这些代码躺到今天的原因。
+ *
+ * 批次 C（2026-09-10）销账了四处：`window.rs` 的两个页面函数与 `urlencoding`
+ * 已接线/删除，`recovery.rs` 的模块级抑制随恢复页接入 `dsh_host::diagnostics`
+ * 的真实消费而移除。**这张表现在为空是目标状态**——每加一条都是欠债。
  */
-const ALLOW_DEAD_CODE_ALLOW = {
-  'window.rs:show_recovery_page': '批次 C：接进崩溃归因分支后删除该属性',
-  'window.rs:show_safe_mode_page': '批次 C：接进安全模式入口后删除该属性',
-  'window.rs:urlencoding': '批次 C：仅被上面两个函数使用，随之销账',
-  'recovery.rs:!module': '批次 C：模块级抑制；接线恢复页后本模块成为 plugin-recovery 的数据源，届时删除',
-  'start.rs:cause_hint': '批次 D：诊断导出时把 FailureCause 映射为可读提示并接线'
-}
+const ALLOW_DEAD_CODE_ALLOW = {}
 
 // ---------------------------------------------------------------------------
 // 解析
@@ -208,9 +205,17 @@ function parseRegistered(text) {
  * 这种统一处理失败提示的包装），此时命令名只以字符串字面量的形式出现在包装
  * 函数的**调用**处，而 `invoke(` 只出现在包装函数的**定义**里。
  *
- * 因此这里自动识别包装函数：**函数体里含 `invoke(` 的函数名**即视为包装器，
+ * 因此这里识别包装函数：**函数体里含 `invoke(` 的函数名**即视为包装器，
  * 其调用处的首个字符串参数就是命令名。这样新增一层包装不需要改本脚本。
  *
+ * # 为什么用花括号配对而不是正则截取函数体
+ *
+ * 初版用 `/\{([\s\S]*?)\n\s*\}/` 抓函数体，**会在第一个内层 `}` 处截断**：
+ * 页面里 `function run(...) { if (!invoke) { return } ... invoke(command, args) ... }`
+ * 这种以带花括号的 `if` 开头的包装器，截出来的「函数体」根本不含 `invoke(`，
+ * 于是包装器识别失败 → 它调用的所有命令都被判成「无调用方」。这不是假想：
+ * 它真实地把 `logs_read` / `recovery_action` / `recovery_status` 三个**已接线**
+ * 的命令报成了断线。守卫的假阳性会让人不再看它的输出，和假阴性一样有害。
  * @param {string[]} files 前端文件列表
  * @returns {Map<string, string[]>} 命令名 → 出现位置
  */
@@ -226,14 +231,16 @@ function parseInvoked(files) {
     const text = read(file)
     const where = file.slice(projectRoot.length + 1)
 
-    // 1) 包装函数名：函数声明或箭头函数赋值，函数体内出现 invoke(
+    // 1) 包装函数名：函数声明或箭头函数赋值，其**完整函数体**含 invoke(
     const wrappers = new Set()
-    for (const match of text.matchAll(
-      /(?:function\s+(\w+)\s*\([^)]*\)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)\s*\{([\s\S]*?)\n\s*\}/g
-    )) {
+    const pattern =
+      /(?:function\s+(\w+)\s*\([^)]*\)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)\s*\{/g
+    for (const match of text.matchAll(pattern)) {
       const name = match[1] ?? match[2]
-      const body = match[3] ?? ''
-      if (name && /\binvoke\s*\(/.test(body)) wrappers.add(name)
+      if (!name) continue
+      const bodyStart = match.index + match[0].length
+      const body = extractBracedBody(text, bodyStart)
+      if (body && /\binvoke\s*\(/.test(body)) wrappers.add(name)
     }
 
     // 2) 直接调用
@@ -242,16 +249,36 @@ function parseInvoked(files) {
     }
     // 3) 经包装函数调用
     for (const wrapper of wrappers) {
-      const pattern = new RegExp(
-        `\\b${wrapper}\\(\\s*['"]([a-z_][a-z0-9_]*)['"]`,
-        'g'
-      )
-      for (const match of text.matchAll(pattern)) {
+      const called = new RegExp(`\\b${wrapper}\\(\\s*['"]([a-z_][a-z0-9_]*)['"]`, 'g')
+      for (const match of text.matchAll(called)) {
         add(match[1], `${where}（经 ${wrapper}()）`)
       }
     }
   }
   return map
+}
+
+/**
+ * 从 `{` 之后的位置起，按花括号配对取出完整函数体。
+ *
+ * 不认识字符串与正则字面量（本仓库的前端是手写内联脚本，没有需要转义的花括号
+ * 出现在字符串里的情况）；这是刻意的简化——精确的 JS 词法分析属于「为了一个
+ * 静态检查脚本而引入解析器」，收益不抵成本。
+ * @param {string} text 全文
+ * @param {number} start 函数体第一个字符的下标（`{` 之后）
+ * @returns {string|null} 函数体文本；括号不配对时返回 null
+ */
+function extractBracedBody(text, start) {
+  let depth = 1
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, index)
+    }
+  }
+  return null
 }
 
 /**
@@ -281,6 +308,12 @@ function parseDeadCodeAllows() {
     const shortName = file.slice(projectRoot.length + 1).split(/[\\/]/).pop()
     const testModuleAt = lines.findIndex((line) => /#\[cfg\(test\)\]/.test(line))
     lines.forEach((line, index) => {
+      // 注释里的 `#[allow(dead_code)]` 是**说明文字**，不是抑制属性。
+      // 不排除注释会产生假阳性：本仓 `commands.rs` 的文档注释里正好引用了这个
+      // 属性名（解释恢复页的旧实现为何带着它躺了半年），于是守卫把一个已销账的
+      // 文件报成未登记断线。误报会消耗读者对这个检查的信任，必须过滤。
+      const trimmed = line.trimStart()
+      if (trimmed.startsWith('//')) return
       const isModule = /#!\[allow\(dead_code[^)]*\)\]/.test(line)
       const isItem = /#\[allow\(dead_code[^)]*\)\]/.test(line)
       if (!isModule && !isItem) return

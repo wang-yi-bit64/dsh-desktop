@@ -19,6 +19,7 @@
     "prepare:harness:strict": "node scripts/prepare-harness.mjs --force --strict",
     "verify:patches": "node scripts/patch-layers.mjs --self-test",
     "verify:ipc-surface": "node scripts/verify-ipc-surface.mjs",
+    "verify:shell-pages": "node scripts/verify-shell-pages.mjs",
     "verify:target": "node scripts/verify-target.mjs",
     "verify:harness-inject": "node scripts/verify-harness-inject.mjs",
     "fault-inject": "node scripts/fault-inject.mjs",
