@@ -20,7 +20,12 @@ tauri-build.workspace = true
 [dependencies]
 dsh-contracts.workspace = true
 dsh-host.workspace = true
-dsh-model-gateway.workspace = true
+# 注意：`dsh-model-gateway`（多厂商工具调用 Schema 方言网关）**不是**本壳的
+# 运行时依赖。src-tauri 从未引用它，此前仅为「已实现」口径而声明，属依赖债务
+# （2026-09-10 移除）。该 crate 仍保留在 workspace 中作为独立可测资产
+# （`cargo test -p dsh-model-gateway`、`--example benchmark`），其定位与退出
+# 条件见 docs/model_gateway_design.md。若将来真的要接线，须先在该文档中登记
+# 接线点与消费者，再恢复此处依赖。
 tauri.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-plugin-updater.workspace = true
@@ -30,6 +35,7 @@ tauri-plugin-log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+log.workspace = true
 regex = "1"
 url = "2"
 rand = "0.8"

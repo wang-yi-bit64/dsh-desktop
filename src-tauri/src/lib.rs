@@ -12,6 +12,7 @@
 mod commands;
 mod cookies;
 mod layout;
+mod logging;
 mod menu;
 mod mobile_bridge;
 mod navigation;
@@ -34,7 +35,9 @@ use dsh_host::launch::LauncherConfig;
 /// 应用入口。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 注册崩溃日志钩子，确保 Release .exe 在无控制台环境下也能捕获 panic 根因
+    // 注册崩溃日志钩子，确保 Release .exe 在无控制台环境下也能捕获 panic 根因。
+    // 双通道：stderr（开发态可见）+ crash.log（发布态唯一线索）。此处刻意不依赖
+    // 日志插件——panic hook 可能在插件初始化完成之前就触发。
     std::panic::set_hook(Box::new(|panic_info| {
         let msg = format!("DSH Desktop Panic: {panic_info}\n");
         eprintln!("{msg}");
@@ -61,6 +64,15 @@ pub fn run() {
             // 只读资源 + 可写 userData 布局（INV-1 的唯一落点）。
             let layout = layout::resolve_layout(&handle)?;
             layout.ensure_dirs()?;
+
+            // 壳层结构化日志：目录取自 layout.app_data_dir（INV-1），
+            // 必须在布局解析之后注册（见 logging.rs 模块文档）。
+            logging::init(&handle, &layout.app_data_dir)?;
+            log::info!(
+                "desktop shell starting: app_data_dir={} resource_dir={}",
+                layout.app_data_dir.display(),
+                layout.resource_dir.display()
+            );
 
             let supervisor = Arc::new(HarnessSupervisor::new(
                 handle.clone(),

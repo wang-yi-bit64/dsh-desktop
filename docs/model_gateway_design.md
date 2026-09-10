@@ -1,7 +1,24 @@
 # Model Gateway 设计备忘录 (RFC & Architecture Memo)
 
-> **状态**：待开发（Backlog / RFC Phase）  
-> **目标**：在 `dsh-desktop` 中构建统一的模型协议适配与工具调用治理网关，消除多模型提供商（OpenAI、DeepSeek、Gemini、Claude 等）之间的 Schema 差异与 Tool Calling 格式冲突。
+> **状态（2026-09-10 校准）**：crate **已实现**（`crates/dsh-model-gateway`，含单测与
+> `examples/benchmark.rs`），但**未接线、不在默认运行时路径上**。
+>
+> | 维度 | 事实 |
+> |---|---|
+> | 实现 | ✅ `CanonicalTool` 抽象、`anyOf`/`oneOf` 展开、`$ref` 解析、深度保护、OpenAI/Gemini/Claude 方言转换（`sanitize_for_*` + `adapters/`） |
+> | 测试 | ✅ `cargo test -p dsh-model-gateway`、`cargo run --release -p dsh-model-gateway --example benchmark` |
+> | 运行时接线 | ❌ 无消费者。`src-tauri` 曾声明该依赖但零引用，该依赖已于 2026-09-10 移除，以免对外呈现「壳层跑着第二套模型适配」的假象 |
+> | 与官方关系 | 官方 dsh 自带模型适配器；本 crate 若接线，将构成**第二套适配逻辑**，需与官方接口同步演进 |
+>
+> **退出条件（满足任一即应归档本 crate 或删除）**：① 官方 dsh 覆盖了本 crate 所解决的
+> 方言场景（尤其 Gemini 大写枚举、Claude `input_schema` 递归约束）；② 连续两个
+> DSH 小版本迭代后仍无接线计划；③ 官方模型适配接口发生不兼容变更而本 crate 未同步。
+>
+> **接线前置（若决定启用）**：必须在本文件中登记——接线点（哪个进程、哪个函数）、
+> 消费者（谁调用 `build_request` / `transform_tools`）、失败降级策略、以及
+> 「官方覆盖后如何摘除」的回归验证方式；随后才可恢复 `src-tauri` 的依赖声明。
+>
+> **目标**：统一模型协议适配与工具调用治理网关，消除多模型提供商（OpenAI、DeepSeek、Gemini、Claude 等）之间的 Schema 差异与 Tool Calling 格式冲突。
 
 ---
 

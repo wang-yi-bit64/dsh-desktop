@@ -244,6 +244,18 @@ pub const HARNESS_LOG_FILE: &str = "harness.log";
 /// userData 下的宿主应用日志文件名。
 pub const APP_LOG_FILE: &str = "app.log";
 
+/// userData 下的桌面壳层日志文件名（`tauri-plugin-log` 的落盘目标）。
+///
+/// 与 [`APP_LOG_FILE`]（宿主面 `dsh_host::logging` 写入）并列，互不覆盖：
+/// 前者记录**壳自身**的启动、导航、菜单动作与 panic，后者记录宿主面事件。
+pub const DESKTOP_LOG_FILE: &str = "desktop.log";
+
+/// 桌面壳层日志单文件上限（字节），超过即按 [`DESKTOP_LOG_ROTATIONS`] 轮转。
+pub const DESKTOP_LOG_MAX_BYTES: u128 = 5 * 1024 * 1024;
+
+/// 桌面壳层日志保留的历史文件份数。
+pub const DESKTOP_LOG_ROTATIONS: usize = 2;
+
 /// 契约 C10 — Profile 子目录名。
 pub const PROFILES_DIR_NAME: &str = "profiles";
 

@@ -38,6 +38,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 regex = "1"
+# `tauri-plugin-log` 的日志门面。显式声明而非借助插件的 `pub use log`
+# 重导出，避免把「用日志」这件事耦合到某个插件的重导出路径上。
+log = "0.4"
 url = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = [
   "rt-multi-thread",
