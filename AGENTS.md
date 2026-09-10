@@ -227,6 +227,7 @@ Harness 页面运行在 Tauri webview 中。**此处曾有一处机制误判，�
 ---
 
 ## 6. 修改敏感模块前必读文档
+- `docs/dev-plan-disconnected-points.md`：**当前主计划**——断线点清单（D1~D11）与批次 A~G 的施工计划、进度快照与需裁决的决策点。**开工前先看它的「进度快照」表与 §4 决策点。**
 - `docs/dsh-desktop-redesign-architecture-and-plan.md`：系统重构设计与开发全流程计划。
 - `docs/system_design.md`：核心系统架构设计、缺陷清单与契约细则。
 - `docs/model_gateway_design.md`：大模型工具调用网关架构设计。
