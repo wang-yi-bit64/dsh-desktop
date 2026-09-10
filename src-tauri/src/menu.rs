@@ -15,6 +15,9 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     let safe_mode =
         MenuItemBuilder::with_id("harness-safe-mode", "Restart in Safe Mode").build(app)?;
     let view_log = MenuItemBuilder::with_id("harness-view-log", "View Harness Log").build(app)?;
+    // LAN 手机桥是显式动作：菜单点击才监听，避免每次启动都在局域网暴露端口。
+    let mobile_pair = MenuItemBuilder::with_id("mobile-pair", "Phone Pairing (LAN)…").build(app)?;
+    let mobile_stop = MenuItemBuilder::with_id("mobile-stop", "Stop Phone Bridge").build(app)?;
     let check_updates =
         MenuItemBuilder::with_id("updates-check", "Check for Updates…").build(app)?;
     let quit = MenuItemBuilder::with_id("app-quit", "Quit DSH Desktop").build(app)?;
@@ -26,6 +29,11 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         .item(&view_log)
         .build()?;
 
+    let mobile_submenu = SubmenuBuilder::new(app, "Phone")
+        .item(&mobile_pair)
+        .item(&mobile_stop)
+        .build()?;
+
     let app_submenu = SubmenuBuilder::new(app, "DSH Desktop")
         .item(&check_updates)
         .separator()
@@ -35,6 +43,7 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     MenuBuilder::new(app)
         .item(&app_submenu)
         .item(&harness_submenu)
+        .item(&mobile_submenu)
         .build()
 }
 
@@ -62,6 +71,42 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                         .opener()
                         .open_path(dir.display().to_string(), None::<&str>);
                 }
+            }
+            // 启动 LAN 桥并在系统浏览器打开配对页（桌面端显示二维码供手机扫描）。
+            // 二维码由配对页渲染，见 mobile_bridge::pair_page。
+            "mobile-pair" => {
+                // 配对页本身不依赖 Harness；但目标未注入时 /api/rpc 必然失败，
+                // 提前告警，避免用户把「Harness 未就绪」误判成配对故障。
+                if !state.mobile.has_target().await {
+                    log::warn!("mobile bridge has no Harness target; RPC forwarding will fail");
+                }
+                match state.mobile.start(None).await {
+                    Ok(snapshot) => {
+                        log::info!(
+                            "mobile bridge listening port={:?} authenticated={}",
+                            snapshot.port,
+                            snapshot.authenticated
+                        );
+                        if !snapshot.authenticated {
+                            log::warn!(
+                            "mobile bridge has no Harness auth cookie yet; /api/rpc will retry the handshake"
+                        );
+                        }
+                        match snapshot.pairing_url {
+                            Some(url) => {
+                                if let Err(error) = app.opener().open_url(url, None::<&str>) {
+                                    log::error!("cannot open pairing page: {error}");
+                                }
+                            }
+                            None => log::warn!("mobile bridge started without a pairing URL"),
+                        }
+                    }
+                    Err(error) => log::error!("mobile bridge failed to start: {error}"),
+                }
+            }
+            "mobile-stop" => {
+                state.mobile.stop().await;
+                log::info!("mobile bridge stopped");
             }
             "updates-check" => {
                 let manager = state.updates.lock().await.clone();

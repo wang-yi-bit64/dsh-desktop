@@ -321,10 +321,16 @@ impl HarnessSupervisor {
             }
             let _ = webview.navigate(url.clone());
         }
+
+        // LAN 手机桥：注入转发目标 + 首航 token（**不**启动监听——监听是显式
+        // 的用户动作，见 mobile_bridge 模块文档的安全语义）。
+        self.sync_mobile_target(Some(&endpoint));
         self.emit();
     }
 
     fn on_failed(&self, cause: FailureCause) {
+        // Harness 已不可用：清空桥的目标，避免把手机请求转发到死端口。
+        self.sync_mobile_target(None);
         {
             let mut inner = self.inner.lock().unwrap();
             inner.phase = HarnessPhase::Failed {
@@ -337,6 +343,24 @@ impl HarnessSupervisor {
             inner.push_desktop(format!("failed: {cause}"));
         }
         window::show_error_page(&self.app);
+    }
+
+    /// 把 Harness 端点同步给 LAN 手机桥（`None` = 清空）。
+    ///
+    /// 状态机回调里不能 await，因此只做一次性派生；`AppState` 由 `setup`
+    /// 提前 manage，此处 `try_state` 必命中（未命中则静默跳过，不影响主链路）。
+    fn sync_mobile_target(&self, endpoint: Option<&LaunchEndpoint>) {
+        let target = endpoint.map(|endpoint| crate::mobile_bridge::HarnessTarget {
+            base_url: endpoint.base_url(),
+            launch_token: Some(endpoint.token.clone()),
+        });
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let Some(state) = app.try_state::<Arc<AppState>>() else {
+                return;
+            };
+            state.mobile.set_harness_target(target).await;
+        });
     }
 
     /// exit watcher 兑现：Ready 之后子进程退出（无论码值）→ Failed。
