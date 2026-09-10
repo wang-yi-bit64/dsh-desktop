@@ -240,7 +240,7 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 | URL / Token 捕获与就绪探测 | ✅ 已接线 | `readiness.rs`、`token.rs` | `state.rs::on_ready` |
 | Supervisor 自愈与退避 | ✅ 已接线 | `crates/dsh-host/src/supervisor.rs` | `state.rs` 生命周期回调 |
 | Safe Mode 隔离 Profile | ✅ 已接线（2026-09-10 补完启动链路） | `crates/dsh-host/src/safe_mode.rs`（profile 落盘）+ `args.rs::profile_patch` / `launch.rs::with_safe_mode`（**启动时选中**：`--profile desktop-safe-mode` + `build/dsh-desktop-safe.patch.yml`） | 错误页 `/safe_mode_action` → `commands.rs`、菜单 `harness-safe-mode` → `menu.rs` |
-| ↳ Safe Mode 的界面反馈 | ⚠️ **缺口** | 上游靠 preload 往 Harness 页注入安全模式横幅（`mountSafeModeBanner`）+ 切换存储 profile；本仓无 preload 通道，进安全模式后**用户界面看不出差别** | 待定（原生菜单加模式指示是可行方向） |
+| ↳ Safe Mode 的界面反馈（横幅） | 🕓 **计划中**（刻意后置） | 上游靠 preload 往 Harness 页注入安全模式横幅（`mountSafeModeBanner`，含「卸载插件 / 退出安全模式」两个按钮）；本仓界面**看不出**当前处于安全模式 | 无（**待软件功能稳定后再开发**，非阻塞项） |
 | 崩溃归因诊断（**结论**，非压缩包） | ✅ 已接线 | `crates/dsh-host/src/diagnostics.rs` | `dsh-host-cli doctor`、错误页 |
 | 插件故障归因（进程内） | ✅ 已接线 | `build/plugin-safety-guard.mjs:formatFaultDetails`（:25，export :154） | `build/harness-node-entry.mjs:15,37,44` |
 | **插件分级隔离 Tier 0/1/2** | ⚠️ **未接线** | `crates/dsh-host/src/plugin_worker.rs`（`call_tool` :191 返回 `ISOLATION_NOT_WIRED`）、`build/plugin-worker-host.mjs`、`build/plugin-safety-guard.mjs:PluginWorkerClient`（:52） | **无**（`PluginWorkerClient` 无消费者） |
@@ -260,6 +260,14 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 ### 7.3 维护方式
 
 - 新增能力时：先写代码，再在本表补一行——**顺序不可颠倒**。
+- 状态词只有四种，含义互不重叠，**不得混用**：
+  | 状态 | 含义 |
+  |------|------|
+  | ✅ 已接线 | 有代码、有运行时调用方，用户可见 |
+  | ⚠️ 未接线 | **代码已写但无运行时调用方**（如 `plugin_worker.rs`）——这是「欠债」，必须登记销账批次 |
+  | ❌ 未实现 | **代码不存在**——这是「缺口」，不得对外宣称 |
+  | 🕓 计划中 | **代码不存在，且刻意不现在做**——这是「决策」，不是欠债。必须写明后置理由（通常是为等前置能力稳定） |
+  「未接线」与「计划中」的区别是**有没有代码**：前者是写了没接（欠债），后者是还没写（决策）。把计划中说成未接线会误导读者去找不存在的代码；把未接线说成计划中则是在给欠债打掩护。
 - 修改未接线模块（如把 `plugin_worker.rs` 接入运行时）时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态、更新 `docs/plugin_isolation_architecture.md` 的状态段。
 - 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线**的条目。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
