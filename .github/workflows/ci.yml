@@ -61,6 +61,20 @@ jobs:
       - name: Verify patch layer manifest
         run: npm run verify:patches
 
+      # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
+      # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
+      # 断线跨语言（Rust ↔ HTML），编译器看不见，只能静态比对：
+      #   命令定义 ↔ generate_handler 注册 ↔ 前端 invoke / listen ↔ local_page 目标
+      # 已经借此捕获过真实事故：error.html 调用了不存在的 `harness_start_safe_mode`
+      # （注册名是 `safe_mode_action`），异常被 .catch 吞掉 → 按钮静默失效。
+      # 纯静态、不需 npm install，放最前面快速失败。
+      - name: Verify shell IPC surface
+        run: npm run verify:ipc-surface
+
+      # 守卫脚本自己的自检：一个写错了却静默放行的守卫比没有守卫更危险。
+      - name: Verify target guard self-test
+        run: npm run verify:target -- --self-test
+
       # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
       # tauri-build 的 build.rs 要求 bundle.resources 每个 glob 至少匹配一个文件，
       # 而 src-tauri/resources/ 被 gitignore（全新 checkout 不存在）。这里用
@@ -115,6 +129,18 @@ jobs:
       - name: Smoke L1 (mock resource tree)
         run: node scripts/smoke-launch.mjs --level=1 --resource-mode=stub
 
+      # 故障注入：孤儿进程清理 + 退出码归因（6 类故障场景，10 项断言）。
+      # 这是唯一能证伪「子进程在宿主崩溃后残留」的门禁——单测覆盖不到，
+      # 因为要真的派生、真的杀。前置只有 `cargo build -p dsh-host-cli`，
+      # 与上面的步骤复用同一份产物。
+      #
+      # Windows 已本地跑通 10/10（Job Object 路径）。Linux/macOS 走的是
+      # PDEATHSIG / 进程组，尚无人工确认记录，因此先作为**信息性**步骤：
+      # 失败留档但不阻断。确认全绿后把 continue-on-error 去掉转硬门禁。
+      - name: Fault injection (orphan cleanup + exit-code attribution)
+        continue-on-error: ${{ runner.os != 'Windows' }}
+        run: npm run fault-inject
+
       # 失败时把烟雾报告留档——这一层的失败通常只在日志里可读
       # （就绪超时 / 页面取不到 / 退出码不对），不留档就得本地复现。
       - name: Upload smoke logs
@@ -168,6 +194,16 @@ jobs:
 
       # 任务 0.3：资源组装必须可复现（内部会写 MANIFEST.json），且补丁分级
       # 策略记录在 MANIFEST.patches[] 里逐条留证。
+
+      # 打包目标守卫：`prepare:harness` 会把**当前主机架构**的 Node 运行时
+      # 组装进 `src-tauri/resources/node/`。若构建镜像里 node 与 rustc 架构
+      # 不一致（或将来启用跨编译），产物会内嵌错误架构的运行时——在目标机上
+      # 表现为「Harness 起不来」，而根因在构建期，事后极难归因。此步在组装
+      # 300MB 之前失败，避免白跑一轮。目标自动推断：无参数时依次取
+      # `TAURI_ENV_TARGET_TRIPLE`、`rustc -vV` 的 host triple。
+      - name: Verify packaging target
+        run: npm run verify:target
+
       - name: Prepare harness resources
         run: npm run prepare:harness
 

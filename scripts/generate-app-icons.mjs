@@ -1,3 +1,31 @@
+#!/usr/bin/env node
+/**
+ * generate-app-icons.mjs — 从 `build/app-icon.png` 生成 `build/icon.icns` 与
+ * `build/icon.ico`。
+ *
+ * ## 这是 macOS 手工工具，**刻意没有自动化入口**
+ *
+ * * 依赖 macOS 自带的 `sips` 与 `iconutil`，在 Windows / Linux 上必然失败；
+ * * 输入是**不常变的品牌源图**（`build/app-icon.png`），产物是入库的静态资产，
+ *   没有「每次构建都该重算」的必要。
+ *
+ * 一个只在 macOS 上有意义、且产物本已入库的脚本，如果接进 `prepare:harness`
+ * 或 CI，只会让另外两个平台的流水线多一个必然跳过或必然报错的门禁——那是噪声，
+ * 不是守护。因此这里明确标注它的定位，而不是给它硬塞一个入口。
+ *
+ * 产物去向（注意区分，容易混淆）：
+ *
+ * | 产物 | 位置 | 是否入库 | 说明 |
+ * |------|------|---------|------|
+ * | 本脚本产出的 icns | `build/icon.icns` | ❌ 未入库 | macOS 图标源 |
+ * | 本脚本产出的 ico | `build/icon.ico` | ✅ 已入库 | Windows 图标源 |
+ * | 打包实际消费的图标 | `src-tauri/icons/*` | ✅ 已入库 | 见 `tauri.conf.json` → `bundle.icon` |
+ *
+ * 用法（仅 macOS）：
+ *   node scripts/generate-app-icons.mjs
+ * 随后按需把结果同步到 `src-tauri/icons/` 并提交。
+ */
+
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'

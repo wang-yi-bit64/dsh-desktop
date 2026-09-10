@@ -46,6 +46,10 @@ import {
   packageNameFromPatchFile
 } from './patch-layers.mjs'
 
+// 打包目标守卫（见下方 `--target` 段）。import 模块级无副作用：
+// verify-target.mjs 的 CLI 入口有「主模块」判定保护。
+import { checkTarget } from './verify-target.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const staging = join(projectRoot, 'harness-deps')
 const resources = join(projectRoot, 'src-tauri', 'resources')
@@ -63,6 +67,19 @@ const forceRebuild = process.argv.includes('--force')
 // 补丁失败策略：默认按 patches/LAYERS.md 的分级（functional 才中断构建）；
 // `--strict` 让所有层都 fail-fast，等价于分级引入前的行为。
 const strictPatches = process.argv.includes('--strict')
+
+// 打包目标平台守卫：`--target=<platform>/<arch>`（例：`--target=win32/x64`）。
+//
+// 为什么这一步必须存在：本脚本会把**当前主机架构**的 Node 二进制组装进
+// resources/node/。若构建主机与目标平台不一致，产出的安装包会内嵌错误架构
+// 的 Node，在目标机上表现为「Harness 起不来」——根因在构建期，事后极难归因。
+// 因此显式声明目标时先校验再组装，把事故前移到构建前一刻。
+//
+// 默认（不传 `--target`）不校验：本地开发机常常没有 rustc 在 PATH 上，
+// 强制校验会让 `npm run dev` 莫名失败。CI 侧另有独立步骤跑自动推断校验。
+const targetArg = (process.argv.find((arg) => arg.startsWith('--target=')) ?? '').slice(
+  '--target='.length
+)
 
 // 补丁应用结果（由 applyTieredPatches 填充，buildManifest 消费）。
 let patchReport = []
@@ -125,6 +142,28 @@ function directoryFingerprint(directory) {
       return `${file}:${digest}`
     })
   return sha256(entries.join('\n'))
+}
+
+// ---------------------------------------------------------------------------
+// 0. 打包目标守卫（仅当显式传 `--target` 时）。
+//    放在任何删除/下载之前：目标不匹配就立刻退出，不浪费一次 300MB 组装。
+// ---------------------------------------------------------------------------
+if (targetArg) {
+  const [expectedPlatform, expectedArch] = targetArg.split('/')
+  if (!expectedPlatform || !expectedArch) {
+    console.error(`[prepare-harness] 非法 --target=${targetArg}；期望 <platform>/<arch>，例：win32/x64`)
+    process.exit(2)
+  }
+  const { ok, message } = checkTarget({ platform: expectedPlatform, arch: expectedArch })
+  if (!ok) {
+    console.error(`[prepare-harness] 打包目标校验失败：\n${message}`)
+    console.error(
+      '[prepare-harness] 本脚本会把当前主机的 Node 二进制组装进 resources/node/，' +
+        '跨平台产物会内嵌错误架构的运行时，因此拒绝继续。'
+    )
+    process.exit(1)
+  }
+  log(message)
 }
 
 // ---------------------------------------------------------------------------
