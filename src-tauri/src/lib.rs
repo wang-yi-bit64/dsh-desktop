@@ -85,6 +85,29 @@ pub fn run() {
                 Arc::clone(&mobile),
             )));
 
+            // 配对状态变化 → 原生菜单状态行（镜像上游 `onConnectedChange`）。
+            //
+            // 上游把该状态广播进 Harness 网页（preload 注入侧栏浮动按钮），
+            // 本仓没有 preload 通道（见 `AGENTS.md`），等价展示面是原生
+            // `Phone` 子菜单首行的实时状态文本。
+            //
+            // 回调里**只派生任务**：`refresh_bridge_status` 需要一份异步快照，
+            // 且内部经 `run_on_main_thread` 阻塞等待——两件事都不适合在触发
+            // 线程（axum 的配对处理器）上同步做。
+            {
+                let listener_handle = handle.clone();
+                mobile.on_connected_change(move |_connected| {
+                    let app = listener_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let Some(state) = app.try_state::<Arc<AppState>>() else {
+                            return;
+                        };
+                        let snapshot = state.mobile.snapshot().await;
+                        menu::refresh_bridge_status(&app, &snapshot);
+                    });
+                });
+            }
+
             // 菜单。
             let menu = menu::build_menu(&handle)?;
             handle.set_menu(menu)?;

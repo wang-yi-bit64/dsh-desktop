@@ -14,6 +14,21 @@
 //! | 配对页 `GET /`（含二维码） | ✅ 已接线 |
 //! | `POST /pair` 令牌校验 | ✅ 已接线 |
 //! | `POST /api/rpc` 转发 | ✅ 已接线（含 cookie 握手，见下） |
+//! | 配对状态变化 → 原生菜单状态行 | ✅ 已接线（[`MobileBridge::on_connected_change`]，2026-09-10） |
+//!
+//! ## 配对状态的展示面（与上游的差异，2026-09-10 核对）
+//!
+//! 上游把这个状态送进 **Harness 网页**（preload 往侧栏注入浮动手机按钮，
+//! `mobile:status-changed` → `applyMobileStatus` → 按钮文案在「连接手机」与
+//! 「管理手机连接」之间切换）。**上游的原生菜单项本身是静态的**
+//! （`main-index.ts`：`label: isChinese ? '连接手机…' : 'Connect Phone…'`，
+//! 不随配对变化）。
+//!
+//! 本仓没有 preload 注入通道（见 `AGENTS.md`），且往 Harness 远程页注入脚本
+//! 会与「远程页不得调用宿主命令」的 origin 守卫（INV-2）直接冲突。因此等价
+//! 实现是把状态放进**原生菜单**：`Phone` 子菜单首项显示实时状态，文案由
+//! [`BridgeState::set_connected`] 的回调驱动刷新——覆盖面是上游的真超集
+//! （上游菜单不显示状态）。
 //!
 //! ## 安全语义：默认不监听
 //!
@@ -94,6 +109,17 @@ struct PendingPairing {
     expires_at: u128,
 }
 
+/// 配对状态变化的监听器（镜像上游 `onConnectedChange`）。
+///
+/// 宿主壳（Tauri 层）用它把「手机刚配对成功」这件事翻译成原生菜单状态行的
+/// 刷新。**刻意做成回调而不是让壳轮询**：配对动作可能发生在手机浏览器里
+/// （`POST /pair`），宿主没有任何本地事件可挂钩；轮询要么引入常驻定时器，
+/// 要么把刷新延迟成「下次操作才更新」。
+///
+/// `Send + Sync`：配对处理器在 axum 的运行时线程上触发它，而注册发生在
+/// Tauri 的 setup 线程。
+type ConnectedListener = Box<dyn Fn(bool) + Send + Sync>;
+
 struct BridgeState {
     harness_url: Mutex<Option<String>>,
     /// 首航 token，用于换取 cookie；握手成功后即可丢弃。
@@ -105,6 +131,43 @@ struct BridgeState {
     connected: Mutex<bool>,
     port: Mutex<Option<u16>>,
     shutdown: tokio::sync::Notify,
+    /// 配对状态监听器；用同步锁是因为触发点（[`BridgeState::set_connected`]）
+    /// 不持有它跨 `await`。
+    listener: std::sync::Mutex<Option<ConnectedListener>>,
+}
+
+impl BridgeState {
+    /// 翻转配对状态，**仅在真正变化时**通知监听器。
+    ///
+    /// 判重是必须的：`stop()` 与重复配对都可能带着同一目标值进来，若不判重，
+    /// 壳侧会被无意义地反复刷新菜单（每次 `set_text` 都是一次主线程往返）。
+    ///
+    /// 监听器在**释放 `connected` 锁之后**调用：回调只做「派生一个任务」，
+    /// 该任务稍后要读 [`MobileBridge::snapshot`]，而快照会锁 `connected`
+    /// 自身——持锁调用等于把状态翻转与快照读取耦合成自锁。
+    async fn set_connected(&self, connected: bool) {
+        let changed = {
+            let mut current = self.connected.lock().await;
+            if *current == connected {
+                false
+            } else {
+                *current = connected;
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+        let listener = match self.listener.lock() {
+            Ok(listener) => listener,
+            // 锁中毒（某个回调 panic 过）时静默降级：状态已经翻转过，只是
+            // 没人被通知——不能因此让配对请求本身失败。
+            Err(_) => return,
+        };
+        if let Some(listener) = listener.as_ref() {
+            listener(connected);
+        }
+    }
 }
 
 pub struct MobileBridge {
@@ -123,7 +186,34 @@ impl MobileBridge {
                 connected: Mutex::new(false),
                 port: Mutex::new(None),
                 shutdown: tokio::sync::Notify::new(),
+                listener: std::sync::Mutex::new(None),
             }),
+        }
+    }
+
+    /// 注册配对状态变化监听器（镜像上游 `onConnectedChange`）。
+    ///
+    /// 重复注册时**覆盖**前一个：桥只有一份配对状态，多个监听器只会造成
+    /// 重复刷新；保留「最后一次注册生效」比维护监听器列表更简单，也更难用错。
+    ///
+    /// # 参数
+    ///
+    /// * `listener` — 收到新的配对状态（`true` = 已配对）。在触发线程上
+    ///   **同步**调用，因此回调本身必须立刻返回；要读快照或触碰 UI 请自行
+    ///   派生任务（见 `lib.rs` 的接线）。
+    ///
+    /// # 示例
+    ///
+    /// 形状示意（不可执行；可执行断言见下方回归测试）：
+    ///
+    /// ```text
+    /// bridge.on_connected_change(|connected| { /* 派生刷新任务 */ });
+    /// // 之后任一次 stop() 或 POST /pair 引起的翻转都会回调它。
+    /// // 值未变时不回调（判重见 BridgeState::set_connected）。
+    /// ```
+    pub fn on_connected_change(&self, listener: impl Fn(bool) + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.state.listener.lock() {
+            *slot = Some(Box::new(listener));
         }
     }
 
@@ -240,7 +330,9 @@ impl MobileBridge {
     pub async fn stop(&self) {
         self.state.shutdown.notify_waiters();
         *self.state.port.lock().await = None;
-        *self.state.connected.lock().await = false;
+        // 经 set_connected 而不是直接写字段：停止桥同样是一次配对状态翻转
+        // （已配对的手机不再有效），壳侧的菜单状态行必须一起回到 off。
+        self.state.set_connected(false).await;
         *self.state.pairing.lock().await = None;
         *self.state.session_token.lock().await = None;
     }
@@ -578,8 +670,12 @@ async fn pair(
 
     let session = random_token(32);
     *state.session_token.lock().await = Some(session.clone());
-    *state.connected.lock().await = true;
     *pairing = None;
+    // 显式释放配对锁后再翻转状态：监听器会派生任务去读 `snapshot()`，
+    // 而快照要锁 `pairing`——持锁通知会把「配对完成」和「读快照」耦合成
+    // 一次无谓的等待（任务侧只是排队，但顺序上没必要）。
+    drop(pairing);
+    state.set_connected(true).await;
     Json(serde_json::json!({"ok": true, "session": session})).into_response()
 }
 
@@ -859,5 +955,95 @@ mod tests {
         assert!(!after.running);
         assert!(after.pairing_url.is_none(), "stop 后不得残留有效配对令牌");
         assert!(!after.connected);
+    }
+
+    /// 通知语义：只在配对状态**真正翻转**时触发一次。
+    ///
+    /// 判重不是优化而是正确性要求——壳侧每次收到通知都要走一次主线程
+    /// `set_text`，重复通知会在「打开配对页」这类密集操作里被放大。
+    #[tokio::test]
+    async fn connected_listener_fires_only_on_real_transition() {
+        let bridge = MobileBridge::new();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        bridge.on_connected_change(move |connected| {
+            sink.lock().unwrap().push(connected);
+        });
+
+        bridge.state.set_connected(true).await;
+        bridge.state.set_connected(true).await; // 值未变：不得重复通知
+        bridge.state.set_connected(false).await;
+
+        assert_eq!(*seen.lock().unwrap(), vec![true, false]);
+    }
+
+    /// 回归护栏（本模块此前缺失的一环）：手机在配对页完成 `POST /pair`
+    /// 之后，宿主**必须**收到通知。
+    ///
+    /// 此前 `pair()` 直接写 `connected` 字段，没有任何观察者，于是原生菜单的
+    /// 状态行会停在 `listening`——用户刚在手机上点完「配对」，桌面菜单却毫无
+    /// 反应，只能靠停止/重开桥来刷新。配对动作发生在手机浏览器里，宿主没有
+    /// 本地事件可挂钩，因此这条链路只能靠回调保证。
+    #[tokio::test]
+    async fn pairing_from_the_phone_notifies_the_listener() {
+        let bridge = MobileBridge::new();
+        let notified = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&notified);
+        bridge.on_connected_change(move |connected| {
+            sink.lock().unwrap().push(connected);
+        });
+
+        let snapshot = bridge.start(None).await.expect("绑定临时端口");
+        let pairing_url = snapshot.pairing_url.expect("配对 URL 必须在监听后可用");
+        let token = url::Url::parse(&pairing_url)
+            .expect("配对 URL 必须可解析")
+            .query_pairs()
+            .find(|(key, _)| key == "token")
+            .map(|(_, value)| value.to_string())
+            .expect("配对 URL 必须带 token");
+
+        let response = pair(
+            State(Arc::clone(&bridge.state)),
+            Json(HashMap::from([(
+                "token".to_string(),
+                serde_json::Value::String(token),
+            )])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *notified.lock().unwrap(),
+            vec![true],
+            "配对成功必须通知宿主"
+        );
+
+        // 令牌一次性：重放不得成功，也不得再次通知。
+        let replay = pair(
+            State(Arc::clone(&bridge.state)),
+            Json(HashMap::from([(
+                "token".to_string(),
+                serde_json::Value::String("whatever".to_string()),
+            )])),
+        )
+        .await;
+        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(*notified.lock().unwrap(), vec![true]);
+    }
+
+    /// 停止桥同样是一次状态翻转（已配对的手机不再有效），通知必须发出，
+    /// 否则菜单状态行会停留在 `paired`。
+    #[tokio::test]
+    async fn stopping_the_bridge_notifies_the_listener() {
+        let bridge = MobileBridge::new();
+        let notified = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&notified);
+        bridge.on_connected_change(move |connected| {
+            sink.lock().unwrap().push(connected);
+        });
+
+        bridge.state.set_connected(true).await;
+        bridge.stop().await;
+
+        assert_eq!(*notified.lock().unwrap(), vec![true, false]);
     }
 }
