@@ -29,16 +29,26 @@
         min-height: 34px; padding: 7px 18px; border-radius: 999px;
         font-size: 13px; font-weight: 600;
       }
+      button[disabled] { opacity: .55; cursor: progress; }
       .primary { color: #fff; background: #4d6bfe; }
       .primary:hover { background: #3e5de7; }
       .secondary { color: #3f3f46; background: #ececee; border: 1px solid rgba(32,33,36,.14); }
       .secondary:hover { background: #e2e2e5; }
+      /* 动作失败的可见出口。此前失败只进 console.error，页面上毫无痕迹——
+         「点了没反应」让用户和排障者都无从判断，因此失败必须落在页面上。 */
+      .notice {
+        margin: 0; padding: 8px 14px; max-width: 640px;
+        color: #8a2c2c; background: rgba(220,38,38,.10);
+        border: 1px solid rgba(220,38,38,.28); border-radius: 8px;
+        font-size: 12px; white-space: pre-wrap; word-break: break-word;
+      }
       :root[data-theme='dark'] body, @media (prefers-color-scheme: dark) { }
       @media (prefers-color-scheme: dark) {
         body { color: #f3f4f6; background: #141416; }
         .message { color: #9ca0a8; }
         .secondary { color: #e4e4e7; background: #2a2a2e; border-color: rgba(255,255,255,.16); }
         .secondary:hover { background: #34343a; }
+        .notice { color: #fca5a5; background: rgba(220,38,38,.16); border-color: rgba(248,113,113,.32); }
       }
     </style>
   </head>
@@ -48,6 +58,7 @@
       <h1 class="title" id="title">Harness could not start</h1>
       <p class="message" id="message"></p>
       <pre class="logs" id="logs" hidden></pre>
+      <p class="notice" id="notice" hidden></p>
       <div class="actions">
         <button class="primary" id="retry">Retry</button>
         <button class="secondary" id="safemode" hidden>Safe Mode</button>
@@ -67,7 +78,48 @@
       const invoke = window.__TAURI__?.core?.invoke;
       const messageEl = document.getElementById('message');
       const logsEl = document.getElementById('logs');
+      const noticeEl = document.getElementById('notice');
       const safeModeBtn = document.getElementById('safemode');
+
+      /**
+       * 显示动作失败原因。
+       *
+       * 不用 console.error 兜底：错误页的用户正处于「应用起不来」的场景，
+       * 他们不会开 DevTools。失败必须落在页面上，否则一次拼错的命令名
+       * 就会表现为「按钮点了没反应」——2026-09-10 之前正是如此。
+       * @param {string} label 动作名（已本地化）
+       * @param {unknown} error 失败原因
+       */
+      function fail(label, error) {
+        const detail = error && error.message ? error.message : String(error);
+        noticeEl.textContent = zh ? `${label}失败：${detail}` : `${label} failed: ${detail}`;
+        noticeEl.hidden = false;
+      }
+
+      function clearNotice() {
+        noticeEl.hidden = true;
+        noticeEl.textContent = '';
+      }
+
+      /**
+       * 执行一个壳命令，失败时在页面上可见。
+       *
+       * 成功路径通常会导致页面被导航覆盖（重启/退出），因此只在失败时恢复按钮，
+       * 避免与即将消失的页面抢状态。
+       * @param {string} command 已注册的 Tauri 命令名
+       * @param {string} label 本地化动作名
+       * @param {object} [args] 命令参数
+       * @param {HTMLButtonElement} [button] 触发按钮（用于禁用与恢复）
+       */
+      function run(command, label, args, button) {
+        if (!invoke) return;
+        clearNotice();
+        if (button) button.disabled = true;
+        invoke(command, args).catch((error) => {
+          if (button) button.disabled = false;
+          fail(label, error);
+        });
+      }
 
       function apply(snapshot) {
         if (!snapshot) return;
@@ -102,17 +154,26 @@
         invoke('harness_status').then(apply).catch(() => {});
         loadLogs();
       }
-      document.getElementById('retry').addEventListener('click', () => {
-        if (invoke) invoke('harness_restart').catch(console.error);
+      const retryBtn = document.getElementById('retry');
+      const openLogsBtn = document.getElementById('openlogs');
+      const quitBtn = document.getElementById('quit');
+
+      retryBtn.addEventListener('click', () => {
+        run('harness_restart', zh ? '重试' : 'Retry', undefined, retryBtn);
       });
+      // 命令名必须是 generate_handler! 里注册的那个：`safe_mode_action`，
+      // 通过 `action` 参数区分动作。此前这里写的是并不存在的
+      // `harness_start_safe_mode`，异常又被 catch 吞掉，导致「进入安全模式」
+      // 静默失效（no-op）。命令面与调用面的一致性现由
+      // scripts/verify-ipc-surface.mjs 在 CI 中守护。
       safeModeBtn.addEventListener('click', () => {
-        if (invoke) invoke('harness_start_safe_mode').catch(console.error);
+        run('safe_mode_action', zh ? '进入安全模式' : 'Safe Mode', { action: 'restart' }, safeModeBtn);
       });
-      document.getElementById('openlogs').addEventListener('click', () => {
-        if (invoke) invoke('open_logs').catch(console.error);
+      openLogsBtn.addEventListener('click', () => {
+        run('open_logs', zh ? '打开日志' : 'View log', undefined, openLogsBtn);
       });
-      document.getElementById('quit').addEventListener('click', () => {
-        if (invoke) invoke('app_quit').catch(console.error);
+      quitBtn.addEventListener('click', () => {
+        run('app_quit', zh ? '退出' : 'Quit', undefined, quitBtn);
       });
     </script>
   </body>
