@@ -224,10 +224,30 @@ jobs:
       - name: Smoke L1 (assembled resource tree)
         run: node scripts/smoke-launch.mjs --level=1 --resource-mode=assembled
 
+      # 更新产物必须签名才能生成（`createUpdaterArtifacts: true`）。缺密钥时
+      # tauri build 会在打包末尾才失败，白跑一轮 300MB 组装，因此先显式检查，
+      # 并把「缺的是哪一项」写进错误信息。密钥只存在于 GitHub Secrets 与离线
+      # 备份，绝不进仓库（见 README「Auto-update」一节）。
+      #
+      # 用 env 传值而不是把 `${{ secrets.* }}` 插进 run 字符串：后者一旦被
+      # 回显就会把私钥写进构建日志。
+      - name: Verify signing key is available
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — updater artifacts cannot be signed. See README (Auto-update)."
+            exit 1
+          fi
+
       # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
       # 资源。直跑 npm run tauri build（package.json 的 tauri script 指向
       # @tauri-apps/cli 的 tauri 二进制，不需 cargo 子命令）。
       - name: Build installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
       # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。
