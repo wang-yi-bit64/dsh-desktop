@@ -125,6 +125,13 @@
         if (!snapshot) return;
         if (snapshot.message) messageEl.textContent = snapshot.message;
         // Failed 相位的结构化归因（任务 1.4）：kind / plugin_fault / retryable。
+        //
+        // 这里的 `snapshot.phase === 'failed'` 依赖一个**跨语言契约**：Rust 侧
+        // `HarnessSnapshot.phase` 带 `#[serde(flatten)]`，tag 与 message / logs 平铺。
+        // 2026-09-10 之前该属性缺失，服务端发的是 `{phase:{phase:'failed',…}}`，
+        // 于是本判据**恒为 false**，「疑似插件故障」提示与安全模式按钮从未出现过。
+        // 若要让这条分支继续工作，就不要去掉 state.rs 里的 flatten；
+        // `snapshot_json_keeps_the_phase_tag_flat` 在 CI 中守护它。
         if (snapshot.phase === 'failed' && snapshot.plugin_fault) {
           const hint = zh
             ? '\n（疑似第三方插件故障：建议进入安全模式禁用故障插件）'

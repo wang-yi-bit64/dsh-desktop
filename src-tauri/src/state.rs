@@ -65,10 +65,23 @@ pub enum HarnessPhase {
 
 /// 推送给前端的完整快照。
 ///
-/// `HarnessPhase` 是 tagged enum，序列化后与 `message` / `logs` 平铺在同一层。
+/// # 为什么 `phase` 必须带 `#[serde(flatten)]`
+///
+/// 这是一个**契约**：`phase` 的 tag 与 `message` / `logs` 平铺在同一层，即
+/// `{"phase":"failed","cause_kind":…,"plugin_fault":true,"message":…}`，与上游
+/// `RuntimeStatus`（`contracts.ts`：`phase` 是一个同级字符串字段）一致。
+///
+/// 此前本文件**写了这句话但漏了属性**，于是 `HarnessPhase` 被当作普通字段嵌套，
+/// 实际发出的是 `{"phase":{"phase":"failed",…}}`。后果不是格式难看，而是
+/// `frontend/error.html` 的判据 `snapshot.phase === 'failed'` **恒为 false**：
+/// 「疑似插件故障 → 建议进入安全模式」那条分支从未生效，安全模式按钮也从未露面。
+/// 2026-09-10 由 serde 探针实测确认（`cargo run` 打印真实 JSON）并修复。
+///
+/// 改动这一行之前请先读 `snapshot_json_keeps_the_phase_tag_flat` 测试。
 #[derive(Clone, Debug, Serialize)]
 pub struct HarnessSnapshot {
-    /// 当前相位。
+    /// 当前相位。**必须 flattened**——理由见上。
+    #[serde(flatten)]
     pub phase: HarnessPhase,
     /// 人类可读的进度描述。
     pub message: String,
@@ -478,5 +491,77 @@ impl AppState {
             mobile,
             updates: Arc::new(tokio::sync::Mutex::new(None)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 快照契约：`phase` 的 tag 必须与 `message` / `logs` **平铺**，不得嵌套。
+    ///
+    /// 这条断言的唯一存在理由是它**曾经不成立**：字段缺 `#[serde(flatten)]`，
+    /// 实际发出 `{"phase":{"phase":"failed",…}}`，于是 `frontend/error.html` 的
+    /// `snapshot.phase === 'failed'` 恒为 false，「疑似插件故障 → 建议进入安全模式」
+    /// 分支静默失效。跨语言（Rust → HTML）的契约错误编译器看不见，只能这样钉住。
+    #[test]
+    fn snapshot_json_keeps_the_phase_tag_flat() {
+        let snapshot = HarnessSnapshot {
+            phase: HarnessPhase::Failed {
+                cause_kind: "plugin_fault".to_string(),
+                cause: "loader entry failed (my-plugin)".to_string(),
+                plugin_fault: true,
+                retryable: false,
+            },
+            message: "failed".to_string(),
+            logs: vec!["[desktop] failed".to_string()],
+        };
+        let json = serde_json::to_value(&snapshot).expect("snapshot must serialize");
+        assert_eq!(
+            json["phase"],
+            serde_json::json!("failed"),
+            "phase tag must be flat, not nested: {json}"
+        );
+        assert_eq!(
+            json["plugin_fault"],
+            serde_json::json!(true),
+            "variant fields must be flat too, otherwise the page cannot read them: {json}"
+        );
+        assert_eq!(
+            json["cause_kind"],
+            serde_json::json!("plugin_fault"),
+            "{json}"
+        );
+        assert_eq!(json["message"], serde_json::json!("failed"), "{json}");
+        assert!(json.get("logs").is_some(), "{json}");
+    }
+
+    #[test]
+    fn unit_phase_serializes_to_a_flat_string() {
+        let snapshot = HarnessSnapshot {
+            phase: HarnessPhase::Idle,
+            message: "Harness is not running.".to_string(),
+            logs: vec![],
+        };
+        let json = serde_json::to_value(&snapshot).expect("snapshot must serialize");
+        assert_eq!(json["phase"], serde_json::json!("idle"), "{json}");
+    }
+
+    #[test]
+    fn ready_phase_exposes_its_url_flat() {
+        let snapshot = HarnessSnapshot {
+            phase: HarnessPhase::Ready {
+                url: "http://127.0.0.1:1234/?token=x".to_string(),
+            },
+            message: "Harness is ready.".to_string(),
+            logs: vec![],
+        };
+        let json = serde_json::to_value(&snapshot).expect("snapshot must serialize");
+        assert_eq!(json["phase"], serde_json::json!("ready"), "{json}");
+        assert_eq!(
+            json["url"],
+            serde_json::json!("http://127.0.0.1:1234/?token=x"),
+            "{json}"
+        );
     }
 }

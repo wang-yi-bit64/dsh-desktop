@@ -190,6 +190,18 @@ Harness 页面运行在 Tauri webview 中。**此处曾有一处机制误判，�
 
 `scripts/prepare-harness.mjs` 的 `assertPickerSurfaceIsHostBacked()` 会在应用补丁后校验该文件不再引用 `window.dshDesktop*` 且仍调用 `ctx.uiWorkspace.pickDirectory()`，违反即构建失败。
 
+### 快照契约：`HarnessSnapshot.phase` 必须 `#[serde(flatten)]`（已修复，勿回归）
+
+`harness_status` 命令与 `harness://status` 事件共用同一个载荷 `HarnessSnapshot`，契约为 `phase` 的 tag 与 `message` / `logs` **平铺**（与上游 `RuntimeStatus` 一致）：
+
+```json
+{ "phase": "failed", "cause_kind": "plugin_fault", "plugin_fault": true, "message": "…", "logs": ["…"] }
+```
+
+此前 `state.rs` 只**写了这句话**、漏了属性，实际发出 `{"phase":{"phase":"failed",…}}`。编译器不会报错——`Serialize` 照常成功，只是形状变了；而唯一的消费方 `frontend/error.html` 判的是 `snapshot.phase === 'failed'`，于是**恒为 false**：「疑似插件故障 → 建议进入安全模式」分支与安全模式按钮**从未生效过**。2026-09-10 用 serde 探针打印真实 JSON 才定位到。
+
+这是跨语言契约问题的典型形态：**两侧各自都没错，错在中间的形状**。守护它的是 `state.rs` 的 `snapshot_json_keeps_the_phase_tag_flat`（CI 运行；本机 GNU 工具链跑不了 `src-tauri` 单测，原因见 §2）。
+
 ### 插件「已安装但未生效」的两类根因（已修复，勿回归）
 
 市场对「安装成功却不在 `dsh.profile.bundles` 里」的包会给出结论，历史上此处出过两个独立缺陷，都会让一个**声明了 `dsh.bundle.patch` 的插件**永远挂载不上：
