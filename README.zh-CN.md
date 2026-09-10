@@ -22,7 +22,8 @@
 - **安全模式与故障恢复** ✅ —— 自动检测启动失败原因并写入独立隔离 profile，随后**真正以该 profile 启动 Harness**（`--profile desktop-safe-mode` 搭配 `dsh-desktop-safe.patch.yml`，后者会摘掉常规补丁层挂载的产品插件），保障基础功能可用。注意：安全模式生效期间，壳层界面上**尚无任何提示**——该指示器属**刻意后置的功能**，见[后续计划](#后续计划尚未开工)。
 - **多 Profile 与会话管理** ✅ —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
 - **壳层结构化日志** ✅ —— `tauri-plugin-log` 落盘到 `app_data_dir/desktop.log`（5 MB × 2 轮转，含本地时区），与 Harness 侧 `harness.log` / `app.log` 分离，便于归因「是壳的问题还是 Harness 的问题」。
-- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从应用菜单「Phone Pairing (LAN)…」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。菜单的 `Phone` 子菜单会实时显示桥状态（off / listening / paired）——注意本应用**尚无系统托盘**。
+- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从应用菜单「Phone Pairing (LAN)…」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。菜单的 `Phone` 子菜单会实时显示桥状态（off / listening / paired），Harness 侧边栏另有一枚对应的**页内状态指示器**——注意本应用**尚无系统托盘**。
+  - 该指示器由壳层注入到 Harness 页面（见下方[Harness 页面注入](#harness-页面注入)）。它**只表示状态、刻意不可点击**：配对与停止在原生 `Phone` 菜单里，壳层不会为了复制一个菜单项而向 Harness 这个远程 origin 开 IPC 入口。文案随连接状态切换（「手机未连接」/「手机已连接」），侧边栏收起且未配对时保持隐藏。
 - **桌面深度定制** ✅ —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。补丁按 `functional` / `ui-behavior` / `brand` 三层分级（见 [`patches/LAYERS.md`](patches/LAYERS.md)），失败时默认降级并在 `MANIFEST.json` 的 `patches[]` 逐条留证；`--strict` 可恢复全量 fail-fast。
 - **单实例锁定** ✅ —— 第二次启动时聚焦已有窗口，避免重复拉起多实例。
 - **自动更新** ✅ —— `tauri-plugin-updater` 已注册，检查 → 下载 → 择机重启安装的完整链路均已接线，并配有应用内更新页（`frontend/updates.html`，由应用菜单「检查更新」打开）。更新源为**本仓库**（`wang-yi-bit64/dsh-desktop`），验签使用**本项目自有**的 minisign 密钥。发布正式包前请先读[自动更新与签名密钥](#自动更新与签名密钥)。
@@ -148,6 +149,23 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
 
 **私钥一旦丢失，对已安装用户而言不可挽回。** 公钥被编译进每一个已发布的二进制；换新密钥对就意味着换新公钥，而已安装的客户端会持续拒绝由新公钥签名的更新。请把 `~/.tauri/dsh-desktop.key` 当作发布关键基础设施，而不是本地开发文件。
 
+## Harness 页面注入
+
+壳层通过 Tauri 的 `initialization_script` 在**每一次 Harness 页面加载**时注入一小段脚本——它等价于 Electron 的 `preload`。脚本在文档解析之前执行、在每次顶层导航时生效，并按 origin 自我早退，因此壳层自己的本地页（`index.html`、`error.html`、`updates.html` 等）与子框架都不受影响。
+
+有两点必须说清，因为本文档早期版本把它们搞错了：
+
+1. **Harness 页上是可以定义 `window.*` 全局的。** 本文档曾写道「Tauri webview 没有 preload / initialization script」——那是一个错误的机制判断。它当年用来支撑的「目录选择器规则」依然成立，但依据已改为真正成立的理由，见上文目录选择器一段。
+2. **这条通道是单向的：壳层 → 页面。** 状态经 `webview.eval()` 推送，因此**不**向 Harness 这个远程 origin 暴露任何 IPC 命令。任何需要反向通信的能力都被刻意不做。
+
+当前消费方是手机状态指示器（`src-tauri/frontend/harness-ui-inject.js`，由 `src-tauri/src/harness_ui.rs` 推送）。它的 DOM 侧行为由一套基于最小 DOM 桩的无头自测覆盖：
+
+```sh
+npm run verify:harness-inject
+```
+
+该套件还带一项**可证伪性检查**：它把脚本回退成上游的行为（会把指示器以未渲染状态漏进侧边栏），并要求断言**必须变红**；若不变红则门禁失败。一个不可能失败的测试是装饰，不是防线。
+
 ## 体积现状与期望管理
 
 安装包体积主要由**内置 Node.js 运行时 + 完整 Harness 依赖树**决定，壳层（Rust/Tauri）自身的贡献很小。这不是「胖壳」问题，而是为了「宿主机零依赖」付出的必然代价——把这个前提说清楚，比给出一个笼统的 MB 数字更有用。
@@ -172,7 +190,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
 - **`prepare:harness` 幂等快速路径按完整打包清单校验。** 此前只检查 3 个文件，导致缺 `bin/`、`plugin-safety-guard.mjs` 或 `plugin-worker-host.mjs` 的 `resources/` 被判定为完整并跳过组装。`plugin-safety-guard.mjs` 由 `harness-node-entry.mjs` 直接 import，缺失时 Harness 根本无法启动；缺 `bin/` 还会让 `cargo build` 因 `resources/bin/*` glob 不匹配而失败。完整性检查现已对齐 `tauri.conf.json` → `bundle.resources`。
 - **`shell == None` 时同样要走 `harness_env`。** `Launcher::execute` 此前把 `capture_shell_environment()` 的原始结果直接交给子进程，`DSH_HOME` 等契约变量因此从未注入，Harness 回退到 `~/.dsh`，把可变状态写到了 `app_data_dir` 之外（违反 INV-1）。GUI 与 CLI 两条路径现已都注入契约环境。
 
-另有工作区目录选择器必须走 Host seam、不得使用 renderer 全局桥：Tauri webview 没有 preload / initialization script，`window.*` 全局无处定义。曾有一个 `patch-package` 补丁把原生目录选择器改成 `window.dshDesktopDirectoryPicker.pick()`，该全局从未被定义，因此导入项目时必然弹出「无法打开文件夹 / DSH Desktop directory picker bridge is unavailable」。现已移除该补丁，恢复上游 stock 路径：客户端 `ctx.uiWorkspace.pickDirectory()` → Host `ctx.directoryPicker` seam → Harness 进程内拉起 Win32 `IFileOpenDialog`。`scripts/prepare-harness.mjs` 的 `assertPickerSurfaceIsHostBacked()` 会在打补丁后校验这一点，违反即构建失败。
+另有工作区目录选择器必须走 Host seam、不得使用 renderer 全局桥。这条规则原先的理由是「Tauri webview 没有 preload / initialization script，`window.*` 全局无处定义」——**这个机制描述是错的**（Tauri 的 `initialization_script` 正是 preload 的等价物，本仓现已用它向 Harness 页注入手机状态指示器）。规则依旧成立，但要用成立的理由：曾有一个 `patch-package` 补丁把原生目录选择器改成 `window.dshDesktopDirectoryPicker.pick()`，而该全局**从未被任何东西定义**，因此导入项目时必然弹出「无法打开文件夹 / DSH Desktop directory picker bridge is unavailable」；并且即便今天有能力定义这样的全局，让选择器经由页面回连宿主也要为 Harness 这个**远程 origin** 开一个 IPC 入口，而注入机制刻意只用于**壳层 → 页面**的单向下发。现已移除该补丁，恢复上游 stock 路径：客户端 `ctx.uiWorkspace.pickDirectory()` → Host `ctx.directoryPicker` seam → Harness 进程内拉起 Win32 `IFileOpenDialog`。`scripts/prepare-harness.mjs` 的 `assertPickerSurfaceIsHostBacked()` 会在打补丁后校验这一点，违反即构建失败。
 
 要构建真实安装包，`npm run tauri build` 首次运行会下载 NSIS 工具链；在网络无法访问 GitHub releases 的环境下，打包步骤会以 `timeout: global` 失败，但此时 `.exe` 与资源其实已成功产出。
 

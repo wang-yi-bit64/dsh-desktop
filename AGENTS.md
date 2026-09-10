@@ -180,7 +180,11 @@ api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
 
 ### 目录选择器必须走 Host seam，禁止引入 renderer 全局桥（已修复，勿回归）
 
-Harness 页面运行在 Tauri webview 中，**没有 preload / initialization script**，任何 `window.*` 全局都无处定义。曾有一个 `patch-package` 补丁把原生目录选择器改成 `window.dshDesktopDirectoryPicker.pick()`，该全局在整个仓库中从未被定义，导致工作区导入时必然弹出「无法打开文件夹 / DSH Desktop directory picker bridge is unavailable」。
+Harness 页面运行在 Tauri webview 中。**此处曾有一处机制误判，已更正**：早期版本写「没有 preload / initialization script，任何 `window.*` 全局都无处定义」——**这句话是错的**。Tauri 的 `WebviewWindowBuilder::initialization_script` 会在每次顶层导航前执行脚本，正是 preload 的等价物；本仓已用它向 Harness 页注入手机状态指示器（见 §7.2 与 `src-tauri/src/harness_ui.rs`）。所以「定义不了全局」这个理由不成立。
+
+**结论不变，但理由要换成成立的**：曾有一个 `patch-package` 补丁把原生目录选择器改成 `window.dshDesktopDirectoryPicker.pick()`，该全局在整个仓库中从未被定义（从没有任何注入脚本定义过它），导致工作区导入时必然弹出「无法打开文件夹 / DSH Desktop directory picker bridge is unavailable」。
+
+即便今天有能力定义这样一个全局，**也不该走这条路**：页面若要回连宿主，就得为 Harness 这个**远程 origin** 开一个 IPC 入口，而本仓的命令面是收紧的（见 INV-2 与 §7）。注入机制只用于**壳层 → 页面**的单向下发。
 
 正确路径是上游 stock 实现：客户端调用 `ctx.uiWorkspace.pickDirectory()` → Host `ctx.directoryPicker` seam → `@deepseek-ai/dsh-host-directory-picker-native` 在 Harness 进程内拉起 Win32 `IFileOpenDialog`。因为 Harness 绑定 `127.0.0.1`，`directory-picker-auto` 必定解析到 native 组合，无需任何 renderer IPC（这也与 INV-2 一致：harness 页没有 remote capability，本来也调不动宿主命令）。
 
@@ -256,6 +260,8 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 | **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复调用名；同日补完启动链路） | `src-tauri/frontend/error.html` 调 `safe_mode_action`（`action: "restart"`），失败经 `fail()` 可见上报 | 错误页按钮 → `commands::safe_mode_action` → `HarnessSupervisor::restart_in_safe_mode`（此前调 `restart()`，实际只是**普通重启**——按钮曾是谎话） |
 | **恢复页交互** | ❌ **未接线** | `recovery_action` / `safe_mode_action`（restart/quit）已定义且注册 | **无**：`plugin-recovery.html` 与 `safe-mode.html` 零 `invoke`、零事件监听（`plugin-recovery.html` 甚至无 `local_page` 指向，不可达） |
 | 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label`；`MobileBridge::on_connected_change`（镜像上游 `onConnectedChange`）在配对状态翻转时回调 | 菜单构建时初始化，**手机侧 `POST /pair` 成功**、菜单配对/停止时均经 `refresh_bridge_status` 刷新（`lib.rs` setup 注册监听器） |
+| ↳ 页内手机状态指示器（Harness 侧边栏） | ✅ 已接线（2026-09-10） | `harness_ui.rs::INJECT_SCRIPT`（`include_str!` 内嵌 `frontend/harness-ui-inject.js`），挂在 `[data-dsh-sidebar-settings]` 下；状态下发 `push_phone_status` 走 `webview.eval`，**不新增 IPC 命令** | 两个推送点：连接翻转（`on_connected_change`）与页面加载完成（`on_page_load`）。**只做状态指示、不可点击**——配对/停止仍只走原生 `Phone` 菜单，因此它不渲染成按钮 |
+| **Harness 页注入机制（preload 等价物）** | ✅ 已接线（2026-09-10；同期更正「无初始化脚本」的误判） | 主窗口 builder 的 `initialization_script`（`lib.rs`）+ `frontend/harness-ui-inject.js`；脚本按 origin 自我早退（本地页与子框架不注入） | 无头行为自测 `npm run verify:harness-inject`（19 项断言 + 可证伪性检查，已进 CI） |
 
 ### 7.3 维护方式
 
