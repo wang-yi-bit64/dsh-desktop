@@ -2,12 +2,38 @@
 //!
 //! 菜单事件全部走状态机：「重启 Harness」必须先 `Stopping → Stopped` 再
 //! `Preparing`（新端口新 token → 重新导航，旧页面自然失效）。
+//!
+//! # `Phone` 子菜单的状态行（2026-09-10 接入）
+//!
+//! 菜单第一项是**禁用**的信息项，文案由 [`refresh_bridge_status`] 在桥状态
+//! 变化时刷新（当前有三处调用：启动建菜单、配对成功/失败、停止桥）。
+//!
+//! 为什么不做成「重建整个菜单」或「把句柄存进托管状态」：
+//!
+//! * `muda::MenuItem` 内部是 `Rc`，**既非 `Send` 也非 `Sync`**，无法放进
+//!   Tauri 托管状态（`manage` 要求 `Send + Sync + 'static`）；
+//! * 因此改为经 `AppHandle::menu()` 取回已设置的菜单，再按 id 逐层定位句柄。
+//!   注意 `Menu::get` / `Submenu::get` **只查直接子项、不递归**，所以必须先进
+//!   `Phone` 子菜单（[`PHONE_SUBMENU_ID`]）再取状态项。
+//!
+//! 这些 API 内部都经 `run_on_main_thread` 派发并**阻塞等待**结果，所以只能在
+//! 工作线程调用；从主线程调用会自锁（我们的调用点都在
+//! `tauri::async_runtime::spawn` 出的任务里）。
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::mobile_bridge::{self, MobileBridgeSnapshot};
 use crate::state::AppState;
+
+/// `Phone` 子菜单的 id。
+///
+/// `Menu::get` 只查直接子项，定位状态项必须先经该 id 拿到子菜单句柄。
+pub const PHONE_SUBMENU_ID: &str = "phone";
+
+/// 手机桥状态信息项的 id（禁用项，只展示不可点击）。
+pub const MOBILE_STATUS_ID: &str = "mobile-status";
 
 /// 构建应用菜单。
 pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
@@ -18,6 +44,14 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     // LAN 手机桥是显式动作：菜单点击才监听，避免每次启动都在局域网暴露端口。
     let mobile_pair = MenuItemBuilder::with_id("mobile-pair", "Phone Pairing (LAN)…").build(app)?;
     let mobile_stop = MenuItemBuilder::with_id("mobile-stop", "Stop Phone Bridge").build(app)?;
+    // 状态行：初始即「未启动」（桥从不自动监听，见 mobile_bridge 模块文档），
+    // 无需异步查询，因此 setup 阶段可以同步建好。
+    let mobile_status = MenuItemBuilder::with_id(
+        MOBILE_STATUS_ID,
+        mobile_bridge::status_label(&MobileBridgeSnapshot::default(), None),
+    )
+    .enabled(false)
+    .build(app)?;
     let check_updates =
         MenuItemBuilder::with_id("updates-check", "Check for Updates…").build(app)?;
     let quit = MenuItemBuilder::with_id("app-quit", "Quit DSH Desktop").build(app)?;
@@ -29,7 +63,9 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         .item(&view_log)
         .build()?;
 
-    let mobile_submenu = SubmenuBuilder::new(app, "Phone")
+    let mobile_submenu = SubmenuBuilder::with_id(app, PHONE_SUBMENU_ID, "Phone")
+        .item(&mobile_status)
+        .separator()
         .item(&mobile_pair)
         .item(&mobile_stop)
         .build()?;
@@ -45,6 +81,48 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         .item(&harness_submenu)
         .item(&mobile_submenu)
         .build()
+}
+
+/// 刷新 `Phone` 子菜单里的桥状态文案。
+///
+/// 幂等；任一环节查不到（菜单未设置、平台未支持）时静默返回——状态行是
+/// **辅助信息**，不该因为刷新失败而中断配对/停止流程。
+///
+/// # 参数
+///
+/// * `app` — 应用句柄，需已 `set_menu` 过 [`build_menu`] 的产物。
+/// * `snapshot` — 桥状态快照，通常来自 `MobileBridge::snapshot()`。
+///
+/// # 调用约束
+///
+/// 内部经 `run_on_main_thread` 同步派发，**必须从工作线程调用**（主线程调用
+/// 会自锁）。
+pub fn refresh_bridge_status<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    snapshot: &MobileBridgeSnapshot,
+) {
+    let label = mobile_bridge::status_label(snapshot, mobile_bridge::lan_ipv4().as_deref());
+
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    // 逐层定位：`Menu::get` / `Submenu::get` 都不递归，必须显式进 `Phone` 子菜单。
+    let Some(submenu) = menu.get(PHONE_SUBMENU_ID) else {
+        log::warn!("menu submenu `{PHONE_SUBMENU_ID}` not found; bridge status row not updated");
+        return;
+    };
+    let Some(submenu) = submenu.as_submenu() else {
+        return;
+    };
+    let Some(item) = submenu.get(MOBILE_STATUS_ID) else {
+        return;
+    };
+    let Some(item) = item.as_menuitem() else {
+        return;
+    };
+    if let Err(error) = item.set_text(&label) {
+        log::warn!("cannot update phone bridge menu label: {error}");
+    }
 }
 
 /// 菜单事件分发。
@@ -92,21 +170,31 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                             "mobile bridge has no Harness auth cookie yet; /api/rpc will retry the handshake"
                         );
                         }
-                        match snapshot.pairing_url {
+                        match &snapshot.pairing_url {
                             Some(url) => {
-                                if let Err(error) = app.opener().open_url(url, None::<&str>) {
+                                if let Err(error) = app.opener().open_url(url.clone(), None::<&str>)
+                                {
                                     log::error!("cannot open pairing page: {error}");
                                 }
                             }
                             None => log::warn!("mobile bridge started without a pairing URL"),
                         }
+                        // 状态行必须在配对页打开**之前或之后都行**，但必须在 start
+                        // 返回后：此时 port 才非空，否则状态行会停在 off。
+                        refresh_bridge_status(&app, &snapshot);
                     }
-                    Err(error) => log::error!("mobile bridge failed to start: {error}"),
+                    Err(error) => {
+                        log::error!("mobile bridge failed to start: {error}");
+                        // 绑定失败（端口被占等）时窗口不会监听，状态行必须回到
+                        // 真实状态，不能停留在上一次的 listening。
+                        refresh_bridge_status(&app, &state.mobile.snapshot().await);
+                    }
                 }
             }
             "mobile-stop" => {
                 state.mobile.stop().await;
                 log::info!("mobile bridge stopped");
+                refresh_bridge_status(&app, &state.mobile.snapshot().await);
             }
             "updates-check" => {
                 let manager = state.updates.lock().await.clone();
@@ -115,6 +203,8 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 }
             }
             "app-quit" => app.exit(0),
+            // `mobile-status` 是 `enabled(false)` 的信息项，点击不会产生事件；
+            // 其余未知 id 一并忽略。
             _ => {}
         }
     });

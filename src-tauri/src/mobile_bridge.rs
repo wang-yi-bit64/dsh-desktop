@@ -81,7 +81,8 @@ pub struct MobileBridgeSnapshot {
     pub port: Option<u16>,
     pub pairing_url: Option<String>,
     /// 二维码的 **文本块渲染**（`<pre>` + Unicode 半块字符），并非 `<svg>`。
-    /// 字段名保留 `_svg` 以免破坏既有 `mobile_status` 消费方。
+    /// 字段名保留 `_svg` 是历史命名（上游 JSON 契约沿用），与本 Rust 端口
+    /// 无消费方——`render_qr_block` 的产物一律是 `<pre>` 文本块。
     pub pairing_qr_svg: Option<String>,
     pub expires_at: Option<u128>,
     /// 是否已取得 `dsh-auth-*` cookie —— `false` 时 `/api/rpc` 会被 Harness 拒绝。
@@ -282,12 +283,64 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
+/// 手机桥状态的一行展示文案（供原生菜单 `Phone` 子菜单的动态状态项使用）。
+///
+/// 刻意写成**纯函数**并显式接收局域网地址：
+///
+/// * 纯函数 → 确定性单测（不依赖当前机器的真实网卡，CI 上不会因跑在
+///   容器/无网环境而漂移）；
+/// * 地址由调用方经 [`lan_ipv4`] 探测传入 → 这里不做任何网络动作。
+///
+/// # 参数
+///
+/// * `snapshot` — 桥状态快照；`port` 为 `None` 即「未启动」。
+/// * `lan_ip` — 展示用局域网地址；`None` 时退化为只显示端口号（探测不到
+///   网卡时仍要给出可用信息，而不是留空）。
+///
+/// # 返回
+///
+/// 形如 `Phone Bridge: paired · 192.168.1.5:41234` 的单行文本。三种状态：
+///
+/// | 条件 | 文案 |
+/// |------|------|
+/// | `port == None` | `Phone Bridge: off` |
+/// | 已配对（`connected`） | `Phone Bridge: paired · <ip>:<port>` |
+/// | 已监听但未握手（`authenticated == false`） | `Phone Bridge: listening (unauth) · <ip>:<port>` |
+/// | 已监听且已握手 | `Phone Bridge: listening · <ip>:<port>` |
+///
+/// # 示例
+///
+/// ```ignore
+/// let snapshot = MobileBridgeSnapshot { port: Some(41234), ..Default::default() };
+/// assert_eq!(
+///     status_label(&snapshot, Some("192.168.1.5")),
+///     "Phone Bridge: listening (unauth) · 192.168.1.5:41234"
+/// );
+/// ```
+pub fn status_label(snapshot: &MobileBridgeSnapshot, lan_ip: Option<&str>) -> String {
+    let Some(port) = snapshot.port else {
+        return "Phone Bridge: off".to_string();
+    };
+    let endpoint = match lan_ip {
+        Some(ip) => format!("{ip}:{port}"),
+        None => format!("port {port}"),
+    };
+    let state = match (snapshot.connected, snapshot.authenticated) {
+        (true, _) => "paired",
+        (false, true) => "listening",
+        // 未取得 `dsh-auth-*` cookie 时 `/api/rpc` 必被 Harness 拒绝——如实告知，
+        // 否则用户会把「配对成功但调用全 401」当成 Harness 的 bug。
+        (false, false) => "listening (unauth)",
+    };
+    format!("Phone Bridge: {state} · {endpoint}")
+}
+
 /// 探测本机在默认路由上的局域网 IPv4 地址。
 ///
 /// 技巧：把 UDP socket `connect` 到公网地址（不发送任何数据），让内核按路由表
 /// 选出出口网卡地址。无需引入额外依赖，也不会真的产生流量。
 /// 探测不到时返回 `None`（调用方回退 `127.0.0.1`）。
-fn lan_ipv4() -> Option<String> {
+pub fn lan_ipv4() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     let addr = socket.local_addr().ok()?;
@@ -739,6 +792,50 @@ mod tests {
         if let Some(ip) = lan_ipv4() {
             assert_ne!(ip, "127.0.0.1");
         }
+    }
+
+    /// 菜单状态文案：四种状态各自可辨；未探测到网卡时退化为端口号而非留空。
+    #[test]
+    fn status_label_covers_all_bridge_states() {
+        let stopped = MobileBridgeSnapshot::default();
+        assert_eq!(
+            status_label(&stopped, Some("192.168.1.5")),
+            "Phone Bridge: off"
+        );
+
+        let listening = MobileBridgeSnapshot {
+            running: true,
+            port: Some(41234),
+            ..Default::default()
+        };
+        assert_eq!(
+            status_label(&listening, Some("192.168.1.5")),
+            "Phone Bridge: listening (unauth) · 192.168.1.5:41234"
+        );
+
+        let authenticated = MobileBridgeSnapshot {
+            authenticated: true,
+            ..listening.clone()
+        };
+        assert_eq!(
+            status_label(&authenticated, Some("192.168.1.5")),
+            "Phone Bridge: listening · 192.168.1.5:41234"
+        );
+
+        // 已配对时 `authenticated` 不再是关注点（配对即已拿到 cookie）。
+        let paired = MobileBridgeSnapshot {
+            connected: true,
+            ..listening.clone()
+        };
+        assert_eq!(
+            status_label(&paired, Some("192.168.1.5")),
+            "Phone Bridge: paired · 192.168.1.5:41234"
+        );
+
+        assert_eq!(
+            status_label(&listening, None),
+            "Phone Bridge: listening (unauth) · port 41234"
+        );
     }
 
     /// 接线不变量：`start` 幂等、`stop` 释放端口并吊销凭据。
