@@ -9,7 +9,7 @@
 ## 功能特性
 
 - **内置运行时** —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
-- **独立契约库 (`dsh-contracts`)** —— 彻底剥离 UI 依赖，提炼统一常量、标准错误码体系 (`E1001`~`E4002`)、前后端 IPC 封套 (`IpcEnvelope<T>`) 以及 JSON-RPC 2.0 规范定义。
+- **独立契约库 (`dsh-contracts`)** —— 彻底剥离 UI 依赖，提炼统一常量、标准错误码体系 (`E1001`~`E4002`)、前后端 IPC 封套 (`IpcEnvelope<T>`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
 - **Harness 核心生命周期** —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **插件分级隔离 2.0 (Tier 0/1/2) 与看门狗** —— 基于 Node.js `worker_threads` / 独立沙箱子进程运行不可信插件，通过标准 JSON-RPC 2.0 双向通信，具备超时控制、故障计数与熔断自愈机制。

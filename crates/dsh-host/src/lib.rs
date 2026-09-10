@@ -18,7 +18,7 @@
 //! | [`stop`] | SIGTERM → 4s → SIGKILL 停止语义 | C6 |
 //! | [`logs`] | 日志环形缓冲、滚动落盘、失败归因、级别前缀 | C7 |
 //! | [`logging`] | 宿主日志（`app.log`）落盘门面 + 级别过滤 | C7 |
-//! | [`transport`] | 统一传输协议（Named Pipe / UDS / HTTP）与 JSON-RPC 2.0 模型 | — |
+//! | [`transport`] | 统一传输协议（Named Pipe / UDS / HTTP）；RPC 消息模型 re-export 自 `dsh-contracts::rpc`（唯一契约源） | — |
 //! | [`launch`] | 上述模块的编排（spawn → 日志泵 → 就绪等待） | C1–C7 |
 //! | [`error`] | 统一错误类型 + 退出码映射 + 归因降级 | — |
 

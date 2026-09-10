@@ -4,14 +4,23 @@
 //! - [`TransportProtocol::Http`]：传统的 HTTP 探测与 Webview 导航模式。
 //! - [`TransportProtocol::NamedPipe`]：Windows 平台命名的全双工管道通信（IPC）。
 //! - [`TransportProtocol::UnixDomainSocket`]：macOS / Linux 平台的 Unix 域套接字通信（IPC）。
+//!
+//! # RPC 消息模型（契约收敛）
+//!
+//! JSON-RPC 2.0 消息模型（[`RpcRequest`] / [`RpcResponse`] / [`RpcError`] /
+//! [`RpcId`] / [`RpcMessage`]）的唯一定义点是 `dsh-contracts::rpc`；本模块
+//! 仅 re-export 以保持 `dsh_host::transport::RpcX` 与 `dsh_host::RpcX` 两条
+//! 既有引用路径兼容。**禁止在本 crate 内重复定义协议类型**，否则会与
+//! `crate::contracts` 的 glob re-export 形成同名异型冲突。
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::contracts::{NAMED_PIPE_PREFIX, UDS_SOCKET_FILENAME};
+
+pub use dsh_contracts::rpc::{RpcError, RpcId, RpcMessage, RpcRequest, RpcResponse};
 
 /// 宿主与 Harness / 运行时之间的底层通信协议与端点定义。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,237 +92,10 @@ impl fmt::Display for TransportProtocol {
     }
 }
 
-/// JSON-RPC 2.0 标识符。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum RpcId {
-    /// 数值型 ID。
-    Number(i64),
-    /// 字符串型 ID。
-    String(String),
-    /// 空值 ID。
-    Null,
-}
-
-impl From<i64> for RpcId {
-    fn from(value: i64) -> Self {
-        Self::Number(value)
-    }
-}
-
-impl From<&str> for RpcId {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
-    }
-}
-
-impl From<String> for RpcId {
-    fn from(value: String) -> Self {
-        Self::String(value)
-    }
-}
-
-impl fmt::Display for RpcId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Number(n) => write!(f, "{n}"),
-            Self::String(s) => write!(f, "{s}"),
-            Self::Null => write!(f, "null"),
-        }
-    }
-}
-
-/// JSON-RPC 2.0 请求对象。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RpcRequest {
-    /// JSON-RPC 协议版本，固定为 `"2.0"`。
-    pub jsonrpc: String,
-    /// 请求方法名。
-    pub method: String,
-    /// 请求参数（可选）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Value>,
-    /// 请求标识符。如果为 `None`，则为单向 Notification。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<RpcId>,
-}
-
-impl RpcRequest {
-    /// 构造一个新的标准 JSON-RPC 2.0 请求。
-    pub fn new(id: impl Into<RpcId>, method: impl Into<String>, params: Option<Value>) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            method: method.into(),
-            params,
-            id: Some(id.into()),
-        }
-    }
-
-    /// 构造一个新的单向通知（Notification，无 id 且不期望回复）。
-    pub fn notification(method: impl Into<String>, params: Option<Value>) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            method: method.into(),
-            params,
-            id: None,
-        }
-    }
-
-    /// 检查是否为单向通知。
-    pub fn is_notification(&self) -> bool {
-        self.id.is_none()
-    }
-}
-
-/// JSON-RPC 2.0 错误体。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RpcError {
-    /// 错误码。
-    pub code: i64,
-    /// 简要错误信息。
-    pub message: String,
-    /// 附加错误数据（可选）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-}
-
-impl RpcError {
-    /// 构造一个新的错误对象。
-    pub fn new(code: i64, message: impl Into<String>, data: Option<Value>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            data,
-        }
-    }
-
-    /// 标准 Parse error (-32700)。
-    pub fn parse_error(data: Option<Value>) -> Self {
-        Self::new(-32700, "Parse error", data)
-    }
-
-    /// 标准 Invalid Request (-32600)。
-    pub fn invalid_request(data: Option<Value>) -> Self {
-        Self::new(-32600, "Invalid Request", data)
-    }
-
-    /// 标准 Method not found (-32601)。
-    pub fn method_not_found(data: Option<Value>) -> Self {
-        Self::new(-32601, "Method not found", data)
-    }
-
-    /// 标准 Invalid params (-32602)。
-    pub fn invalid_params(data: Option<Value>) -> Self {
-        Self::new(-32602, "Invalid params", data)
-    }
-
-    /// 标准 Internal error (-32603)。
-    pub fn internal_error(data: Option<Value>) -> Self {
-        Self::new(-32603, "Internal error", data)
-    }
-}
-
-impl fmt::Display for RpcError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "RPC Error [{}]: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for RpcError {}
-
-/// JSON-RPC 2.0 响应对象。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RpcResponse {
-    /// JSON-RPC 协议版本，固定为 `"2.0"`。
-    pub jsonrpc: String,
-    /// 成功时的返回结果。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    /// 失败时的错误信息。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<RpcError>,
-    /// 关联的请求标识符。
-    pub id: Option<RpcId>,
-}
-
-impl RpcResponse {
-    /// 构造成功的响应对象。
-    pub fn success(id: impl Into<RpcId>, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: Some(result),
-            error: None,
-            id: Some(id.into()),
-        }
-    }
-
-    /// 构造失败的响应对象。
-    pub fn error(id: Option<RpcId>, error: RpcError) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: Some(error),
-            id,
-        }
-    }
-
-    /// 检查响应是否成功。
-    pub fn is_success(&self) -> bool {
-        self.error.is_none() && self.result.is_some()
-    }
-
-    /// 检查响应是否包含错误。
-    pub fn is_error(&self) -> bool {
-        self.error.is_some()
-    }
-}
-
-/// JSON-RPC 2.0 顶层消息包装枚举（请求或响应）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum RpcMessage {
-    /// RPC 请求或通知。
-    Request(RpcRequest),
-    /// RPC 回复。
-    Response(RpcResponse),
-}
-
-impl RpcMessage {
-    /// 将消息序列化为 JSON 字符串。
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(self)
-    }
-
-    /// 将消息序列化为带换行符（NDJSON 协议）的 JSON 字符串。
-    pub fn to_ndjson_line(&self) -> Result<String, serde_json::Error> {
-        let mut s = self.to_json()?;
-        s.push('\n');
-        Ok(s)
-    }
-
-    /// 从 JSON 字符串反序列化 RPC 消息。
-    pub fn from_json(raw: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(raw)
-    }
-}
-
-impl From<RpcRequest> for RpcMessage {
-    fn from(req: RpcRequest) -> Self {
-        Self::Request(req)
-    }
-}
-
-impl From<RpcResponse> for RpcMessage {
-    fn from(res: RpcResponse) -> Self {
-        Self::Response(res)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::DEFAULT_RPC_TIMEOUT_SECS;
-    use serde_json::json;
+    use crate::contracts::UDS_SOCKET_FILENAME;
 
     #[test]
     fn transport_protocol_display_and_helpers() {
@@ -386,67 +168,21 @@ mod tests {
         assert_eq!(parsed, uds);
     }
 
+    /// 契约收敛验证：`crate::contracts`（glob re-export）与 `crate::transport`
+    /// （显式 re-export）必须指向同一组类型，不允许同名异型。
     #[test]
-    fn rpc_request_serialization() {
-        let req = RpcRequest::new(
-            1,
-            "system.ping",
-            Some(json!({"timeout": DEFAULT_RPC_TIMEOUT_SECS})),
-        );
-        let json_str = serde_json::to_string(&req).unwrap();
-        let v: Value = serde_json::from_str(&json_str).unwrap();
+    fn rpc_types_are_the_same_across_contracts_and_transport() {
+        fn assert_same_type<T: 'static>(_: &T) {}
 
-        assert_eq!(v["jsonrpc"], "2.0");
-        assert_eq!(v["id"], 1);
-        assert_eq!(v["method"], "system.ping");
-        assert_eq!(v["params"]["timeout"], 30);
-        assert!(!req.is_notification());
+        let req = RpcRequest::new(1, "ping", None);
+        assert_same_type::<dsh_contracts::rpc::RpcRequest>(&req);
+        let resp = RpcResponse::success(2, serde_json::json!({"ok": true}));
+        assert_same_type::<dsh_contracts::rpc::RpcResponse>(&resp);
 
-        let notif = RpcRequest::notification("log.stream", Some(json!({"line": "hello"})));
-        assert!(notif.is_notification());
-        let notif_json = serde_json::to_string(&notif).unwrap();
-        let notif_v: Value = serde_json::from_str(&notif_json).unwrap();
-        assert!(notif_v.get("id").is_none());
-        assert_eq!(notif_v["method"], "log.stream");
-    }
-
-    #[test]
-    fn rpc_response_success_and_error() {
-        let success = RpcResponse::success("req-99", json!({"status": "ready"}));
-        assert!(success.is_success());
-        assert!(!success.is_error());
-
-        let json_str = serde_json::to_string(&success).unwrap();
-        let parsed: RpcResponse = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(parsed.id, Some(RpcId::String("req-99".to_string())));
-        assert_eq!(parsed.result, Some(json!({"status": "ready"})));
-        assert_eq!(parsed.error, None);
-
-        let err = RpcError::method_not_found(Some(json!({"details": "unknown handler"})));
-        let failure = RpcResponse::error(Some(RpcId::Number(42)), err);
-        assert!(!failure.is_success());
-        assert!(failure.is_error());
-
-        let err_json = serde_json::to_string(&failure).unwrap();
-        let parsed_err: RpcResponse = serde_json::from_str(&err_json).unwrap();
-        assert_eq!(parsed_err.id, Some(RpcId::Number(42)));
-        assert_eq!(parsed_err.error.unwrap().code, -32601);
-    }
-
-    #[test]
-    fn rpc_message_round_trip() {
-        let req = RpcRequest::new("abc", "get_status", None);
-        let msg: RpcMessage = req.clone().into();
-        let ndjson = msg.to_ndjson_line().unwrap();
-        assert!(ndjson.ends_with('\n'));
-
-        let parsed = RpcMessage::from_json(ndjson.trim_end()).unwrap();
-        assert_eq!(parsed, RpcMessage::Request(req));
-
-        let res = RpcResponse::success("abc", json!({"ok": true}));
-        let msg_res: RpcMessage = res.clone().into();
-        let json_res = msg_res.to_json().unwrap();
-        let parsed_res = RpcMessage::from_json(&json_res).unwrap();
-        assert_eq!(parsed_res, RpcMessage::Response(res));
+        // 行为一致性：re-export 的类型与 contracts 侧构造器互通。
+        let via_contracts =
+            dsh_contracts::rpc::RpcResponse::success(3, serde_json::json!({"pong": true}));
+        let msg: RpcMessage = via_contracts.into();
+        assert!(matches!(msg, RpcMessage::Response(_)));
     }
 }

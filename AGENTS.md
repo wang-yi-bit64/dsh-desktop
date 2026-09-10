@@ -10,7 +10,7 @@
 
 ### 目录划分
 - **`crates/dsh-contracts`**：无 GUI / 无平台绑定的通用契约库。
-  - 核心职责：集中定义常量与契约标识（`CX-1` ~ `CX-9`）、标准错误分类码（`E1001` ~ `E4002`）、前后端统一 IPC 封套（`IpcEnvelope<T>`）、JSON-RPC 2.0 规范、生命周期阶段与崩溃诊断类型。
+  - 核心职责：集中定义常量与契约标识（`CX-1` ~ `CX-9`）、标准错误分类码（`E1001` ~ `E4002`）、前后端统一 IPC 封套（`IpcEnvelope<T>`）、JSON-RPC 2.0 规范（唯一契约源，`dsh-host` 等下游 crate 仅 re-export）、生命周期阶段与崩溃诊断类型。
 - **`crates/dsh-host`**：无 GUI 依赖的纯 Rust 核心宿主库。
   - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断、Safe Mode 隔离 Profile、多 Profile/Session 管理、插件分级隔离宿主（`plugin_worker.rs`）与断路器看门狗。
   - **严格保持无 GUI / Headless 状态（不变量 INV-6）**。
@@ -80,6 +80,7 @@ cargo check --workspace
 2. **契约与常量集中管理（`crates/dsh-contracts`）**：
    - 所有硬编码字符串、超时时间、重试退避间隔、缓冲区大小、正则模式与探测常量，**必须**统一定义在 `crates/dsh-contracts/src/constants.rs` 中，并带有 `CX-` 契约编号注释。
    - 严禁在业务逻辑中硬编码超时、路径常量或 URL。
+   - JSON-RPC 2.0 消息模型（`RpcId` / `RpcRequest` / `RpcResponse` / `RpcError` / `RpcMessage`）的**唯一定义点**是 `crates/dsh-contracts/src/rpc.rs`；`dsh-host/src/transport.rs` 仅 re-export，`dsh-host/src/contracts.rs` 的 glob re-export 与之指向同一组类型。**严禁在任何 crate 内重复定义协议类型**，否则会形成同名异型冲突（该问题已于 2026-09 修复）。Node 侧 `build/plugin-worker-host.mjs` 按同一协议手写实现，错误码语义必须与契约保持一致。
 3. **孤儿进程防护与进程管理（INV-3）**：
    - Windows 采用 Win32 `JobObject`（`KILL_ON_JOB_CLOSE`）。
    - Linux 采用 `PR_SET_PDEATHSIG` + 进程组。
@@ -147,4 +148,5 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 - `docs/model_gateway_design.md`：大模型工具调用网关架构设计。
 - `docs/plugin_isolation_architecture.md`：插件隔离与进程通信机制。
 - `crates/dsh-contracts/src/constants.rs`：Harness 运行时通用契约常量总表。
-- `crates/dsh-host/src/transport.rs`：IPC 传输抽象与通信信道定义。
+- `crates/dsh-contracts/src/rpc.rs`：JSON-RPC 2.0 消息模型唯一契约源（Rust 侧）。
+- `crates/dsh-host/src/transport.rs`：IPC 传输抽象与通信信道定义；RPC 类型 re-export 自 `dsh-contracts::rpc`。

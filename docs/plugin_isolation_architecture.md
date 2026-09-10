@@ -58,6 +58,27 @@
 
 主进程与 Plugin Worker Host 之间通过 `stdio`（标准输入输出）按行（Line-delimited JSON）进行 RPC 交互：
 
+> **契约源说明（2026-09 协议债务收敛）**：Rust 侧消息模型的唯一定义点是
+> `crates/dsh-contracts/src/rpc.rs`（`RpcId` / `RpcRequest` / `RpcResponse` /
+> `RpcError` / `RpcMessage`，含 NDJSON 序列化助手与单元测试）；
+> `dsh-host/src/transport.rs` 仅 re-export，禁止重复定义。Node 侧
+> `build/plugin-worker-host.mjs` 按同一协议手写实现——错误码与字段语义必须
+> 与契约保持一致，新增方法时两端同步更新。
+
+**错误码对照表（两端共用）**：
+
+| 错误码 | 语义 | Rust 构造器 | Node 侧场景 |
+|---|---|---|---|
+| `-32700` | Parse error（非法 JSON） | `RpcError::parse_error` | stdin 行解析失败 |
+| `-32600` | Invalid Request | `RpcError::invalid_request` | 非法 `jsonrpc` 版本标记 |
+| `-32601` | Method not found | `RpcError::method_not_found` | switch 未命中方法名 |
+| `-32602` | Invalid params | `RpcError::invalid_params` | 参数缺失/类型不符 |
+| `-32603` | Internal error | `RpcError::internal_error` | 执行期内部错误 |
+| `-32000` | Server error（自定义区间） | `RpcError::server_error` | 未捕获异常 / 未处理 Promise 拒绝 |
+
+语义约束：响应中 `result` 与 `error` 互斥；`id` 永远序列化（不可确定时为
+`null`，见 `RpcResponse::error`）；Notification（无 `id`）不期望回复。
+
 ### 3.1 握手与初始化 (`initialize`)
 * **Request**:
   ```json

@@ -9,7 +9,7 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 ## Features
 
 - **Bundled Runtime** — Ships its own Node.js (v24) and the full `@deepseek-ai/dsh` dependency tree, so no Node.js is required on the host system.
-- **Dedicated Contracts & Protocol Types (`dsh-contracts`)** — Clean separation of universal constants, error code taxonomies (`E1001`~`E4002`), IPC Envelopes (`IpcEnvelope<T>`), and JSON-RPC 2.0 protocol specifications without GUI or platform bloat.
+- **Dedicated Contracts & Protocol Types (`dsh-contracts`)** — Clean separation of universal constants, error code taxonomies (`E1001`~`E4002`), IPC Envelopes (`IpcEnvelope<T>`), and JSON-RPC 2.0 protocol specifications (single source of truth; downstream crates such as `dsh-host` re-export instead of redefining) without GUI or platform bloat.
 - **Harness Subprocess Lifecycle** — Spawns Harness on a reserved loopback port, extracts per-process launch tokens, and polls HTTP readiness.
 - **Watchdog & Crash Self-Healing (Supervisor)** — Embedded supervisor state machine with heartbeat checks, automatic restarts, and circuit breaking.
 - **Tier 0/1/2 Plugin Process Isolation 2.0 & Watchdog** — Runs untrusted plugins in decoupled Worker threads / subprocess sandboxes with JSON-RPC 2.0 communication, execution timeouts, error counter trip-wires, and circuit breaker self-healing.
