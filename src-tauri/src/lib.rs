@@ -56,7 +56,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -184,8 +183,6 @@ pub fn run() {
             commands::harness_restart,
             commands::harness_logs_tail,
             commands::open_logs,
-            commands::open_in_finder,
-            commands::directory_picker_open,
             commands::open_external,
             commands::app_quit,
             commands::recovery_action,
@@ -194,8 +191,7 @@ pub fn run() {
             commands::updates_check,
             commands::updates_download,
             commands::updates_install,
-            commands::updates_skip,
-            commands::mobile_status
+            commands::updates_skip
         ])
         .run(tauri::generate_context!())
         .expect("error while running DSH Desktop");

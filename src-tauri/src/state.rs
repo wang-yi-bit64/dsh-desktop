@@ -19,7 +19,7 @@
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager};
 
 use dsh_host::contracts::{AUTH_COOKIE_PREFIX, WINDOWS_QUERY_MODE, WINDOWS_QUERY_PLATFORM};
 use dsh_host::launch::{LaunchEvent, LaunchOutcome, Launcher, LauncherConfig, RunningHarness};
@@ -116,12 +116,6 @@ impl HarnessSupervisor {
         }
     }
 
-    /// 只读布局（命令层打开日志等用）。
-    #[allow(dead_code)] // 命令层直接读 state.layout 字段；此访问器留给后续阶段。
-    pub fn layout(&self) -> &Layout {
-        &self.layout
-    }
-
     /// 当前快照。
     pub fn snapshot(&self) -> HarnessSnapshot {
         let inner = self.inner.lock().unwrap();
@@ -130,12 +124,6 @@ impl HarnessSupervisor {
             message: inner.message.clone(),
             logs: inner.logs.tail(200),
         }
-    }
-
-    /// 是否处于 Ready。
-    #[allow(dead_code)] // 阶段 3 UI 逻辑预留。
-    pub fn is_ready(&self) -> bool {
-        matches!(self.inner.lock().unwrap().phase, HarnessPhase::Ready { .. })
     }
 
     /// 当前 harness 实例端口（导航白名单据此放行）。
@@ -242,11 +230,9 @@ impl HarnessSupervisor {
         self.inner.lock().unwrap().logs.tail(count)
     }
 
-    /// 清空日志（重启前调用，避免上一次的日志混进本次归因）。
-    #[allow(dead_code)] // 重启路径当前走状态机内部清理；此方法留给后续阶段。
-    pub fn clear_logs(&self) {
-        self.inner.lock().unwrap().logs.clear();
-    }
+    // 原 `clear_logs()` 已移除（2026-09-10）：重启路径由状态机内部完成清理，
+    // 该方法是冗余入口，此前靠一个 dead-code 抑制属性挂着等「后续阶段」。
+    // 若将来真需要对外暴露清理能力，由状态机自身提供，不在此另开入口。
 
     // ------------------------------------------------------------------
     // 内部
@@ -425,11 +411,8 @@ pub struct AppState {
     pub layout: Layout,
     /// 手机桥接（阶段 4 完整接线）。
     pub mobile: Arc<crate::mobile_bridge::MobileBridge>,
-    /// 更新管理器（阶段 6 完整接线）。
+    /// 更新管理器（运行期由 `lib.rs` 注入）。
     pub updates: Arc<tokio::sync::Mutex<Option<Arc<crate::update::UpdateManager>>>>,
-    /// 窗口当前是否在展示 harness UI。
-    #[allow(dead_code)] // 前端 show/hide 逻辑接线时启用（阶段 3）。
-    pub harness_loaded: tokio::sync::Mutex<bool>,
 }
 
 impl AppState {
@@ -444,14 +427,6 @@ impl AppState {
             layout,
             mobile,
             updates: Arc::new(tokio::sync::Mutex::new(None)),
-            harness_loaded: tokio::sync::Mutex::new(false),
         }
-    }
-
-    /// 从 Tauri 状态取回（供命令守卫后的各命令使用）。
-    #[allow(dead_code)] // 阶段 3 命令面扩展预留。
-    pub fn from_app<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<Self>> {
-        app.try_state::<Arc<AppState>>()
-            .map(|state| Arc::clone(&state))
     }
 }
