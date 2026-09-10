@@ -6,33 +6,41 @@
 
 ## 1. 项目概述与仓库结构
 
-`dsh-desktop` 是基于 **Tauri 2.0** 与 **Rust** 构建的 DeepSeek Harness 跨平台桌面外壳程序。它负责打包内置 Node.js + DeepSeek Harness 服务运行时的生命周期管理，并提供 GUI 窗口承载、崩溃自愈、插件分级隔离防护以及多模型工具网关。
+`dsh-desktop` 是基于 **Tauri 2.0** 与 **Rust** 构建的 DeepSeek Harness 跨平台桌面外壳程序。它负责打包内置 Node.js + DeepSeek Harness 服务运行时的生命周期管理，并提供 GUI 窗口承载与崩溃自愈。
+
+> ⚠️ **能力口径**：文档中每个特性都必须区分「已接线」与「未接线/实验性」。本文件与 README 中列为**未接线**的项（插件分级隔离、诊断包导出）在代码中确有实现或部分实现，但**不在运行时路径上**，不得对外呈现为可用能力。判据与证据位置见 §7 宣称纪律。
 
 ### 目录划分
 - **`crates/dsh-contracts`**：无 GUI / 无平台绑定的通用契约库。
   - 核心职责：集中定义常量与契约标识（`CX-1` ~ `CX-9`）、标准错误分类码（`E1001` ~ `E4002`）、前后端统一 IPC 封套（`IpcEnvelope<T>`）、JSON-RPC 2.0 规范（唯一契约源，`dsh-host` 等下游 crate 仅 re-export）、生命周期阶段与崩溃诊断类型。
 - **`crates/dsh-host`**：无 GUI 依赖的纯 Rust 核心宿主库。
-  - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断、Safe Mode 隔离 Profile、多 Profile/Session 管理、插件分级隔离宿主（`plugin_worker.rs`）与断路器看门狗。
+  - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断、Safe Mode 隔离 Profile、多 Profile/Session 管理、插件分级隔离的**状态机与断路器逻辑**（`plugin_worker.rs`，⚠️ **未接线**，见 §7）。
   - **严格保持无 GUI / Headless 状态（不变量 INV-6）**。
 - **`crates/dsh-host-cli`**：`dsh-host` 的命令行工具前端（支持 `dsh-host start | status | stop | tail | doctor`）。
-- **`crates/dsh-model-gateway`**：无 GUI 依赖的多模型工具调用清洗与适配网关库。
+- **`crates/dsh-model-gateway`**：无 GUI 依赖的多模型工具调用清洗与适配网关库。⚠️ **未接线**：无任何运行时消费者，**不是** `src-tauri` 的依赖（2026-09-10 移除声明）；保留为独立可测资产。
   - 核心职责：统一 `CanonicalTool` 抽象、复杂 Schema 降级与净化（`anyOf`/`oneOf` 规范化、深度超限保护）、多模型提供方（OpenAI、DeepSeek、Gemini、Claude）方言转换与严格模式适配、微秒级性能基准测试（`examples/benchmark.rs`）。
-- **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、系统托盘、生命周期、Webview IPC 封套对接、自动更新、页面导航、安全模式引导、一键脱敏导出诊断包）。
+  - 定位、接线前置与**退出条件**见 [`docs/model_gateway_design.md`](docs/model_gateway_design.md) 顶部状态表。
+- **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志）。⚠️ 一键脱敏导出诊断包（`diagnostics.zip`）**未实现**，见 §7。
   - **`src-tauri/frontend/`**：轻量静态 Loading / Splash 启动页、Error 结构化错误页（支持插件故障归因提示）与安全模式恢复页。
 - **`build/`**：运行时启动脚本与安全防护注入。
-  - `harness-node-entry.mjs`：支持隔离参数（`--dsh-isolated-plugins`）与环境引导。
-  - `plugin-worker-host.mjs`：基于 Node.js `worker_threads` 与子进程的插件分级隔离宿主（JSON-RPC 2.0 通信）。
-  - `plugin-safety-guard.mjs`：全局未捕获异常与未处理 Promise 拦截及断路器。
+  - `harness-node-entry.mjs`：支持隔离参数（`--dsh-isolated-plugins`）与环境引导；同时是 cold-start 投影（`projectGenerations` / `sweepRegistry`）与 `[dsh-plugin-fault]` 归因的接线点。
+  - `plugin-worker-host.mjs`：基于 Node.js `worker_threads` 与子进程的插件分级隔离宿主（JSON-RPC 2.0 通信）。⚠️ **未接线**：只能由 `PluginWorkerClient` 拉起，而后者当前无调用方（见 §7）。
+  - `plugin-safety-guard.mjs`：`formatFaultDetails` **已接线**（被 `harness-node-entry.mjs` 的未捕获异常/拒绝处理器消费）；`PluginWorkerClient` **未接线**。
 - **`scripts/`**：
-  - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性。
+  - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
   - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证。
+  - `smoke-launch.mjs`：CI 分层烟雾（L1 无头 / L2 GUI），见 §2。
+  - `report-bundle-size.mjs`：采集壳/安装包/资源树体积，写入 CI job summary（§7 期望管理）。
+- **`patches/`**：`patch-package` 补丁 + [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。
 - **`docs/`**：架构设计、契约定义、不变量与技术规范：
   - `dsh-desktop-redesign-architecture-and-plan.md`：最新系统架构重构设计与执行计划。
   - `system_design.md`：核心系统架构设计、契约定义与不变量清单。
-  - `model_gateway_design.md`：多厂商大模型工具调用转换网关设计。
-  - `plugin_isolation_architecture.md`：插件分级隔离机制、看门狗与 RPC 协议设计。
+  - `model_gateway_design.md`：多厂商大模型工具调用转换网关设计（含未接线状态与退出条件）。
+  - `plugin_isolation_architecture.md`：插件分级隔离机制、看门狗与 RPC 协议设计（含未接线状态）。
+  - `dsh-upgrade-checklist.md`：DSH 官方版本升级清单（补丁重生成 → 断言 → 门禁 → 三平台烟雾 → 体积对比）。
+  - `harness-packaging-and-compatibility.md`：产物瘦身与补丁脆弱性治理的长期方案（A/B/C）。
 
 ---
 
@@ -66,9 +74,39 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # 5. 全 Workspace 编译检查
 cargo check --workspace
+
+# 6. 补丁分级自检（patches/ 与 patch-layers.mjs 登记表一致性）
+npm run verify:patches
+
+# 7. 分层烟雾（L1 无头硬门禁；L2 需已构建产物，缺失则 SKIP）
+npm run smoke:headless
+npm run smoke
+
+# 8. 产物体积三口径（壳二进制 / 安装包 / 资源树）
+npm run size:report
 ```
 
 集成测试（`crates/dsh-host/tests/`）会真实派生 Node 进程运行 `scripts/mock-harness.mjs`，需要 `PATH` 上有 Node.js（可用 `DSH_TEST_NODE` 指定）；找不到时测试自行跳过而非失败。故障模式经 `mock-harness.mjs` 的 argv / 环境变量注入，不在 Rust 侧打桩。
+
+#### ⚠️ 已知环境限制：GNU 工具链下 `dsh-desktop` 的测试二进制无法加载
+
+在 **`x86_64-pc-windows-gnu`**（mingw）宿主机上，`cargo test -p dsh-desktop` 会失败：
+
+```text
+dsh_desktop_lib-<hash>.exe: error while loading shared libraries:
+api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
+（或 STATUS_ENTRYPOINT_NOT_FOUND / 0xc0000139）
+```
+
+- **根因**：该导入来自 Tauri 无条件链接的 `webview2-com-sys`（WinRT）。本机 `System32` 与 `System32\downlevel` 下都没有该 API set DLL，GNU 运行时加载器不会去 MSVC 的解析路径找它。
+- **性质**：失败发生在**动态加载阶段**，早于测试 harness 的 `main()`——因此与任何测试代码无关，也不会因源码改动而出现或消失。
+- **后果**：`cargo test --workspace` 在本机必然失败；`src-tauri` 下的单元测试（含 `mobile_bridge.rs`）**只能编译、不能本地执行**。
+- **怎么办**：
+  1. 本地依赖上面第 1 条的**无头门禁**（不含 `src-tauri`，这正是 INV-6 的价值）；
+  2. `src-tauri` 的行为由第 7 条的 L1/L2 烟雾覆盖（它派生真实进程，不依赖 Rust 单测）；
+  3. `src-tauri` 单测的实际执行者是 CI——GitHub runner 用 **MSVC** 工具链，该导入可正常解析，故 CI 的 `cargo test --workspace` 有意义。
+  4. 若本机需要跑这些单测，唯一可靠路径是切到 MSVC 工具链（`rustup default stable-x86_64-pc-windows-msvc`），这不是代码问题。
+
 
 ---
 
@@ -134,11 +172,14 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 
 ## 5. 架构演进与路线图 (P0~P4)
 
-- **P0（契约基线与无头核心库）**：独立通用契约库（`dsh-contracts`）、集中常量契约、退出码与错误码变体映射（`E1001`~`E4002`）、无 GUI 核心库设计（`dsh-host`, `dsh-host-cli`）、Win32 JobObject / POSIX 孤儿防护。
-- **P1（生命周期监督与自愈）**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`）与 Safe Mode 隔离 Profile。
-- **P2（插件分级隔离与看门狗）**：Tier 0/1/2 分级沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 通信、全局未捕获异常守护（`plugin-safety-guard.mjs`）、连续错误断路器看门狗自愈（`plugin_worker.rs`）。
-- **P3（多模型工具网关与基准测试）**：复杂 Schema 深度嵌套/`anyOf`/`oneOf` 降级清洗、多厂商方言适配（OpenAI/Gemini/Claude）、微秒级基准测试套件（`dsh-model-gateway`）。
-- **P4（薄壳收敛与诊断系统 2.0）**：统一 IPC 封套 (`IpcEnvelope<T>`)、前端结构化错误归因、一键脱敏导出完整诊断压缩包 (`diagnostics.zip`)。
+> 下表描述**设计目标**，不等于当前可用能力。阶段名后标注的状态以 §7 的代码证据为准；
+> 凡标 ⚠️ 者，代码存在但未接线，不得按「已完成」对外表述。
+
+- **P0（契约基线与无头核心库）✅ 已接线**：独立通用契约库（`dsh-contracts`）、集中常量契约、退出码与错误码变体映射（`E1001`~`E4002`）、无 GUI 核心库设计（`dsh-host`, `dsh-host-cli`）、Win32 JobObject / POSIX 孤儿防护。
+- **P1（生命周期监督与自愈）✅ 已接线**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`，输出归因结论而非压缩包）与 Safe Mode 隔离 Profile。
+- **P2（插件分级隔离与看门狗）⚠️ 未接线**：Tier 0/1/2 分级沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 通信、连续错误断路器（`plugin_worker.rs`）均已实现且有单测，但**没有任何运行时调用方**——`PluginWorkerClient` 无消费者，`call_tool` 现返回显式错误而非伪造成功。当前生效的插件防护只有 `plugin-safety-guard.mjs` 的进程内 `formatFaultDetails` 归因。接线前置见 `docs/plugin_isolation_architecture.md`。
+- **P3（多模型工具网关与基准测试）⚠️ 未接线**：复杂 Schema 深度嵌套/`anyOf`/`oneOf` 降级清洗、多厂商方言适配（OpenAI/Gemini/Claude）、微秒级基准测试套件（`dsh-model-gateway`）均已实现并测试通过，但无运行时消费者，已从 `src-tauri` 依赖中移除。退出条件见 `docs/model_gateway_design.md`。
+- **P4（薄壳收敛与诊断系统 2.0）🟡 部分**：统一 IPC 封套（`IpcEnvelope<T>`）已接线；前端结构化错误归因已接线；**一键脱敏导出诊断压缩包（`diagnostics.zip`）未实现**，当前只有 `dsh-host-cli doctor` 与壳层日志（`desktop.log`）两条可用的证据获取路径。
 
 ---
 
@@ -150,3 +191,42 @@ Harness 页面运行在 Tauri webview 中，**没有 preload / initialization sc
 - `crates/dsh-contracts/src/constants.rs`：Harness 运行时通用契约常量总表。
 - `crates/dsh-contracts/src/rpc.rs`：JSON-RPC 2.0 消息模型唯一契约源（Rust 侧）。
 - `crates/dsh-host/src/transport.rs`：IPC 传输抽象与通信信道定义；RPC 类型 re-export 自 `dsh-contracts::rpc`。
+
+---
+
+## 7. 宣称纪律（Claim Discipline）
+
+**背景**：外部评审（2026-09）指出 README / 文档宣称的能力与实际代码存在落差。逐项核对后有 4 项宣称在代码中**没有运行时路径**：插件分级隔离、多模型工具网关、一键诊断包、LAN 手机桥（本轮已接线）。这不是「文档写早了」的程度问题——`plugin_worker.rs::call_tool` 当时会**返回伪造的成功结果**（`success: true`），即上层无法通过任何观测手段发现插件工具其实根本没被执行。
+
+### 7.1 三条硬规则
+
+1. **未接线的能力必须显式标注**。任何「已实现但无运行时调用方」的模块，必须在其模块文档头部加 `⚠️ 状态：未接线` 横幅，并在本表登记。禁止用「已实现」「已支持」等词描述未接线能力。
+2. **禁止伪造成功**。桩实现若被调用，必须返回**可辨识的错误**（错误串含 `ISOLATION_NOT_WIRED` 之类的稳定标识），不得返回 `Ok` / `success: true` / 空数组等合理默认值。判据：调用方能否从返回值区分「成功」与「未接线」。
+3. **禁止无声降级**。允许降级（如补丁分级失败策略），但必须把降级事实写进产物：`MANIFEST.json` 的 `patches[]` 逐条记录 `applied / skipped / failed`，缺记录即视为未应用。
+
+### 7.2 宣称能力 ↔ 代码证据对照表
+
+| 对外宣称 | 状态 | 代码证据（唯一产地） | 运行时调用方 |
+|---------|------|-------------------|------------|
+| 内置 Node + Harness 生命周期管理 | ✅ 已接线 | `crates/dsh-host/src/launch.rs` | `src-tauri/src/lib.rs` setup |
+| 孤儿进程防护（INV-3） | ✅ 已接线 | `crates/dsh-host/src/process.rs`（Win32 JobObject / POSIX） | `launch.rs` 派生路径 |
+| URL / Token 捕获与就绪探测 | ✅ 已接线 | `readiness.rs`、`token.rs` | `state.rs::on_ready` |
+| Supervisor 自愈与退避 | ✅ 已接线 | `crates/dsh-host/src/supervisor.rs` | `state.rs` 生命周期回调 |
+| Safe Mode 隔离 Profile | ✅ 已接线 | `crates/dsh-host/src/safe_mode.rs` + `src-tauri/src/safe_mode.rs` | 崩溃归因分支 |
+| 崩溃归因诊断（**结论**，非压缩包） | ✅ 已接线 | `crates/dsh-host/src/diagnostics.rs` | `dsh-host-cli doctor`、错误页 |
+| 插件故障归因（进程内） | ✅ 已接线 | `build/plugin-safety-guard.mjs:formatFaultDetails`（:25，export :154） | `build/harness-node-entry.mjs:15,37,44` |
+| **插件分级隔离 Tier 0/1/2** | ⚠️ **未接线** | `crates/dsh-host/src/plugin_worker.rs`（`call_tool` :191 返回 `ISOLATION_NOT_WIRED`）、`build/plugin-worker-host.mjs`、`build/plugin-safety-guard.mjs:PluginWorkerClient`（:52） | **无**（`PluginWorkerClient` 无消费者） |
+| **多模型工具网关** | ⚠️ **未接线** | `crates/dsh-model-gateway/**` | **无**（2026-09-10 从 `src-tauri/Cargo.toml` 移除） |
+| **一键脱敏诊断包 `diagnostics.zip`** | ❌ **未实现** | 无对应代码 | **无** |
+| LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 托盘菜单 `mobile-pair` / `mobile-stop` |
+| 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
+| 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]` |
+| 自动更新（检查/下载/重启安装） | 🟡 已接线，**发布源待改** | `src-tauri/src/update.rs`、`tauri-plugin-updater`（`lib.rs:58`） | 启动后 + 每 6h |
+| ↳ 更新源归属 | 🔴 **风险项** | `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints` 当前指向 `github.com/dataelement/dsh-desktop`（**上游仓库**），`pubkey` 非本项目所有 | 待定（需自有签名密钥） |
+
+### 7.3 维护方式
+
+- 新增能力时：先写代码，再在本表补一行——**顺序不可颠倒**。
+- 修改未接线模块（如把 `plugin_worker.rs` 接入运行时）时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态、更新 `docs/plugin_isolation_architecture.md` 的状态段。
+- 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线**的条目。
+- 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。

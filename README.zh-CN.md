@@ -8,20 +8,31 @@
 
 ## 功能特性
 
-- **内置运行时** —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
-- **独立契约库 (`dsh-contracts`)** —— 彻底剥离 UI 依赖，提炼统一常量、标准错误码体系 (`E1001`~`E4002`)、前后端 IPC 封套 (`IpcEnvelope<T>`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
-- **Harness 核心生命周期** —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
-- **看门狗与崩溃自愈 (Supervisor)** —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
-- **插件分级隔离 2.0 (Tier 0/1/2) 与看门狗** —— 基于 Node.js `worker_threads` / 独立沙箱子进程运行不可信插件，通过标准 JSON-RPC 2.0 双向通信，具备超时控制、故障计数与熔断自愈机制。
-- **多模型工具网关 2.0 (Model Gateway)** —— 原生 Rust 库 `dsh-model-gateway`，支持多厂商（OpenAI、DeepSeek、Gemini、Claude）工具调用 JSON Schema 校验、深度嵌套展开、`anyOf`/`oneOf` 降级净化与方言适配。
-- **微秒级性能基准测试** —— 内置 benchmark 测试套件，保障 Schema 清洗与多方言适配转换在 2~20 微秒级内高效完成。
-- **壳页面与诊断系统 2.0** —— 静态启动页 (Splash)、错误页（支持故障归因、一键重试、安全模式切换）、一键脱敏导出诊断包 (`diagnostics.zip`)。
-- **安全模式与故障恢复** —— 自动检测启动失败原因，定位并隔离崩溃插件，生成独立沙箱 profile 保障基础功能可用。
-- **多 Profile 与会话管理** —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
-- **桌面深度定制** —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。
-- **移动桥接 (Mobile Bridge)** —— 提供带配对令牌、二维码的局域网 HTTP 服务，并转发 RPC 到 Harness。
-- **自动更新** —— 基于 `tauri-plugin-updater` 的通用更新源（GitHub releases）。
-- **单实例锁定** —— 第二次启动时聚焦已有窗口，避免重复拉起多实例。
+> **状态标记约定**：✅ 已接线（在运行时路径上）· ⚠️ 未接线（代码已实现并测试，但无运行时调用方）· 🟡 部分 · ❌ 未实现。
+> 每项的代码证据与调用方见 [`AGENTS.md` §7 宣称纪律](AGENTS.md#7-宣称纪律claim-discipline)。本文件与 AGENTS.md 的状态必须一致，改一处须同步另一处。
+
+### 已接线能力
+
+- **内置运行时** ✅ —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
+- **独立契约库 (`dsh-contracts`)** ✅ —— 彻底剥离 UI 依赖，提炼统一常量、标准错误码体系 (`E1001`~`E4002`)、前后端 IPC 封套 (`IpcEnvelope<T>`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
+- **Harness 核心生命周期** ✅ —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
+- **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
+- **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
+- **插件运行异常守护（进程内）** ✅ —— `plugin-safety-guard.mjs` 拦截未捕获异常与未处理 Promise 拒绝，产出 `[dsh-plugin-fault]` 归因信息，避免单个插件把整个 Harness 拖崩。
+- **安全模式与故障恢复** ✅ —— 自动检测启动失败原因，生成独立隔离 profile 保障基础功能可用。
+- **多 Profile 与会话管理** ✅ —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
+- **壳层结构化日志** ✅ —— `tauri-plugin-log` 落盘到 `app_data_dir/desktop.log`（5 MB × 2 轮转，含本地时区），与 Harness 侧 `harness.log` / `app.log` 分离，便于归因「是壳的问题还是 Harness 的问题」。
+- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从托盘菜单「手机配对/局域网」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。
+- **桌面深度定制** ✅ —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。补丁按 `functional` / `ui-behavior` / `brand` 三层分级（见 [`patches/LAYERS.md`](patches/LAYERS.md)），失败时默认降级并在 `MANIFEST.json` 的 `patches[]` 逐条留证；`--strict` 可恢复全量 fail-fast。
+- **单实例锁定** ✅ —— 第二次启动时聚焦已有窗口，避免重复拉起多实例。
+- **微秒级性能基准测试** ✅ —— `dsh-model-gateway` 内置 benchmark 套件，保障 Schema 清洗与多方言适配转换在 2~20 微秒级内完成（基准可运行，但见下方「未接线」说明）。
+
+### 未接线 / 未实现（实验性，勿对外宣称可用）
+
+- **插件分级隔离 2.0 (Tier 0/1/2)** ⚠️ **未接线** —— Tier 0/1/2 分级沙箱宿主（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、超时控制、故障计数与熔断断路器（`plugin_worker.rs`）**均已实现并有单元测试**，但整个仓库**没有任何运行时调用方**：Node 侧 `PluginWorkerClient` 被刻意丢弃，Rust 侧 `call_tool` 现在直接返回可辨识的 `ISOLATION_NOT_WIRED` 错误而非伪造成功。因此**当前生效的插件防护仅为上文的进程内守护**（同进程崩溃仍可能带走 Harness）。接线前置与退出条件见 [`docs/plugin_isolation_architecture.md`](docs/plugin_isolation_architecture.md)。
+- **多模型工具网关 2.0 (`dsh-model-gateway`)** ⚠️ **未接线** —— 该 crate 的 Schema 校验、`anyOf`/`oneOf` 降级净化、多厂商（OpenAI/DeepSeek/Gemini/Claude）方言适配均已实现并测试通过，但**无任何运行时消费者**，自 2026-09-10 起**不再是 `src-tauri` 的依赖**。保留为可独立测试的资产，接线或冻结的判据见 [`docs/model_gateway_design.md`](docs/model_gateway_design.md) 顶部状态表。
+- **壳页面与错误归因** 🟡 **部分** —— 静态启动页 (Splash) 与错误页（故障归因、一键重试、安全模式切换）**已接线**；但**一键脱敏导出诊断包 (`diagnostics.zip`) 未实现**，代码库中不存在对应实现。当前获取诊断证据的两条可用路径是 `dsh-host-cli doctor` 与壳层日志 `desktop.log`。
+- **自动更新** 🟡 **已接线，发布源待改** —— `tauri-plugin-updater` 已注册，检查/下载/择机重启安装流程可用；但 `tauri.conf.json` → `plugins.updater.endpoints` **当前仍指向上游 `dataelement/dsh-desktop` 的 releases**，且 `pubkey` 非本项目所有。在改指本仓库发布页并换用自有签名密钥之前，**不得发布带 updater 的正式包**。
 
 ## 环境要求
 
@@ -51,41 +62,58 @@ npm run tauri build
 ```text
 crates/
   dsh-contracts/        # 纯 Rust 通用契约库（常量、错误码体系、IPC 封套、JSON-RPC、生命周期与诊断定义）
-  dsh-host/             # 无 GUI 核心宿主库（子进程管理、Supervisor 监督器、崩溃诊断、插件隔离 2.0、日志环形缓冲）
+  dsh-host/             # 无 GUI 核心宿主库（子进程管理、Supervisor 监督器、崩溃诊断、日志环形缓冲；插件隔离仅状态机，未接线）
   dsh-host-cli/         # dsh-host 命令行工具（支持 start / status / stop / tail / doctor 等）
-  dsh-model-gateway/    # 多模型工具网关（Schema 清洗、复杂 union 降级、OpenAI/Gemini/Claude 适配、Benchmark 套件）
+  dsh-model-gateway/    # 多模型工具网关（Schema 清洗、复杂 union 降级、OpenAI/Gemini/Claude 适配、Benchmark 套件）—— 未接线，非 src-tauri 依赖
 src-tauri/
   frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、安全模式提示）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
-  src/                  # Tauri 桌面应用层（窗口管理、托盘、IPC 封套接线、安全模式切换、诊断导出、自动更新）
+  src/                  # Tauri 桌面应用层（窗口管理、托盘、IPC 封套接线、安全模式切换、LAN 手机桥、壳层日志、自动更新）
+    logging.rs              # 壳层结构化日志（desktop.log，5MB × 2 轮转）
+    mobile_bridge.rs        # 局域网手机桥（配对页 + dsh-auth-* cookie 握手 + RPC 转发）
 build/                  # 运行时组装与辅助注入脚本
-  harness-node-entry.mjs    # Node 端入口与启动参数适配
-  plugin-safety-guard.mjs   # 插件运行异常全局守护网
-  plugin-worker-host.mjs    # 基于 Worker Threads / 子进程的插件隔离宿主（JSON-RPC 2.0）
-patches/                # 应用到 Harness 依赖树的 patch-package 补丁
+  harness-node-entry.mjs    # Node 端入口与启动参数适配（含 cold-start 投影与故障归因接线）
+  plugin-safety-guard.mjs   # 插件运行异常全局守护网（formatFaultDetails 已接线；PluginWorkerClient 未接线）
+  plugin-worker-host.mjs    # 基于 Worker Threads / 子进程的插件隔离宿主（JSON-RPC 2.0）—— 未接线
+patches/                # 应用到 Harness 依赖树的 patch-package 补丁 + LAYERS.md 分级清单
 vendor/                 # 本地桌面定制包（dshmarket 等）
 packages/               # 被打补丁包的 vendored tgz 覆盖
 scripts/                # 构建与测试辅助（prepare-harness、stub-tauri-resources 等）
-  prepare-harness.mjs       # 组装运行时到 src-tauri/resources/
+  prepare-harness.mjs       # 组装运行时到 src-tauri/resources/（补丁按级降级，--strict 恢复 fail-fast）
   stub-tauri-resources.mjs  # 全新 checkout / CI 用的仅编译桩资源
   mock-harness.mjs          # 可注入故障的假 Harness，供集成测试使用
   fault-inject.mjs          # 孤儿进程与失败归因验证
+  patch-layers.mjs          # 补丁分级唯一产地（--self-test / --list 自检）
+  smoke-launch.mjs          # CI 分层烟雾（L1 无头门禁 / L2 GUI xvfb）
+  report-bundle-size.mjs    # 采集壳/安装包/资源树体积，写入 CI job summary
 docs/                   # 架构设计、契约定义与技术方案
   dsh-desktop-redesign-architecture-and-plan.md  # 架构重构与开发执行完整计划
   system_design.md                  # 系统架构设计与不变量规范
-  model_gateway_design.md           # 多模型网关设计与工具转换
-  plugin_isolation_architecture.md  # 插件隔离架构与通信契约
+  model_gateway_design.md           # 多模型网关设计与工具转换（含未接线状态与退出条件）
+  plugin_isolation_architecture.md  # 插件隔离架构与通信契约（含未接线状态）
+  dsh-upgrade-checklist.md          # DSH 官方版本升级清单（补丁重生成 → 门禁 → 三平台烟雾）
+  harness-packaging-and-compatibility.md  # 产物瘦身与补丁脆弱性治理的长期方案
 ```
 
 ## 架构演进与路线图 (Roadmap)
 
-项目整体架构围绕以下核心阶段演进：
+### 设计与当前状态对照
 
-- **阶段 0 (P0) —— 契约基线与无头核心库**：提炼独立契约库（`dsh-contracts`）、错误码分类体系、跨平台孤儿进程防护（Win32 Job Objects / POSIX 进程组）以及纯 Rust 核心宿主库（`dsh-host`、`dsh-host-cli`）。
-- **阶段 1 (P1) —— 进程生命周期与诊断系统**：内置 Supervisor 状态机与自愈机制、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）以及安全模式（Safe Mode）隔离 Profile 生成。
-- **阶段 2 (P2) —— 插件分级隔离 2.0 (Tier 0/1/2) 与看门狗**：构建解耦的 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`）。
-- **阶段 3 (P3) —— 多模型网关 2.0 与基准测试**：支持 OpenAI、DeepSeek、Gemini、Claude 多厂商工具调用 JSON Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）以及微秒级性能基准测试。
-- **阶段 4 (P4) —— 薄壳收敛与诊断系统 2.0**：Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回，支持一键脱敏导出诊断包 (`diagnostics.zip`)。
+下表左列是**设计目标**，右列是**当前是否在运行时路径上**。二者不可混用（详见 [`AGENTS.md` §7](AGENTS.md#7-宣称纪律claim-discipline)）。
+
+| 阶段 | 设计范围 | 当前状态 |
+|------|---------|---------|
+| P0 | 契约库 `dsh-contracts`、错误码分类体系、跨平台孤儿进程防护（Win32 Job Objects / POSIX 进程组）、无头核心宿主库（`dsh-host`、`dsh-host-cli`） | ✅ 已接线 |
+| P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
+| P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | ⚠️ **未接线**：实现与单测俱在，但无运行时调用方；`call_tool` 返回 `ISOLATION_NOT_WIRED` 而非伪造成功 |
+| P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | ⚠️ **未接线**：已从 `src-tauri` 依赖移除，无运行时消费者 |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`) | 🟡 封套✅ 已接线；**诊断包 ❌ 未实现** |
+
+### 后续计划（尚未开工）
+
+- **P2/P3 接线或冻结裁定**：为插件隔离与模型网关给出明确的「接入运行时」或「标记为冻结资产」结论，避免无限期停留在「实现了但没人用」的中间态。
+- **发布源切换**：将 updater endpoint 由上游 `dataelement/dsh-desktop` 改指本仓库，并生成自有 minisign 密钥对。
+- **诊断包落地**：在 `dsh-host-cli doctor` 现有归因能力之上补齐脱敏打包（日志 + 归因结论 + 环境快照 + `MANIFEST.json`）。
 
 ## 测试
 
@@ -101,7 +129,23 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli -p dsh-model-gateway
 
 - `node_modules/`、`harness-deps/`、`src-tauri/target/` 与 `src-tauri/resources/` 均已被 gitignore；其中 `resources/` 由构建脚本按需组装生成，避免增大仓库体积。
 - 在全新拉取的无资源环境中运行 `cargo check` 或 `cargo test` 前，可先执行 `node scripts/stub-tauri-resources.mjs` 生成桩资源以通过 Tauri 编译期校验。
-- 更新源指向本仓库 GitHub 发布页的 `latest.json`。发布构建需要签名密钥（见 `tauri.conf.json` → `plugins.updater.pubkey`）。
+- **更新源（🔴 待改）**：`tauri.conf.json` → `plugins.updater.endpoints` **当前指向上游 `dataelement/dsh-desktop` 的 releases**，`pubkey` 亦非本项目所有。这意味着现阶段的自动更新会去检查另一个项目的发布物——**在改指本仓库发布页并换成自有 minisign 密钥对之前，不得依赖该通道，也不得发布带 updater 的正式包**。
+
+## 体积现状与期望管理
+
+安装包体积主要由**内置 Node.js 运行时 + 完整 Harness 依赖树**决定，壳层（Rust/Tauri）自身的贡献很小。这不是「胖壳」问题，而是为了「宿主机零依赖」付出的必然代价——把这个前提说清楚，比给出一个笼统的 MB 数字更有用。
+
+体积数据由 `scripts/report-bundle-size.mjs` 在构建后采集并写入 CI job summary，避免 README 里的数字随时间失真。三个可区分的体积口径：
+
+| 口径 | 含义 | 受什么影响 |
+|------|------|-----------|
+| 壳二进制 | `src-tauri/target/release/*.exe`（未打包） | Rust 依赖与 LTO 设置；与 Harness 无关 |
+| 安装包 | NSIS `*-setup.exe` | 壳二进制 + 压缩后的资源树 |
+| 资源树 | `src-tauri/resources/`（未压缩） | Node 运行时 + `harness/node_modules` 依赖树；**体积主项** |
+
+> 实际数值以 `npm run build` 后 `node scripts/report-bundle-size.mjs` 的输出为准（或见 CI 的 build job summary）。本 README 不再维护会失真的手写数字。
+
+若需显著瘦身，方向是减少打包进 `resources/` 的依赖（见 [`docs/harness-packaging-and-compatibility.md`](docs/harness-packaging-and-compatibility.md)），而非改动 Tauri 侧配置——后者对总量的影响在个位数 MB 量级。
 
 ## Windows 打包注意事项
 
