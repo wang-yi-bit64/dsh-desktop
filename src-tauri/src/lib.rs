@@ -11,6 +11,7 @@
 
 mod commands;
 mod cookies;
+mod harness_ui;
 mod layout;
 mod logging;
 mod menu;
@@ -96,12 +97,16 @@ pub fn run() {
             // 线程（axum 的配对处理器）上同步做。
             {
                 let listener_handle = handle.clone();
-                mobile.on_connected_change(move |_connected| {
+                mobile.on_connected_change(move |connected| {
                     let app = listener_handle.clone();
                     tauri::async_runtime::spawn(async move {
                         let Some(state) = app.try_state::<Arc<AppState>>() else {
                             return;
                         };
+                        // 一个状态翻转要同时刷新**两个**用户可见面：原生菜单的状态
+                        // 行，以及 Harness 侧边栏里的页内指示器。少刷一个就会出现
+                        // 「菜单说已连接、页面说没连接」的自相矛盾。
+                        harness_ui::push_phone_status(&app, connected);
                         let snapshot = state.mobile.snapshot().await;
                         menu::refresh_bridge_status(&app, &snapshot);
                     });
@@ -127,6 +132,30 @@ pub fn run() {
             .min_inner_size(900.0, 600.0)
             .center()
             .resizable(true)
+            // Harness 页的壳层 UI 注入（「preload 等价物」，见 `harness_ui`）。
+            //
+            // `initialization_script` 在**每一次顶层文档导航**之前执行，因此页面
+            // 刷新、导航到 Harness、Harness 自身跳转后脚本都还在。脚本头部按
+            // origin 自我早退，本地页（splash / error / updates）不受影响。
+            .initialization_script(harness_ui::INJECT_SCRIPT)
+            // 推送的另一半：`eval` 只作用于**当前文档**，页面一导航上一次推的状态
+            // 就没了，因此每次加载完成补推一次当前桥状态（见 `harness_ui` 模块文档）。
+            .on_page_load({
+                let page_handle = handle.clone();
+                move |_window, payload| {
+                    if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                        return;
+                    }
+                    let app = page_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let Some(state) = app.try_state::<Arc<AppState>>() else {
+                            return;
+                        };
+                        let snapshot = state.mobile.snapshot().await;
+                        harness_ui::push_phone_status(&app, snapshot.connected);
+                    });
+                }
+            })
             // 任务 1.4：导航白名单——只放行本地静态页与当前 harness 实例。
             .on_navigation({
                 let nav_handle = handle.clone();
