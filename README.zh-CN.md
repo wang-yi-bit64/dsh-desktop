@@ -146,6 +146,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
 | `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
 | `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
+| `npm run verify:release-workflow` | 发布工作流自身的两个静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L2 GUI 启动。 |
 

@@ -96,6 +96,7 @@ jobs:
           npm run verify:patches
           npm run verify:prune
           npm run verify:variants
+          npm run verify:release-workflow
           npm run verify:ipc-surface
           npm run verify:shell-pages
           npm run verify:harness-inject
@@ -205,11 +206,15 @@ jobs:
           PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           {
             echo 'body<<RELEASE_NOTES_EOF'
+            # 变量一律用 ${VAR} 花括号形式：macOS runner 的 bash 3.2 在无 UTF-8
+            # locale 时，不会把紧跟其后的全角标点当作变量名的终止符——`$TAG）`
+            # 会被解析成变量 `TAG）`，报 `TAG）: unbound variable`（Linux/Windows
+            # 的 bash 则正确终止）。这是发布链路只在 macOS 上失败过的根因。
             if [ -n "$PREV" ]; then
-              echo "**完整变更**：\`$PREV\` → \`$TAG\`"$'\n'
+              echo "**完整变更**：\`${PREV}\` → \`${TAG}\`"$'\n'
               node scripts/changelog.mjs --notes --from "$PREV" --to "$TAG"
             else
-              echo "**首次发布**（$TAG）"$'\n'
+              echo "**首次发布**（${TAG}）"$'\n'
               node scripts/changelog.mjs --notes --to "$TAG"
             fi
             echo 'RELEASE_NOTES_EOF'
@@ -247,8 +252,18 @@ jobs:
           releaseDraft: false
           prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
           releaseCommitish: ${{ github.sha }}
-          tauriScript: npm run tauri --
-          args: build --bundles ${{ matrix.bundles }} -v
+          # tauri-action **自己**会在 tauriScript 之后插入 `build` 子命令和一个
+          # `--` 分隔符（src/runner.ts：args = tauriScript + ['build'] + ['--'] + args），
+          # 因此：
+          #   · tauriScript 不能再带尾随 `--`，也不要包含 `build`；
+          #   · args 只放 `tauri build` 的**选项**，不要把 `build` 写进去。
+          # 踩过的坑（2026-09-11，三平台 release 全红）：写成
+          # `tauriScript: npm run tauri --` + `args: build --bundles …`，
+          # 实际展开为 `npm run tauri -- build -- build --bundles …`，tauri CLI 报
+          # `unexpected argument 'build' found`。正确展开应为
+          # `npm run tauri build -- --bundles …`。
+          tauriScript: npm run tauri
+          args: --bundles ${{ matrix.bundles }} -v
           # 同时传工作流工件：即使 Release 创建环节出问题，安装包也能从
           # Actions 页面取回，不至于「构建成功但拿不到产物」。
           uploadWorkflowArtifacts: true

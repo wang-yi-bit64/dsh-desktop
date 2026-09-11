@@ -131,6 +131,11 @@ npm run verify:prune
 #     Linux AppImage 打包的必要前置——见「linuxdeploy 撞上外来变体」一节）
 npm run verify:variants
 
+# 17. 发布工作流守卫（tauri-action 参数拼装 + shell 变量终止；含自测）
+#     守两类「只有真跑 release 才炸」的缺陷——见「发布工作流的两个静默缺陷」一节
+npm run verify:release-workflow
+npm run verify:release-workflow:self-test
+
 # 15. 推进版本号（dry-run 先看，再真改）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
 npm run version:set  -- 0.2.0              # 直接指定
@@ -358,6 +363,25 @@ ERROR: Failed to deploy dependencies for existing files
 修法：`prepare:harness` 在瘦身之后、打包之前调用 [`scripts/prune-platform-variants.mjs`](scripts/prune-platform-variants.mjs) 剪掉外来变体。判据**有界**，只对「目录名本身充当平台选择器」的两种布局动手——`prebuilds/`（prebuildify 约定，其 loader 按 `platform-arch` 查找）与 koffi 的 `musl_*` 布局；包**名**里带平台后缀的（`@img/sharp-linux-x64`）不碰（npm 已按 `os`/`cpu` 过滤）。另有一道保险：prebuilds 目录之外只对**有同平台邻居**的目录按名删，永远不会删掉「最后一个能用的」。剪掉它们不影响运行时——我们发布的 node 是 glibc 链接的，koffi 按运行时 libc 选构建。
 
 `npm run verify:variants` 把判据钉住，并带**可伪证性检查**：把**现有**瘦身门禁 `pruneNodeModules()` 作用于同一棵树，必须复现出「`musl_x64/koffi.node` 原样幸存」——证明这个缺陷**逃得过当时全部门禁**（静态检查、L1 烟雾、Windows/macOS 打包全部看不出），断言才不是装饰。
+
+### 发布工作流的两个静默缺陷（已修复，勿回归）
+
+`v0.1.0` 首次发布时，三个平台的 release job **全红**，但失败点各不相同，且本地门禁全绿——只有真跑发布才暴露。两处根因都已修正并加了守卫 `npm run verify:release-workflow`：
+
+1. **tauri-action 会自己插入 `build` 与 `--`**。其 `Runner.execTauriCommand` 拼出的 argv 是
+   `[...tauriScript] + ['build'] + (npm 且有参数 ? ['--'] : []) + [...args]`。
+   本仓原来写成 `tauriScript: npm run tauri --` + `args: build --bundles …`，实际展开成
+   `npm run tauri -- build -- build --bundles …`，tauri CLI 报 `unexpected argument 'build' found`。
+   正确形状是 `tauriScript: npm run tauri`（不带 `build`、不带尾随 `--`）+ `args: --bundles …`（只放选项）。
+   守卫会**模拟**该拼装逻辑，断言 `build` 恰好出现一次、且 `tauriScript` 自身不含 `build`/`--`。
+
+2. **macOS 的 bash 3.2 不认全角标点作变量终止符**。生成发布说明的脚本里写了
+   `**首次发布**（$TAG）`：macOS runner 的 bash 3.2 在没有 UTF-8 locale 时会把紧跟其后的
+   全角 `）` 并进变量名，解析成变量 `TAG）`，报 `TAG）: unbound variable`（Linux/Windows 的
+   bash 正确终止，所以只有 macOS 这一台红）。修法是变量一律写 `${VAR}` 花括号形式。守卫用正则
+   扫 release.yml 里「未加花括号的 `$NAME` 紧邻非 ASCII 字符」的可执行行（注释与 `${{ … }}` 表达式除外）。
+
+两条判据都带**可伪证性检查**：把上述旧写法当夹具，断言必须变红。
 
 ---
 

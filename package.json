@@ -20,6 +20,8 @@
     "verify:patches": "node scripts/patch-layers.mjs --self-test",
     "verify:prune": "node scripts/prune-harness-deps.mjs --self-test",
     "verify:variants": "node scripts/prune-platform-variants.mjs --self-test",
+    "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
+    "verify:release-workflow:self-test": "node scripts/verify-release-workflow.mjs --self-test",
     "verify:harness-tree": "node scripts/verify-harness-tree.mjs src-tauri/resources/harness/node_modules",
     "verify:ipc-surface": "node scripts/verify-ipc-surface.mjs",
     "verify:shell-pages": "node scripts/verify-shell-pages.mjs",

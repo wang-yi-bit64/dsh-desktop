@@ -78,6 +78,13 @@ jobs:
       - name: Verify platform variant prune rules
         run: npm run verify:variants
 
+      # 发布工作流自身的静态判据（自测）。它守的是两类「只有真跑发布才炸」的缺陷：
+      # tauri-action 的 tauriScript/args 拼装（重复 build → `unexpected argument`），
+      # 以及 shell 变量紧邻非 ASCII 字符（macOS bash 3.2 会并入变量名）。
+      # 两者都让 v0.1.0 首次发布三平台全红，且本地门禁全绿——因此必须在这里独立成门禁。
+      - name: Verify release workflow guards
+        run: npm run verify:release-workflow:self-test
+
       # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
       # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
       # 断线跨语言（Rust ↔ HTML），编译器看不见，只能静态比对：
