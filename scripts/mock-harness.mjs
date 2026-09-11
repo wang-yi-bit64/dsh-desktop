@@ -11,7 +11,8 @@
  *       本脚本忽略这两个位置参数）
  *   C3  stdout 打印 `${prefix}dsh web: http://127.0.0.1:<port>/?token=<uuid>`
  *   C4  `GET /` 返回 401（无 token 属正常）；健康区间 200≤status<500
- *   C5  仅 `GET /?token=` 返回 200 并下发 `dsh-auth-*` cookie
+ *   C5  仅 `GET /?token=` 返回 303 并下发 `dsh-auth-*` cookie（对齐真实
+ *       harness 的两步兑换：token 换 cookie → cookie 二跳取页）
  *
  * 用法：
  *   node scripts/mock-harness.mjs web --port 4173 --delay 800 --fail <mode>
@@ -88,12 +89,27 @@ function startServer(token, listenPort) {
         return
       }
 
-      // C5：只有带上启动 token 的首航才换 cookie。
+      // C5：带启动 token 的首航 → 铸 cookie 并 303 回干净 `/`。**必须与真实
+      // harness（dsh-client-connection authorizeIndex）一致用 303 而非 200 直返**：
+      // 真实形态是「token 换 cookie → cookie 二跳取页」两步，mock 若一步直返
+      // 会掩盖 smoke 侧「fetch 不带 cookie jar」这类客户端缺陷（2026-09-11 实证）。
       if (supplied && supplied === token) {
-        res.writeHead(200, {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Set-Cookie': `dsh-auth-session=${token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax`
+        res.writeHead(303, {
+          'Set-Cookie': `dsh-auth-session=${token}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax`,
+          Location: '/',
         })
+        res.end()
+        return
+      }
+
+      // 二跳：带本会话 cookie 的请求直接服务页面（对齐 isAuthenticated）。
+      const cookieHeader = String(req.headers.cookie ?? '')
+      if (
+        cookieHeader
+          .split(';')
+          .some((pair) => pair.trim() === `dsh-auth-session=${token}`)
+      ) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(page(token))
         return
       }
