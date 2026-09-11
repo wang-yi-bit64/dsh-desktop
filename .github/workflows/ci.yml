@@ -260,6 +260,15 @@ jobs:
       - name: Prepare harness resources
         run: npm run prepare:harness
 
+      # 组装树健全性（独立成步，失败在 CI 界面上一眼可见；prepare:harness 内部
+      # 也会跑同一套检查并失败）。两条零噪声规则：
+      #   规则1 树内不得有逃出树外的符号链接——`file:` 依赖若没被实体化，
+      #         复制进安装包就是指向开发机绝对路径的死链接；
+      #   规则2 桌面插件入口的裸导入必须能在树内解析——否则 Harness 启动即
+      #         `Cannot find package '<dep>'`（2026-09-11 的真实事故）。
+      - name: Verify assembled harness tree
+        run: npm run verify:harness-tree
+
       - name: Verify bundled Node.js version
         shell: bash
         run: |

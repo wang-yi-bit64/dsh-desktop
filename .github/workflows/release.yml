@@ -159,6 +159,10 @@ jobs:
       - name: Prepare harness resources
         run: npm run prepare:harness
 
+      # 组装树健全性（与 ci.yml 的 bundle job 同一套规则，发布前再拦一次）。
+      - name: Verify assembled harness tree
+        run: npm run verify:harness-tree
+
       - name: Verify bundled Node.js version
         shell: bash
         run: |

@@ -28,6 +28,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -56,6 +57,9 @@ import { checkTarget } from './verify-target.mjs'
 // 瘦身逻辑单独成模块（含自测）：它的目录判据一旦写错，产出的是「能装上但起不来」
 // 的安装包，且没有任何静态检查能发现——所以必须能独立跑断言。
 import { pruneNodeModules } from './prune-harness-deps.mjs'
+
+// 组装树的健全性检查（规则1 链接逃逸 / 规则2 插件裸导入）。同理必须能独立跑断言。
+import { verifyNoEscapingLinks, verifyPluginBareImports } from './verify-harness-tree.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const staging = join(projectRoot, 'harness-deps')
@@ -733,13 +737,52 @@ mkdirSync(harnessTree, { recursive: true })
 const stagedModules = join(staging, 'node_modules')
 for (const entry of readdirSafe(stagedModules)) {
   if (entry === 'node' || entry === '.bin' || entry === '.package-lock.json') continue
-  cpSync(join(stagedModules, entry), join(harnessTree, entry), { recursive: true })
+  const from = join(stagedModules, entry)
+  // **必须解引用符号链接。** npm 对 `file:` 依赖（本仓库的 5 个 vendor 桌面插件）
+  // 的默认处理是**建链接**而不是拷贝。直接 cpSync 会把链接原样复制进安装包：
+  //   · 链接指向开发机的绝对路径（`D:\…\vendor\…`），打包后目标不存在 → 死链接；
+  //   · 更隐蔽的是解析语义：Node 按**链接目标**的真实路径向上找 node_modules，
+  //     于是插件自己的裸导入（`fflate` / `@deepseek-ai/cordis` / `pnpm`）会在
+  //     `vendor/` 一带解析失败——安装包「装得上、起不来」。
+  //     CI 上 L1 烟雾的真实报错即此（2026-09-11）：
+  //       failed to import loader entry dsh-desktop-hmr-fallback:
+  //         Cannot find package '@deepseek-ai/cordis' imported from …/vendor/dsh-desktop-hmr-fallback/index.js
+  // 实体化成真实目录后，插件位于 `resources/harness/node_modules/<name>`，
+  // 裸导入沿树向上即可命中同一层里的依赖。
+  // dereference 的范围仅限「本身就是链接」的顶层条目——npm 树里只有 file: 依赖是链接，
+  // 其余包按原样复制，不引入额外的解引用行为。
+  let isLink = false
+  try {
+    isLink = lstatSync(from).isSymbolicLink()
+  } catch {
+    /* 读不到就按普通目录处理，让后续步骤报错 */
+  }
+  cpSync(from, join(harnessTree, entry), { recursive: true, dereference: isLink })
 }
 
 // 瘦身优化：清理 node_modules 下开发冗余文件（.d.ts / .map / test / docs / markdown 等），
 // 大幅减少 NSIS 需要打包和解压的文件数量（从数万小文件降至核心运行时文件），极大加速安装速度。
 log('pruning dev artifacts and non-runtime files from harness node_modules')
 pruneNodeModules(harnessTree)
+
+// 组装后健全性门禁：树内不得有逃出树外的链接（规则1），桌面插件入口的裸导入必须
+// 能在树内解析（规则2）。这是「装得上、起不来」一类缺陷的唯一静态防线——上面两步
+// 各自的判据写错都不会让任何编译检查变红，只有 Harness 启动才报错。
+// 失败时直接终止组装：带着一颗已知不完整的树继续打包，产物注定起不来。
+log('verifying assembled harness tree integrity')
+const treeProblems = [...verifyNoEscapingLinks(harnessTree), ...verifyPluginBareImports(harnessTree)]
+if (treeProblems.length > 0) {
+  for (const problem of treeProblems) {
+    const entry = problem.entry ?? `${problem.pkg}: ${problem.file.replace(harnessTree, '<tree>')}`
+    console.error(`  ✗ ${entry}${problem.target ? `  →  ${problem.target}` : ''}`)
+    if (problem.details) console.error(`      · ${problem.details.join(', ')}`)
+  }
+  throw new Error(
+    `组装后的依赖树不健全（${treeProblems.length} 处）：见上。` +
+      '继续打包只会产出「装得上、起不来」的安装包。'
+  )
+}
+log(`harness tree integrity OK（规则1/规则2 通过）`)
 
 // Wrapper entry, hide patch, and patch layer.
 // plugin-safety-guard.mjs 是 harness-node-entry.mjs 的运行时依赖（入口直接
