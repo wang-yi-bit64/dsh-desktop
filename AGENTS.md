@@ -124,6 +124,13 @@ npm run version:show
 npm run verify:commits
 npm run verify:changelog
 
+# 15. 依赖树瘦身自测（删目录判据是「内容」不是「名字」，含可证伪性检查）
+npm run verify:prune
+
+# 16. 原生平台变体剪枝自测（删 musl / 非目标架构 prebuilds；
+#     Linux AppImage 打包的必要前置——见「linuxdeploy 撞上外来变体」一节）
+npm run verify:variants
+
 # 15. 推进版本号（dry-run 先看，再真改）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
 npm run version:set  -- 0.2.0              # 直接指定
@@ -335,6 +342,22 @@ Harness 出现未处理的 Promise 拒绝：Error: Cannot find module '../doc/di
 规则已抽到 [`scripts/prune-harness-deps.mjs`](scripts/prune-harness-deps.mjs)，判据改为**目录内是否含运行时模块**（`.js`/`.cjs`/`.mjs`/`.node`/`.wasm`/`.json`）：命中名字只是必要条件，含运行时模块时**只递归进去删文件，绝不整目录删除**。`npm run verify:prune` 的自测带**可伪证性检查**——把旧判据作用于同一棵树必须复现出「`dist/doc` 被删」，否则自测本身失效。
 
 实测（真实 `yaml` 包，203 → 153 个文件）：`dist/doc/directives.js`、`Document.js` 存活，同目录 5 个 `.d.ts` 仍被删除；整个 staging 内有 **42 个**这类「名字像开发产物但含运行时模块」的目录，旧判据会全部误删。取舍明确：**误删只会得到一个起不来的包，少删只是少省一点体积**，所以判据一律偏向「宁可不删」。
+
+### linuxdeploy 撞上外来平台原生变体：AppImage 打包的静默杀手（已修复，勿回归）
+
+Linux 的 `build` job 曾**连续多轮**以 `failed to run linuxdeploy` 收场，而 tauri-bundler 在默认日志级别下**吞掉 linuxdeploy 的 stderr**，CI 上只留下一句无信息量的错误（deb 正常，因为 deb 不解析 ELF 依赖；Windows/macOS 不经过 linuxdeploy，全绿——所以红灯只出现在一个平台）。用 `-v` 拿到真实报错才定位：
+
+```
+Deploying dependencies for ELF file …/@koromix/koffi-linux-x64/musl_x64/koffi.node
+ERROR: Could not find dependency: libc.musl-x86_64.so.1
+ERROR: Failed to deploy dependencies for existing files
+```
+
+根因：linuxdeploy 会遍历 AppDir 内**每一个** ELF 并解析其动态依赖。`@koromix/koffi-linux-x64` 在同一个包里并列 glibc 与 musl 两份构建，`node-pty` 的 `prebuilds/` 也带齐所有平台架构——其中 musl 变体依赖 `libc.musl-x86_64.so.1`，在 glibc 的 ubuntu runner 上**必然**解析失败，于是整个 AppImage 打包被拖垮。附带噪声（非致命）：静态链接的 `landlock-run` 让 patchelf 打 ERROR、跨架构的 arm64 `pty.node` 走 ldd 只给警告——同源，都是「树里混进了与目标无关的二进制」。
+
+修法：`prepare:harness` 在瘦身之后、打包之前调用 [`scripts/prune-platform-variants.mjs`](scripts/prune-platform-variants.mjs) 剪掉外来变体。判据**有界**，只对「目录名本身充当平台选择器」的两种布局动手——`prebuilds/`（prebuildify 约定，其 loader 按 `platform-arch` 查找）与 koffi 的 `musl_*` 布局；包**名**里带平台后缀的（`@img/sharp-linux-x64`）不碰（npm 已按 `os`/`cpu` 过滤）。另有一道保险：prebuilds 目录之外只对**有同平台邻居**的目录按名删，永远不会删掉「最后一个能用的」。剪掉它们不影响运行时——我们发布的 node 是 glibc 链接的，koffi 按运行时 libc 选构建。
+
+`npm run verify:variants` 把判据钉住，并带**可伪证性检查**：把**现有**瘦身门禁 `pruneNodeModules()` 作用于同一棵树，必须复现出「`musl_x64/koffi.node` 原样幸存」——证明这个缺陷**逃得过当时全部门禁**（静态检查、L1 烟雾、Windows/macOS 打包全部看不出），断言才不是装饰。
 
 ---
 

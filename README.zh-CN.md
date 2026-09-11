@@ -142,6 +142,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:shell-pages` | 把每个壳页面的内联脚本放进 DOM 桩里真跑一遍，并**逐个点一遍按钮**。抓 `getElementById` 返回 `null`（脚本会就此中断，**该页所有监听全部失效**），以及 HTML 留了按钮却没挂监听。 |
 | `npm run verify:harness-inject` | Harness 页注入脚本的 DOM 行为，含**可证伪性检查**：把脚本回退成上游行为，断言必须变红。 |
 | `npm run verify:patches` | `patches/` 与 `scripts/patch-layers.mjs` 的分级清单一致，且每个补丁文件名都能推导出包名。 |
+| `npm run verify:prune` / `npm run verify:variants` | 决定出厂 `node_modules` 形状的两条剪枝规则：哪些开发产物目录可安全删除（看**内容**不看名字——`yaml/dist/doc` 是运行时路径），以及哪些外来平台原生变体必须在 linuxdeploy 扫描 AppDir 前清掉。两条都带针对旧判据的可伪证性检查。 |
 | `npm run verify:version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
 | `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
 | `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |

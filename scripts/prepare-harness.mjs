@@ -52,11 +52,15 @@ import {
 
 // 打包目标守卫（见下方 `--target` 段）。import 模块级无副作用：
 // verify-target.mjs 的 CLI 入口有「主模块」判定保护。
-import { checkTarget } from './verify-target.mjs'
+import { checkTarget, resolveExpectedTarget } from './verify-target.mjs'
 
 // 瘦身逻辑单独成模块（含自测）：它的目录判据一旦写错，产出的是「能装上但起不来」
 // 的安装包，且没有任何静态检查能发现——所以必须能独立跑断言。
 import { pruneNodeModules } from './prune-harness-deps.mjs'
+
+// 原生平台变体剪枝（musl / 非目标架构 prebuilds），单独成模块（含自测）。
+// 它修的是「linuxdeploy 遍历 AppDir 内每个 ELF、撞上外来变体而打包失败」，见模块文档。
+import { pruneForeignPlatformVariants } from './prune-platform-variants.mjs'
 
 // 组装树的健全性检查（规则1 链接逃逸 / 规则2 插件裸导入）。同理必须能独立跑断言。
 import { verifyNoEscapingLinks, verifyPluginBareImports } from './verify-harness-tree.mjs'
@@ -764,6 +768,25 @@ for (const entry of readdirSafe(stagedModules)) {
 // 大幅减少 NSIS 需要打包和解压的文件数量（从数万小文件降至核心运行时文件），极大加速安装速度。
 log('pruning dev artifacts and non-runtime files from harness node_modules')
 pruneNodeModules(harnessTree)
+
+// 剪掉与目标平台无关的原生变体：musl 构建（`@koromix/koffi-linux-x64/musl_x64/`）
+// 与非目标架构的 prebuilds（`node-pty/prebuilds/linux-arm64/` 等）。
+//
+// 为什么必须在上面的 prune 之后、且必须在打包之前：linuxdeploy 会遍历 AppDir 内
+// **每一个** ELF 并解析动态依赖，而 musl 变体依赖 `libc.musl-x86_64.so.1`——在 glibc
+// 的 ubuntu runner 上无解，于是**整个 AppImage 打包失败**，且 tauri-bundler 默认
+// 会把 linuxdeploy 的真实报错吞掉，只留下无信息量的 `failed to run linuxdeploy`。
+// （2026-09-11 真实事故；deb 正常是因为它不解析 ELF 依赖。）
+//
+// 目标平台由 verify-target 的三来源优先级解析（argv → TAURI_ENV_TARGET_TRIPLE →
+// rustc host）。解析不到时回退到当前进程宿主——这与「组装的就是本机 Node」一致，
+// 不会比现有行为更保守。**Windows/macOS 打包不经过 linuxdeploy**，此步对它们只是
+// 顺手省体积，无行为差异。
+log('pruning foreign-platform native variants from harness node_modules')
+const { expected: resolvedPruneTarget } = resolveExpectedTarget([])
+const pruneTarget = resolvedPruneTarget ?? { platform: process.platform, arch: process.arch }
+const { removed: removedVariants } = pruneForeignPlatformVariants(harnessTree, pruneTarget)
+log(`pruned ${removedVariants.length} foreign-platform variant dir(s) for ${pruneTarget.platform}/${pruneTarget.arch}`)
 
 // 组装后健全性门禁：树内不得有逃出树外的链接（规则1），桌面插件入口的裸导入必须
 // 能在树内解析（规则2）。这是「装得上、起不来」一类缺陷的唯一静态防线——上面两步

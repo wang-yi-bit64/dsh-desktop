@@ -70,6 +70,14 @@ jobs:
       - name: Verify dependency prune rules
         run: npm run verify:prune
 
+      # 原生平台变体剪枝判据的自测。musl / 非目标架构的 prebuild 二进制留在树里时，
+      # linuxdeploy 会在打包阶段解析它们的动态依赖并失败（`libc.musl-x86_64.so.1` 在
+      # glibc runner 上无解）——而 tauri-bundler 默认吞掉真实报错，只留下
+      # `failed to run linuxdeploy`。这条自测把判据钉住：既断言外来变体必被删除，
+      # 也用「现有 prune 应当留下 musl」做可伪证性对照，证明缺陷逃得过旧门禁。
+      - name: Verify platform variant prune rules
+        run: npm run verify:variants
+
       # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
       # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
       # 断线跨语言（Rust ↔ HTML），编译器看不见，只能静态比对：
