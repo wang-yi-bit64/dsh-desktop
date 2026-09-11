@@ -218,6 +218,9 @@ jobs:
       - uses: actions/checkout@v4
 
       # L2 在 Linux 上走 xvfb-run，需要 xvfb；其余构建依赖同 test job。
+      # 另外两行是 AppImage 打包专用：linuxdeploy 的 gtk 插件按 Debian 布局找
+      # pixbuf loaders，缺包或缓存未刷新时以 `failed to run linuxdeploy` 收场
+      # （tauri bundler 会吞掉具体报错）——deb 成功而 AppImage 失败的常见根因。
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -226,8 +229,11 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
+            librsvg2-common \
+            libgdk-pixbuf2.0-bin \
             patchelf \
             xvfb
+          gdk-pixbuf-query-loaders --update-cache
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -313,6 +319,11 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Ubuntu 24.04+（glibc 2.38+）链接产物含 `.relr.dyn` 段，linuxdeploy
+          # 自带的旧 strip 识别不了 → AppImage 打包报 `failed to run linuxdeploy`。
+          # NO_STRIP=1 是 tauri 社区官方 workaround；Win/mac 不跑 linuxdeploy，
+          # 此变量对它们无作用。代价：AppImage 内二进制不做 strip（体积略增）。
+          NO_STRIP: "1"
         run: npm run tauri -- build --bundles ${{ matrix.bundles }}
 
       # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。

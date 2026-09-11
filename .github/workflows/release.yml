@@ -132,7 +132,12 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
+            librsvg2-common \
+            libgdk-pixbuf2.0-bin \
             patchelf
+          # AppImage 打包专用：linuxdeploy 的 gtk 插件需要 pixbuf loaders 且缓存
+          # 已刷新，否则 `failed to run linuxdeploy`（详见 ci.yml 同名步骤注释）。
+          gdk-pixbuf-query-loaders --update-cache
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -218,6 +223,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Ubuntu 24.04+ 的 .relr.dyn 段令 linuxdeploy 的旧 strip 失败 →
+          # `failed to run linuxdeploy`；NO_STRIP=1 为官方 workaround
+          # （详见 ci.yml Build installers 步骤注释）。
+          NO_STRIP: "1"
         with:
           tagName: ${{ needs.preflight.outputs.tag }}
           releaseName: 'DSH Desktop ${{ needs.preflight.outputs.version }}'
