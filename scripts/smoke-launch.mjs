@@ -424,18 +424,58 @@ async function runLevel1() {
           '未在输出中找到契约 C3 的 `dsh web: http://…/?token=…` 行'
         )
       } else {
-        try {
-          const response = await fetch(tokenUrl, { redirect: 'follow' })
-          const body = await response.text()
-          const hasCookie = /dsh-auth-/.test(response.headers.get('set-cookie') ?? '')
-          record(
-            'L1.3 token 兑换取页（契约 C3/C5）',
-            response.ok && body.length > 0,
-            `HTTP ${response.status}, ${body.length} bytes, cookie=${hasCookie ? 'dsh-auth-*' : 'none'}`
-          )
-        } catch (error) {
-          record('L1.3 token 兑换取页（契约 C3/C5）', false, `${error?.message ?? error}`)
+        // 失败时把**能定位原因的细节**全部打出来：响应体只有几十字节、多半就是
+        // 服务端的错误说明（此前只记录了状态码和字节数，等于把答案扔掉了）。
+        // 再补几个请求形态的对照（是否要求浏览器式 Accept/UA、token 是否一次性），
+        // 一次 CI 就能分辨「契约漂移」「token 被提前消费」「需要浏览器头」三种假设。
+        const describe = async (label, url, init) => {
+          try {
+            const response = await fetch(url, { redirect: 'follow', ...init })
+            const body = await response.text()
+            const hasCookie = /dsh-auth-/.test(response.headers.get('set-cookie') ?? '')
+            const contentType = response.headers.get('content-type') ?? 'no-content-type'
+            log(
+              `  [诊断] ${label}: HTTP ${response.status}, ${body.length}B, ` +
+                `cookie=${hasCookie ? 'dsh-auth-*' : 'none'}, type=${contentType}, ` +
+                `body=${JSON.stringify(body.slice(0, 160))}`
+            )
+            return { ok: response.ok && body.length > 0, status: response.status, hasCookie }
+          } catch (error) {
+            log(`  [诊断] ${label}: 异常 ${error?.message ?? error}`)
+            return { ok: false, status: 0, hasCookie: false }
+          }
         }
+
+        let first
+        try {
+          first = await describe('裸 GET（契约 C3 原样）', tokenUrl, { headers: {} })
+        } catch (error) {
+          first = { ok: false }
+          log(`  [诊断] 裸 GET 异常：${error?.message ?? error}`)
+        }
+
+        if (!first.ok) {
+          // 对照组：带浏览器式头的 GET；再补一次裸 GET 看 token 是否已被消费。
+          await describe('GET + Accept:text/html', tokenUrl, {
+            headers: { accept: 'text/html,application/xhtml+xml' },
+          })
+          await describe('GET + 浏览器 UA + Accept', tokenUrl, {
+            headers: {
+              accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'user-agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+            },
+          })
+          await describe('第二次裸 GET（token 是否一次性）', tokenUrl, { headers: {} })
+          await describe('HEAD /', tokenUrl.split('?')[0], { method: 'HEAD', headers: {} })
+        }
+
+        const ok = Boolean(first.ok)
+        record(
+          'L1.3 token 兑换取页（契约 C3/C5）',
+          ok,
+          `HTTP ${first.status ?? 'n/a'}, cookie=${first.hasCookie ? 'dsh-auth-*' : 'none'}（诊断见上方 [诊断] 行）`
+        )
       }
     }
 
