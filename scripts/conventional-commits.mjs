@@ -228,17 +228,25 @@ export function readCommits(options = {}) {
 }
 
 /**
- * 读取当前仓库最近的 tag（按版本序，非字典序）。
+ * 读取仓库中「指定起点可达」的最近 tag（按版本序，非字典序）。
+ *
+ * `rev` 决定了搜索范围：省略时从 `HEAD` 起（= 「目前最新的 tag」）；给出时从该
+ * rev 起。**这个参数不是可选便利，而是正确性所必需**——见 `baselineRefFor()`：
+ * 想知道「某个 tag 的上一个 tag」，只能从 `tag^` 去找；从 `HEAD` 找会把该 tag
+ * 自己找回来，区间随之退化成空。
  *
  * @param {object} [options]
  * @param {string} [options.cwd] - 仓库路径。
  * @param {string} [options.pattern] - tag 匹配模式，默认 `v*`。
- * @returns {string|null} 最近 tag 名；无 tag 时返回 `null`（**首次发布**的情形）。
+ * @param {string} [options.rev] - 起始 revision，默认 `HEAD`。
+ * @returns {string|null} 最近 tag 名；范围内无 tag 时返回 `null`（**首次发布**的情形）。
  */
 export function latestTag(options = {}) {
-  const { cwd = process.cwd(), pattern = 'v*' } = options;
+  const { cwd = process.cwd(), pattern = 'v*', rev } = options;
+  const args = ['describe', '--tags', '--abbrev=0', `--match=${pattern}`];
+  if (rev) args.push(rev);
   try {
-    const stdout = execFileSync('git', ['describe', '--tags', '--abbrev=0', `--match=${pattern}`], {
+    const stdout = execFileSync('git', args, {
       cwd,
       encoding: 'utf8',
       // stderr 必须丢弃：没有 tag 时 git 会打印 `fatal: No names found…`。
@@ -248,8 +256,25 @@ export function latestTag(options = {}) {
     return stdout.trim() || null;
   } catch {
     // `git describe` 在没有匹配 tag 时以非零码退出——这是合法状态，不是错误。
+    // `rev` 非法（如根提交的 `^`）同样走这里，语义退化为「从头读」，也是安全的。
     return null;
   }
+}
+
+/**
+ * 求「相对 `to` 的上一个 tag」应当从哪个 revision 开始搜索。
+ *
+ * 这是变更日志最容易错、且错了**不会报错只会变空**的一处：
+ * 生成 `v0.1.0` 的说明时，若从 `HEAD`（或任何包含 `v0.1.0` 的起点）去找最近的
+ * tag，找回来的正是 `v0.1.0` 自己，`--from` 与 `--to` 指向同一个提交，区间为空，
+ * Release 正文就成了「区间内没有提交」。发布链路里这个 tag 在生成说明时**必然
+ * 已经存在**（它是 push 上来的），所以这不是理论边界，而是首次发布的默认路径。
+ *
+ * @param {string|null|undefined} to - 区间的结束 ref；省略表示 `HEAD`。
+ * @returns {string|null} 传给 `latestTag` 的 rev；`null` 表示按 `HEAD` 搜索。
+ */
+export function baselineRefFor(to) {
+  return to ? `${to}^` : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -41,7 +41,15 @@ export const DEFAULT_LAYER = 'ui-behavior'
 export const CRITICAL_LAYER = 'functional'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const patchesDir = join(projectRoot, 'patches')
+
+/**
+ * 补丁文件所在目录（绝对路径）。
+ *
+ * 导出而非各处自行拼接：`prepare-harness.mjs` 需要把**单个**补丁文件复制到临时
+ * patch-dir，若两边各写一遍 `join(root, 'patches')`，改目录名时必然漏改一处。
+ */
+export const PATCHES_DIR = join(projectRoot, 'patches')
+const patchesDir = PATCHES_DIR
 
 /**
  * 分级表：补丁文件名 → `{ layer, why, retireWhen }`。

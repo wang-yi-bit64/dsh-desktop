@@ -29,18 +29,20 @@
  * node scripts/changelog.mjs --notes                     # 打印 release 正文（上个 tag..HEAD）
  * node scripts/changelog.mjs --notes --from v0.1.0 --to v0.2.0
  * node scripts/changelog.mjs --write --version 0.2.0     # 写入 CHANGELOG.md
- * node scripts/changelog.mjs --self-test                 # 渲染逻辑自测（无需 git）
+ * node scripts/changelog.mjs --self-test                 # 渲染逻辑 + 区间解析自测
  * ```
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import {
   BREAKING_TITLE,
+  baselineRefFor,
   classify,
   latestTag,
   parseCommit,
@@ -352,6 +354,67 @@ export function selfTest() {
   check(!/\n\n\n/.test(first), '插入：产出不得含连续空行');
   check(first.endsWith('\n') && !first.endsWith('\n\n'), '插入：文件应以单个换行结尾');
 
+  // 10) 基线 ref 的推导（纯逻辑）。
+  check(baselineRefFor('v0.1.0') === 'v0.1.0^', '基线：给定 --to 时必须从其父提交开始找上一个 tag');
+  check(baselineRefFor(null) === null, '基线：无 --to 时按 HEAD 搜索');
+  check(baselineRefFor(undefined) === null, '基线：--to 未给出时按 HEAD 搜索');
+
+  // 11) **首次发布的区间必须非空**——这条是真实 bug 的回归钉。
+  //
+  // 背景：生成 `v0.1.0` 的 Release 说明时，tag 已经存在（它就是刚 push 上来的）。
+  // 若默认基线写成 `latestTag()`（从 HEAD 找），找回来的正是 `v0.1.0` 自己，
+  // 区间退化成 `v0.1.0..v0.1.0`，说明变空白——而且**不报错**。
+  // 纯逻辑断言抓不到这类错误（错在「和 git 的交互」上），所以这里真的建一个
+  // 临时仓库把整条路径跑一遍。
+  {
+    const repo = mkdtempSync(path.join(tmpdir(), 'changelog-selftest-'));
+    const git = (...args) =>
+      execFileSync('git', ['-c', 'user.name=selftest', '-c', 'user.email=selftest@example.com', ...args], {
+        cwd: repo,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    try {
+      git('init', '-q', '-b', 'main');
+      git('commit', '-q', '--allow-empty', '-m', 'feat: 第一个功能');
+      git('commit', '-q', '--allow-empty', '-m', 'fix: 修一个问题');
+      git('tag', 'v0.1.0');
+
+      // 模拟 changelog.mjs 的默认基线解析（--to v0.1.0，--from 省略）。
+      const to = 'v0.1.0';
+      const rev = baselineRefFor(to);
+      const from = latestTag(rev ? { rev, cwd: repo } : { cwd: repo });
+      const commits = readCommits({ from, to, cwd: repo });
+
+      check(from === null, `首次发布：v0.1.0 之前不应存在更早的 tag，实际解析为 ${from}`);
+      check(
+        commits.length === 2,
+        `首次发布：区间不得为空，应读到全部 2 条提交，实际 ${commits.length} 条`,
+      );
+      // 断言到「渲染出来的正文」而不是内部字段名：内部字段改名不该让这条回归
+      // 失效，真正要守住的是「说明里有内容」这个可见结果。
+      const body = renderSection(commits, { base: null });
+      check(body.includes('第一个功能'), '首次发布：最早那条提交必须出现在说明正文里');
+      check(body.includes('修一个问题'), '首次发布：最近那条提交必须出现在说明正文里');
+      check(body.trim().length > 0, '首次发布：说明正文不得为空（这正是该缺陷的表现）');
+
+      // 第二次发布：v0.2.0 的基线必须落在 v0.1.0 上，且只含新提交。
+      git('commit', '-q', '--allow-empty', '-m', 'feat: 第二个功能');
+      git('tag', 'v0.2.0');
+      const rev2 = baselineRefFor('v0.2.0');
+      const from2 = latestTag(rev2 ? { rev: rev2, cwd: repo } : { cwd: repo });
+      const commits2 = readCommits({ from: from2, to: 'v0.2.0', cwd: repo });
+      check(from2 === 'v0.1.0', `后续发布：v0.2.0 的基线应为 v0.1.0，实际 ${from2}`);
+      check(commits2.length === 1, `后续发布：应只有 1 条新提交，实际 ${commits2.length} 条`);
+    } finally {
+      try {
+        rmSync(repo, { recursive: true, force: true });
+      } catch {
+        // 临时目录清理失败不影响断言结论，不掩盖真正的失败项。
+      }
+    }
+  }
+
   if (failures.length > 0) {
     throw new Error(`changelog 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
   }
@@ -397,8 +460,15 @@ async function main(argv) {
     return;
   }
 
-  // `--from` 省略时的默认基线：最近一个 v* tag；没有 tag 说明是首次发布，从头读。
-  const from = options.from ?? latestTag();
+  // `--from` 省略时的默认基线：**相对 `--to` 的**上一个 v* tag。
+  //
+  // 这里**不能**写成 `latestTag()`（= 从 HEAD 去找）。发布链路调用的是
+  // `--notes --to v0.1.0`，而 `v0.1.0` 这个 tag 在生成说明时必然已经存在（它就是
+  // 刚 push 上来的那个），从 HEAD 找会把它自己找回来，`--from` 与 `--to` 指向
+  // 同一处，区间为空，Release 正文变成「区间内没有提交」——而且不报错。
+  // 详见 `baselineRefFor()`。
+  const baselineRev = baselineRefFor(options.to);
+  const from = options.from ?? latestTag(baselineRev ? { rev: baselineRev } : {});
   const commits = readCommits({ from, to: options.to });
   const base = repoUrl();
 
@@ -408,7 +478,22 @@ async function main(argv) {
   }
 
   if (commits.length === 0) {
-    console.log(`（${from ? `${from}..${options.to}` : options.to} 区间内没有提交）`);
+    const detail = `（${from ? `${from}..${options.to}` : options.to} 区间内没有提交）`;
+
+    // 空区间在**发布说明**这条链路上几乎总是调用错误（基线解析错、tag 打错），
+    // 而不是「这次真的没有改动」。--notes 的输出会被直接塞进 GitHub Release 正文，
+    // 静默产出空白没人会发现（Release 页看起来只是「这个版本没什么可说的」）。
+    // 因此这里必须响亮失败：宁可让发布停在 preflight，也不要发一个空说明的版本。
+    // 非 --notes 的用法（人工查看）保持原样，只打印提示语。
+    if (options.notes) {
+      throw new Error(
+        `生成的变更说明为空：${detail}\n` +
+          '最常见的原因是基线解析错了——即 --from 与 --to 指向同一处提交。\n' +
+          '请显式指定 --from <上一个 tag>，或确认 --to 指向的 tag 之前确实还有提交。',
+      );
+    }
+
+    console.log(detail);
     return;
   }
 

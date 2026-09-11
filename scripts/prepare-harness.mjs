@@ -25,9 +25,11 @@
 
 import { execFileSync } from 'node:child_process'
 import {
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -36,11 +38,12 @@ import {
   writeFileSync
 } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
   CRITICAL_LAYER,
+  PATCHES_DIR,
   auditPatchLayers,
   layerOf,
   listPatchFiles,
@@ -452,10 +455,12 @@ assertPickerSurfaceIsHostBacked()
  * Apply every tracked patch individually and decide by layer whether a failure
  * is fatal.
  *
- * `patch-package` is invoked once per patched package (`npx patch-package
- * <pkg>`) rather than once for the whole tree: only the per-package form tells
- * us *which* patch broke, and that is what the tiered policy needs to decide
- * between "warn and ship without this enhancement" and "stop the build".
+ * `patch-package` is invoked once per patch **file**, each pointed at its own
+ * temporary `--patch-dir`, rather than once for the whole tree: only the
+ * per-patch form tells us *which* patch broke, and that is what the tiered
+ * policy needs to decide between "warn and ship without this enhancement" and
+ * "stop the build". See `applySinglePatch()` for why the
+ * `patch-package <package>` form must never be used for this.
  *
  * Policies (see `patches/LAYERS.md`, single source of truth in
  * `scripts/patch-layers.mjs`):
@@ -504,7 +509,7 @@ function applyTieredPatches() {
       continue
     }
 
-    const result = runCaptured('npx', ['patch-package', pkg], staging)
+    const result = applySinglePatch(file)
     if (result.ok) {
       records.push({ file, package: pkg, layer: info.layer, status: 'applied', detail: null })
       continue
@@ -515,7 +520,7 @@ function applyTieredPatches() {
     if (fatal) {
       throw new Error(
         `补丁应用失败（层 ${info.layer}${info.classified ? '' : '，未登记'}）：${file}\n` +
-          `包：${pkg}\n$(npx patch-package ${pkg} 输出末尾)\n${detail}`
+          `包：${pkg}\n(patch-package --patch-dir <临时目录> --error-on-fail 输出末尾)\n${detail}`
       )
     }
     log(`⚠️ 补丁未应用（层 ${info.layer}，按策略降级继续）：${file}`)
@@ -530,9 +535,77 @@ function applyTieredPatches() {
 
   if (applied === 0) {
     throw new Error(
-      `${files.length} 个补丁全部未应用。这通常是 npx patch-package <pkg> 调用形式失效，` +
+      `${files.length} 个补丁全部未应用。这通常是 patch-package 的调用形式失效` +
+        '（必须是「不带包名的应用模式 + --patch-dir」，见 applySinglePatch()），' +
         '或 node_modules 未安装；无论分级如何，交付未打补丁的 Harness 都是不可接受的。'
     )
+  }
+}
+
+/**
+ * Apply exactly one tracked patch through patch-package's **apply** mode.
+ *
+ * Mechanism: copy the single patch into its own scratch `--patch-dir` inside
+ * `staging/` and let patch-package apply that directory. That keeps "which patch
+ * broke?" answerable (what the tiered policy needs) while still using the apply
+ * code path.
+ *
+ * **Do not use the `patch-package <package>` form here.** Supplying a package
+ * name switches the CLI to **creation** mode: it installs a pristine copy of the
+ * package and diffs it against `node_modules` in order to *write* a patch file.
+ * A freshly staged tree has nothing applied yet, so it reports
+ * "There don't appear to be any changes" and exits non-zero — every patch is
+ * then recorded as failed, the `functional` layer throws, and all three platform
+ * bundle jobs die with a message about a package that is in fact perfectly fine.
+ * (That is exactly what happened between cea57b3 and this fix: the remaining
+ * `test` failure masked it, so it only surfaced once the earlier gate went
+ * green.)
+ *
+ * **The `--patch-dir` value must be relative, and the directory has to live under
+ * `staging/`.** patch-package only rejects values that start with `/`
+ * (`--patch-dir must be a relative path`), so a Windows absolute path (`C:\...`)
+ * slips past that guard, gets joined onto the cwd, resolves to a directory that
+ * does not exist, and patch-package prints "No patch files found" while
+ * **exiting 0**. An absolute path therefore does not fail — it silently applies
+ * nothing while this function would record `applied`. Hence: scratch dir inside
+ * `staging/`, relative value on the command line, plus an explicit
+ * "no patch files found" check because exit code 0 is not trustworthy on its
+ * own here.
+ *
+ * `--error-on-fail` is passed explicitly: patch-package exits 0 on failure when
+ * it does not detect CI (a deliberate guard against package.json drifting from
+ * node_modules). Without it a local `npm run prepare:harness` would record every
+ * broken patch as `applied` — a false green in the very report that exists to be
+ * the evidence of what got applied.
+ *
+ * @param {string} file - Patch file name inside `patches/`.
+ * @returns {{ ok: boolean, output: string }} Outcome plus captured output.
+ */
+function applySinglePatch(file) {
+  const patchDir = mkdtempSync(join(staging, '.dsh-patch-'))
+  const relativePatchDir = basename(patchDir)
+  try {
+    copyFileSync(join(PATCHES_DIR, file), join(patchDir, file))
+    const result = runCaptured(
+      'npx',
+      ['patch-package', '--patch-dir', relativePatchDir, '--error-on-fail'],
+      staging
+    )
+    if (result.ok && /no patch files found/i.test(result.output)) {
+      // 退出码 0 却一个补丁都没找到 = 静默空操作，与「应用成功」有本质区别。
+      // 这类守卫刻意做得很窄：只拦这一种已知的静默形态，不试图解析输出语义。
+      return {
+        ok: false,
+        output:
+          `patch-package 未在 --patch-dir ${relativePatchDir} 找到补丁文件，` +
+          `补丁实际上没有被应用（退出码却为 0）。\n${result.output}`
+      }
+    }
+    return result
+  } finally {
+    // 临时目录必须清掉：每个补丁一次，失败路径上尤其容易堆积；
+    // 它还会被后续的 resources 拷贝扫到。
+    rmTreeSafe(patchDir)
   }
 }
 
