@@ -137,7 +137,8 @@ jobs:
             patchelf
           # AppImage 打包专用：linuxdeploy 的 gtk 插件需要 pixbuf loaders 且缓存
           # 已刷新，否则 `failed to run linuxdeploy`（详见 ci.yml 同名步骤注释）。
-          gdk-pixbuf-query-loaders --update-cache
+          # noble 的 gdk-pixbuf-query-loaders 不在 PATH，用 multiarch 绝对路径兜底。
+          /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache || true
 
       - uses: dtolnay/rust-toolchain@stable
 

@@ -233,7 +233,10 @@ jobs:
             libgdk-pixbuf2.0-bin \
             patchelf \
             xvfb
-          gdk-pixbuf-query-loaders --update-cache
+          # noble 的 gdk-pixbuf-query-loaders 不在 PATH（位于 multiarch lib 目录、
+          # 属 libgdk-pixbuf-2.0-0；2.44 才回归 bin 包的 /usr/bin），用绝对路径；
+          # librsvg2-common 的 postinst 通常已刷新缓存，此行是兜底故容错。
+          /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache || true
 
       - uses: dtolnay/rust-toolchain@stable
 
