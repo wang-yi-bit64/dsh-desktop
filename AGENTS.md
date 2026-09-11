@@ -301,6 +301,25 @@ note: `-D clippy::result-large-err` implied by `-D warnings`
 **这条 lint 本地能拦**（见 §2 关于 clippy 的实测复核）：改完跑
 `cargo clippy --workspace --all-targets -- -D warnings`，不要等 CI 三平台跑一轮才发现。
 
+### 补丁应用：`patch-package` 必须用「应用模式 + 相对 `--patch-dir`」（已修复，勿回归）
+
+`scripts/prepare-harness.mjs` 的 `applySinglePatch()` 逐个应用 `patches/` 下的补丁。两条约束都是硬性的，各自都能**静默**做错事：
+
+1. **不得用 `patch-package <包名>` 形式。** 带包名会把 CLI 切到**生成**模式：它安装一份干净的包并与 `node_modules` 做 diff，以便*写出*补丁文件。刚装好的 staging 树什么都没打过，于是它报 `There don't appear to be any changes` 并退出非零 → 18 个补丁全被判失败 → `functional` 层抛错 → 三平台 `bundle` 作业一起挂。报错信息指向「某个包没有改动」，与真实原因（调用形式用错）毫无关系。`cea57b3` 就是这样把原来正确的 `npx patch-package`（应用全部）换掉的；由于当时 `test` 作业本身是红的，`bundle` 从未执行，这个缺陷被掩盖了两天。
+2. **`--patch-dir` 必须传相对路径，且目录要位于 `staging/` 之内。** patch-package 只拒绝以 `/` 开头的值（`--patch-dir must be a relative path`），**Windows 绝对路径（`C:\…`）能绕过这个守卫**：它被当成相对路径拼到 cwd 之下，变成 `harness-deps/C:/…` 这样不存在的目录，patch-package 打印 `No patch files found` 却**以 0 退出**。也就是说绝对路径不会失败，它只是什么都不做，而调用方会把补丁记成 `applied`。`applySinglePatch()` 因此在 staging 内建 scratch 目录、命令行传目录名，并额外拦截 `No patch files found` 这一种已知静默形态。
+
+配套：**`--error-on-fail` 必须显式传**。patch-package 在非 CI 环境失败也返回 0（它有意如此，以防 `package.json` 与 `node_modules` 失步），不传的话本机跑出来的「已应用」是假绿，而这份报告正是「哪些补丁真的打上了」的证据。
+
+判定这类改动是否成功，看的是**补丁是否真的落到盘上**（文件字节数 / 内容形态变化），不是退出码。
+
+### 变更说明的默认基线必须相对 `--to` 求（已修复，勿回归）
+
+`release.yml` 用 `changelog.mjs --notes --to "$TAG"` 生成 Release 正文。`--from` 省略时的默认基线**不能**写成「全仓库最近的 tag」：发布时 `$TAG` 这个 tag 必然已经存在（它就是刚 push 上来的那个），从 `HEAD` 去找会把它自己找回来，`--from` 与 `--to` 指向同一处，区间退化为 `v0.1.0..v0.1.0`，正文变成「区间内没有提交」——**首个版本的 Release 说明整篇空白，且不报错**。
+
+正确做法是相对 `--to` 求上一个 tag：`latestTag({ rev: \`${to}^\` })`（推导已抽成 `conventional-commits.mjs` 的 `baselineRefFor()`）。另外 `--notes` 遇到空区间现在**直接失败**：空白正文会被 GitHub Release 原样展示，没人会注意到「这个版本没什么可说的」其实是一次自动化故障。
+
+`changelog.mjs --self-test` 里有一条建临时 git 仓库实跑区间解析的断言钉着这点（渲染层纯逻辑断言抓不到它——错在「与 git 的交互」上）。实测：同一首次发布场景，旧实现读到 0 条提交、新实现读到全部历史（98 行 / 13063 字符 / 8 章节，对比修复前的 5 行 / 115 字符 / 0 章节）。
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)
