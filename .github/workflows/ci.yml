@@ -1,18 +1,28 @@
 name: CI
 
 # 阶段 0 任务 0.4：三平台兜底。
-# PR   → 静态检查 + 单测 + 补丁分级自检 + L1 烟雾（不组装 300MB 资源，快反馈）
-# main/nightly → 额外组装资源、跑真实资源树的 L1 烟雾、打包、L2 GUI 烟雾、体积采集
 #
-# 门禁分层（为什么这样分）：
-#   cargo test/clippy 测的是壳自己的逻辑，Harness 对它是黑盒，**覆盖不到**
-#   Harness 侧行为变更与资源组装缺陷。smoke 的 L1/L2 补这一段。
-#   L1 用 mock 资源树即可验证「宿主 → 子进程 → 就绪 → 服务页面 → 关闭 → 无孤儿」
-#   这条链路，因此可以在 PR 上便宜地跑；真实资源树的 L1 放在 build job。
+# 职责（2026-09-11 收敛）：**只跑静态门禁 + 单测**，不组装资源、不打包、不跑烟雾。
+#   · PR            → 三平台 `test`（静态门禁 + clippy + 单测），快反馈
+#   · 手动 dispatch → 同上，用于在分支上主动验证
+#
+# 其余两件事已有各自唯一的产地，别在这里重复实现：
+#   · 冒烟测试（L1 会话烟雾 / L2 GUI 烟雾）→ `.github/workflows/smoke.yml`，**手动触发**。
+#     它要真起子进程与窗口，assembled/full 还要组装 300MB 运行时，成本与「一次提交的
+#     价值」不成比例，因此刻意不挂在自动触发上。要跑就去 Smoke 工作流按一下。
+#   · 出包与发布 → `.github/workflows/release.yml`，**推 `v*` tag 触发**。
+#
+# 为什么本工作流不监听 `push`（含 main 与 tag）：日常提交零自动化。tag 上的出包由
+# release.yml 负责；让 main 上每次提交都跑一遍编译矩阵，收益与成本不成比例。
+#
+# ⚠️ 代价必须写清楚（别让下一个人以为门禁还在）：日常提交不再自动跑 `cargo test` /
+# clippy / 三平台矩阵，而 release.yml 的 preflight 只跑秒级静态门禁、看不见运行时行为。
+# 因此**发布前请先手动 dispatch 本工作流（拿静态+单测）并 dispatch 一次 Smoke（拿冒烟）
+# 且都确认全绿，再打 tag**。省略这一步，一个从未通过矩阵的提交会被直接打包发布。
 
 on:
-  push:
-    branches: [main]
+  # 刻意不监听 `push`（含 main 与 tag）：日常提交零自动化，出包只在 release.yml，
+  # 冒烟只在 smoke.yml（手动）。
   pull_request:
   workflow_dispatch:
 
@@ -152,231 +162,3 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace
-
-  # L1 无头烟雾：证伪「宿主能派生 → 能就绪 → 真的在服务页面 → 关得干净」。
-  # 用 mock 资源树（DSH_MOCK=1），因此不需要 npm install，也不需要显示器。
-  smoke-headless:
-    name: ${{ matrix.os }} / smoke L1
-    runs-on: ${{ matrix.os }}
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            src-tauri
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Build host CLI
-        run: cargo build -p dsh-host-cli
-
-      - name: Smoke L1 (mock resource tree)
-        run: node scripts/smoke-launch.mjs --level=1 --resource-mode=stub
-
-      # 故障注入：孤儿进程清理 + 退出码归因（6 类故障场景，10 项断言）。
-      # 这是唯一能证伪「子进程在宿主崩溃后残留」的门禁——单测覆盖不到，
-      # 因为要真的派生、真的杀。前置只有 `cargo build -p dsh-host-cli`，
-      # 与上面的步骤复用同一份产物。
-      #
-      # Windows 已本地跑通 10/10（Job Object 路径）。Linux/macOS 走的是
-      # PDEATHSIG / 进程组，尚无人工确认记录，因此先作为**信息性**步骤：
-      # 失败留档但不阻断。确认全绿后把 continue-on-error 去掉转硬门禁。
-      - name: Fault injection (orphan cleanup + exit-code attribution)
-        continue-on-error: ${{ runner.os != 'Windows' }}
-        run: npm run fault-inject
-
-      # 失败时把烟雾报告留档——这一层的失败通常只在日志里可读
-      # （就绪超时 / 页面取不到 / 退出码不对），不留档就得本地复现。
-      - name: Upload smoke logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-l1-logs-${{ matrix.os }}
-          if-no-files-found: ignore
-          retention-days: 7
-          path: target/smoke/**
-
-  build:
-    name: ${{ matrix.os }} / bundle
-    runs-on: ${{ matrix.os }}
-    needs: test
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      # 每个平台**显式**声明要产出哪些包。
-      #
-      # 此前这里只写 `os: [...]`，打包命令是 `npm run tauri build`，实际 bundle
-      # 类型由 tauri.conf.json 的 `bundle.targets`（当前只有 `nsis`）决定。nsis 是
-      # Windows 专属类型，把它交给 macOS/Linux 去处理是在依赖 Tauri 的平台回退
-      # 行为——那既没被文档承诺，也没法在本机验证。显式传 `--bundles` 之后，
-      # 每个平台该产出什么一目了然，且与 release.yml 用同一套声明。
-      matrix:
-        include:
-          - os: windows-latest
-            bundles: nsis
-          - os: macos-latest
-            bundles: app,dmg
-          - os: ubuntu-latest
-            bundles: deb,appimage
-    steps:
-      - uses: actions/checkout@v4
-
-      # L2 在 Linux 上走 xvfb-run，需要 xvfb；其余构建依赖同 test job。
-      # 另外两行是 AppImage 打包专用：linuxdeploy 的 gtk 插件按 Debian 布局找
-      # pixbuf loaders，缺包或缓存未刷新时以 `failed to run linuxdeploy` 收场
-      # （tauri bundler 会吞掉具体报错）——deb 成功而 AppImage 失败的常见根因。
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            librsvg2-common \
-            libgdk-pixbuf2.0-bin \
-            patchelf \
-            xvfb
-          # noble 的 gdk-pixbuf-query-loaders 不在 PATH（位于 multiarch lib 目录、
-          # 属 libgdk-pixbuf-2.0-0；2.44 才回归 bin 包的 /usr/bin），用绝对路径；
-          # librsvg2-common 的 postinst 通常已刷新缓存，此行是兜底故容错。
-          /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache || true
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            src-tauri
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install build tooling
-        run: npm ci
-
-      # 任务 0.3：资源组装必须可复现（内部会写 MANIFEST.json），且补丁分级
-      # 策略记录在 MANIFEST.patches[] 里逐条留证。
-
-      # 打包目标守卫：`prepare:harness` 会把**当前主机架构**的 Node 运行时
-      # 组装进 `src-tauri/resources/node/`。若构建镜像里 node 与 rustc 架构
-      # 不一致（或将来启用跨编译），产物会内嵌错误架构的运行时——在目标机上
-      # 表现为「Harness 起不来」，而根因在构建期，事后极难归因。此步在组装
-      # 300MB 之前失败，避免白跑一轮。目标自动推断：无参数时依次取
-      # `TAURI_ENV_TARGET_TRIPLE`、`rustc -vV` 的 host triple。
-      - name: Verify packaging target
-        run: npm run verify:target
-
-      - name: Prepare harness resources
-        run: npm run prepare:harness
-
-      # 组装树健全性（独立成步，失败在 CI 界面上一眼可见；prepare:harness 内部
-      # 也会跑同一套检查并失败）。两条零噪声规则：
-      #   规则1 树内不得有逃出树外的符号链接——`file:` 依赖若没被实体化，
-      #         复制进安装包就是指向开发机绝对路径的死链接；
-      #   规则2 桌面插件入口的裸导入必须能在树内解析——否则 Harness 启动即
-      #         `Cannot find package '<dep>'`（2026-09-11 的真实事故）。
-      - name: Verify assembled harness tree
-        run: npm run verify:harness-tree
-
-      - name: Verify bundled Node.js version
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            ./src-tauri/resources/node/node.exe --version
-          else
-            ./src-tauri/resources/node/node --version
-          fi
-
-      - name: Build host CLI
-        run: cargo build -p dsh-host-cli
-
-      # 真实资源树上的 L1：这是**唯一**能发现「资源组装缺文件 / Harness 起不来 /
-      # 补丁把入口改坏」的门禁。硬门禁，失败即阻断。
-      - name: Smoke L1 (assembled resource tree)
-        run: node scripts/smoke-launch.mjs --level=1 --resource-mode=assembled
-
-      # 更新产物必须签名才能生成（`createUpdaterArtifacts: true`）。缺密钥时
-      # tauri build 会在打包末尾才失败，白跑一轮 300MB 组装，因此先显式检查，
-      # 并把「缺的是哪一项」写进错误信息。密钥只存在于 GitHub Secrets 与离线
-      # 备份，绝不进仓库（见 README「Auto-update」一节）。
-      #
-      # 用 env 传值而不是把 `${{ secrets.* }}` 插进 run 字符串：后者一旦被
-      # 回显就会把私钥写进构建日志。
-      - name: Verify signing key is available
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — updater artifacts cannot be signed. See README (Auto-update)."
-            exit 1
-          fi
-
-      # tauri binary-releases 里的 linuxdeploy 是 2021 年的旧 continuous 构建，
-      # 在新 glibc（Ubuntu 24.04）下有 ELF/strip 兼容问题（`failed to run
-      # linuxdeploy` 且真实报错被吞）。tauri 对 ~/.cache/tauri 下已存在的工具
-      # 不重新下载（bundler prepare_tools 逻辑），因此预置官方新版 pin 住版本。
-      - name: Pin recent linuxdeploy (Linux AppImage)
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p ~/.cache/tauri
-          curl -fL --retry 3 -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
-          chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
-
-      # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
-      # 资源。`npm run tauri -- build …` 会转发到 @tauri-apps/cli 的 tauri
-      # 二进制（package.json 的 tauri script），不需要 cargo 子命令。
-      #
-      # `--bundles` 按平台显式指定（见上方 matrix 注释）：不要依赖
-      # tauri.conf.json 的 bundle.targets，那里只有 Windows 的 nsis。
-      #
-      # `-v`（verbose）：非 verbose 时 bundler 会吞掉 linuxdeploy 的全部
-      # stderr（源码固定报 `failed to run linuxdeploy`），verbose 走
-      # output_ok() 把输出打进 debug log——失败时 CI 上可直接看到根因。
-      - name: Build installers
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Ubuntu 24.04+（glibc 2.38+）链接产物含 `.relr.dyn` 段，linuxdeploy
-          # 自带的旧 strip 识别不了 → AppImage 打包报 `failed to run linuxdeploy`。
-          # NO_STRIP=1 是 tauri 社区官方 workaround；Win/mac 不跑 linuxdeploy，
-          # 此变量对它们无作用。代价：AppImage 内二进制不做 strip（体积略增）。
-          NO_STRIP: "1"
-        run: npm run tauri -- build --bundles ${{ matrix.bundles }} -v
-
-      # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。
-      # 软门禁（continue-on-error）：GUI 在 CI 上受窗口管理器 / WebKit 版本影响，
-      # 偶发失败不应伪装成产品缺陷；结果留档，由人判断是否回归。
-      - name: Smoke L2 (GUI launch)
-        continue-on-error: true
-        run: node scripts/smoke-launch.mjs --level=2
-
-      # 体积采集写入 job summary。README 不再维护会失真的手写数字。
-      - name: Report bundle size
-        run: node scripts/report-bundle-size.mjs --markdown
-
-      - name: Upload smoke and size logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ matrix.os }}
-          if-no-files-found: ignore
-          retention-days: 7
-          path: target/smoke/**
-

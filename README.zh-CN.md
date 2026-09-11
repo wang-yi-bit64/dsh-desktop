@@ -193,9 +193,19 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 ```bash
 npm run version:show                        # 看各处版本、最近 tag、建议升级位
 npm run version:bump -- auto --dry-run      # 只预览，不写文件
+# ★ 2026-09-11 起为必需：日常提交不跑任何 CI、冒烟也改为手动，这两次 dispatch 是
+#   提交在打 tag 前唯一会跑 cargo test / clippy（CI）与真实进程冒烟（Smoke）的机会。
+gh workflow run ci.yml --ref main                   # 静态门禁 + clippy + 单测
+gh workflow run smoke.yml --ref main -f scope=full  # 组装真实资源 + 打包 + L2 冒烟
+gh run watch                                        # 等两个都全绿再继续
 npm run version:bump -- auto --commit --tag # 落版本号 + 更新 CHANGELOG + 提交 + 打本地 tag
 git push origin main --follow-tags          # 推 tag 即触发发布
 ```
+
+> 省掉那几行 dispatch 不是无伤大雅：`release.yml` 的 preflight 只跑秒级静态门禁，
+> 一个从未通过三平台矩阵、也没跑过冒烟的提交会被直接打包并发布，没有任何环节会拦住它。
+> 只想要快速一档时，`smoke.yml` 用默认的 `scope=l1`（几十秒、不起窗口）；要复现发布形态
+> 就用 `scope=full`。
 
 `--commit` 会**顺带重新生成 `CHANGELOG.md` 的对应段落**并纳入同一个提交——版本号与变更日志同属一次发布，分成两个提交就会出现「tag 指向有版本号、没变更日志的那个提交」，CHANGELOG 从此永久滞后一版。`--tag` 只创建**本地** tag，是否推送由人决定。
 
@@ -207,12 +217,15 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 
 | 工作流 | 触发 | 做什么 |
 |--------|------|--------|
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | push `main` / 任意 PR / 手动 | 三平台 `test`（静态门禁 + clippy + 单测）→ `smoke-headless`（L1 + 故障注入）→ main 上追加 `build`（组装真实资源 + 打包 + L2 + 体积采集） |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | 任意 PR / 手动（**刻意不监听 `push`**） | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
+| [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) | **仅手动**（`workflow_dispatch`） | 按需跑的冒烟测试，用 `scope` 分档：`l1`（mock 资源树 L1 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。**不发布任何东西** |
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | **推 `v*` tag** / 手动指定 tag | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包，**创建/更新 GitHub Release** 并上传安装包、`.sig` 签名与 `latest.json` |
 
+- **日常提交不触发任何 CI**：`ci.yml` 不再监听 `push`（也从不监听 tag——出包只有一个产地 `release.yml`）。静态门禁 + 单测已够一次提交拿到快反馈；组装 300MB 运行时、打包、起窗口这些成本高的动作不该挂在每次提交上。
+- **冒烟测试改为手动触发**：L1/L2 冒烟**从 `ci.yml` 迁到独立的 `smoke.yml`**，只由 `workflow_dispatch` 触发。保留能力、去掉自动化正是目的——需要时能跑，平时不占额度。三种 `scope` 对应三档成本；`gh workflow run smoke.yml -f scope=l1` 是命令行等价物。它用的是**同一批脚本与同一套断言**，所以这是搬家，不是另立一套判据。
 - **发布用 tag 触发而非 main 提交**：发布是一次性、不可撤销的动作。tag 是显式的单一意图声明；让每次提交都发版会把「发布」退化成无需决策的背景动作。手动触发用于失败后**指定同一 tag 重跑**（删已发布的 tag 是破坏性操作）。
 - **各平台产物类型显式声明**：Windows `nsis`、macOS `app,dmg`、Linux `deb,appimage`。不依赖 `tauri.conf.json` 的 `bundle.targets`——那里只有 Windows 专属的 `nsis`。
-- **与 CI 的边界**：发布流程**不重跑**整套 Rust 测试矩阵（那是 CI 对同一 commit 的职责），`preflight` 只跑秒级门禁以便在组装 300MB 资源前失败。因此**只对 main 上绿着的提交打 tag**——这是有意接受的边界。
+- **与 CI 的边界（2026-09-11 重述）**：发布流程**不重跑**整套 Rust 测试矩阵，`preflight` 只跑秒级门禁以便在组装 300MB 资源前失败。⚠️ 由于 `ci.yml` 不再随 `push main` 触发、冒烟也改为手动，「tag 提交早已绿过」这个前提不再自动成立，而 preflight 看不见运行时行为——**发布前请分别手动 dispatch CI（静态 + 单测）与 Smoke（冒烟）两个工作流并等都变绿，再打 tag**。给从未跑过门禁的提交打 tag，Release 不会发现，这是有意接受的边界。
 
 ## Harness 页面注入
 

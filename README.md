@@ -190,9 +190,20 @@ The bump rule follows [Conventional Commits](https://www.conventionalcommits.org
 ```bash
 npm run version:show                        # current version, latest tag, suggested bump
 npm run version:bump -- auto --dry-run      # preview only, writes nothing
+# ★ required before tagging since 2026-09-11: everyday commits run no CI and smoke is
+#   manual, so these dispatches are the only chances your commit gets to pass
+#   cargo test / clippy (CI) and the real-process smoke (Smoke).
+gh workflow run ci.yml --ref main                   # static gates + clippy + unit tests
+gh workflow run smoke.yml --ref main -f scope=full  # real resources + bundle + L2 smoke
+gh run watch                                        # wait for both to go green
 npm run version:bump -- auto --commit --tag # bump + regenerate CHANGELOG + commit + local tag
 git push origin main --follow-tags          # pushing the tag triggers the release
 ```
+
+> Skipping those dispatches is not cosmetic: `release.yml`'s preflight only runs
+> second-scale static gates, so a commit that never passed the three-platform matrix or a
+> smoke run will be packaged and published without anything catching it. For a quick check
+> use the default `scope=l1` (seconds, no windows); use `scope=full` to mirror a release.
 
 `--commit` also **regenerates the matching `CHANGELOG.md` section inside the same commit** — the version and the changelog belong to one release, and splitting them across two commits all but guarantees a tag pointing at the commit that has the version but not the changelog, leaving `CHANGELOG.md` permanently one version behind. `--tag` creates a **local** tag only; whether to push it is a human decision.
 
@@ -204,12 +215,16 @@ git push origin main --follow-tags          # pushing the tag triggers the relea
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | push to `main` / any PR / manual | Three-platform `test` (static gates + clippy + unit tests) → `smoke-headless` (L1 + fault injection) → on `main`, additionally `build` (assemble real resources + bundle + L2 + size report) |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | any PR / manual (deliberately **not** on `push`) | Three-platform `test` (static gates + clippy + unit tests). No resource assembly, no bundling, no smoke. |
+| [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) | **manual only** (`workflow_dispatch`) | Smoke testing on demand, tiered by `scope`: `l1` (mock resource tree L1 + optional fault injection), `assembled` (assemble the real resource tree, then L1 on it), `full` (also bundle installers + L2 GUI smoke + size report). Publishes nothing. |
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | **push a `v*` tag** / manual with a tag | `preflight` (version↔tag consistency + second-scale static gates) → three platforms build in parallel, **create/update the GitHub Release** and upload installers, `.sig` signatures and `latest.json` |
 
+- **No CI on everyday commits**: `ci.yml` no longer listens on `push` (nor on tags — bundling has exactly one producer, `release.yml`). Static gates plus unit tests are what a commit needs for fast feedback; assembling 300 MB of runtime, bundling and launching windows are too expensive to hang off every commit.
+- **Smoke testing is manual**: the L1/L2 smoke jobs **moved out of `ci.yml` into the dedicated `smoke.yml`**, triggered only by `workflow_dispatch`. Keeping the capability while dropping the automation is the point — runnable when you need it, not consuming minutes on every push. Three `scope` values map to three cost tiers; `gh workflow run smoke.yml -f scope=l1` is the CLI equivalent. It reuses the same scripts and assertions as before, so this is a move, not a second set of criteria.
 - **Tags trigger releases, not `main` commits**: a release is a one-shot, irreversible act. A tag is an explicit, single declaration of intent; auto-releasing every commit would turn "publishing" into a background action requiring no decision. The manual trigger exists to **re-run the same tag** after a failure, since deleting an already-published tag is destructive.
 - **Bundle types are declared explicitly per platform**: `nsis` on Windows, `app,dmg` on macOS, `deb,appimage` on Linux. This deliberately does not rely on `bundle.targets` in `tauri.conf.json`, which lists only the Windows-only `nsis`.
-- **Boundary with CI**: the release workflow does **not** re-run the full Rust test matrix — that is CI's job for the same commit. `preflight` runs only second-scale gates so it can fail before assembling 300 MB of runtime. **Only tag commits that are green on `main`**; that is a deliberate, accepted boundary.
+- **Everyday commits trigger no CI**: `ci.yml` no longer listens on `push` (and never on tags — bundling has exactly one producer, `release.yml`). A non-tag commit gets fast feedback from the `pr` run when it comes in as a pull request; the `build` job (300 MB resource assembly + three-platform installers) is expensive enough that running it per commit is not worth it, so it is reserved for manual runs. Use **Run workflow** (or `gh workflow run ci.yml`) to execute the full matrix on demand.
+- **Boundary with CI** (restated 2026-09-11): the release workflow does **not** re-run the full Rust test matrix — `preflight` runs only second-scale gates so it can fail before assembling 300 MB of runtime. ⚠️ Because `ci.yml` no longer fires on `push to main`, and smoke is manual, the old assumption "the tagged commit was already green" no longer holds automatically, and `preflight` cannot see runtime behaviour. **Dispatch the CI workflow (static + unit tests) and the Smoke workflow (smoke), wait for both to be green, then tag.** Tagging a commit that never ran the gates is a risk Release will not catch — a deliberate, accepted boundary.
 
 ## Harness page injection
 

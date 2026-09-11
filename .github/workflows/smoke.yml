@@ -1,0 +1,239 @@
+name: Smoke
+
+# 手动触发的冒烟测试机制。
+#
+# 为什么独立成工作流、且**只**手动触发（不监听 push / pull_request / tag）：
+#   · 冒烟测试拉起的是**真实子进程与窗口**，验证的是静态检查与单测覆盖不到的一段——
+#     L1 证伪「宿主派生 → 就绪 → 真的在服务页面 → 关闭 → 无孤儿」，L2 证伪「已构建
+#     的壳二进制存活满观察窗且不留孤儿」。这个能力必须保留（见 AGENTS.md §8.4）。
+#   · 但成本随范围陡增：L1 用 mock 资源树几十秒即可；L1-assembled 与 L2 要组装
+#     300MB 运行时、甚至打安装包。挂在每次提交上，成本与「一次提交的价值」不成比例，
+#     因此改为**按需手动触发**——这也是本工作流存在的唯一理由。
+#   · 日常提交的门禁是 ci.yml 的 PR 路径（静态门禁 + clippy + 单测，快反馈）；
+#     出包与发布是 release.yml 的 tag 路径。本工作流**不发布任何东西**，也不上传
+#     安装包——它只回答一个问题：「现在这个 ref 起得来吗」。
+#
+# 三种用法（成本递增）：
+#   Actions → Smoke → Run workflow：
+#     scope = l1         会话烟雾（mock 资源树）+ 可选故障注入        （最快，无 300MB）
+#     scope = assembled  组装真实资源树 + 真实树 L1                   （唯一能发现「资源缺文件 → Harness 起不来」）
+#     scope = full       assembled + 打安装包 + L2 GUI 烟雾 + 体积采集（最完整）
+#   os 可只挑一个平台调试（默认三平台都跑）。
+#   命令行等价：gh workflow run smoke.yml -f scope=l1 -f os=all -f fault_injection=true
+#
+# 与旧 ci.yml 的关系：本工作流的三段正是从 ci.yml 的 smoke-headless / build job
+# **搬过来**的（同一套脚本、同一套断言），不是第二套判断标准。搬家的目的是让
+# 「冒烟」只有一个产地——两处实现同一件事，早晚给出两种说法。
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '冒烟范围（l1 最快；assembled 组装真实资源；full 含打包与 L2）'
+        required: true
+        default: l1
+        type: choice
+        options:
+          - l1
+          - assembled
+          - full
+      os:
+        description: '运行平台'
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+          - linux
+      fault_injection:
+        description: '运行故障注入（孤儿进程清理 + 退出码归因，6 场景 / 10 断言）'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  # 把 `os` 选择解析成矩阵。集中在一处产出，免得每个 job 各写一遍同样的映射
+  # （那必然出现某一处漏改）。`bundles` 只在 full 范围用得上，其余范围带着无害。
+  resolve:
+    name: resolve targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - name: Build platform matrix from the os input
+        id: m
+        shell: bash
+        run: |
+          case "${OS_INPUT}" in
+            windows) echo 'matrix=[{"os":"windows-latest","bundles":"nsis"}]' ;;
+            macos)   echo 'matrix=[{"os":"macos-latest","bundles":"app,dmg"}]' ;;
+            linux)   echo 'matrix=[{"os":"ubuntu-latest","bundles":"deb,appimage"}]' ;;
+            *)       echo 'matrix=[{"os":"windows-latest","bundles":"nsis"},{"os":"macos-latest","bundles":"app,dmg"},{"os":"ubuntu-latest","bundles":"deb,appimage"}]' ;;
+          esac >> "$GITHUB_OUTPUT"
+        env:
+          # 用 env 传值：把 ${{ inputs.* }} 直接插进 run 字符串时，一旦值里含
+          # shell 元字符就会改变命令语义（这里是 choice，但保持一致的写法）。
+          OS_INPUT: ${{ inputs.os }}
+
+  smoke:
+    name: ${{ matrix.os }} / smoke ${{ inputs.scope }}
+    needs: resolve
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # GUI（L2）与打安装包需要 GTK / xvfb；L1 是无头的，用不上，故只对 full 装。
+      # xvfb 让 L2 在无显示器的 runner 上也能起窗口。
+      # 最后一行是 AppImage 专用：linuxdeploy 的 gtk 插件按 Debian 布局找 pixbuf
+      # loaders，缺包或缓存未刷新时以 `failed to run linuxdeploy` 收场。
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux' && inputs.scope == 'full'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            librsvg2-common \
+            libgdk-pixbuf2.0-bin \
+            patchelf \
+            xvfb
+          # noble 的 gdk-pixbuf-query-loaders 不在 PATH（位于 multiarch lib 目录），
+          # 用绝对路径兜底；librsvg2-common 的 postinst 通常已刷新缓存，此行容错。
+          /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache || true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # L1 的前置：脚本直接使用 target/debug 下的 dsh-host-cli。
+      - name: Build host CLI
+        run: cargo build -p dsh-host-cli
+
+      # ---- 范围 l1：mock 资源树，不组装 300MB，也不需要 npm install ----
+      - name: Smoke L1 (mock resource tree)
+        if: inputs.scope == 'l1'
+        run: node scripts/smoke-launch.mjs --level=1 --resource-mode=stub
+
+      # ---- 范围 assembled / full：先组装真实资源树，再在它上面跑 L1 ----
+      - name: Install build tooling
+        if: inputs.scope != 'l1'
+        run: npm ci
+
+      # 打包目标守卫：`prepare:harness` 会把**当前主机架构**的 Node 运行时装进资源树；
+      # 架构不一致的树在目标机上表现为「Harness 起不来」，根因却在组装期。放在组装
+      # 之前失败，避免白跑一轮。
+      - name: Verify packaging target
+        if: inputs.scope != 'l1'
+        run: npm run verify:target
+
+      - name: Prepare harness resources
+        if: inputs.scope != 'l1'
+        run: npm run prepare:harness
+
+      # 组装树健全性：树内不得有逃出树外的符号链接；桌面插件入口的裸导入必须能在
+      # 树内解析（否则 Harness 启动即 `Cannot find package '<dep>'`）。
+      - name: Verify assembled harness tree
+        if: inputs.scope != 'l1'
+        run: npm run verify:harness-tree
+
+      - name: Verify bundled Node.js version
+        if: inputs.scope != 'l1'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./src-tauri/resources/node/node.exe --version
+          else
+            ./src-tauri/resources/node/node --version
+          fi
+
+      # 真实资源树上的 L1：这是**唯一**能发现「资源组装缺文件 / Harness 起不来 /
+      # 补丁把入口改坏」的门禁（2026-09-11 的 yaml/dist/doc 事故就属于这一类）。
+      - name: Smoke L1 (assembled resource tree)
+        if: inputs.scope != 'l1'
+        run: node scripts/smoke-launch.mjs --level=1 --resource-mode=assembled
+
+      # 故障注入：孤儿进程清理 + 退出码归因。这是唯一能证伪「子进程在宿主崩溃后
+      # 残留」的门禁——单测覆盖不到，因为要真的派生、真的杀。
+      # Windows 走 Job Object 路径，已本地跑通 10/10，作硬门禁；Linux/macOS 走
+      # PDEATHSIG / 进程组，尚无人工确认记录，先作**信息性**步骤（失败留档不阻断）。
+      - name: Fault injection (orphan cleanup + exit-code attribution)
+        if: inputs.fault_injection
+        continue-on-error: ${{ runner.os != 'Windows' }}
+        run: npm run fault-inject
+
+      # ---- 范围 full：打安装包并跑 L2 GUI 烟雾 ----
+      # 更新产物必须签名才能生成（`createUpdaterArtifacts: true`）。缺密钥时
+      # tauri build 会在打包末尾才失败，白跑一轮 300MB 组装，故先显式检查。
+      # 用 env 传值而不是插进 run 字符串：后者一旦被回显就会把私钥写进日志。
+      - name: Verify signing key is available
+        if: inputs.scope == 'full'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — updater artifacts cannot be signed. See README (Auto-update)."
+            exit 1
+          fi
+
+      # linuxdeploy 的旧 continuous 构建在新 glibc 下有兼容问题（真实报错被 bundler
+      # 吞掉，只剩 `failed to run linuxdeploy`）。tauri 对 ~/.cache/tauri 下已存在的
+      # 工具不重新下载，故预置官方新版 pin 住版本。
+      - name: Pin recent linuxdeploy (Linux AppImage)
+        if: inputs.scope == 'full' && runner.os == 'Linux'
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fL --retry 3 -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
+
+      # `--bundles` 按平台显式指定：不依赖 tauri.conf.json 的 bundle.targets
+      # （那里只有 Windows 专属的 nsis，交给 macOS/Linux 是依赖未文档化的回退）。
+      # `-v`：非 verbose 时 bundler 吞掉 linuxdeploy 全部 stderr，失败只能看到
+      # 无信息量的 `failed to run linuxdeploy`；verbose 会把输出打进 debug log。
+      - name: Build installers
+        if: inputs.scope == 'full'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Ubuntu 24.04+ 的 `.relr.dyn` 段令 linuxdeploy 自带的旧 strip 失败 →
+          # NO_STRIP=1 是官方 workaround（AppImage 内二进制不 strip，体积略增）。
+          NO_STRIP: "1"
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }} -v
+
+      # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。软门禁（continue-on-error）：
+      # GUI 在 CI 上受窗口管理器 / WebKit 版本影响，偶发失败不应伪装成产品缺陷。
+      - name: Smoke L2 (GUI launch)
+        if: inputs.scope == 'full'
+        continue-on-error: true
+        run: node scripts/smoke-launch.mjs --level=2
+
+      - name: Report bundle size
+        if: inputs.scope == 'full'
+        run: node scripts/report-bundle-size.mjs --markdown
+
+      # 失败时把烟雾报告留档——这一层的失败通常只在日志里可读。
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ inputs.scope }}-logs-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: target/smoke/**

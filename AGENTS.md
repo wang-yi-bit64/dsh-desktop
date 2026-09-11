@@ -46,7 +46,7 @@
   - `conventional-commits.mjs`：Conventional Commits 解析器（**共享库**，被下面两个脚本复用）。解析 / 归类 / 版本建议都收在这里，避免两个 CLI 各写一份、对同一条提交给出两种说法。含 `--self-test`。
   - `changelog.mjs`：由提交历史生成 `CHANGELOG.md` 与 Release 正文（`--write` / `--notes`）。仓库内变更日志与 Release 正文同源同渲染，因此不会互相矛盾。见 §8.3。
   - `version.mjs`：版本号的 `show` / `check` / `set` / `bump`（`bump auto` 依提交历史判定升哪一位），并同步 `Cargo.toml`；`--commit` 会一并重生成 CHANGELOG 段落。见 §8。
-- **`.github/workflows/`**：`ci.yml`（push `main` / PR / 手动）与 `release.yml`（推 `v*` tag / 手动指定 tag）。两者的分工边界见 §8.4——简言之 CI 负责**验证**，Release 负责**出包与发布**，互不重复。
+- **`.github/workflows/`**：`ci.yml`（PR / 手动；**刻意不监听 `push`**——日常提交零自动化）、`smoke.yml`（**仅手动**触发冒烟：`l1` / `assembled` / `full` 三档）、`release.yml`（推 `v*` tag / 手动指定 tag）。三者分工见 §8.4——CI 负责**静态验证**，Smoke 负责**按需起的真实进程验证**，Release 负责**出包与发布**，互不重复。
 - **`CHANGELOG.md`**：**生成物，勿手工编辑**（改动会在下次生成时被覆盖）。数据源是 git 提交历史，见 §8.3。
 - **`patches/`**：`patch-package` 补丁 + [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。
 - **`docs/`**：架构设计、契约定义、不变量与技术规范：
@@ -536,17 +536,29 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 
 | 工作流 | 文件 | 触发 | 做什么 |
 |--------|------|------|--------|
-| CI | `.github/workflows/ci.yml` | `push` main / 任意 `pull_request` / 手动 | 三平台 `test`（静态门禁 + clippy + 单测）→ `smoke-headless`（L1 + 故障注入）→ main 上追加 `build`（组装真实资源 + 打包 + L2 + 体积） |
+| CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
+| Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，三个输入：`scope` / `os` / `fault_injection`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。**不发布任何东西** |
 | Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json` |
 
+- **日常提交不触发任何 CI**（2026-09-11 起）：`ci.yml` 摘掉了 `push: main`，**推 tag 也不会跑它**
+  （tag 归 `release.yml`；同一件事两处实现必然漂移，出包只留一个产地）。日常提交要的是快反馈，
+  静态门禁 + 单测就够了；组装 300MB 资源、打包、起窗口这些成本高的动作不该挂在每次提交上。
+  `pr` 触发保留（拉 PR 时跑静态 + 单测），`workflow_dispatch` 保留（在分支上主动验证）。
+- **冒烟测试改为手动触发**（2026-09-11 起）：冒烟（L1/L2）**从 `ci.yml` 迁到独立的 `smoke.yml`**，
+  且**只**由 `workflow_dispatch` 触发。保留能力、去掉自动化，正是为了「需要时能跑、平时不占额度」。
+  三种 `scope` 对应三档成本，见上表；`gh workflow run smoke.yml -f scope=l1` 是命令行等价物。
+  与 `ci.yml` 的关系是**搬家不是另起一套**：用的是同一批脚本（`smoke-launch.mjs` / `fault-inject.mjs`）
+  与同一套断言，只是触发方式从自动变成了手动。
 - **为什么发布用 tag 触发而不是 main 提交**：发布是一次性、不可撤销的动作（Release 一旦公开
   就有人下载）。tag 是显式的单一意图声明；让 main 上每次提交都发版会把「发布」退化成无需决策的背景动作。
 - **`workflow_dispatch` 兜底**：发布失败时可指定同一个 tag 重跑，不必删 tag 重建（删已发布的 tag
   是破坏性操作）。
-- **与 CI 的边界（明确声明）**：Release **不重跑** `cargo test` / clippy / 三平台烟雾矩阵——那是
-  CI 对**同一个 commit** 的职责。Release 的 `preflight` 只跑秒级静态门禁 + 版本校验，目的是在
-  组装 300MB 资源**之前**失败。残留风险：给一个从未通过 CI 的提交打 tag，Release 不会发现——
-  请只对 main 上绿着的提交打 tag。**这是有意接受的边界，不是遗漏。**
+- **与 CI 的边界（2026-09-11 重述）**：Release **不重跑** `cargo test` / clippy / 三平台烟雾矩阵，
+  它只跑 `preflight` 的秒级静态门禁 + 版本校验，目的是在组装 300MB 资源**之前**失败。
+  ⚠️ **但「tag 提交已经绿过」这个前提不再自动成立**——`ci.yml` 不再随 `push main` 触发，冒烟也
+  不再自动跑，Release 成了 tag 上唯一会出包、也唯一会拦一道门的地方，而 preflight 看不见运行时行为。
+  **发布前请手动 dispatch 一次 CI 工作流（静态 + 单测）与一次 Smoke 工作流（冒烟），都确认全绿，
+  再打 tag。** 残留风险（给从未跑过门禁的提交打 tag，Release 不会发现）是**有意接受的边界，不是遗漏**。
 - **各平台产物类型必须显式传 `--bundles`**：`tauri.conf.json` 的 `bundle.targets` 只写了 `nsis`
   （Windows 专属）。macOS/Linux 上必须显式声明 `app,dmg` / `deb,appimage`，不要依赖 Tauri 对
   不支持类型的平台回退行为（既无文档承诺，也无法在本机验证）。
@@ -557,22 +569,35 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 ### 8.5 发布操作步骤（人看的）
 
 ```bash
-# 1. 确认待发布提交在 main 上且 CI 绿
+# 1. 确认待发布提交在 main 上
 git checkout main && git pull
 
-# 2. 看将要升到哪个版本（不写任何文件）
+# 2. 手动 dispatch CI 与 Smoke 两个工作流并确认全绿（★ 2026-09-11 起为必需步骤）
+#    日常提交已不触发 CI，冒烟也不再自动跑，Release 的 preflight 只跑静态门禁、
+#    看不见运行时行为，因此「静态 + 单测」与「冒烟」这两轮只能在发布前手动补齐。
+#    gh CLI 示例（在 Actions 页点 Run workflow 等价）：
+gh workflow run ci.yml --ref main                  # 三平台静态门禁 + clippy + 单测
+gh workflow run smoke.yml --ref main -f scope=full # 组装真实资源 + 打包 + L2 冒烟
+gh run watch   # 等到两个都全绿再继续
+
+# 3. 看将要升到哪个版本（不写任何文件）
 npm run version:bump -- auto --dry-run
 
-# 3. 落版本号 + 重新生成 CHANGELOG 段落 + 提交 + 打本地 tag（一个原子发布提交）
+# 4. 落版本号 + 重新生成 CHANGELOG 段落 + 提交 + 打本地 tag（一个原子发布提交）
 npm run version:bump -- auto --commit --tag
 
-# 4. 推送（tag 推送即触发 Release 工作流）
+# 5. 推送（tag 推送即触发 Release 工作流）
 git push origin main --follow-tags
 ```
 
-> 第 3 步的 `--tag` 只创建**本地** tag，推送与否由人决定——这是刻意的：打 tag 就是发布意图，
+> 第 4 步的 `--tag` 只创建**本地** tag，推送与否由人决定——这是刻意的：打 tag 就是发布意图，
 > 不该由脚本替人按下。
 >
 > `--commit` 会**一并重新生成 CHANGELOG.md 的对应段落**并纳入同一个提交。版本号与变更日志
 > 同属「这一次发布」，分成两个提交就会出现「tag 指向有版本号、没变更日志的那个提交」——
 > CHANGELOG.md 从此永久滞后一版。
+>
+> ⚠️ 第 2 步不是可选的仪式：`ci.yml` 不再随 `push main` 触发、冒烟也改为手动之后，这两次
+> dispatch 是你的提交在打 tag 前**唯一**几次会跑 `cargo test` / clippy / 真实进程冒烟的机会。
+> 跳过它们，Release 不会替你拦。只想要快速一档时，`smoke.yml` 用默认的 `scope=l1` 即可
+> （几十秒、不起窗口）；要复现发布形态就用 `scope=full`。
