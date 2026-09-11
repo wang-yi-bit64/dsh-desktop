@@ -458,6 +458,12 @@ async function runLevel1() {
       killProcess(pid, true)
     }
     killProcess(cli.child.pid, true)
+    // 失败时先把 Harness 日志搬出来再删数据目录：删除是彻底的，
+    // 而「哪一条 loader entry 没起来」这类信息只存在于日志里。
+    if (failures > 0) {
+      const preserved = preserveHarnessLogs(dataDir)
+      if (preserved) log(`已保留 Harness 日志：${preserved}`)
+    }
     cleanupDirs([dataDir, ...(mode === 'stub' ? [resourceDir] : [])])
   }
 }
@@ -535,6 +541,37 @@ function cleanupDirs(dirs) {
     } catch (error) {
       log(`清理 ${dir} 被拦截（可忽略）：${error?.message ?? error}`)
     }
+  }
+}
+
+/**
+ * 失败时把 Harness 侧日志复制到 `target/smoke/` 下落档。
+ *
+ * **为什么必须做**：`cleanupDirs()` 会删掉整个数据目录，而 Harness 崩溃的**唯一**
+ * 细节只在 `<data>/logs/harness.log` 里。CLI 转发到 stdout 的只有一句概括，例如
+ *
+ *     Harness 入口加载失败（多为插件不兼容）：Error: dsh: plugin tree failed to
+ *     load: failed to apply loader entry include (cordis:include): loader entries failed to apply
+ *
+ * ——「哪个 entry 失败了、为什么」全在 harness.log 里。失败路径销毁自己的证据，
+ * 等于每次都要本地复现一遍才能定位。复制到 `target/smoke/` 后即可被 CI 的
+ * `target/smoke/**` artifact 一并带走。
+ *
+ * @param {string} dataDir 本次 smoke 的数据目录。
+ * @returns {string|null} 落档目录；无日志可复制或复制失败时为 `null`。
+ */
+function preserveHarnessLogs(dataDir) {
+  const from = join(dataDir, 'logs')
+  if (!existsSync(from)) return null
+  const to = join(projectRoot, 'target', 'smoke', 'harness-logs')
+  try {
+    mkdirSync(to, { recursive: true })
+    cpSync(from, to, { recursive: true })
+    return to
+  } catch (error) {
+    // 留档失败不能改变门禁结论——它只是诊断辅助。
+    log(`保留 Harness 日志失败（不阻断结论）：${error?.message ?? error}`)
+    return null
   }
 }
 
