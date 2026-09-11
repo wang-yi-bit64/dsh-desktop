@@ -1,0 +1,20 @@
+{
+  "name": "search-expert",
+  "version": "1.0.0",
+  "description": "High-precision technical research using Z.AI Web Search Prime",
+  "author": "tianxiao1430-jpg",
+  "license": "MIT",
+  "triggers": [
+    "搜索",
+    "调研",
+    "查找资料",
+    "search",
+    "技术研究",
+    "最佳实践",
+    "对比分析",
+    "趋势分析"
+  ],
+  "dependencies": [],
+  "allowed-tools": ["zai-web-search:*"],
+  "language": ["zh", "en", "ja"]
+}

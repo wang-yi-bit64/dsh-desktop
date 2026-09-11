@@ -28,6 +28,9 @@ Thumbs.db
 /.workbuddy/
 .mimosa/
 .zcode/
+# skills CLI 生成的机器本地符号链接（指向本机绝对路径，随检出重建；
+# 技能实体在 .agents/skills/ 入库，可用 npx skills experimental_install 恢复）
+.claude/
 
 # Local machine-specific linker/toolchain config (see .cargo/config.toml header)
 .cargo/

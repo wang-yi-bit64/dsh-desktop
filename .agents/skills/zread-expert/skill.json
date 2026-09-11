@@ -1,0 +1,20 @@
+{
+  "name": "zread-expert",
+  "version": "1.0.0",
+  "description": "Senior architect-level codebase analysis via Zread MCP",
+  "author": "tianxiao1430-jpg",
+  "license": "MIT",
+  "triggers": [
+    "分析仓库",
+    "代码审计",
+    "zread",
+    "架构分析",
+    "源码理解",
+    "Issue 调研",
+    "贡献指南",
+    "项目结构"
+  ],
+  "dependencies": [],
+  "allowed-tools": ["zread:*"],
+  "language": ["zh", "en", "ja"]
+}

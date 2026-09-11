@@ -1,0 +1,20 @@
+{
+  "name": "vision-expert",
+  "version": "1.0.0",
+  "description": "Advanced UI-to-Code and visual error diagnosis for Z.AI Vision",
+  "author": "tianxiao1430-jpg",
+  "license": "MIT",
+  "triggers": [
+    "分析图片",
+    "UI 转代码",
+    "截图诊断",
+    "vision",
+    "图像分析",
+    "架构图",
+    "OCR 提取",
+    "错误截图"
+  ],
+  "dependencies": [],
+  "allowed-tools": ["zai-vision:*"],
+  "language": ["zh", "en", "ja"]
+}

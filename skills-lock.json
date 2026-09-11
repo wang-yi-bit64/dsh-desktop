@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "skills": {
+    "authoring-github-workflows": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/authoring-github-workflows/SKILL.md",
+      "computedHash": "8a1ab212d59191e828ad00d02060c93cb642ff35dcb1761212a7cd2dcef212cb"
+    },
+    "conventional-commits": {
+      "source": "patricio0312rev/skills",
+      "sourceType": "github",
+      "skillPath": "foundation/conventional-commits/SKILL.md",
+      "computedHash": "7ef6d7db4fa5ce56b05b754779cfe755a50d14f0b4ae93f2b62c6ddb10045faa"
+    },
+    "desktop-applications": {
+      "source": "bobmatnyc/claude-mpm-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "toolchains/rust/desktop-applications/SKILL.md",
+      "computedHash": "7ad99ba81c2413b79b803c7a474ba5836a956d6931243a315ee385a72a796712"
+    },
+    "gh-fix-ci": {
+      "source": "openai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/gh-fix-ci/SKILL.md",
+      "computedHash": "62b4c9b9aeb0e52925882185019e65c7785da8e7fa16ddb95dd3aaa00883961a"
+    },
+    "search-expert": {
+      "source": "tianxiao1430-jpg/zai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/search-expert/SKILL.md",
+      "computedHash": "939ded28f1fc95a6e7dd137ca3c000764e9f524357f94a483979beaf46f59e72"
+    },
+    "tauri-app-dev": {
+      "source": "xiaolai/vmark",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/tauri-app-dev/SKILL.md",
+      "computedHash": "b1e55f61a932604f009fb5e89757a6cd7e5d309fd4e4ba4be27e9d27d2e80f30"
+    },
+    "understanding-tauri-ecosystem-security": {
+      "source": "dchuk/claude-code-tauri-skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "tauri/tauri-ecosystem-security/SKILL.md",
+      "computedHash": "17b1a0ad75fe1ea7f7a4adf515a4eca396c396cccd918e2a64cd8e7079739de6"
+    },
+    "vision-expert": {
+      "source": "tianxiao1430-jpg/zai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/vision-expert/SKILL.md",
+      "computedHash": "121ba3d0822eb97792e9bc26570602b787de6ff42f6fc096e11c180a94a12660"
+    },
+    "zai-orchestrator": {
+      "source": "tianxiao1430-jpg/zai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zai-orchestrator/SKILL.md",
+      "computedHash": "1b6611c561bd1a39c47c9ce5561bd1907b33c86c2d0c0f8cea2947ebab69fb3a"
+    },
+    "zread-expert": {
+      "source": "tianxiao1430-jpg/zai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/zread-expert/SKILL.md",
+      "computedHash": "d72d7343538cae03723e05727733a3147008ea1dc55edc87765a8e241e829086"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "zai-orchestrator",
+  "version": "1.0.0",
+  "description": "Coordinates Vision, Search, and Zread to solve complex engineering tasks",
+  "author": "tianxiao1430-jpg",
+  "license": "MIT",
+  "triggers": [
+    "复杂任务",
+    "多步骤",
+    "协同",
+    "orchestrator",
+    "架构师",
+    "全栈开发",
+    "技术方案",
+    "系统设计"
+  ],
+  "dependencies": [
+    "vision-expert",
+    "search-expert",
+    "zread-expert"
+  ],
+  "allowed-tools": ["zai-vision:*", "zai-web-search:*", "zread:*"],
+  "language": ["zh", "en", "ja"],
+  "recommended-setup": "install-all"
+}
