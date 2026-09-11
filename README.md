@@ -139,6 +139,8 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 | `npm run verify:shell-pages` | Every shell page's inline script is executed in a DOM shim and **every button is clicked**. Catches `getElementById` returning `null` (which aborts the rest of the script and silently kills *every* listener on that page) and buttons left in the HTML with no listener attached. |
 | `npm run verify:harness-inject` | The Harness-page injection script's DOM behaviour, including a **falsifiability check**: the script is reverted to upstream's behaviour and the assertions are required to go red. |
 | `npm run verify:patches` | `patches/` and the tier manifest in `scripts/patch-layers.mjs` agree, and every patch filename yields a derivable package name. |
+| `npm run verify:version` | The version is identical in `package.json` (single source of truth), `tauri.conf.json` (inherits it), and `Cargo.toml` (synced by script); on a tag build it additionally checks **the tag matches the version**. A mismatch makes the installer claim a different version, and the updater's version comparison decides whether to offer an update based on it — one mistake affects every installed user. |
+| `npm run verify:commits` / `npm run verify:changelog` | Self-tests for the changelog generator and its commit parser. A generator that breaks and **silently emits an empty changelog** is worse than no generator: the release page would read "nothing changed". |
 | `npm run verify:target` | The build host and the packaging target are the same platform/arch — checked before 300 MB of runtime gets assembled into the bundle. |
 | `npm run fault-inject` | Orphan-process cleanup and exit-code attribution against a real `dsh-host-cli` binary (10 assertions). |
 | `npm run smoke:headless` / `npm run smoke` | Layered smoke: L1 headless (spawn → ready → serving → clean exit, no orphans) and L2 GUI launch. |
@@ -153,7 +155,9 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 
 ## Auto-update and the signing key
 
-The updater endpoint is `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`, and `tauri.conf.json` → `bundle.createUpdaterArtifacts` is `true`, so `npm run build` emits the signed artifacts **and** the `latest.json` manifest that this endpoint serves. Publishing a release therefore needs no separate release action beyond uploading the build output.
+The updater endpoint is `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`, and `tauri.conf.json` → `bundle.createUpdaterArtifacts` is `true`, so `npm run build` emits the signed artifacts **and** the `latest.json` manifest that this endpoint serves.
+
+> `latest.json` has to be among the release assets — **without it, auto-update is broken**. The release workflow (below) has `tauri-action`'s `uploadUpdaterJson` produce and upload it; if you build with `npm run build` and upload manually, do not forget this file.
 
 Update integrity rests on a single minisign key pair:
 
@@ -167,6 +171,43 @@ Update integrity rests on a single minisign key pair:
 A build without signing credentials still produces a bundle, but such a bundle cannot be installed by an already-released client — the signature check rejects it. CI therefore verifies the secret exists *before* starting the expensive build and fails early with an explicit `::error::` when it is missing, rather than discovering the problem at the end.
 
 **Losing the private key is unrecoverable for existing users.** The public key is compiled into every shipped binary; a new key pair means a new public key, and installed clients will keep rejecting updates signed by it. Treat `~/.tauri/dsh-desktop.key` as release-critical infrastructure rather than as a local developer file.
+
+## Versioning & Release
+
+**The single source of truth for the version is `package.json` → `version`.** `src-tauri/tauri.conf.json` writes `"../package.json"` and inherits it natively (the Tauri schema explicitly allows a path to a `package.json`), so it stores no second copy; `Cargo.toml`'s workspace version is synced by script because Cargo cannot read `package.json`.
+
+The bump rule follows [Conventional Commits](https://www.conventionalcommits.org/) and is **executable** rather than a convention people are asked to remember:
+
+| Commits since the last tag | Bump | Example |
+|---------------------------|------|---------|
+| Any breaking change (`!` or a `BREAKING CHANGE:` footer) | `major` | 0.3.1 → 1.0.0 |
+| Any `feat` | `minor` | 0.1.0 → 0.2.0 |
+| Any `fix` / `perf` | `patch` | 0.2.0 → 0.2.1 |
+| Only `docs` / `chore` / `ci` … | **no release** | Nothing in the shipped product changed |
+
+```bash
+npm run version:show                        # current version, latest tag, suggested bump
+npm run version:bump -- auto --dry-run      # preview only, writes nothing
+npm run version:bump -- auto --commit --tag # bump + regenerate CHANGELOG + commit + local tag
+git push origin main --follow-tags          # pushing the tag triggers the release
+```
+
+`--commit` also **regenerates the matching `CHANGELOG.md` section inside the same commit** — the version and the changelog belong to one release, and splitting them across two commits all but guarantees a tag pointing at the commit that has the version but not the changelog, leaving `CHANGELOG.md` permanently one version behind. `--tag` creates a **local** tag only; whether to push it is a human decision.
+
+**The changelog is derived from git history** (`npm run changelog:write` / `changelog:notes`). The in-repo `CHANGELOG.md` and the GitHub Release body come from the same data and the same rendering code, so they cannot contradict each other. Two hard rules: an unrecognised commit type (such as the historical `debug(ci):`) lands in "Other" rather than being **silently dropped** (dropping makes the changelog lie by omission), and breaking changes appear **both** in the pinned section and under their own type.
+
+> Why not GitHub's built-in `--generate-notes`: it summarises **merged PRs**, and this repository pushes straight to `main` (`gh pr list --state all` is empty). Measured output was a single line, `**Full Changelog**: …`, with zero entries.
+
+### Release workflow
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | push to `main` / any PR / manual | Three-platform `test` (static gates + clippy + unit tests) → `smoke-headless` (L1 + fault injection) → on `main`, additionally `build` (assemble real resources + bundle + L2 + size report) |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | **push a `v*` tag** / manual with a tag | `preflight` (version↔tag consistency + second-scale static gates) → three platforms build in parallel, **create/update the GitHub Release** and upload installers, `.sig` signatures and `latest.json` |
+
+- **Tags trigger releases, not `main` commits**: a release is a one-shot, irreversible act. A tag is an explicit, single declaration of intent; auto-releasing every commit would turn "publishing" into a background action requiring no decision. The manual trigger exists to **re-run the same tag** after a failure, since deleting an already-published tag is destructive.
+- **Bundle types are declared explicitly per platform**: `nsis` on Windows, `app,dmg` on macOS, `deb,appimage` on Linux. This deliberately does not rely on `bundle.targets` in `tauri.conf.json`, which lists only the Windows-only `nsis`.
+- **Boundary with CI**: the release workflow does **not** re-run the full Rust test matrix — that is CI's job for the same commit. `preflight` runs only second-scale gates so it can fail before assembling 300 MB of runtime. **Only tag commits that are green on `main`**; that is a deliberate, accepted boundary.
 
 ## Harness page injection
 

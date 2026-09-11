@@ -43,6 +43,11 @@
   - `generate-app-icons.mjs`：**macOS 手工工具**（依赖 `sips` / `iconutil`），刻意无 npm 入口、不进 CI；定位与产物去向见其文件头注释。
   - `smoke-launch.mjs`：CI 分层烟雾（L1 无头 / L2 GUI），见 §2。
   - `report-bundle-size.mjs`：采集壳/安装包/资源树体积，写入 CI job summary（§7 期望管理）。
+  - `conventional-commits.mjs`：Conventional Commits 解析器（**共享库**，被下面两个脚本复用）。解析 / 归类 / 版本建议都收在这里，避免两个 CLI 各写一份、对同一条提交给出两种说法。含 `--self-test`。
+  - `changelog.mjs`：由提交历史生成 `CHANGELOG.md` 与 Release 正文（`--write` / `--notes`）。仓库内变更日志与 Release 正文同源同渲染，因此不会互相矛盾。见 §8.3。
+  - `version.mjs`：版本号的 `show` / `check` / `set` / `bump`（`bump auto` 依提交历史判定升哪一位），并同步 `Cargo.toml`；`--commit` 会一并重生成 CHANGELOG 段落。见 §8。
+- **`.github/workflows/`**：`ci.yml`（push `main` / PR / 手动）与 `release.yml`（推 `v*` tag / 手动指定 tag）。两者的分工边界见 §8.4——简言之 CI 负责**验证**，Release 负责**出包与发布**，互不重复。
+- **`CHANGELOG.md`**：**生成物，勿手工编辑**（改动会在下次生成时被覆盖）。数据源是 git 提交历史，见 §8.3。
 - **`patches/`**：`patch-package` 补丁 + [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。
 - **`docs/`**：架构设计、契约定义、不变量与技术规范：
   - `dsh-desktop-redesign-architecture-and-plan.md`：最新系统架构重构设计与执行计划。
@@ -108,6 +113,25 @@ npm run smoke
 
 # 12. 产物体积三口径（壳二进制 / 安装包 / 资源树）
 npm run size:report
+
+# 13. 版本号一致性（package.json 唯一真源 ↔ tauri.conf.json ↔ Cargo.toml；
+#     tag 构建时额外校验 tag 与版本号匹配）——发布前的关键防线
+npm run verify:version
+# 本地查看各处版本、最近 tag、以及「上个 tag 以来的提交建议升哪一位」
+npm run version:show
+
+# 14. 变更日志/版本推进生成器自测（纯逻辑，无 git 依赖）
+npm run verify:commits
+npm run verify:changelog
+
+# 15. 推进版本号（dry-run 先看，再真改）
+npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
+npm run version:set  -- 0.2.0              # 直接指定
+npm run version:bump -- minor --commit --tag   # 改文件 + 提交 + 打本地 tag（不推送）
+
+# 16. 变更日志（产物入库 / 供 Release 正文使用）
+npm run changelog:write -- --version 0.2.0     # 写入 CHANGELOG.md
+npm run changelog:notes                        # 打印上个 tag..HEAD 的 Release 正文
 ```
 
 集成测试（`crates/dsh-host/tests/`）会真实派生 Node 进程运行 `scripts/mock-harness.mjs`，需要 `PATH` 上有 Node.js（可用 `DSH_TEST_NODE` 指定）；找不到时测试自行跳过而非失败。故障模式经 `mock-harness.mjs` 的 argv / 环境变量注入，不在 Rust 侧打桩。
@@ -119,12 +143,17 @@ npm run size:report
 rustc 1.97.1 / clippy 0.1.97），停在 `codegen_and_build_linker`。
 
 - **性质**：clippy 自身缺陷（环境相关），与本仓库源码无关：同一命令在 `cargo check --workspace` 下完全通过。
-- **现状**：该 crate 已于 2026-09-10 随批次 F 从 workspace 移除，因此本机现在
-  `cargo clippy --workspace` 大概率不再触发该 ICE。**但这并不改变下面两条建议**——
-  触发它的是一类「某个 crate 恰好触到 clippy 代码生成路径」的环境问题，将来任何新
-  crate 都可能复现：
-  1. 本地用 `cargo check --workspace --all-targets` 替代（能报出全部真实 warning，包括 CI `-D warnings` 会拦下的 `unused_imports`）；
-  2. clippy 的权威执行者是 CI（MSVC 工具链，三个平台都跑）。
+- **现状（2026-09-11 已实测复核）**：该 crate 于 2026-09-10 随批次 F 从 workspace 移除后，
+  **本机 `cargo clippy --workspace --all-targets -- -D warnings` 已可正常执行**（本地实跑 exit 0，
+  增量构建约 6 秒）。也就是说：**现在本地就能复现 CI 的 clippy 失败，不必等 CI 报错再回头改。**
+  这一点在 2026-09-11 修 `clippy::result_large_err` 时起了决定作用——先本地复现、再修、再本地验证通过，
+  一轮闭环，没有消耗三平台 CI 跑一轮十几分钟的反馈时间。
+  ⚠️ **仍不要把 clippy 当成「本地有没有都无所谓」**：触发该 ICE 的是一类「某个 crate 恰好触到
+  clippy 代码生成路径」的环境问题，将来任何新 crate 都可能复现。因此：
+  1. 本地首选 `cargo clippy --workspace --all-targets -- -D warnings`（与 CI 逐字一致）；
+     若某天又 ICE，退回 `cargo check --workspace --all-targets`（能报出全部真实 warning，包括
+     CI `-D warnings` 会拦下的 `unused_imports`）；
+  2. clippy 的最终权威执行者仍是 CI（MSVC 工具链，三个平台都跑）——本地通过不等于三平台都通过。
 
 #### ⚠️ 已知环境限制：GNU 工具链下 `dsh-desktop` 的测试二进制无法加载
 
@@ -240,7 +269,37 @@ if (!snapshot || !snapshot.phase) return
 
 1. **命令不返回 `Err`**。外层 `Result` 恒为 `Ok`（只为满足 Tauri 对 `async` 命令的编译要求）；返回 `Err` 会让封套连同 `error.code` / `error.category` 一起丢掉，消费方退回读字符串。
 2. **页面必须解包 `success`**，并把 `envelope.data` 当载荷用（`updates://status` 这类**事件**给的才是裸快照——同一页面两种载荷形态，别弄混）。
-3. **改命令返回形态属于破坏性变更，必须过 `npm run verify:shell-pages`**。该守卫在 DOM 桩里真跑每个页面的内联脚本并点一遍按钮，P6 专查「调用了命令却没解包封套」。上面两处缺陷就是它抓到的。
+3. **改命令返回形态属于破坏性变更，必须过 `npm run verify:shell-pages`**。该守卫在 DOM 桩里真点每个页面的按钮并跑内联脚本，P6 专查「调用了命令却没解包封套」。上面两处缺陷就是它抓到的。
+
+#### 后续回归：不要把 `IpcEnvelope` 放进 `Err` 位置（2026-09-11 修复）
+
+批次 E 之后 CI 三平台 `cargo clippy` 全红，下游 smoke / bundle 被连带跳过。根因很单一：
+
+```text
+error: the `Err`-variant returned from this function is very large
+  --> src-tauri/src/commands.rs:66
+   |  fn ensure_local_origin(webview: &WebviewWindow) -> Result<(), IpcEnvelope<()>>
+   |                                                    ^^^^^^^^^ the `Err`-variant is at least 128 bytes
+note: `-D clippy::result-large-err` implied by `-D warnings`
+```
+
+`AppError` 里装着两个 `String`、一个可选 `String` 与一个 `serde_json::Value`，于是
+`size_of::<IpcEnvelope<()>>()` = **128 字节**。它一旦出现在 `Err` 位置，clippy 就会把
+「按值返回的 `Result` 每穿一层调用搬 128 字节」判为问题——在 `-D warnings` 下这是错误。
+
+**修法（勿改回）**：`ensure_local_origin` 的 `Err` 改为 `Box<IpcEnvelope<()>>`
+（`guard!` 宏相应 `failed(*error)`）。
+
+**为什么不改共享契约**：`CommandResult<T> = Result<IpcEnvelope<T>, String>` 把封套放在
+**`Ok`** 位置（`Err` 是 24 字节的 `String`），clippy 不管它；因此「给 `AppError` 拆箱」之类
+的改法会让**所有**错误构造都多一次分配，却只修得掉上面这一处——成本与收益不成比例。
+
+**为什么不 `#[allow(clippy::result_large_err)]`**：本仓库口径是能修根因就不压制，而
+`Box` 正是 clippy 自己给的两条建议之一。若将来确有需要压制的场合，请连同理由一起写进本节，
+不要就地挂一个裸 `allow`。
+
+**这条 lint 本地能拦**（见 §2 关于 clippy 的实测复核）：改完跑
+`cargo clippy --workspace --all-targets -- -D warnings`，不要等 CI 三平台跑一轮才发现。
 
 ---
 
@@ -331,7 +390,107 @@ if (!snapshot || !snapshot.phase) return
   「已归档」与「未接线」的区别是**代码还在不在**：归档是欠债已销账（删了，并给出不做的理由），未接线是债还挂着。**归档不是「计划中」**——不要用「以后可能做」来软化一个已经裁定不做的决定。
 - 修改未接线模块时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态。
 - **归档一个模块时**：代码删除、文档移入 `docs/archive/` 并在文首写归档说明（判据 + 恢复前提），本表状态改 🗄️，`README` 对应表述同步收敛。**删除的文件名要写进本表**——否则下一个人只会看到「某个能力不见了」。
-- 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线/未实现**的条目（归档项不在其中，它们改用 🗄️）。
+- 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线/未实现**的条目（归档项不在其中，它们改用 🗄️）。除真实欠债外，以下三类命中是**预期内**的，不要为消除它们而改写文本：
+  1. **词表与纪律条文本身**（§7.3 的状态词表、README 的状态标记约定、本条的规则文字）；
+  2. **历史盘点记录**——`docs/dev-plan-disconnected-points.md` §1 的 D1~D11 标题记录的是「盘点当时」的状态（该节开头有显式声明）。把它们改成「已修复」会让后来者看不出当初断在哪；
+  3. 引用这些术语的规范文档（如 `dsh-upgrade-checklist.md` 的操作说明）。
 - **跨语言断言必须可证伪**：新增「X 一定会发生」这类关于页面 / 脚本行为的断言时，按 `scripts/verify-harness-inject.mjs` 的模式配一段**变体回退检查**——把被守护的行为打回旧写法，断言必须变红，否则断言是装饰。同时守卫**不得依赖检出配置**（行尾、路径分隔符）：CRLF 检出下必须与 LF 表现一致。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
 - **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
+
+---
+
+## 8. 版本与发布（Versioning & Release）
+
+### 8.1 版本号的唯一真源
+
+| 位置 | 角色 | 谁写 |
+|------|------|------|
+| `package.json` → `version` | **唯一真源** | `scripts/version.mjs` |
+| `src-tauri/tauri.conf.json` → `version` | 写 `"../package.json"`，**原生继承**不存值 | 手工设一次，之后不动 |
+| `Cargo.toml` → `[workspace.package] version` | 跟随真源（Cargo 读不了 package.json） | `scripts/version.mjs` |
+| `Cargo.lock` | 生成物，跟随 Cargo.toml | cargo 自身 |
+| `CHANGELOG.md` | 生成物，由提交历史推导 | `scripts/changelog.mjs` |
+
+`tauri.conf.json` 之所以能不存值：Tauri 官方 schema 明确允许 `version` 写成
+「`package.json` 的路径」（*"a semver version number **or a path to a `package.json` file**
+containing the `version` field"*）。用满这个能力就把三处重复消掉一处——**不要**把它改回硬编码字面量。
+
+### 8.2 版本号怎么推进（规则可执行，不靠人记）
+
+| 提交内容 | 推进 | 例子 |
+|---------|------|------|
+| 任一破坏性变更（`!` 或正文 `BREAKING CHANGE:` 页脚） | `major` | 0.3.1 → 1.0.0 |
+| 任一 `feat` | `minor` | 0.1.0 → 0.2.0 |
+| 任一 `fix` / `perf` | `patch` | 0.2.0 → 0.2.1 |
+| 只有 `docs` / `chore` / `ci` 等 | **不发版** | —（产物无行为变化） |
+
+- 由 `npm run version:bump -- auto` 执行上面的判定，也可 `version:set <x.y.z>` 直接指定。
+- **`0.y.z` 阶段（当前）**：破坏性变更升 `minor` 而非 `major`——API 本就未稳定，用 `major`
+  会让版本号跑在实际成熟度前面。
+- 预发布版本用 `-` 后缀（`0.2.0-beta.1`）。对应的 GitHub Release 会被标为 prerelease，
+  且**不进入** updater 的正常更新通道。
+- **先 `--dry-run` 再真改**：`npm run version:bump -- auto --dry-run`。
+- 没有历史 tag 时 `auto` **会报错并要求显式指定**——首次发布不该由一个推导规则猜版本号。
+
+### 8.3 变更日志与 Release 正文
+
+`CHANGELOG.md` 与 Release 正文**来自同一份数据（git 提交历史）与同一套渲染逻辑**，因此不会出现
+「Release 页说的」与「CHANGELOG.md 说的」不一致。
+
+- 解析器 `scripts/conventional-commits.mjs`：类型分组、破坏性置顶、版本建议。
+- 渲染器 `scripts/changelog.mjs`：`--write` 落 `CHANGELOG.md`，`--notes` 出 Release 正文。
+- **两条硬规则**（都有自测钉着）：
+  1. **不静默丢弃任何提交**。认不出的 `type`（例如历史上真实存在的 `debug(ci):`）归入「其他」
+     并保留原文。静默丢弃会让变更日志**因遗漏而撒谎**——比分类不准严重得多。
+  2. **破坏性变更同时出现在置顶章节与它的类型章节**——读者既要知道「有不兼容改动」，
+     也要知道它属于哪一类工作。
+
+> ⚠️ **为什么不用 GitHub 内置的 `--generate-notes`**：它按**已合并 PR** 归纳，而本仓库全程直推
+> `main`（`gh pr list --state all` 为空）。2026-09-11 实测其产出只有一行
+> `**Full Changelog**: …`、零条目。直推流程下这条路走不通，不要为了"少维护"换回去。
+
+### 8.4 CI 工作流与触发条件
+
+| 工作流 | 文件 | 触发 | 做什么 |
+|--------|------|------|--------|
+| CI | `.github/workflows/ci.yml` | `push` main / 任意 `pull_request` / 手动 | 三平台 `test`（静态门禁 + clippy + 单测）→ `smoke-headless`（L1 + 故障注入）→ main 上追加 `build`（组装真实资源 + 打包 + L2 + 体积） |
+| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json` |
+
+- **为什么发布用 tag 触发而不是 main 提交**：发布是一次性、不可撤销的动作（Release 一旦公开
+  就有人下载）。tag 是显式的单一意图声明；让 main 上每次提交都发版会把「发布」退化成无需决策的背景动作。
+- **`workflow_dispatch` 兜底**：发布失败时可指定同一个 tag 重跑，不必删 tag 重建（删已发布的 tag
+  是破坏性操作）。
+- **与 CI 的边界（明确声明）**：Release **不重跑** `cargo test` / clippy / 三平台烟雾矩阵——那是
+  CI 对**同一个 commit** 的职责。Release 的 `preflight` 只跑秒级静态门禁 + 版本校验，目的是在
+  组装 300MB 资源**之前**失败。残留风险：给一个从未通过 CI 的提交打 tag，Release 不会发现——
+  请只对 main 上绿着的提交打 tag。**这是有意接受的边界，不是遗漏。**
+- **各平台产物类型必须显式传 `--bundles`**：`tauri.conf.json` 的 `bundle.targets` 只写了 `nsis`
+  （Windows 专属）。macOS/Linux 上必须显式声明 `app,dmg` / `deb,appimage`，不要依赖 Tauri 对
+  不支持类型的平台回退行为（既无文档承诺，也无法在本机验证）。
+- **`latest.json` 是更新链路的命门**：updater 端点指向
+  `releases/latest/download/latest.json`。tauri-action 的 `uploadUpdaterJson`（默认开）负责生成上传；
+  **它不在 Release 里，自动更新就是断的**。
+
+### 8.5 发布操作步骤（人看的）
+
+```bash
+# 1. 确认待发布提交在 main 上且 CI 绿
+git checkout main && git pull
+
+# 2. 看将要升到哪个版本（不写任何文件）
+npm run version:bump -- auto --dry-run
+
+# 3. 落版本号 + 重新生成 CHANGELOG 段落 + 提交 + 打本地 tag（一个原子发布提交）
+npm run version:bump -- auto --commit --tag
+
+# 4. 推送（tag 推送即触发 Release 工作流）
+git push origin main --follow-tags
+```
+
+> 第 3 步的 `--tag` 只创建**本地** tag，推送与否由人决定——这是刻意的：打 tag 就是发布意图，
+> 不该由脚本替人按下。
+>
+> `--commit` 会**一并重新生成 CHANGELOG.md 的对应段落**并纳入同一个提交。版本号与变更日志
+> 同属「这一次发布」，分成两个提交就会出现「tag 指向有版本号、没变更日志的那个提交」——
+> CHANGELOG.md 从此永久滞后一版。

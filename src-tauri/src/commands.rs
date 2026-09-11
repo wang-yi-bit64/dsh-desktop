@@ -63,14 +63,31 @@ fn failed<T>(error: IpcEnvelope<()>) -> CommandResult<T> {
 /// 校验调用方是本地静态页；非本地 origin 一律拒绝（INV-2）。
 ///
 /// 失败形态统一为 `E4002` / `authentication`（见 [`IpcEnvelope::denied`]）。
-fn ensure_local_origin(webview: &WebviewWindow) -> Result<(), IpcEnvelope<()>> {
+///
+/// # 为什么 `Err` 要 `Box`
+///
+/// [`IpcEnvelope`] 是「把数据带在身上的值类型」：`AppError` 内含两个 `String`、
+/// 一个可选 `String` 与一个 `serde_json::Value`，于是
+/// `size_of::<IpcEnvelope<()>>()` = **128 字节**。它出现在 `Err` 位置会触发
+/// `clippy::result_large_err`——按值返回的 `Result` 每穿一层调用就要搬这 128 字节。
+/// 守卫又是**每个命令**的第一件事，所以这里 `Box` 掉：正常（放行）路径保持零开销，
+/// 只有真的被拒绝时才多一次分配。
+///
+/// 为什么不动共享契约：`CommandResult<T> = Result<IpcEnvelope<T>, String>` 把封套
+/// 放在 **`Ok`** 位置（`Err` 是 24 字节的 `String`），lint 不管。也就是说
+/// 「把 `AppError` 拆箱」这类改法会让**所有**错误构造都多一次分配，却只能修掉
+/// 下面这一处——成本与收益不成比例。
+///
+/// 为什么不用 `#[allow(clippy::result_large_err)]` 压下去：本仓库的口径是能修根因
+/// 就不压制，而 `Box` 正是 clippy 自己给的两条建议之一。
+fn ensure_local_origin(webview: &WebviewWindow) -> Result<(), Box<IpcEnvelope<()>>> {
     let url = webview
         .url()
-        .map_err(|error| internal(format!("cannot read the caller url: {error}")))?;
+        .map_err(|error| Box::new(internal(format!("cannot read the caller url: {error}"))))?;
     if is_local_page(&url) {
         Ok(())
     } else {
-        Err(IpcEnvelope::denied(url))
+        Err(Box::new(IpcEnvelope::denied(url)))
     }
 }
 
@@ -91,7 +108,8 @@ fn environment(code: &str, message: impl Into<String>) -> IpcEnvelope<()> {
 macro_rules! guard {
     ($webview:expr) => {
         if let Err(error) = ensure_local_origin(&$webview) {
-            return failed(error);
+            // 守卫的 `Err` 是 `Box<IpcEnvelope<()>>`（理由见 `ensure_local_origin`）。
+            return failed(*error);
         }
     };
 }

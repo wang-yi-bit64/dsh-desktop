@@ -90,6 +90,22 @@ jobs:
       - name: Verify Harness UI injection behaviour
         run: npm run verify:harness-inject
 
+      # 版本号一致性 + 变更日志生成器自测。
+      #
+      # 版本号散落在 package.json（唯一真源）/ tauri.conf.json（继承真源）/
+      # Cargo.toml（脚本同步）三处，任一处漂移，打出来的包就会自称另一个版本；
+      # 而 updater 的版本比较据此决定推不推更新——错一次就会让所有已安装用户
+      # 收到「版本号没变」的更新，或永远收不到更新。因此这是一条契约门禁，
+      # 不是格式美化。
+      #
+      # 后两条是生成器自身的自测：一个写错了却静默产出空变更日志的脚本，
+      # 比没有脚本更危险（Release 页会显示「没有任何改动」）。
+      - name: Verify version consistency and changelog generators
+        run: |
+          npm run verify:version
+          npm run verify:commits
+          npm run verify:changelog
+
       # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
       # tauri-build 的 build.rs 要求 bundle.resources 每个 glob 至少匹配一个文件，
       # 而 src-tauri/resources/ 被 gitignore（全新 checkout 不存在）。这里用
@@ -174,8 +190,21 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
+      # 每个平台**显式**声明要产出哪些包。
+      #
+      # 此前这里只写 `os: [...]`，打包命令是 `npm run tauri build`，实际 bundle
+      # 类型由 tauri.conf.json 的 `bundle.targets`（当前只有 `nsis`）决定。nsis 是
+      # Windows 专属类型，把它交给 macOS/Linux 去处理是在依赖 Tauri 的平台回退
+      # 行为——那既没被文档承诺，也没法在本机验证。显式传 `--bundles` 之后，
+      # 每个平台该产出什么一目了然，且与 release.yml 用同一套声明。
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            bundles: nsis
+          - os: macos-latest
+            bundles: app,dmg
+          - os: ubuntu-latest
+            bundles: deb,appimage
     steps:
       - uses: actions/checkout@v4
 
@@ -257,13 +286,16 @@ jobs:
           fi
 
       # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
-      # 资源。直跑 npm run tauri build（package.json 的 tauri script 指向
-      # @tauri-apps/cli 的 tauri 二进制，不需 cargo 子命令）。
+      # 资源。`npm run tauri -- build …` 会转发到 @tauri-apps/cli 的 tauri
+      # 二进制（package.json 的 tauri script），不需要 cargo 子命令。
+      #
+      # `--bundles` 按平台显式指定（见上方 matrix 注释）：不要依赖
+      # tauri.conf.json 的 bundle.targets，那里只有 Windows 的 nsis。
       - name: Build installers
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }}
 
       # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。
       # 软门禁（continue-on-error）：GUI 在 CI 上受窗口管理器 / WebKit 版本影响，

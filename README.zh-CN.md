@@ -142,6 +142,8 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:shell-pages` | 把每个壳页面的内联脚本放进 DOM 桩里真跑一遍，并**逐个点一遍按钮**。抓 `getElementById` 返回 `null`（脚本会就此中断，**该页所有监听全部失效**），以及 HTML 留了按钮却没挂监听。 |
 | `npm run verify:harness-inject` | Harness 页注入脚本的 DOM 行为，含**可证伪性检查**：把脚本回退成上游行为，断言必须变红。 |
 | `npm run verify:patches` | `patches/` 与 `scripts/patch-layers.mjs` 的分级清单一致，且每个补丁文件名都能推导出包名。 |
+| `npm run verify:version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
+| `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
 | `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L2 GUI 启动。 |
@@ -156,7 +158,9 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 
 ## 自动更新与签名密钥
 
-更新端点为 `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`，且 `tauri.conf.json` → `bundle.createUpdaterArtifacts` 已置 `true`，因此 `npm run build` 会同时产出**已签名的安装包**与该端点所服务的 `latest.json` 清单——发布一个版本无需再额外做发布动作，上传构建产物即可。
+更新端点为 `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`，且 `tauri.conf.json` → `bundle.createUpdaterArtifacts` 已置 `true`，因此 `npm run build` 会同时产出**已签名的安装包**与该端点所服务的 `latest.json` 清单。
+
+> `latest.json` 必须出现在 Release 资产里——**它不在，自动更新就是断的**。发布工作流（见下）由 `tauri-action` 的 `uploadUpdaterJson` 负责生成上传；手工 `npm run build` 后自行上传产物时，别忘了这个文件。
 
 更新的可信度完全落在同一对 minisign 密钥上：
 
@@ -170,6 +174,43 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 没有签名凭据时构建仍能产出安装包，但这种包无法被已发布的客户端安装——验签会直接拒绝。因此 CI 会在**开始昂贵的构建之前**先校验该 Secret 是否存在，缺失时以显式 `::error::` 提前失败，而不是等到最后才发现问题。
 
 **私钥一旦丢失，对已安装用户而言不可挽回。** 公钥被编译进每一个已发布的二进制；换新密钥对就意味着换新公钥，而已安装的客户端会持续拒绝由新公钥签名的更新。请把 `~/.tauri/dsh-desktop.key` 当作发布关键基础设施，而不是本地开发文件。
+
+## 版本与发布
+
+**版本号的唯一真源是 `package.json` 的 `version`。** `src-tauri/tauri.conf.json` 写 `"../package.json"` 原生继承（Tauri schema 明确支持该写法），因此它不存第二份值；`Cargo.toml` 的 workspace version 由脚本同步（Cargo 读不了 `package.json`）。
+
+推进规则与 [Conventional Commits](https://www.conventionalcommits.org/) 对齐，且**可执行**而非靠人记：
+
+| 提交内容 | 推进 | 例子 |
+|---------|------|------|
+| 破坏性变更（`!` 或 `BREAKING CHANGE:` 页脚） | `major` | 0.3.1 → 1.0.0 |
+| 任一 `feat` | `minor` | 0.1.0 → 0.2.0 |
+| 任一 `fix` / `perf` | `patch` | 0.2.0 → 0.2.1 |
+| 只有 `docs` / `chore` / `ci` 等 | **不发版** | 产物没有任何行为变化 |
+
+```bash
+npm run version:show                        # 看各处版本、最近 tag、建议升级位
+npm run version:bump -- auto --dry-run      # 只预览，不写文件
+npm run version:bump -- auto --commit --tag # 落版本号 + 更新 CHANGELOG + 提交 + 打本地 tag
+git push origin main --follow-tags          # 推 tag 即触发发布
+```
+
+`--commit` 会**顺带重新生成 `CHANGELOG.md` 的对应段落**并纳入同一个提交——版本号与变更日志同属一次发布，分成两个提交就会出现「tag 指向有版本号、没变更日志的那个提交」，CHANGELOG 从此永久滞后一版。`--tag` 只创建**本地** tag，是否推送由人决定。
+
+**变更日志由 git 提交历史自动生成**（`npm run changelog:write` / `changelog:notes`），仓库内 `CHANGELOG.md` 与 GitHub Release 正文来自同一份数据、同一套渲染逻辑，因此不会互相矛盾。两条硬规则：认不出的提交类型（如历史遗留的 `debug(ci):`）归入「其他」而**不静默丢弃**（丢弃会让变更日志因遗漏而撒谎）；破坏性变更**同时**出现在置顶章节与它的类型章节。
+
+> 为什么不用 GitHub 内置的 `--generate-notes`：它按**已合并 PR** 归纳，而本仓库全程直推 `main`（`gh pr list --state all` 为空）。实测其产出只有一行 `**Full Changelog**: …`、零条目。
+
+### 发布工作流
+
+| 工作流 | 触发 | 做什么 |
+|--------|------|--------|
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | push `main` / 任意 PR / 手动 | 三平台 `test`（静态门禁 + clippy + 单测）→ `smoke-headless`（L1 + 故障注入）→ main 上追加 `build`（组装真实资源 + 打包 + L2 + 体积采集） |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | **推 `v*` tag** / 手动指定 tag | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包，**创建/更新 GitHub Release** 并上传安装包、`.sig` 签名与 `latest.json` |
+
+- **发布用 tag 触发而非 main 提交**：发布是一次性、不可撤销的动作。tag 是显式的单一意图声明；让每次提交都发版会把「发布」退化成无需决策的背景动作。手动触发用于失败后**指定同一 tag 重跑**（删已发布的 tag 是破坏性操作）。
+- **各平台产物类型显式声明**：Windows `nsis`、macOS `app,dmg`、Linux `deb,appimage`。不依赖 `tauri.conf.json` 的 `bundle.targets`——那里只有 Windows 专属的 `nsis`。
+- **与 CI 的边界**：发布流程**不重跑**整套 Rust 测试矩阵（那是 CI 对同一 commit 的职责），`preflight` 只跑秒级门禁以便在组装 300MB 资源前失败。因此**只对 main 上绿着的提交打 tag**——这是有意接受的边界。
 
 ## Harness 页面注入
 

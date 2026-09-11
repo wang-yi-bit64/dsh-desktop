@@ -1,0 +1,232 @@
+name: Release
+
+# 触发条件（两条，二者互补）：
+#   1. push tag `v*`   —— 正常路径。发布由 tag 掌控，代码合并不会误发。
+#   2. workflow_dispatch —— 兜底重跑。发布失败时不必删 tag 重建（删已发布的 tag
+#      是破坏性操作），指定同一个 tag 重跑即可。
+#
+# 为什么用「tag 触发」而不是「main 触发」：
+#   发布是**一次性、不可撤销**的动作（GitHub Release 一旦公开就有人下载）。
+#   tag 是一个显式的、单一的意图声明；而 main 上的每次提交都自动发版会让
+#   「发布」退化成一个无需决策的背景动作。
+#
+# 与 ci.yml 的分工边界（**明确声明，不含糊**）：
+#   - 本工作流**不重跑** cargo test / clippy / 三平台烟雾矩阵。那是 ci.yml 对
+#     **同一个 commit** 的职责（tag 通常指向已通过 main 门禁的提交）。
+#   - 本工作流的 preflight 只跑秒级静态门禁 + 版本/tag 一致性，目的是**在组装
+#     300MB 资源之前**失败，避免三平台各白跑一轮。
+#   - 残留风险：若给一个从未通过 CI 的提交打 tag，本工作流不会发现。请只对
+#     main 上绿着的提交打 tag。此风险是有意接受的，不是遗漏。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（须已存在，形如 v0.1.0）'
+        required: true
+        type: string
+
+# 发布不可中途取消：半途取消会留下一个缺产物的 Release。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# contents: write 是创建 Release 与上传资产所必需。
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    name: preflight / 版本与 tag 一致性
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 —— 生成变更说明需要「上一个 tag..本 tag」的完整区间，
+          # 浅克隆拿不到 tag 与历史（GitHub 默认只取 1 个提交、不含 tag）。
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 解析 tag → 版本 → 是否预发布。三者后续都要用，集中在一处产出，
+      # 避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
+      - name: Resolve tag, version and prerelease flag
+        id: resolve
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # semver 含 `-` 后缀即预发布（如 0.2.0-beta.1）。用 node 判定而不是
+          # shell 的字符串包含：`0.2.0` 里没有任何 `-`，但未来出现 `1.0.0+build-5`
+          # 这类 build metadata 时，字符串判断会把正式版误判成预发布。
+          PRE=$(node -e '
+            const v = process.argv[1];
+            const m = /^\d+\.\d+\.\d+(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v);
+            if (!m) { console.error(`非法 semver: ${v}`); process.exit(1); }
+            console.log(m[1] ? "true" : "false");
+          ' "$VERSION")
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$VERSION prerelease=$PRE"
+
+      # 版本号三处（package.json / tauri.conf.json / Cargo.toml）一致性 + tag 匹配。
+      # 这条是发布链路最关键的防线：tag 与版本号不一致时，打出来的包会自称另一个
+      # 版本，而 updater 的版本比较据此决定推不推更新——错一次就会让所有已安装
+      # 用户收到「版本号没变」的更新，或永远收不到更新。
+      - name: Verify version consistency against the tag
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: node scripts/version.mjs check --tag "$TAG"
+
+      # 秒级静态门禁：确认这个 commit 的契约面是自洽的（命令面、页面按钮接线、
+      # 补丁分级）。与 ci.yml 用同一套脚本，不是另一套判断标准。
+      - name: Fast static gates
+        run: |
+          npm run verify:patches
+          npm run verify:ipc-surface
+          npm run verify:shell-pages
+          npm run verify:harness-inject
+          npm run verify:commits
+          npm run verify:changelog
+
+  build:
+    name: ${{ matrix.os }} / release
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # 每个平台显式指定 bundle 类型。**不能**依赖 tauri.conf.json 的
+      # `bundle.targets`：那里只写了 `nsis`（Windows 专属），在 macOS/Linux 上
+      # 会因「目标类型不属于该平台」而失败。
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+          - os: macos-latest
+            bundles: app,dmg
+          - os: ubuntu-latest
+            bundles: deb,appimage
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight.outputs.tag }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install build tooling
+        run: npm ci
+
+      # 打包目标守卫：prepare:harness 会把**当前主机架构**的 Node 运行时装进
+      # 资源树；架构不一致的包在目标机上表现为「Harness 起不来」，根因在构建期。
+      # 放在组装 300MB 之前失败。
+      - name: Verify packaging target
+        run: npm run verify:target
+
+      - name: Prepare harness resources
+        run: npm run prepare:harness
+
+      - name: Verify bundled Node.js version
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./src-tauri/resources/node/node.exe --version
+          else
+            ./src-tauri/resources/node/node --version
+          fi
+
+      # 预检签名密钥：`createUpdaterArtifacts: true` 要求签名密钥，缺了会在打包
+      # 末尾才失败（白跑一轮 300MB 组装）。用 env 传值而不是把 `${{ secrets.* }}`
+      # 插进 run 字符串——后者一旦被回显就会把私钥写进构建日志。
+      - name: Verify signing key is available
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — updater artifacts cannot be signed. See README (Auto-update)."
+            exit 1
+          fi
+
+      # 生成变更说明。三个平台各自生成（内容由 tag 区间唯一决定，必然一致），
+      # 避免用 job outputs 跨 job 传多行字符串这种脆弱做法。
+      # 上一个 tag 的取法：`<tag>^` 上找最近 tag；找不到（首次发布）则从头读。
+      - name: Build release notes from commit history
+        id: notes
+        shell: bash
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            if [ -n "$PREV" ]; then
+              echo "**完整变更**：\`$PREV\` → \`$TAG\`"$'\n'
+              node scripts/changelog.mjs --notes --from "$PREV" --to "$TAG"
+            else
+              echo "**首次发布**（$TAG）"$'\n'
+              node scripts/changelog.mjs --notes --to "$TAG"
+            fi
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # tauri-action 负责：跑 `tauri build`、创建/更新 Release、上传安装包与
+      # `.sig` 签名、并生成 updater 的 `latest.json`（uploadUpdaterJson 默认开）。
+      # `latest.json` 是自动更新的关键——updater 端点指向
+      # `releases/latest/download/latest.json`，缺了它更新链路就断。
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ needs.preflight.outputs.tag }}
+          releaseName: 'DSH Desktop ${{ needs.preflight.outputs.version }}'
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
+          releaseCommitish: ${{ github.sha }}
+          tauriScript: npm run tauri --
+          args: build --bundles ${{ matrix.bundles }}
+          # 同时传工作流工件：即使 Release 创建环节出问题，安装包也能从
+          # Actions 页面取回，不至于「构建成功但拿不到产物」。
+          uploadWorkflowArtifacts: true
+          retryAttempts: 2
+
+      - name: Report bundle size
+        if: always()
+        run: node scripts/report-bundle-size.mjs --markdown
