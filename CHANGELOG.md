@@ -11,6 +11,7 @@
 
 ### ✨ 新功能
 
+- **release**: 修复 CI 红灯 + 打通 tag 发布链路 + 版本管理与变更日志自动生成 ([2878589](https://github.com/wang-yi-bit64/dsh-desktop/commit/287858941de181fc51d2d2dd6cfacdac463684e1))
 - **shell**: 闭合恢复/诊断/封套三条链路并冻结归档插件隔离与模型网关 ([b0a3e46](https://github.com/wang-yi-bit64/dsh-desktop/commit/b0a3e46e6d95b0431198924dd10be49d8abc31b8))
 - **shell**: Harness 页注入机制 + 页内手机状态指示器 ([18e26f5](https://github.com/wang-yi-bit64/dsh-desktop/commit/18e26f5b91c4dce8bf2c794af382e683daca416f))
 - **shell**: 接线应用内更新 UI（updates.html + harness_open） ([7a3ca73](https://github.com/wang-yi-bit64/dsh-desktop/commit/7a3ca73177995942ab8458bd63070339f8d873e0))
@@ -28,6 +29,15 @@
 
 ### 🐛 修复
 
+- **release**: 修正 tauri-action 参数重复与 macOS 变量终止，打通发布链路 ([917ddc0](https://github.com/wang-yi-bit64/dsh-desktop/commit/917ddc050a035efa760f3b2747431c7104a2edd8))
+- **build**: 剪掉外来平台原生变体，修复 Linux AppImage 打包失败 ([5230cd9](https://github.com/wang-yi-bit64/dsh-desktop/commit/5230cd9162eb0da81a4b0f95be2f7803269a19c7))
+- **ci**: pin 新版 linuxdeploy + verbose 构建输出 ([30624bb](https://github.com/wang-yi-bit64/dsh-desktop/commit/30624bbab625ac28cce2bc730eb6eb57eaa82fe3))
+- **ci**: gdk-pixbuf-query-loaders 在 noble 不在 PATH——改 multiarch 绝对路径 ([7b7f3ed](https://github.com/wang-yi-bit64/dsh-desktop/commit/7b7f3ed8a298b19aecb74eaf04190586666551f5))
+- **ci**: Linux AppImage 打包环境修复——NO_STRIP + pixbuf loaders ([09ed742](https://github.com/wang-yi-bit64/dsh-desktop/commit/09ed742b063cfc901de368f4cb2674e1631c7552))
+- **smoke**: 对齐契约 C5 两步兑换——undici fetch 无 cookie jar 致 303 二跳 401 ([5364f54](https://github.com/wang-yi-bit64/dsh-desktop/commit/5364f5422f831af63a79cdd7ffe02a4ed8965d25))
+- **build**: 实体化 file: 依赖，修复桌面插件裸导入解析失败 ([b71bc92](https://github.com/wang-yi-bit64/dsh-desktop/commit/b71bc92834a5faf00659bca8b556dc67fe99843c))
+- **build**: 修正依赖树瘦身误删运行时模块（yaml/dist/doc） ([be47830](https://github.com/wang-yi-bit64/dsh-desktop/commit/be478305fbe631faf3ff31f1218b65f4a4cd276f))
+- **build**: 修正补丁应用与变更说明基线的两处静默失效 ([5a2f030](https://github.com/wang-yi-bit64/dsh-desktop/commit/5a2f030404661ddcd2b887d8f3a6d626f459f8f4))
 - **shell**: 修正快照契约——phase 平铺（此前恒为 false 的插件故障分支根因） ([476a056](https://github.com/wang-yi-bit64/dsh-desktop/commit/476a05697d601c506a441fee6fc472469fc8ab78))
 - **shell**: 更新源改指本仓库并接通自有签名密钥 ([60682ac](https://github.com/wang-yi-bit64/dsh-desktop/commit/60682ac2d4e3134cec3c3b7df2e4c26c7f9b88b8))
 - **shell**: 安全模式真正以 desktop-safe-mode profile 启动 ([baa0cbe](https://github.com/wang-yi-bit64/dsh-desktop/commit/baa0cbe7f6bab463d71d89076610f26f6063f1fd))
@@ -54,6 +64,7 @@
 
 ### 📝 文档
 
+- **agents**: 补两条「勿回归」——补丁应用形式与变更说明基线 ([79b0d9a](https://github.com/wang-yi-bit64/dsh-desktop/commit/79b0d9a5876e21760fbaf8ae71855002bb9fa143))
 - 同步批次 C~G 的真实能力口径与新增门禁 ([3ce658a](https://github.com/wang-yi-bit64/dsh-desktop/commit/3ce658a578b4b6cbea784110e47919689ed26579))
 - 把断线点主计划移入 docs/ 入库并补 AGENTS.md 索引 ([3b7e570](https://github.com/wang-yi-bit64/dsh-desktop/commit/3b7e570d0f4728b393b402e24e2ee4c436e2e88e))
 - 更正「无初始化脚本」的误判并登记页内指示器 ([d6b7fb0](https://github.com/wang-yi-bit64/dsh-desktop/commit/d6b7fb009efa57866c675fd5ec0c8fcc4abcb1e1))
@@ -88,6 +99,8 @@
 
 ### 🧹 其他
 
+- **smoke**: L1.3 失败时记录响应体与请求形态对照 ([14b63e3](https://github.com/wang-yi-bit64/dsh-desktop/commit/14b63e3a13d5550ea636fd93e053d8e986373891))
+- **smoke**: 失败时保留 Harness 日志 + 新增瘦身引用审计工具 ([d91e30c](https://github.com/wang-yi-bit64/dsh-desktop/commit/d91e30c4c2f2cbca3344c8771c75c6aef3bb6498))
 - **gates**: 新增壳内页面运行时冒烟，并修掉两处会误报的守卫 ([0d2ea84](https://github.com/wang-yi-bit64/dsh-desktop/commit/0d2ea84a17b6c7db90d12c049c13a859f66d61b5))
 - **gates**: 注入脚本无头自测（含可证伪性检查）并进 CI ([6319994](https://github.com/wang-yi-bit64/dsh-desktop/commit/63199948529e6ce490cc4bbd688be94ffbdaa6de))
 - **gates**: 登记 plugin-recovery.html 不可达，修复接口面门禁红灯 ([216f330](https://github.com/wang-yi-bit64/dsh-desktop/commit/216f3301cb8519494e560841eebbee6da0807b28))
