@@ -214,6 +214,17 @@ jobs:
             echo 'RELEASE_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
 
+      # tauri binary-releases 里的 linuxdeploy 是 2021 年的旧 continuous 构建，
+      # 新 glibc 下有多种兼容问题；tauri 对 ~/.cache/tauri 下已存在的工具
+      # 不重新下载，预置官方新版 pin 住（详见 ci.yml 同名步骤注释）。
+      - name: Pin recent linuxdeploy (Linux AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fL --retry 3 -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
+
       # tauri-action 负责：跑 `tauri build`、创建/更新 Release、上传安装包与
       # `.sig` 签名、并生成 updater 的 `latest.json`（uploadUpdaterJson 默认开）。
       # `latest.json` 是自动更新的关键——updater 端点指向
@@ -236,7 +247,7 @@ jobs:
           prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
           releaseCommitish: ${{ github.sha }}
           tauriScript: npm run tauri --
-          args: build --bundles ${{ matrix.bundles }}
+          args: build --bundles ${{ matrix.bundles }} -v
           # 同时传工作流工件：即使 Release 创建环节出问题，安装包也能从
           # Actions 页面取回，不至于「构建成功但拿不到产物」。
           uploadWorkflowArtifacts: true

@@ -312,12 +312,28 @@ jobs:
             exit 1
           fi
 
+      # tauri binary-releases 里的 linuxdeploy 是 2021 年的旧 continuous 构建，
+      # 在新 glibc（Ubuntu 24.04）下有 ELF/strip 兼容问题（`failed to run
+      # linuxdeploy` 且真实报错被吞）。tauri 对 ~/.cache/tauri 下已存在的工具
+      # 不重新下载（bundler prepare_tools 逻辑），因此预置官方新版 pin 住版本。
+      - name: Pin recent linuxdeploy (Linux AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fL --retry 3 -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
+
       # 打真实安装包（含 prepare:harness 组装的 300MB 运行时），验证打包不缺
       # 资源。`npm run tauri -- build …` 会转发到 @tauri-apps/cli 的 tauri
       # 二进制（package.json 的 tauri script），不需要 cargo 子命令。
       #
       # `--bundles` 按平台显式指定（见上方 matrix 注释）：不要依赖
       # tauri.conf.json 的 bundle.targets，那里只有 Windows 的 nsis。
+      #
+      # `-v`（verbose）：非 verbose 时 bundler 会吞掉 linuxdeploy 的全部
+      # stderr（源码固定报 `failed to run linuxdeploy`），verbose 走
+      # output_ok() 把输出打进 debug log——失败时 CI 上可直接看到根因。
       - name: Build installers
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -327,7 +343,7 @@ jobs:
           # NO_STRIP=1 是 tauri 社区官方 workaround；Win/mac 不跑 linuxdeploy，
           # 此变量对它们无作用。代价：AppImage 内二进制不做 strip（体积略增）。
           NO_STRIP: "1"
-        run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }} -v
 
       # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。
       # 软门禁（continue-on-error）：GUI 在 CI 上受窗口管理器 / WebKit 版本影响，
