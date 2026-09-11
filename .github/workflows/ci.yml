@@ -61,6 +61,15 @@ jobs:
       - name: Verify patch layer manifest
         run: npm run verify:patches
 
+      # 依赖树瘦身判据的自检。`prepare:harness` 会把 node_modules 里「像开发产物」
+      # 的目录整目录删掉以缩小安装包，而 `doc` / `docs` 这类名字在某些包里恰好是
+      # **运行时路径**（`yaml/dist/doc/directives.js`）。删错不会让任何静态检查变红：
+      # 打包、签名、安装全部成功，只有 Harness 启动时抛 `Cannot find module`，
+      # 也就是「装得上、起不来」。这里用可伪证性断言把这个判据钉住——同一条断言
+      # 必须能复现旧判据的事故形态，否则自测自己就是失效的。
+      - name: Verify dependency prune rules
+        run: npm run verify:prune
+
       # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
       # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
       # 断线跨语言（Rust ↔ HTML），编译器看不见，只能静态比对：

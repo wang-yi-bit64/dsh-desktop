@@ -34,11 +34,10 @@ import {
   readdirSync,
   rmSync,
   statSync,
-  unlinkSync,
   writeFileSync
 } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -53,6 +52,10 @@ import {
 // 打包目标守卫（见下方 `--target` 段）。import 模块级无副作用：
 // verify-target.mjs 的 CLI 入口有「主模块」判定保护。
 import { checkTarget } from './verify-target.mjs'
+
+// 瘦身逻辑单独成模块（含自测）：它的目录判据一旦写错，产出的是「能装上但起不来」
+// 的安装包，且没有任何静态检查能发现——所以必须能独立跑断言。
+import { pruneNodeModules } from './prune-harness-deps.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const staging = join(projectRoot, 'harness-deps')
@@ -759,75 +762,4 @@ function readdirSafe(directory) {
   } catch {
     return []
   }
-}
-
-function pruneNodeModules(dir) {
-  const IGNORED_EXTS = new Set([
-    '.d.ts',
-    '.d.ts.map',
-    '.ts.map',
-    '.js.map',
-    '.mjs.map',
-    '.cjs.map',
-    '.md',
-    '.markdown',
-    '.npmignore',
-    '.eslintrc',
-    '.prettierrc',
-    '.travis.yml',
-    '.editorconfig'
-  ])
-
-  const IGNORED_DIRS = new Set([
-    'test',
-    'tests',
-    '__tests__',
-    'docs',
-    'doc',
-    'example',
-    'examples',
-    '.github',
-    '.vscode'
-  ])
-
-  function scan(currentDir) {
-    let entries = []
-    try {
-      entries = readdirSync(currentDir, { withFileTypes: true })
-    } catch {
-      return
-    }
-
-    for (const ent of entries) {
-      const fullPath = join(currentDir, ent.name)
-      if (ent.isDirectory()) {
-        const lower = ent.name.toLowerCase()
-        if (IGNORED_DIRS.has(lower)) {
-          rmSync(fullPath, { recursive: true, force: true })
-        } else {
-          scan(fullPath)
-        }
-      } else if (ent.isFile()) {
-        const name = ent.name.toLowerCase()
-        if (
-          name.endsWith('.d.ts') ||
-          name.endsWith('.d.ts.map') ||
-          name.endsWith('.map') ||
-          name.endsWith('.md') ||
-          name.endsWith('.markdown') ||
-          name === 'license' ||
-          name === 'licence' ||
-          name === 'changelog' ||
-          name.startsWith('readme') ||
-          IGNORED_EXTS.has(extname(name))
-        ) {
-          try {
-            unlinkSync(fullPath)
-          } catch {}
-        }
-      }
-    }
-  }
-
-  scan(dir)
 }

@@ -320,6 +320,22 @@ note: `-D clippy::result-large-err` implied by `-D warnings`
 
 `changelog.mjs --self-test` 里有一条建临时 git 仓库实跑区间解析的断言钉着这点（渲染层纯逻辑断言抓不到它——错在「与 git 的交互」上）。实测：同一首次发布场景，旧实现读到 0 条提交、新实现读到全部历史（98 行 / 13063 字符 / 8 章节，对比修复前的 5 行 / 115 字符 / 0 章节）。
 
+### 依赖树瘦身：删目录的判据是「内容」不是「名字」（已修复，勿回归）
+
+`prepare:harness` 会把组装好的 `node_modules` 里「名字像开发产物」的目录（`test` / `docs` / `doc` / `example` …）**整目录删除**，用来缩小安装包。这条规则按名字判定是错的：`doc` 在某些包里恰好是**运行时路径**。
+
+2026-09-11 定位的真实事故：`yaml/dist/doc/` 被整个删掉，而那里装的是 `directives.js` / `Document.js` 等运行时模块，于是 Harness 一启动就崩：
+
+```
+Harness 出现未处理的 Promise 拒绝：Error: Cannot find module '../doc/directives.js'
+```
+
+这个缺陷**没有任何静态检查能发现**——打包、签名、安装、`tauri build` 全部成功，只有真正启动才报错，也就是「装得上、起不来」。它能存活这么久，是因为 CI 直到 2026-09-10 才加「真实资源树 L1 烟雾」，而那条烟雾当时又被更早的红灯连续挡住。
+
+规则已抽到 [`scripts/prune-harness-deps.mjs`](scripts/prune-harness-deps.mjs)，判据改为**目录内是否含运行时模块**（`.js`/`.cjs`/`.mjs`/`.node`/`.wasm`/`.json`）：命中名字只是必要条件，含运行时模块时**只递归进去删文件，绝不整目录删除**。`npm run verify:prune` 的自测带**可伪证性检查**——把旧判据作用于同一棵树必须复现出「`dist/doc` 被删」，否则自测本身失效。
+
+实测（真实 `yaml` 包，203 → 153 个文件）：`dist/doc/directives.js`、`Document.js` 存活，同目录 5 个 `.d.ts` 仍被删除；整个 staging 内有 **42 个**这类「名字像开发产物但含运行时模块」的目录，旧判据会全部误删。取舍明确：**误删只会得到一个起不来的包，少删只是少省一点体积**，所以判据一律偏向「宁可不删」。
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)

@@ -18,6 +18,7 @@
     "prepare:harness": "node scripts/prepare-harness.mjs",
     "prepare:harness:strict": "node scripts/prepare-harness.mjs --force --strict",
     "verify:patches": "node scripts/patch-layers.mjs --self-test",
+    "verify:prune": "node scripts/prune-harness-deps.mjs --self-test",
     "verify:ipc-surface": "node scripts/verify-ipc-surface.mjs",
     "verify:shell-pages": "node scripts/verify-shell-pages.mjs",
     "verify:target": "node scripts/verify-target.mjs",

@@ -94,6 +94,7 @@ jobs:
       - name: Fast static gates
         run: |
           npm run verify:patches
+          npm run verify:prune
           npm run verify:ipc-surface
           npm run verify:shell-pages
           npm run verify:harness-inject
