@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-contracts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "regex",
  "serde",
@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "dsh-contracts",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dsh-contracts",
  "libc",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-host-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "dsh-host",

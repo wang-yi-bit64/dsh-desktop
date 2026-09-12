@@ -7,6 +7,28 @@
 
 <!-- changelog-entries -->
 
+## [0.2.0] - 2026-09-12
+
+### ✨ 新功能
+
+- **guards**: 新增风险哨兵、宣称纪律守卫与上游预检工具 ([949c0dd](https://github.com/wang-yi-bit64/dsh-desktop/commit/949c0dd97735206d827d6eb6e6111a1ec145f75c))
+
+### 🐛 修复
+
+- **version**: 修正 --commit 下 CHANGELOG 静默不生成 ([ee136e4](https://github.com/wang-yi-bit64/dsh-desktop/commit/ee136e4a73274c3c5dc9fd04c943bc976e4ca2e5))
+
+### 📝 文档
+
+- **plan**: 新增长期路线图与加固差异化计划 ([ec3e65a](https://github.com/wang-yi-bit64/dsh-desktop/commit/ec3e65a515dde8ccf6c8a827db08e301842461cc))
+- **changelog**: 重新生成 0.1.0 段落，纳入 v0.1.0 发布前的修复提交 ([96ad2ca](https://github.com/wang-yi-bit64/dsh-desktop/commit/96ad2cae25ee44e8c278687e0d4cf8c5db74e2f9))
+
+### 🔧 CI
+
+- **workflows**: 冒烟测试改为手动触发，日常提交不再跑 CI ([9f8e0f4](https://github.com/wang-yi-bit64/dsh-desktop/commit/9f8e0f462e87cccb90419a9ee535eef7e1ea8681))
+
+### 🧹 其他
+
+- **skills**: 安装项目级 agent skills（10 项）并入库技能实体 ([d7e12ed](https://github.com/wang-yi-bit64/dsh-desktop/commit/d7e12ed7d9890500c63e12382b3bc66eacc545b2))
 ## [0.1.0] - 2026-09-11
 
 ### ✨ 新功能
