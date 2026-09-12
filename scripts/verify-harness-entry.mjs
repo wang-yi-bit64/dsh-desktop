@@ -71,10 +71,19 @@ export function auditEntry(text) {
   const callsRunCli = /\.\s*runCli\s*\(\s*\)/.test(src)
   // E3：仍用 pathToFileURL(dshEntryPath) 动态加载上游 CLI。
   const dynamicLoad = /import\s*\(\s*pathToFileURL\s*\(\s*dshEntryPath\s*\)/.test(src)
-  // E4：macOS 父死看门狗（R-7 的可移植补法）。判据取两处特征同时出现：
-  // 平台判断 + `process.ppid` 轮询。
-  const watchdog =
-    /process\.platform\s*===\s*['"]darwin['"]/.test(src) && /process\.ppid/.test(src)
+  // E4：macOS 父死看门狗（R-7 的可移植补法）。三条特征同时具备才算通过：
+  //   ① 平台判断（darwin / 强制开关）；② 用 `process.ppid` 拿到被监视的父 pid；
+  //   ③ 轮询定时器**没有 unref**——unref 的定时器在事件循环闲置时不会触发，
+  //      而 Harness 大部分时间正是闲置的。这是真机 CI 上第一版失效的原因，
+  //      必须钉住（否则又是一个「本地看着有、真机不生效」的静默缺陷）。
+  const hasPlatformGate =
+    /process\.platform\s*===\s*['"]darwin['"]/.test(src) ||
+    /DSH_PARENT_DEATH_WATCHDOG/.test(src)
+  const readsPpid = /process\.ppid/.test(src)
+  const usesSetInterval = /setInterval\s*\(/.test(src)
+  // 取看门狗那一行的 unref 使用：若整份文件里 `watchdog.unref()` 存在则视为误用。
+  const wrongUnref = /\bwatchdog\.unref\s*\(\s*\)/.test(src)
+  const watchdog = hasPlatformGate && readsPpid && usesSetInterval && !wrongUnref
 
   const missing = []
   if (!capturesImport) missing.push('E1 入口未接住 import 的返回值（无法访问导出的 runCli）')
@@ -86,10 +95,14 @@ export function auditEntry(text) {
   }
   if (!dynamicLoad) missing.push('E3 未以 `import(pathToFileURL(dshEntryPath))` 加载上游 CLI')
   if (!watchdog) {
-    missing.push(
-      'E4 缺少 macOS 父死看门狗（R-7：macOS 无 PR_SET_PDEATHSIG 等价物，' +
-        '宿主被杀后 Harness 会成为孤儿；看门狗轮询 process.ppid 补上这一环）'
-    )
+    const why = !hasPlatformGate
+      ? '缺平台判断'
+      : !readsPpid
+        ? '未读取 process.ppid'
+        : !usesSetInterval
+          ? '无轮询定时器'
+          : '看门狗被 unref()——闲置时不会触发，真机上等于没有'
+    missing.push(`E4 macOS 父死看门狗不可用（${why}；R-7：macOS 无 PR_SET_PDEATHSIG 等价物）`)
   }
 
   return { e1: capturesImport, e2: checksRunCli && callsRunCli, e3: dynamicLoad, e4: watchdog, missing }
@@ -128,19 +141,27 @@ if (!dshEntryPath) { process.exitCode = 1 } else {
     process.stdout.write('[harness-node] DSH entry loaded\\n')
   } catch (error) { process.exitCode = 1 }
 }
-if (process.platform === 'darwin' && process.ppid !== 1) {
-  const initialPpid = process.ppid
-  const watchdog = setInterval(() => { if (process.ppid !== initialPpid) process.kill(process.pid, 'SIGTERM') }, 500)
-  watchdog.unref()
+if (process.platform === 'darwin') {
+  const parentPid = process.ppid
+  const parentAlive = () => { try { process.kill(parentPid, 0); return true } catch (e) { return e && e.code === 'EPERM' } }
+  if (parentAlive()) {
+    const watchdog = setInterval(() => { if (!parentAlive()) process.kill(process.pid, 'SIGTERM') }, 250)
+  }
 }`
   const fixedResult = auditEntry(fixed)
   check('好夹具 → 无缺失', fixedResult.missing.length === 0)
   check('好夹具 → e4=true', fixedResult.e4 === true)
 
-  // 可证伪性（E4）：去掉看门狗，必须报 E4。
+  // 可证伪性（E4-a）：去掉看门狗，必须报 E4。
   const noWatchdog = fixed.replace(/if \(process\.platform === 'darwin'[\s\S]*$/, '')
-  const noWatchdogResult = auditEntry(noWatchdog)
-  check('无看门狗夹具 → E4 报缺失', noWatchdogResult.missing.some((m) => m.startsWith('E4')))
+  check('无看门狗夹具 → E4 报缺失', auditEntry(noWatchdog).missing.some((m) => m.startsWith('E4')))
+
+  // 可证伪性（E4-b）：看门狗被 unref（真机上失效的确切原因，必须报 E4）。
+  const unrefWatchdog = fixed.replace('}, 250)\n  }\n}', '}, 250)\n    watchdog.unref()\n  }\n}')
+  check(
+    '看门狗被 unref → E4 报缺失',
+    auditEntry(unrefWatchdog).missing.some((m) => m.startsWith('E4') && m.includes('unref'))
+  )
 
   if (failed > 0) {
     console.error(`verify-harness-entry self-test: ${failed} 项失败`)

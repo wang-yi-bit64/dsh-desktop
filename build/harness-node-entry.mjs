@@ -90,7 +90,12 @@ if (process.platform === 'win32') {
 //   · 「父进程从一开始就不存在」（kill 立即 ESRCH，例如 launchd 直拉）则不启用；
 //   · 间隔 500ms；用普通定时器而非 unref（unref 的定时器在事件循环闲着时可能
 //     不触发，而 Harness 大部分时间正是闲着的——这是第一版没生效的原因）。
-if (process.platform === 'darwin') {
+//
+// `DSH_PARENT_DEATH_WATCHDOG=1` 可在非 darwin 平台强制启用：本机（Windows）没有
+// macOS 可跑，这个开关让看门狗的**行为**能被本地实测（scripts/verify-harness-entry.mjs
+// 的 --self-test 之外，另有一条真跑用例），而不必每轮都靠三平台 CI 试错。
+const watchdogForced = process.env.DSH_PARENT_DEATH_WATCHDOG === '1'
+if (process.platform === 'darwin' || watchdogForced) {
   const parentPid = process.ppid
 
   /** 父进程是否仍存活；EPERM 表示存在但无权限（仍算存活）。 */
@@ -107,6 +112,11 @@ if (process.platform === 'darwin') {
   if (parentAlive()) {
     // 250ms：故障注入在杀掉宿主后 ~1.2s 就检查孤儿，需留出「探测 → SIGTERM →
     // 进程真正消失」的余量。
+    //
+    // ⚠️ 这里**刻意不 unref()**：unref 的定时器在事件循环闲置时不会被触发，
+    // 而 Harness 大部分时间正是闲置的——第一版 unref 后看门狗在 macOS CI 上
+    // 从未运行（日志里连一行痕迹都没有）。代价是它会让进程保持存活；这是可接受
+    // 的，因为本进程的职责就是活着服务，父死时看门狗会自我了断。
     const watchdog = setInterval(() => {
       if (parentAlive()) return
       clearInterval(watchdog)
@@ -117,8 +127,6 @@ if (process.platform === 'darwin') {
       process.kill(process.pid, 'SIGTERM')
       setTimeout(() => process.exit(0), 1500)
     }, 250)
-    // 看门狗本身不应阻止进程退出。
-    watchdog.unref()
   }
 }
 
