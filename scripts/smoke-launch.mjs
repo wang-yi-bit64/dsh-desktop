@@ -25,7 +25,8 @@
  *
  * 前置：
  *   L1 → `cargo build -p dsh-host-cli`（脚本直接用 target/debug 下的二进制）
- *   L2 → `npm run tauri build`（脚本查找 src-tauri/target/release 下的二进制）
+ *   L2 → `npm run tauri build`（脚本查找 `target/release/` 下的二进制——
+ *         Cargo **workspace** 的 target 在仓库根，不在 `src-tauri/` 下）
  *
  * 退出码：0 全通过（含预期 SKIP）；1 有断言失败；2 前置缺失（CLI 二进制未构建）。
  */
@@ -53,9 +54,12 @@ const cliBinary = join(
   'debug',
   isWindows ? 'dsh-host-cli.exe' : 'dsh-host-cli'
 )
+// Cargo **workspace** 的 target 落在仓库根（见根 `.gitignore`：`/target/`），
+// 不在 `src-tauri/target/`。此前这里写成 `src-tauri/target/release/...`，于是
+// scope=full 打完包后 L2 仍报「缺少壳二进制」——而打包其实成功了（产物在
+// `target/release/`）。2026-09-12 把 L2 由软门禁转为硬门禁后当场暴露。
 const shellBinary = join(
   projectRoot,
-  'src-tauri',
   'target',
   'release',
   isWindows ? 'dsh-desktop.exe' : 'dsh-desktop'
@@ -525,7 +529,9 @@ async function runLevel2() {
   }
   record('L2.0 壳二进制存在', true, shellBinary)
 
-  if (!existsSync(join(projectRoot, 'src-tauri', 'target', 'release', 'resources'))) {
+  // 资源同样落在 workspace 根的 `target/release/resources`（tauri build 的 bundle
+  // 步骤把 `src-tauri/resources/` 拷到这里），不是 `src-tauri/target/release/resources`。
+  if (!existsSync(join(projectRoot, 'target', 'release', 'resources'))) {
     skip(
       'L2.1 GUI 启动',
       'target/release/resources 不存在；tauri build 正常时会由 bundle 步骤铺好，此处不猜测布局'

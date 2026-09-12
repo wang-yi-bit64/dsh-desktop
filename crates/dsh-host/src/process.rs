@@ -14,7 +14,7 @@
 //! |---|---|
 //! | Windows | `CREATE_NEW_PROCESS_GROUP` + **Job Object**（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`） |
 //! | Linux | `process_group(0)` + `prctl(PR_SET_PDEATHSIG, SIGTERM)` |
-//! | macOS | `process_group(0)`（无 PDEATHSIG 等价物，见风险 R-7）+ 启动时陈旧进程清扫 |
+//! | macOS | `process_group(0)` + **Node 入口侧父死看门狗**（入口轮询 `process.ppid`，见 `build/harness-node-entry.mjs`）+ 启动时陈旧进程清扫 |
 //!
 //! 另外提供 pidfile 机制：启动时若发现上一次的进程仍存活且**镜像路径落在
 //! 本应用资源目录内**，先 SIGTERM / `taskkill /T /F` 再派生，兜住 macOS 与
@@ -274,7 +274,10 @@ fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
 
 #[cfg(target_os = "macos")]
 fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
-    // macOS 没有 PDEATHSIG 等价物（风险 R-7）：只能靠进程组 + 启动清扫。
+    // macOS 没有 PDEATHSIG 等价物（风险 R-7）：这里只能挂进程组，真正兜底的是
+    // **Node 入口侧的父死看门狗**（`build/harness-node-entry.mjs`：父进程消失后
+    // `process.ppid` 变为 1，看门狗据此自我了断）。2026-09-12 故障注入转为三平台
+    // 硬门禁后，本平台原本的 A/B 孤儿断言变红，该看门狗即为闭合此缺口的补法。
     command.process_group(0);
     Ok(())
 }

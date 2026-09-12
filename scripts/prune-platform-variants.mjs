@@ -57,7 +57,7 @@ import { pruneNodeModules } from './prune-harness-deps.mjs'
  * 能出现在「平台选择器」目录名前导位置的平台 / libc token。
  * 命中这只是必要条件——还要 `(insidePrebuilds || oursIsHere)` 才删。
  */
-const PLATFORM_TOKENS = /^(darwin|linux|linuxmusl|win32|android|freebsd|musl)$/
+const PLATFORM_TOKENS = /^(darwin|linux|linuxmusl|win32|android|freebsd|musl|glibc)$/
 
 /**
  * 计算目标平台「我们自己」的变体目录名集合。
@@ -67,18 +67,27 @@ const PLATFORM_TOKENS = /^(darwin|linux|linuxmusl|win32|android|freebsd|musl)$/
  * glibc Linux 产物**，因此 Linux 目标的 `libc` token 取 `linux`。若将来新增 musl
  * 目标，必须在此把 libc 判成 `musl`，否则会把目标平台唯一的构建删掉。
  *
+ * 另有第三种布局：**裸 libc 名**直接做目录选择器（如 0.1.5-rc.1 引入的
+ * `@deepseek-ai/node-addon-system-linux-x64/bin/glibc/` 与 `bin/musl/`）。因此
+ * Linux 目标的保留名必须包含 `glibc`——否则「同层有我们的变体」这道安全丝
+ * （`oursIsHere`）认不出 `bin/glibc`，就会放过同层的 `bin/musl`，linuxdeploy
+ * 遂在 musl 的 `system.node` 上 `Failed to run ldd`（2026-09-12 打包失败的原因）。
+ *
  * @param {{platform: string, arch: string}} target 打包目标（Node 命名法）
  * @returns {Set<string>} 需要保留的目录名（`-` 与 `_` 两种分隔都收录）
  */
 export function keepNamesFor(target) {
   const { platform, arch } = target
   const libc = platform === 'linux' ? 'linux' : platform
-  return new Set([
+  const names = [
     `${platform}-${arch}`,
     `${platform}_${arch}`,
     `${libc}-${arch}`,
     `${libc}_${arch}`
-  ])
+  ]
+  // 裸 libc 目录名：我们的 Linux 产物是 glibc 链接的。
+  if (platform === 'linux') names.push('glibc')
+  return new Set(names)
 }
 
 /**
@@ -169,8 +178,14 @@ function makeFixture(root) {
   // prebuilds 之外、但同层有我们自己的变体：允许按名删邻居
   put('demo-native/linux-x64/a.node')
   put('demo-native/linux-arm64/a.node')
+  // 裸 libc 名做目录选择器（0.1.5-rc.1 的 @deepseek-ai/node-addon-system-linux-x64
+  // 布局；2026-09-12 linuxdeploy 打包失败的现场）
+  put('@deepseek-ai/node-addon-system-linux-x64/bin/glibc/system.node')
+  put('@deepseek-ai/node-addon-system-linux-x64/bin/musl/system.node')
   // prebuilds 之外且**没有**同平台邻居：保险丝，必须原样保留
   put('lonely/darwin-arm64/keep.node')
+  // 只有 musl、没有 glibc 邻居的孤独 libc 变体：安全丝必须挡住（保留）
+  put('lonely-libc/bin/musl/system.node')
   // 与平台无关的运行时模块：绝不能被这套判据碰到
   put('yaml/dist/doc/directives.js')
   put('demo/package.json')
@@ -221,6 +236,22 @@ export function selfTest() {
     check(exists('lonely/darwin-arm64/keep.node'), '变体剪枝：没有同平台邻居的孤独变体被误删（保险丝失效）')
     check(exists('yaml/dist/doc/directives.js'), '变体剪枝：误删了与平台无关的运行时模块')
     check(exists('demo/package.json'), '变体剪枝：误删了 package.json')
+
+    // 4b) 裸 libc 布局（bin/glibc + bin/musl）：musl 必须删、glibc 必须留。
+    check(
+      !exists('@deepseek-ai/node-addon-system-linux-x64/bin/musl/system.node'),
+      '变体剪枝：裸 libc 布局的 bin/musl 未被删除（0.1.5-rc.1 的 linuxdeploy 打包事故未修）'
+    )
+    check(
+      exists('@deepseek-ai/node-addon-system-linux-x64/bin/glibc/system.node'),
+      '变体剪枝：裸 libc 布局的 bin/glibc 被误删（会删掉目标平台唯一的构建）'
+    )
+    // 安全丝：没有 glibc 邻居的孤独 musl 目录必须保留——证明删除是「有邻居」驱动的，
+    // 不是见到 musl 就删。
+    check(
+      exists('lonely-libc/bin/musl/system.node'),
+      '变体剪枝：没有同 libc 邻居的孤独 musl 变体被误删（安全丝对裸 libc 布局失效）'
+    )
 
     // 5) 目标参数化：换成 darwin/arm64，保留集合必须整体翻转。
     const macRoot = mkdtempSync(join(tmpdir(), 'variant-selftest-mac-'))

@@ -221,7 +221,7 @@ api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
 3. **孤儿进程防护与进程管理（INV-3）**：
    - Windows 采用 Win32 `JobObject`（`KILL_ON_JOB_CLOSE`）。
    - Linux 采用 `PR_SET_PDEATHSIG` + 进程组。
-   - macOS 采用进程组 + 退出扫描清理。
+   - macOS 采用进程组 + **Node 入口侧父死看门狗**（入口轮询 `process.ppid`，见 `build/harness-node-entry.mjs` 与 `verify-harness-entry` 的 E4）+ 启动时退出扫描清理。
    - 子进程必须保证在主程序异常崩溃或退出时不残留。
 4. **生命周期监督与自愈机制（Supervisor）**：
    - 内置状态机（Stopped -> Starting -> Healthy -> Degraded -> Crashed）。

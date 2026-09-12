@@ -69,6 +69,43 @@ if (process.platform === 'win32') {
   process.stdout.write('[harness-node] windowsHide enforcement enabled for child processes\n')
 }
 
+// Parent-death watchdog — macOS only.
+//
+// 各平台的「父死子亡」手段（见 crates/dsh-host/src/process.rs）：
+//   · Windows：Job Object（kernel 级）
+//   · Linux：prctl(PR_SET_PDEATHSIG)
+//   · macOS：**没有等价物**（风险 R-7）——此前只剩「进程组 + 下次启动清扫」
+//
+// 后果：宿主被 SIGTERM（场景 A）或被强杀（场景 B）后，Harness 仍会成为孤儿，
+// 直到**下一次**冷启动才被陈旧 pidfile 清扫掉。2026-09-12 把故障注入转为
+// 三平台硬门禁后，macOS 的 A/B 两项当场变红，暴露了这个长期缺口。
+//
+// 可移植的补法：父进程一旦死亡，本进程会被 reparent 到 launchd，`process.ppid`
+// 变为 1。轮询它能以极小代价拿到 PDEATHSIG 的等价效果，而这是**我们自己的**
+// 入口包装器，不必等上游。
+//
+// 保守约束（避免误杀正常运行的 Harness）：
+//   · 只在 macOS 启用（其余平台已有内核级机制，不需要也不应加这层）；
+//   · 只在「启动时父进程不是 1」（即确实是被宿主派生）时启用——否则在
+//     launchd 直接拉起等场景下会立刻自杀；
+//   · 间隔 500ms 且 `unref()`，不阻止事件循环退出。
+if (process.platform === 'darwin' && process.ppid !== 1) {
+  const initialPpid = process.ppid
+  const watchdog = setInterval(() => {
+    if (process.ppid !== initialPpid || process.ppid === 1) {
+      process.stderr.write(
+        '[harness-node] parent process exited; shutting down (macOS parent-death watchdog)\n'
+      )
+      clearInterval(watchdog)
+      // 用 SIGTERM 走正常关闭路径，让 Harness 有机会落地状态。
+      process.kill(process.pid, 'SIGTERM')
+      // 兜底：若 Harness 忽略 SIGTERM，2 秒后强制退出。
+      setTimeout(() => process.exit(0), 2000).unref()
+    }
+  }, 500)
+  watchdog.unref()
+}
+
 // Materialize DSH Desktop's generation projection before any profile module
 // loads. Market operations run inside a live Harness, so they deliberately
 // publish only the manifest and defer both the node_modules links and

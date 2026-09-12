@@ -30,6 +30,7 @@
  * | E1 | 入口持有 import 结果并使用（不再丢弃返回值） | 错误 |
  * | E2 | 入口含 `runCli` 兼容调用（`typeof … runCli === 'function'` + 调用） | 错误 |
  * | E3 | 入口仍以动态 `import(pathToFileURL(dshEntryPath))` 加载 CLI | 错误 |
+ * | E4 | macOS 父死看门狗仍在（R-7 的 PDEATHSIG 等价物，见 build/harness-node-entry.mjs） | 错误 |
  *
  * ## 可证伪性
  *
@@ -70,6 +71,10 @@ export function auditEntry(text) {
   const callsRunCli = /\.\s*runCli\s*\(\s*\)/.test(src)
   // E3：仍用 pathToFileURL(dshEntryPath) 动态加载上游 CLI。
   const dynamicLoad = /import\s*\(\s*pathToFileURL\s*\(\s*dshEntryPath\s*\)/.test(src)
+  // E4：macOS 父死看门狗（R-7 的可移植补法）。判据取两处特征同时出现：
+  // 平台判断 + `process.ppid` 轮询。
+  const watchdog =
+    /process\.platform\s*===\s*['"]darwin['"]/.test(src) && /process\.ppid/.test(src)
 
   const missing = []
   if (!capturesImport) missing.push('E1 入口未接住 import 的返回值（无法访问导出的 runCli）')
@@ -80,8 +85,14 @@ export function auditEntry(text) {
     )
   }
   if (!dynamicLoad) missing.push('E3 未以 `import(pathToFileURL(dshEntryPath))` 加载上游 CLI')
+  if (!watchdog) {
+    missing.push(
+      'E4 缺少 macOS 父死看门狗（R-7：macOS 无 PR_SET_PDEATHSIG 等价物，' +
+        '宿主被杀后 Harness 会成为孤儿；看门狗轮询 process.ppid 补上这一环）'
+    )
+  }
 
-  return { e1: capturesImport, e2: checksRunCli && callsRunCli, e3: dynamicLoad, missing }
+  return { e1: capturesImport, e2: checksRunCli && callsRunCli, e3: dynamicLoad, e4: watchdog, missing }
 }
 
 /** 自检：可证伪性——修复前的入口片段必须报 E2。 */
@@ -107,8 +118,7 @@ if (!dshEntryPath) { process.exitCode = 1 } else {
   const brokenResult = auditEntry(broken)
   check('坏夹具 → E2 报缺失', brokenResult.missing.some((m) => m.startsWith('E2')))
   check('坏夹具 → e2=false', brokenResult.e2 === false)
-
-  // 好夹具：修复后的写法
+  // 好夹具：修复后的写法（含 macOS 父死看门狗）
   const fixed = `
 if (!dshEntryPath) { process.exitCode = 1 } else {
   process.argv = [process.execPath, dshEntryPath, ...dshArguments]
@@ -117,9 +127,20 @@ if (!dshEntryPath) { process.exitCode = 1 } else {
     if (typeof entry?.runCli === 'function') { await entry.runCli() }
     process.stdout.write('[harness-node] DSH entry loaded\\n')
   } catch (error) { process.exitCode = 1 }
+}
+if (process.platform === 'darwin' && process.ppid !== 1) {
+  const initialPpid = process.ppid
+  const watchdog = setInterval(() => { if (process.ppid !== initialPpid) process.kill(process.pid, 'SIGTERM') }, 500)
+  watchdog.unref()
 }`
   const fixedResult = auditEntry(fixed)
   check('好夹具 → 无缺失', fixedResult.missing.length === 0)
+  check('好夹具 → e4=true', fixedResult.e4 === true)
+
+  // 可证伪性（E4）：去掉看门狗，必须报 E4。
+  const noWatchdog = fixed.replace(/if \(process\.platform === 'darwin'[\s\S]*$/, '')
+  const noWatchdogResult = auditEntry(noWatchdog)
+  check('无看门狗夹具 → E4 报缺失', noWatchdogResult.missing.some((m) => m.startsWith('E4')))
 
   if (failed > 0) {
     console.error(`verify-harness-entry self-test: ${failed} 项失败`)
@@ -143,6 +164,7 @@ function run() {
   console.log(`  · E1 接住 import 返回值 : ${result.e1 ? 'ok' : '✗'}`)
   console.log(`  · E2 runCli 兼容调用    : ${result.e2 ? 'ok' : '✗'}`)
   console.log(`  · E3 动态加载上游 CLI   : ${result.e3 ? 'ok' : '✗'}`)
+  console.log(`  · E4 macOS 父死看门狗   : ${result.e4 ? 'ok' : '✗'}`)
   console.log('')
   if (result.missing.length === 0) {
     console.log('  ✅ 入口与上游 CLI 的调用约定兼容')
