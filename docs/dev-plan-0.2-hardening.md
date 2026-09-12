@@ -63,7 +63,7 @@
 | 0.2-B | B2 开机自启动（默认关） | ❌ 未开工 | `src-tauri/Cargo.toml` 无 `tauri-plugin-autostart` |
 | 0.2-B | B3 Safe Mode 界面横幅 | 🕓 计划中（前置条件已满足，待开工） | 注入机制 `harness_ui.rs::INJECT_SCRIPT` + `verify:harness-inject`（19 项断言 + 可证伪检查）已落地；对应 `AGENTS.md` §7.2「计划中」行 |
 | 0.2-B | B4 插件禁用语义**重新核验** | ❌ 未开工 | 批次 C 裁决记录在 `dev-plan-disconnected-points.md` §3/§4 决策点 4 |
-| 0.2-C | C1 补丁面审计（上游化候选标记） | ❌ 未开工 | `patches/` 现存 18 个补丁，无上游化标记 |
+| 0.2-C | C1 补丁面审计（上游化候选标记） | ❌ 未开工 | `patches/` 现存 14 个补丁（0.1.5-rc.1 升级后），无上游化标记 |
 | 0.2-C | C2 首个上游 PR | ❌ 未开工 | 无 |
 | 0.2-C | C3 上游升级演练（实测适配成本） | ❌ 未开工 | `dsh-upgrade-checklist.md` 无演练记录节（与 H0 批次 I2「实跑升级清单」是同一件事，**并入时合并、勿重复立项**） |
 | 0.2-D | D1 Discussions + Issue 模板 | ❌ 未开工 | 仓库无 Discussions / 模板 |
@@ -210,7 +210,7 @@
 
 ### C1 补丁面审计
 
-- **做法**：逐条审 `patches/` 现存 18 个补丁，在
+- **做法**：逐条审 `patches/` 现存 14 个补丁，在
   [`patches/LAYERS.md`](../patches/LAYERS.md) 增补一列「上游化候选」：
   - **可上游化**：修复的是上游缺陷、对所有用户有价值（如纯 bug fix 类）；
   - **品牌层**：永远本地（`brand` 层天然如此）；

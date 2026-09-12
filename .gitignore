@@ -34,3 +34,6 @@ Thumbs.db
 
 # Local machine-specific linker/toolchain config (see .cargo/config.toml header)
 .cargo/
+
+# 临时升级工作区（0.1.5-rc.1 移植；完成后删除）
+.upgrade-scratch/

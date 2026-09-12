@@ -1,8 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
-index 6f4c713..dc48f9d 100644
 --- a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 +++ b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
-@@ -266,10 +266,25 @@ var EntryTree = class EntryTree {
+@@ -276,10 +276,25 @@
  				/* @vite-ignore */
  				new URL(name, this.ctx.baseUrl).href
  			));

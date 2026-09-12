@@ -1,8 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
-index 78ac760..514d6d1 100644
 --- a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
-@@ -99,7 +99,30 @@ window.__ModuleLoader__.load({
+@@ -99,7 +99,30 @@
  			deleteTitle: "Delete this preset?",
  			deleteDescription: "The preset directory is deleted. Sessions already running on it keep working; new sessions cannot select it.",
  			deleteConfirm: "Delete",
@@ -34,7 +33,7 @@ index 78ac760..514d6d1 100644
  		};
  		/** Simplified Chinese copy. */
  		const zh = {
-@@ -153,6 +176,29 @@ window.__ModuleLoader__.load({
+@@ -153,7 +176,30 @@
  			deleteTitle: "删除该预设？",
  			deleteDescription: "预设目录将被删除。已在其上运行的会话不受影响；新会话将无法再选择它。",
  			deleteConfirm: "删除",
@@ -65,16 +64,22 @@ index 78ac760..514d6d1 100644
 +			exportFailed: "无法导出该预设。"
  		};
  		//#endregion
-@@ -212,4 +257,4 @@ window.__ModuleLoader__.load({
--		const css$1 = ".YgMYBq_seat{max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;cursor:pointer;background:0 0;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;overflow:hidden}.YgMYBq_seat:not(:disabled):hover,.YgMYBq_seat[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.YgMYBq_seat:disabled{cursor:default;color:var(--dsw-alias-label-quaternary)}.YgMYBq_seatIcon{color:var(--dsw-alias-label-primary);flex:none}.YgMYBq_introIcon{animation:.15s cubic-bezier(.16,1,.3,1) both YgMYBq_seat-icon-in}@keyframes YgMYBq_seat-icon-in{0%{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}.YgMYBq_introText{white-space:pre;display:inline-block}.YgMYBq_introChar{white-space:pre;opacity:0;animation:.4s ease-out forwards YgMYBq_seat-char-in;display:inline-block}@keyframes YgMYBq_seat-char-in{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.YgMYBq_introIcon,.YgMYBq_introChar{opacity:1;animation:none}}.YgMYBq_chevron{color:var(--dsw-alias-label-caption);flex:none}.YgMYBq_item{flex-direction:column;gap:2px;max-width:280px;display:flex}.YgMYBq_itemName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.YgMYBq_itemDesc{color:var(--dsw-alias-label-caption);white-space:normal;font-size:12px;line-height:16px}";
-+		const css$1 = ".YgMYBq_seat{max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;cursor:pointer;background:0 0;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex;overflow:hidden}.YgMYBq_seat:not(:disabled):hover,.YgMYBq_seat[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.YgMYBq_seat:disabled{cursor:default;color:var(--dsw-alias-label-quaternary)}.YgMYBq_seatIcon{color:var(--dsw-alias-label-primary);flex:none}.YgMYBq_introIcon{animation:.15s cubic-bezier(.16,1,.3,1) both YgMYBq_seat-icon-in}@keyframes YgMYBq_seat-icon-in{0%{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}.YgMYBq_introText{white-space:pre;display:inline-block}.YgMYBq_introChar{white-space:pre;opacity:0;animation:.4s ease-out forwards YgMYBq_seat-char-in;display:inline-block}@keyframes YgMYBq_seat-char-in{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.YgMYBq_searchShell,.YgMYBq_item,.YgMYBq_awesome{transition:none}}.YgMYBq_chevron{color:var(--dsw-alias-label-caption);flex:none}.YgMYBq_picker{min-width:360px}.YgMYBq_searchShell{box-sizing:border-box;width:100%;height:36px;color:var(--dsw-alias-label-caption);background:var(--dsw-alias-bg-module-platform);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;align-items:center;gap:8px;padding:0 10px;display:flex;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}.YgMYBq_searchShell:focus-within{background:var(--dsw-alias-bg-base);border-color:#4d6bfe;box-shadow:0 0 0 3px #4d6bfe1f}.YgMYBq_searchIcon{flex:none}.YgMYBq_search{min-width:0;width:100%;height:100%;color:var(--dsw-alias-label-primary);background:0 0;border:0;outline:0;padding:0;font:inherit}.YgMYBq_search::-webkit-search-cancel-button{opacity:.55}.YgMYBq_groupLabel{width:100%;color:var(--dsw-alias-label-caption);text-transform:none;letter-spacing:.02em;border-top:1px solid var(--dsw-alias-border-l3);padding-top:10px;font-size:11px;font-weight:500;line-height:16px;display:block}.YgMYBq_item{box-sizing:border-box;flex-direction:column;gap:1px;width:336px;min-width:0;border-radius:9px;padding:7px 10px;display:flex;transition:background .12s ease,transform .12s ease}.YgMYBq_item:hover{background:var(--dsw-alias-interactive-bg-hover)}.YgMYBq_selectedItem{background:#4d6bfe12}.YgMYBq_selectedItem:hover{background:#4d6bfe1c}.YgMYBq_itemName{color:var(--dsw-alias-label-primary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:13px;font-weight:500;line-height:19px}.YgMYBq_itemDesc{color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:12px;line-height:17px}.YgMYBq_empty{color:var(--dsw-alias-label-caption);text-align:center;padding:20px 8px;display:block}.YgMYBq_awesome{box-sizing:border-box;width:336px;color:#3154df;background:#4d6bfe0d;border-radius:9px;align-items:center;gap:8px;padding:9px 10px;font-weight:500;display:flex;transition:background .12s ease}.YgMYBq_awesome:hover{background:#4d6bfe18}.YgMYBq_awesomeIcon{flex:none}.YgMYBq_awesomeText{flex:1}.YgMYBq_awesomeArrow{opacity:.6;font-size:15px}[role=menu]:has(.YgMYBq_searchShell){width:376px!important;max-width:calc(100vw - 24px);max-height:min(360px,calc(100vh - 24px))!important;border-radius:14px!important;box-shadow:0 18px 46px #0000001f,0 3px 10px #00000012!important;overflow:hidden}[role=menu]:has(.YgMYBq_searchShell)>[role=presentation]:first-child{min-height:0;padding:8px!important;overflow-y:auto!important}[role=menu]:has(.YgMYBq_searchShell) [role=menuitem]{border-radius:9px!important;margin:1px 0!important;padding:0!important}[role=menu]:has(.YgMYBq_searchShell)>[role=presentation]:last-child{flex:none;padding:8px!important}";
+ 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-agent-preset/src/client/AgentPresetLabel.module.css.mjs
+@@ -209,7 +255,7 @@
+ 		}
+ 		//#endregion
+ 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-agent-preset/src/client/AgentPresetSeat.module.css.mjs
+-		const css$1 = ".cubgiG_menuAnchor{min-width:54px;max-width:100%}.cubgiG_seat{min-width:0;max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary);white-space:nowrap;cursor:pointer;background:0 0;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex}.cubgiG_seat:not(:disabled):hover,.cubgiG_seat[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.cubgiG_seat:disabled{cursor:default;color:var(--dsw-alias-label-quaternary)}.cubgiG_seatIcon{color:var(--dsw-alias-label-primary);flex:none}.cubgiG_seatLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.cubgiG_introIcon{animation:.15s cubic-bezier(.16,1,.3,1) both cubgiG_seat-icon-in}@keyframes cubgiG_seat-icon-in{0%{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}.cubgiG_introText{white-space:pre;display:inline-block}.cubgiG_introChar{white-space:pre;opacity:0;animation:.4s ease-out forwards cubgiG_seat-char-in;display:inline-block}@keyframes cubgiG_seat-char-in{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.cubgiG_introIcon,.cubgiG_introChar{opacity:1;animation:none}}.cubgiG_chevron{color:var(--dsw-alias-label-caption);flex:none}.cubgiG_item{flex-direction:column;gap:2px;max-width:280px;display:flex}.cubgiG_itemName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.cubgiG_itemDesc{color:var(--dsw-alias-label-caption);white-space:normal;font-size:12px;line-height:16px}";
++		const css$1 = ".cubgiG_menuAnchor{min-width:54px;max-width:100%}.cubgiG_seat{min-width:0;max-width:min(100%,240px);min-height:28px;color:var(--dsw-alias-label-primary);white-space:nowrap;cursor:pointer;background:0 0;border:none;border-radius:16px;align-items:center;gap:4px;padding:0 8px;font-size:13px;font-weight:500;line-height:20px;display:inline-flex}.cubgiG_seat:not(:disabled):hover,.cubgiG_seat[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}.cubgiG_seat:disabled{cursor:default;color:var(--dsw-alias-label-quaternary)}.cubgiG_seatIcon{color:var(--dsw-alias-label-primary);flex:none}.cubgiG_seatLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.cubgiG_introIcon{animation:.15s cubic-bezier(.16,1,.3,1) both cubgiG_seat-icon-in}@keyframes cubgiG_seat-icon-in{0%{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}.cubgiG_introText{white-space:pre;display:inline-block}.cubgiG_introChar{white-space:pre;opacity:0;animation:.4s ease-out forwards cubgiG_seat-char-in;display:inline-block}@keyframes cubgiG_seat-char-in{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@media (prefers-reduced-motion:reduce){.cubgiG_introIcon,.cubgiG_introChar{opacity:1;animation:none}}.cubgiG_chevron{color:var(--dsw-alias-label-caption);flex:none}.cubgiG_item{flex-direction:column;gap:2px;max-width:280px;display:flex}.cubgiG_itemName{color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}.cubgiG_itemDesc{color:var(--dsw-alias-label-caption);white-space:normal;font-size:12px;line-height:16px}.YgMYBq_picker{min-width:360px}.YgMYBq_searchShell{box-sizing:border-box;width:100%;height:36px;color:var(--dsw-alias-label-caption);background:var(--dsw-alias-bg-module-platform);border:1px solid var(--dsw-alias-border-l2);border-radius:10px;align-items:center;gap:8px;padding:0 10px;display:flex;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}.YgMYBq_searchShell:focus-within{background:var(--dsw-alias-bg-base);border-color:#4d6bfe;box-shadow:0 0 0 3px #4d6bfe1f}.YgMYBq_searchIcon{flex:none}.YgMYBq_search{min-width:0;width:100%;height:100%;color:var(--dsw-alias-label-primary);background:0 0;border:0;outline:0;padding:0;font:inherit}.YgMYBq_search::-webkit-search-cancel-button{opacity:.55}.YgMYBq_groupLabel{width:100%;color:var(--dsw-alias-label-caption);text-transform:none;letter-spacing:.02em;border-top:1px solid var(--dsw-alias-border-l3);padding-top:10px;font-size:11px;font-weight:500;line-height:16px;display:block}.YgMYBq_item:hover{background:var(--dsw-alias-interactive-bg-hover)}.YgMYBq_selectedItem{background:#4d6bfe12}.YgMYBq_selectedItem:hover{background:#4d6bfe1c}.YgMYBq_empty{color:var(--dsw-alias-label-caption);text-align:center;padding:20px 8px;display:block}.YgMYBq_awesome{box-sizing:border-box;width:336px;color:#3154df;background:#4d6bfe0d;border-radius:9px;align-items:center;gap:8px;padding:9px 10px;font-weight:500;display:flex;transition:background .12s ease}.YgMYBq_awesome:hover{background:#4d6bfe18}.YgMYBq_awesomeIcon{flex:none}.YgMYBq_awesomeText{flex:1}.YgMYBq_awesomeArrow{opacity:.6;font-size:15px}[role=menu]:has(.YgMYBq_searchShell){width:376px!important;max-width:calc(100vw - 24px);max-height:min(360px,calc(100vh - 24px))!important;border-radius:14px!important;box-shadow:0 18px 46px #0000001f,0 3px 10px #00000012!important;overflow:hidden}[role=menu]:has(.YgMYBq_searchShell)>[role=presentation]:first-child{min-height:0;padding:8px!important;overflow-y:auto!important}[role=menu]:has(.YgMYBq_searchShell) [role=menuitem]{border-radius:9px!important;margin:1px 0!important;padding:0!important}[role=menu]:has(.YgMYBq_searchShell)>[role=presentation]:last-child{flex:none;padding:8px!important}";
  		const tagId$1 = "@deepseek-ai/dsh-client-ui-agent-preset/AgentPresetSeat.module.css";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
  			const tag = document.createElement("style");
-@@ -219,6 +265,17 @@ window.__ModuleLoader__.load({
- 			document.head.appendChild(tag);
- 		}
- 		var AgentPresetSeat_module_css_default = {
+@@ -231,7 +277,18 @@
+ 			"seat-char-in": "cubgiG_seat-char-in",
+ 			"seat-icon-in": "cubgiG_seat-icon-in",
+ 			"seatIcon": "cubgiG_seatIcon",
+-			"seatLabel": "cubgiG_seatLabel"
++			"seatLabel": "cubgiG_seatLabel",
 +			"awesome": "YgMYBq_awesome",
 +			"awesomeArrow": "YgMYBq_awesomeArrow",
 +			"awesomeIcon": "YgMYBq_awesomeIcon",
@@ -85,11 +90,11 @@ index 78ac760..514d6d1 100644
 +			"search": "YgMYBq_search",
 +			"searchIcon": "YgMYBq_searchIcon",
 +			"searchShell": "YgMYBq_searchShell",
-+			"selectedItem": "YgMYBq_selectedItem",
- 			"chevron": "YgMYBq_chevron",
- 			"introChar": "YgMYBq_introChar",
- 			"introIcon": "YgMYBq_introIcon",
-@@ -250,6 +307,8 @@ window.__ModuleLoader__.load({
++			"selectedItem": "YgMYBq_selectedItem"
+ 		};
+ 		//#endregion
+ 		//#region lib/types/client/AgentPresetSeat.js
+@@ -252,6 +309,8 @@
  		const INTRO_CHAR_STAGGER_MS = 40;
  		const INTRO_TEXT_REVEAL_MS = 200;
  		const INTRO_CHAR_FADE_MS = 400;
@@ -98,7 +103,7 @@ index 78ac760..514d6d1 100644
  		/**
  		* How long a refused switch holds before fading.
  		*
-@@ -278,6 +337,15 @@ window.__ModuleLoader__.load({
+@@ -280,6 +339,15 @@
  		function AgentPresetSeat({ load, select, introduced, useAgentPresetSeat, t }) {
  			const state = useAgentPresetSeat((snapshot) => snapshot);
  			const [open, setOpen] = (0, react.useState)(false);
@@ -114,7 +119,7 @@ index 78ac760..514d6d1 100644
  			const toastSeq = (0, react.useRef)(0);
  			const [toast, setToast] = (0, react.useState)(null);
  			(0, react.useEffect)(() => {
-@@ -319,30 +387,107 @@ window.__ModuleLoader__.load({
+@@ -321,30 +389,107 @@
  					children: character
  				}, index))
  			}) : label;
@@ -238,18 +243,19 @@ index 78ac760..514d6d1 100644
  					const picked = state.options.find((option) => option.id === id);
  					/* v8 ignore next */
  					const name = picked === void 0 ? id : presetDisplayText(picked, t).name;
-@@ -359,7 +504,10 @@ window.__ModuleLoader__.load({
+@@ -361,8 +506,10 @@
  					});
  				},
  				align: "start",
 +				side: "bottom",
  				portal: true,
+-				className: AgentPresetSeat_module_css_default.menuAnchor,
 +				compact: true,
 +				className: AgentPresetSeat_module_css_default.picker,
  				anchor: (0, react_jsx_runtime.jsxs)("button", {
  					type: "button",
  					className: AgentPresetSeat_module_css_default.seat,
-@@ -558,6 +706,8 @@ window.__ModuleLoader__.load({
+@@ -564,6 +711,8 @@
  			rows: [],
  			copy: null,
  			view: null,
@@ -258,7 +264,7 @@ index 78ac760..514d6d1 100644
  			pendingDelete: null,
  			deleting: false,
  			revealedPaths: {}
-@@ -575,6 +725,17 @@ window.__ModuleLoader__.load({
+@@ -581,6 +730,17 @@
  			if (!PRESET_ID.test(draft.id)) return "idInvalid";
  			if (rows.some((row) => row.id === draft.id)) return "idTaken";
  		}
@@ -276,7 +282,7 @@ index 78ac760..514d6d1 100644
  		/** Reads the roster and drives the copy dialog, viewer, and location reveals. */
  		var AgentPresetSectionController = class {
  			ctx;
-@@ -746,6 +907,143 @@ window.__ModuleLoader__.load({
+@@ -752,6 +912,143 @@
  					[id]: path
  				} });
  			}
@@ -420,7 +426,7 @@ index 78ac760..514d6d1 100644
  			/**
  			* Ask for confirmation before deleting one preset.
  			* @param id - the preset to delete, or null to dismiss the confirmation.
-@@ -807,10 +1105,17 @@ window.__ModuleLoader__.load({
+@@ -813,7 +1110,7 @@
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@deepseek-ai/dsh-client-ui-agent-preset";
  			tag.dataset.pluginCss = tagId;
@@ -429,17 +435,23 @@ index 78ac760..514d6d1 100644
  			document.head.appendChild(tag);
  		}
  		var AgentPresetSection_module_css_default = {
+@@ -850,7 +1147,14 @@
+ 			"secondaryButton": "rtSEdW_secondaryButton",
+ 			"section": "rtSEdW_section",
+ 			"title": "rtSEdW_title",
+-			"viewerCode": "rtSEdW_viewerCode"
++			"viewerCode": "rtSEdW_viewerCode",
 +			"sectionHead": "rtSEdW_sectionHead",
 +			"sectionActions": "rtSEdW_sectionActions",
 +			"importButton": "rtSEdW_importButton",
 +			"hiddenInput": "rtSEdW_hiddenInput",
 +			"importSecurity": "rtSEdW_importSecurity",
 +			"importSummary": "rtSEdW_importSummary",
-+			"importWarnings": "rtSEdW_importWarnings",
- 			"badge": "eWkxHa_badge",
- 			"brokenBadge": "eWkxHa_brokenBadge",
- 			"brokenTip": "eWkxHa_brokenTip",
-@@ -932,6 +1237,84 @@ window.__ModuleLoader__.load({
++			"importWarnings": "rtSEdW_importWarnings"
+ 		};
+ 		//#endregion
+ 		//#region lib/types/client/AgentPresetSection.js
+@@ -937,6 +1241,84 @@
  				})
  			});
  		}
@@ -524,7 +536,7 @@ index 78ac760..514d6d1 100644
  		/**
  		* Render one card's description, clamped by CSS and offered in full on hover.
  		* The tooltip is attached only while the text is actually cut off, so a short
-@@ -979,6 +1362,7 @@ window.__ModuleLoader__.load({
+@@ -984,6 +1366,7 @@
  		function AgentPresetSection(props) {
  			const { useAgentPresetSection, t, load } = props;
  			const state = useAgentPresetSection((snapshot) => snapshot);
@@ -532,7 +544,7 @@ index 78ac760..514d6d1 100644
  			const viewedId = state.view?.id;
  			const viewedRow = viewedId === void 0 ? void 0 : state.rows.find((row) => row.id === viewedId);
  			const viewedTitle = state.view === null ? "" : viewedRow === void 0 ? state.view.title : presetDisplayText(viewedRow, t).name;
-@@ -1019,9 +1403,40 @@ window.__ModuleLoader__.load({
+@@ -1024,9 +1407,40 @@
  			return (0, react_jsx_runtime.jsxs)("div", {
  				className: AgentPresetSection_module_css_default.section,
  				children: [
@@ -576,12 +588,10 @@ index 78ac760..514d6d1 100644
  					}),
  					(0, react_jsx_runtime.jsx)("p", {
  						className: AgentPresetSection_module_css_default.intro,
-@@ -1134,6 +1549,17 @@ window.__ModuleLoader__.load({
- 														},
- 														children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCopyOutline16, {})
+@@ -1139,6 +1553,17 @@
  													}),
-+													row.trust === "user" ? (0, react_jsx_runtime.jsx)("button", {
-+														type: "button",
+ 													row.trust === "user" ? (0, react_jsx_runtime.jsx)("button", {
+ 														type: "button",
 +														className: AgentPresetSection_module_css_default.iconButton,
 +														disabled: state.exporting !== null || row.broken !== void 0,
 +														"data-tip": state.exporting === row.id ? t("exporting") : t("exportPreset"),
@@ -591,10 +601,12 @@ index 78ac760..514d6d1 100644
 +														},
 +														children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconDownloadOutline16, {})
 +													}) : null,
- 													row.trust === "user" ? (0, react_jsx_runtime.jsx)("button", {
- 														type: "button",
++													row.trust === "user" ? (0, react_jsx_runtime.jsx)("button", {
++														type: "button",
  														className: `${AgentPresetSection_module_css_default.iconButton} ${AgentPresetSection_module_css_default.iconDanger}`,
-@@ -1170,6 +1596,15 @@ window.__ModuleLoader__.load({
+ 														"data-tip": t("delete"),
+ 														"aria-label": `${t("delete")}: ${text.name}`,
+@@ -1173,6 +1598,15 @@
  							setCopyName: props.setCopyName
  						}
  					}),
@@ -610,7 +622,7 @@ index 78ac760..514d6d1 100644
  					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
  						open: state.view !== null,
  						onClose: () => {
-@@ -1506,6 +1941,15 @@ window.__ModuleLoader__.load({
+@@ -1509,6 +1943,15 @@
  				},
  				confirmCopy: () => section.confirmCopy(),
  				openLocation: (id) => section.openLocation(id),

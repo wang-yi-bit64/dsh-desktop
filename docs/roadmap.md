@@ -31,8 +31,9 @@
 项目的一切长期决策都由两条曲线决定。它们相互独立，但指向同一个结论。
 
 **曲线 A — 上游是快速迭代的预发布版。** 官方 DSH 明确标注 developer preview，并声明会有破坏性
-变更。本仓的补丁基线（`DSH_VERSION = '0.1.2-alpha.4'`，`scripts/prepare-harness.mjs:74`）已落后于
-npm 上的 `0.1.5-rc.*` 若干版。**只要项目还靠 `patch-package` 改上游文件，这条曲线就会持续收税**：
+变更。本仓的补丁基线（`DSH_VERSION`，`scripts/prepare-harness.mjs`）**已于 2026-09-12 推进到
+`0.1.5-rc.1`**（此前落后到 `0.1.2-alpha.4`）。但上游仍在推进（npm `next` 已到 `0.1.5-rc.2`），
+**只要项目还靠 `patch-package` 改上游文件，这条曲线就会持续收税**：
 `上游变更数 × 补丁数 × 运行时变体数`（见 `harness-packaging-and-compatibility.md`）。
 
 **曲线 B — 官方桌面版已经进入上游仓库，且采用更深的宿主协议。** 上游 `apps/desktop` 是完整实现

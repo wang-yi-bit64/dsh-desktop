@@ -169,6 +169,15 @@ jobs:
       - name: Verify Harness UI injection behaviour
         run: npm run verify:harness-inject
 
+      # 壳入口与上游 `dsh` CLI 的调用约定兼容（纯静态）。上游 0.1.5-rc.1 把 CLI 从
+      # 「顶层自执行」改成「`if (import.meta.main) runCli()`」，而本仓入口是 **import**
+      # 它——若不显式调用导出的 `runCli()`，CLI 从不运行、进程静默以退出码 0 结束，
+      # 表现为「就绪超时但日志无报错」（2026-09-12 升级实测踩到）。此门禁把该兼容处理钉住。
+      - name: Verify Harness entry call-convention compatibility
+        run: |
+          npm run verify:harness-entry
+          npm run verify:harness-entry:self-test
+
       # 版本号一致性 + 变更日志生成器自测。
       #
       # 版本号散落在 package.json（唯一真源）/ tauri.conf.json（继承真源）/

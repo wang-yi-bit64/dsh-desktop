@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
-@@ -208,7 +208,7 @@
+@@ -468,7 +468,7 @@
  		*/
  		function producedFileMentions(paths, openFile, label) {
  			return { resolve(value) {
@@ -10,11 +10,10 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
  				if (path === void 0) return void 0;
  				return {
  					open: () => {
-@@ -218,6 +218,21 @@
- 					title: path
+@@ -479,6 +479,21 @@
  				};
  			} };
-+		}
+ 		}
 +		/**
 +		* Resolve Codex-style local path references that were not produced by a tool
 +		* in the current turn. Keep bare identifiers inert: without a slash, an
@@ -29,16 +28,15 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
 +			if (/[\\/]/.test(path) || /[\\/]$/.test(path)) return path;
 +			if (/^[^\\/]+\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(path)) return path;
 +			return void 0;
- 		}
++		}
  		/** The single produced path whose basename is exactly `value`, else undefined. */
  		function onlyPathWithBasename(paths, value) {
-@@ -381,8 +396,7 @@
- 			const t = ctx.locale.bind(NS);
- 			ctx.provide("chatFileMentions", { forClosing(owner) {
+ 			const matches = paths.filter((path) => basename(path) === value);
+@@ -952,7 +967,6 @@
+ 			ctx.provide("chatFileMentions", { forClosing(owner, sessionId) {
  				const paths = selectProducedFiles(owner);
--				if (paths === null) return void 0;
--				return producedFileMentions(paths, owner.openFile, (path) => t("produced.open", { name: path }));
-+				return producedFileMentions(paths ?? [], owner.openFile, (path) => t("produced.open", { name: path }));
- 			} });
- 		}
- 		//#endregion
+ 				const presented = presentedForClosing(owner);
+-				if (paths === null && presented.length === 0) return void 0;
+ 				const deliveries = new Map(presented.map((file) => [file.path, file]));
+ 				return producedFileMentions([...new Set([...paths ?? [], ...deliveries.keys()])], (path) => {
+ 					const file = deliveries.get(path);

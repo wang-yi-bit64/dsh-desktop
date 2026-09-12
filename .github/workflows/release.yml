@@ -106,6 +106,7 @@ jobs:
           npm run verify:ipc-surface
           npm run verify:shell-pages
           npm run verify:harness-inject
+          npm run verify:harness-entry
           npm run verify:commits
           npm run verify:changelog
 

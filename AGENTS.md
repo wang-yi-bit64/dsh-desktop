@@ -331,6 +331,37 @@ note: `-D clippy::result-large-err` implied by `-D warnings`
 **这条 lint 本地能拦**（见 §2 关于 clippy 的实测复核）：改完跑
 `cargo clippy --workspace --all-targets -- -D warnings`，不要等 CI 三平台跑一轮才发现。
 
+### 上游改 CLI 自执行方式：壳入口静默退出（2026-09-12 升级实测，已修复勿回归）
+
+`build/harness-node-entry.mjs` 是**包装器**：它必须先 import 上游 `@deepseek-ai/dsh/lib/bin.js`
+之前装好 windowsHide 补丁、plugin safety guard 与 cold-start 投影，所以走 **`import`** 而非
+派生 `node bin.js`。
+
+alpha.4 的 `bin.js` 是**顶层自执行**，import 即运行。**0.1.5-rc.1 把它重构成**：
+
+```js
+async function runCli() { … }
+if (import.meta.main) await runCli();   // ← 只有「作为直接入口」才执行
+export { runCli };
+```
+
+import 该模块时 `import.meta.main` 恒为 **false**，于是 **CLI 从不运行**，进程随即以
+退出码 **0** 静默结束。表现极具误导性——资源组装报 `14/14 applied`、入口 import 无任何异常、
+harness.log 只到 `[harness-node] DSH entry loaded` 就断，而 `smoke-launch` 报的是
+「Harness 就绪超时（退出码 8）」。**所有静态检查全绿**，因为它们看不见「进程起来了但 CLI 没跑」。
+
+**修法（勿改回）**：入口接住 import 的返回值，并在导出了 `runCli` 时显式调用——
+
+```js
+const entry = await import(pathToFileURL(dshEntryPath).href)
+if (typeof entry?.runCli === 'function') await entry.runCli()   // 新版显式调用
+// 旧版（≤0.1.2-alpha.4）没有该导出，顶层自执行，不重复调用
+```
+
+**守卫**：`npm run verify:harness-entry`（E1~E3，含以修复前写法为夹具的可证伪性检查），
+已进 CI 与 release preflight。**这类「上游改了自执行方式」属于升级时的隐形炸弹**：
+升级 DSH 版本后若 L1 报「就绪超时但日志无报错」，先查这里。
+
 ### 补丁应用：`patch-package` 必须用「应用模式 + 相对 `--patch-dir`」（已修复，勿回归）
 
 `scripts/prepare-harness.mjs` 的 `applySinglePatch()` 逐个应用 `patches/` 下的补丁。两条约束都是硬性的，各自都能**静默**做错事：

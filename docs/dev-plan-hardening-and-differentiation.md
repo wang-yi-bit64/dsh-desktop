@@ -20,7 +20,7 @@
 
 | 编号 | 不足 | 严重度 | 证据位置 |
 |------|------|--------|----------|
-| **R1** | 上游补丁脆弱性：18 个 `patch-package` 补丁钉在 `dsh 0.1.2-alpha.4`，而上游 npm 已到 `0.1.5-rc.*`（且明确声明会有破坏性变更） | 🔴 高（存续） | `scripts/prepare-harness.mjs:74`；`docs/system_design.md` 记录漂移到 `0.1.2-rc.1` |
+| **R1** | 上游补丁脆弱性：`patch-package` 补丁钉在上游版本上，上游一改行就冲突 | ✅ **已缓解（2026-09-12）**：基线从 `0.1.2-alpha.4` 推进到 `0.1.5-rc.1`；补丁数由 18 减到 14（会话删除 4 条随重构移除）。上游仍会继续迭代（`next` 已到 `0.1.5-rc.2`），故列为**长期**风险 | `scripts/prepare-harness.mjs`（`DSH_VERSION`）；`patches/LAYERS.md` |
 | **R2** | 官方桌面版的定向挤压：上游 `apps/desktop`（Electron）已实现未发布，支持 mac/win、**无 Linux**，且**独占 `$DSH_HOME/profiles/desktop`（含大小写变体）** | 🔴 高 | 上游 `apps/desktop/*`、`.agents/notes/implemented/architecture/2026-09-09-desktop-in-place-profile.md` |
 | **R3** | README 过度宣称：写「一个插件无法拖垮整个 Harness」，与本仓 §7.3 明令禁止的口径冲突 | 🟠 中（纪律） | `README.md:24` vs `README.md:39`、`AGENTS.md` §7.3 |
 | **R4** | 「绿色」假设被自己削弱：`ci.yml` 不监听 push、冒烟改手动、release preflight 看不见运行时行为 | 🟠 中 | `.github/workflows/ci.yml:23-27`；`AGENTS.md` §8.4 |
@@ -69,7 +69,8 @@
     网络不可达时按「跳过而非静默通过」处理（打印 SKIP 并退出 0，与集成测试的 Node 缺失同策略）。
   - 入口 `npm run verify:drift`；`--self-test` 覆盖「落后 / 持平 / 领先 / 无网络」四态；
     可选接入一个 `schedule:` nightly job。
-  - 现状（2026-09-12 实测）：基线 `0.1.2-alpha.4` vs npm `latest 0.1.5-rc.1`，即**当前会报落后**。
+  - 现状（2026-09-12 复核）：基线已推进到 `0.1.5-rc.1`，与 npm `latest` 持平 → 哨兵**通过**；
+    `next` 已到 `0.1.5-rc.2`，后续会再次报落后，属预期行为（它就是要提醒升级）。
 - **H2 — profile 保留名守卫**
   - 新增静态检查（并入 `scripts/verify-ipc-surface.mjs` 或独立 `verify-profile-names.mjs`）：
     仓库内**任何** profile 字面量不得等于 `desktop`（ASCII 大小写任意组合）；断言
@@ -90,42 +91,42 @@
 
 ---
 
-### 批次 I — 上游版本推进与补丁基线 · 🟡 部分完成（工具已交付，版本推进待执行）· 🔴 P0
+### 批次 I — 上游版本推进与补丁基线 · ✅ 已完成（2026-09-12）· 🔴 P0
 
 **目标**：把补丁基线从 `0.1.2-alpha.4` 推进到当前 rc 线，并让「补丁健康度」成为可见报告。
 
 > ⚠️ 这是**最高风险**也**最高价值**的一批：上游明确声明会有破坏性变更，本仓已落后若干个预发布版本。
 > 不推进，则后续所有产品工作都建在一条早晚要断的基线上。
 
-**2026-09-12 执行结果**：本批的**前置工具与实测结论已完成**（I1-pre / I3），
-**版本号本身尚未推进**（I1 / I2 未执行）——原因见下方「为什么在此停住」。
+**2026-09-12 执行结果**：基线**已推进到 `0.1.5-rc.1`**（跨 4 个中间版本）。
 
 - **I1-pre — 补丁适用性预检工具** ✅ `npm run check:patch-applicability -- --target=<版本>`：
   只下载被补丁触及的十几个包（~4MB）到内存做干跑匹配，几秒给出「干净 / 冲突（第几段 hunk）」。
   全流程零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器 + 自带 diff 匹配），
   规避了 MSYS `/tmp` 与 Node 路径翻译不一致的坑。带纯逻辑自检（含上下文漂移可证伪性）。
-- **I1-实测** ✅ 对 `0.1.2-rc.1`：**15 个补丁干净、3 个冲突**（`agent-preset` / `settings-models` /
-  `workspace`，全部 `ui-behavior` 层、全部为上下文漂移而非前提失效）。**3 个 `functional` 补丁全部干净**。
-  结论已写入 [`docs/dsh-upgrade-checklist.md`](dsh-upgrade-checklist.md) Step 2。
+- **I1 — 推进 `DSH_VERSION` 并重生成补丁** ✅ **已完成**。做法不是 `patch-package` 重新生成，而是
+  **三路合并移植**：以 pristine alpha.4 为共同祖先，把 rc.1 的变化叠到「alpha.4 + 补丁」的意图状态上，
+  冲突逐条按语义裁定（CSS 类名 hash 改名取上游、类名映射/函数签名并集）。
+- **I1-实测** ✅ 最终结果：**14 个补丁在 `0.1.5-rc.1` 上全部干净可用**（clean 14 / conflict 0）。
 - **I3 — 补丁健康度报告** ✅ `npm run report:patches`（`--markdown` 写 `$GITHUB_STEP_SUMMARY`）：
   合并 `patch-layers.mjs` 的层/退役条件与 `MANIFEST.json` 的实际结果。缺记录时**不伪造 applied**。
-- **I1 — 推进 `DSH_VERSION` 并重生成补丁** 🕓 **未执行**（见下）。
-- **I2 — 实跑 `docs/dsh-upgrade-checklist.md` 全流程** 🕓 **未执行**（见下）。
+- **I2 — 实跑升级清单全流程** 🟡 **部分**：静态部分全绿（`verify:patches`、`check:patch-applicability`、
+  12 项静态门禁、`verify:drift` 转通过）；**真实组装与三平台烟雾待执行**（见验收判据）。
 
-**为什么在此停住（不是遗漏，是判据）**：版本推进是一个**不可在本机闭环验证**的改动——
-3 个冲突补丁需要在 rc.1 源码上重做语义，且最终必须由**三平台 `smoke.yml -f scope=full`**
-（本机无 macOS/Linux）与真实资源树 L1 证明。在没有那两轮证据前改 `DSH_VERSION`，
-等于把一个未验证的基线提交进仓库，违反本仓「不谎报可运行」的纪律。因此：
-**先把工具与实测结论交付（已完成，且把后续工作量从『未知』压成『重做 3 个 UI 补丁』），
-版本推进留给一次带三平台验证窗口的操作**（步骤已写进升级清单 Step 2）。
+**⚠️ 本次升级移除了「会话永久删除」特性**：rc.1 删除了承载该逻辑的 `PersistenceCoordinator` 类
+（`dsh-session-persistence/lib/index.js` 1594 → 267 行），改为 handle 模型，4 个纯删除后端补丁 +
+`client-ui-workspace` 里的删除 UI 无法机械移植，只能重写。按用户裁决**移除而非盲写**：
+这是**本仓自加功能的降级，不是上游能力回退**（0.1.5-rc.1 本身也没有该特性），
+且属 `ui-behavior` 层允许的降级。完整记录见 [`patches/LAYERS.md`](../patches/LAYERS.md)。
 
-**验收判据（I1/I2 完成时）**
-- 三平台 `smoke.yml -f scope=full` 全绿；`npm run verify:patches` 通过；
-  `check:patch-applicability` 对新版本报「全部干净」。
-- `MANIFEST.json:patches[]` 无 `failed`；`report:patches` 输出与清单逐条对齐。
-- 体积对比相对旧基线无异常膨胀（`scripts/report-bundle-size.mjs`）。
+**验收判据**
+- `npm run verify:patches` 通过（14 个全部分级）；`check:patch-applicability --target=0.1.5-rc.1` 报全部干净。✅
+- ⏳ **待补**：`npm run prepare:harness -- --force` 真实组装 + `verify:harness-tree` 通过；
+  三平台 `smoke.yml -f scope=full` 全绿；`MANIFEST.json:patches[]` 无 `failed`；体积对比无异常膨胀。
+  > 这几项**必须由 CI 跑**（本机无 macOS/Linux，也无真实 Harness 冒烟条件），
+  > 是本次升级**尚未取得**的运行证据——在拿到之前不得声称「升级已验证」。
 
-**依赖**：H1（已交付）。**剩余预估**：1~2 天（15 个干净 + 3 个重做）**+ 三平台验证窗口**。
+**依赖**：H1（已交付）。
 
 ---
 

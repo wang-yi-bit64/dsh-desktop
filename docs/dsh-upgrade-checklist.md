@@ -1,7 +1,7 @@
 # DSH 官方版本升级清单
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
-> **核心风险**：`patches/` 下的 18 个补丁是**行级 diff**，锁定在 `scripts/prepare-harness.mjs` 的 `DSH_VERSION`。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
+> **核心风险**：`patches/` 下的补丁是**行级 diff**，锁定在 `scripts/prepare-harness.mjs` 的 `DSH_VERSION`（当前 `0.1.5-rc.1`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
 ---
@@ -109,23 +109,28 @@ boot / config-dump / 插件管理。
 
 ### Step 2 — 先跑适用性预检，再重生成补丁
 
-> **2026-09-12 起，Step 2 有一个零成本的入口**：`npm run check:patch-applicability -- --target=<版本>`
+> **零成本入口**：`npm run check:patch-applicability -- --target=<版本>`
 > 只下载被补丁触及的十几个包（~4MB）到内存做干跑匹配，几秒内给出「干净 / 冲突（第几段 hunk）」清单，
 > **不必先组装 300MB**。它只判「上下文能否对上」，不判语义是否仍成立——但正是升级时最耗时的第一问。
 >
-> **已实测（2026-09-12，target = `0.1.2-rc.1`）**：18 个补丁中 **15 个上下文干净可用、3 个冲突**，
-> 且 3 个冲突全部是 `ui-behavior` 层（可按分级策略降级）：
+> ### ✅ 0.1.2-alpha.4 → 0.1.5-rc.1 已完成（2026-09-12）
+>
+> **做法**：不靠 `patch-package` 重新生成，而是**三路合并移植**——以 pristine alpha.4 为共同祖先，
+> 把 rc.1 上游的变化叠到「alpha.4 + 补丁」的意图状态上（`git merge-file ours base theirs`），
+> 冲突处逐条按语义裁定（CSS 类名 hash 改名取上游、类名映射并集、函数签名参数并集）。
+>
+> **结果**：14 个补丁（18 − 4，见下）在 `0.1.5-rc.1` 上**全部干净可用**
+> （`check:patch-applicability --target=0.1.5-rc.1` → clean 14 / conflict 0）。
+>
+> **⚠️ 本次升级移除了「会话永久删除」特性**（4 个后端补丁 + `client-ui-workspace` 里的删除 UI）：
+> rc.1 删除了承载该逻辑的 `PersistenceCoordinator` 类（该文件 1594 → 267 行），改为 handle 模型，
+> 补丁无法机械移植。详见 [`patches/LAYERS.md`](../patches/LAYERS.md) 的专门说明。
+> **这是本仓自加功能的降级，不是上游能力回退**——0.1.5-rc.1 本身同样没有会话永久删除。
+>
+> 历史记录（仅供参考）：对中间版本 `0.1.2-rc.1` 的预检结果是 15 干净 / 3 冲突
+> （`agent-preset` / `settings-models` / `workspace`，均为 UI 层的上下文漂移）。
 
-| 冲突补丁 | 冲突段 | 性质 |
-|---------|--------|------|
-| `@deepseek-ai+dsh-client-ui-agent-preset` | 3/18（hunk#3/#4/#12） | 预设导入/导出的文案块与 CSS 字符串整体位移 |
-| `@deepseek-ai+dsh-client-ui-settings-models` | 4/35（hunk#1/#2/#3/#28） | Provider 选择器与模态切换的上下文漂移 |
-| `@deepseek-ai+dsh-client-ui-workspace` | 6/49（hunk#3/#4/#13/#14/#15/#16） | 会话行样式与未读标记的上下文漂移 |
-
-> 三个都是**上下文漂移**（上游改了相邻行），不是前提失效。按 Step 2.3 的处理是「重生成补丁」：
-> 在对应包的 rc.1 源码上重新施加同样的改动，再用 `npx patch-package <pkg>` 出补丁。
-> 判定属于哪一类，见下表。**`functional` 3 个补丁全部干净**——这是最关键的信号：
-> 启动链路不需要重新设计，升级是一次「重做 3 个 UI 补丁」的可控工作。
+重生成补丁的逐个处理流程：
 
 重生成补丁的逐个处理流程：
 
@@ -236,7 +241,7 @@ npm run smoke:headless
 
 | 脆弱点 | 为什么存在 | 缓解 |
 |--------|-----------|------|
-| 18 个 `patch-package` 行级 diff | 上游未开放的能力扩展点（品牌、UI 行为、插件加载） | 分层降级（`ui-behavior` 失败不阻构建）+ `retireWhen` 记录退役判据；长期方案见 [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) |
+| `patch-package` 行级 diff（当前 14 个，曾 18 个） | 上游未开放的能力扩展点（品牌、UI 行为、插件加载） | 分层降级（`ui-behavior` 失败不阻构建）+ `retireWhen` 记录退役判据；长期方案见 [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) |
 | 补丁文件名内嵌版本号 | `patch-package` 的命名约定 | 本文 Step 2.1 强制项；`verify:patches` 校验包名可推导性 |
 | 无头门禁覆盖不到 Harness 行为变更 | 壳把 Harness 当黑盒派生 | Step 5 的 L1/L2 烟雾是**唯一**能发现此类回归的门禁 |
 | 体积随上游增长 | 内置完整依赖树以换取宿主机零依赖 | Step 6 的体积对比 + [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) 的瘦身方案 |

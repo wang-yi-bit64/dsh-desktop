@@ -13,7 +13,7 @@
 ## 1. 为什么需要分级
 
 `patches/*.patch` 是 `patch-package` 的**行级 diff**，全部锁定在 `scripts/prepare-harness.mjs`
-的 `DSH_VERSION`（当前 `0.1.2-alpha.4`）。上游 DSH 处于灰度迭代期，任一被补丁包改动一行，
+的 `DSH_VERSION`（当前 `0.1.5-rc.1`）。上游 DSH 处于灰度迭代期，任一被补丁包改动一行，
 `patch-package` 就会冲突。此前 `prepare-harness.mjs` 对补丁只有两种结果：**全成**或**中断构建**——
 于是一次纯视觉补丁的冲突就能阻断整条打包链路，而品牌与 UI 增强类补丁本不该有这种权力。
 
@@ -50,11 +50,11 @@
 
 | 补丁 | 判据 | 退役条件 |
 |---|---|---|
-| `@deepseek-ai+dsh+0.1.2-alpha.4.patch` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` / `dsh-desktop-preset-transfer` 声明为 dsh 依赖。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
+| `@deepseek-ai+dsh+0.1.5-rc.1.patch` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` / `dsh-desktop-preset-transfer` 声明为 dsh 依赖。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
 | `@deepseek-ai+cordis-plugin-loader+1.0.3.patch` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
-| `@deepseek-ai+dsh-client-modules+0.1.2-alpha.4.patch` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
+| `@deepseek-ai+dsh-client-modules+0.1.5-rc.1.patch` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 
-### ui-behavior（15 个）
+### ui-behavior（11 个）
 
 | 补丁 | 判据 | 退役条件 |
 |---|---|---|
@@ -69,15 +69,27 @@
 | `dsh-client-ui-deliverables` | Codex 风格本地路径引用解析；`paths` 为 `null` 时的空数组兜底 | 官方支持本地路径引用解析 |
 | `dsh-llm-deepseek` | 把 HTTP 403 从 `AUTH` 拆成独立 `FORBIDDEN` 码；缺失时 403 显示为鉴权错误（文案不准，不影响运行） | 官方错误码分类含 `FORBIDDEN` |
 | `dsh-llm-pi-ai` | 同上：消息文本中的 403 归类为 `FORBIDDEN` | 同上 |
-| `dsh-api-session-controller` | 会话**永久删除**的客户端半边（`session.delete` RPC + `SessionDeleteError`）；缺失时删除会话报错，其余会话功能正常 | 官方提供会话永久删除 |
-| `dsh-session-persistence` | 删除原语（`assertDeletable` / `delete` / `deleteStored`） | 同上 |
-| `dsh-session-persistence-jsonl` | JSONL 后端的 `deleteStored`（删单个日志文件，保留共享项目目录） | 同上 |
-| `dsh-workspace` | `forgetSession`：删除后从 Workspace 与归档状态摘除 | 同上 |
 
-> 会话永久删除是**四条补丁 + 一个跨进程契约**的完整特性。它们被归入可降级层，
-> 但四者应当**同进同退**：若其中一条冲突而其余仍在，产物会出现「UI 有删除入口但后端不支持」
-> 的半成品状态。升级 DSH 版本时必须把这四条作为一个整体复核，见
-> [`docs/dsh-upgrade-checklist.md`](../docs/dsh-upgrade-checklist.md)。
+> ### ⚠️「会话永久删除」特性已随 0.1.5-rc.1 升级移除（2026-09-12）
+>
+> 该特性此前由**四条补丁 + 一个跨进程契约**构成：`dsh-api-session-controller`（`session.delete`
+> RPC 客户端）、`dsh-session-persistence`（删除原语）、`dsh-session-persistence-jsonl`（后端
+> `deleteStored`）、`dsh-workspace`（`forgetSession`），外加 `dsh-client-ui-workspace` 里的会话
+> 删除菜单与确认对话框。
+>
+> **移除原因**：0.1.5-rc.1 把会话持久化层整体重构——我们删除逻辑挂钩的 `PersistenceCoordinator`
+> 类**已被删除**（`dsh-session-persistence/lib/index.js` 从 1594 行缩到 267 行），改为基于
+> **handle** 的新模型（`JsonlSessionPersistence`，3361 行）。这四条补丁的目标代码已不存在，
+> 无法机械移植，只能按新模型**重写**；而在无三平台运行证据前重写并交付，属于本仓宣称纪律
+> 明令禁止的「无法验证却声称可用」。
+>
+> **当前状态**：四条后端补丁已删除；`dsh-client-ui-workspace` 里的会话删除 UI（菜单项、确认
+> 对话框、`deleteSession` action、三处 locale 文案）已同步剥离，**未读标记等其余增强保留**。
+> 这是 `ui-behavior` 层允许的降级：**缺失的只是一项本仓自加的功能，不是上游能力回退**——
+> 0.1.5-rc.1 本身同样没有会话永久删除。
+>
+> **恢复条件**：按 rc.1 的 handle 模型重写删除链路，且**必须有三平台真实运行证据**
+> （`smoke.yml -f scope=full`）才能合入。参见 `docs/roadmap.md` 的补丁退役机制。
 
 ---
 

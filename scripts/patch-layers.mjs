@@ -58,7 +58,7 @@ const patchesDir = PATCHES_DIR
  */
 export const PATCH_LAYERS = {
   // ---- functional：缺失即无法加载桌面插件 / 启动不了 -------------------------
-  '@deepseek-ai+dsh+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh+0.1.5-rc.1.patch': {
     layer: 'functional',
     why: '把 dsh-desktop-client-ui / hmr-fallback / market-installer / preset-transfer 四个桌面插件包声明为 dsh 的依赖。缺失则 build/dsh-desktop.patch.yml 的 `insert: name` 解析不到包，profile 启动即失败。',
     retireWhen: '官方 dsh 提供声明式扩展点（无需改 package.json 即可挂载外部插件）时。'
@@ -68,87 +68,67 @@ export const PATCH_LAYERS = {
     why: '插件 loader 的裸 specifier import 失败时回退到 createRequire 解析（基于 ctx.baseUrl）。桌面插件包位于 node_modules 而非相对路径，缺失则插件 import 失败。',
     retireWhen: '官方 loader 支持从 baseUrl 解析裸包名时。'
   },
-  '@deepseek-ai+dsh-client-modules+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-modules+0.1.5-rc.1.patch': {
     layer: 'functional',
     why: 'ClientModuleRegistry 解析 `${expectedPackageName}/package.json` 以定位插件模块。渲染侧插件装载的最后一段依赖，缺失则桌面 UI 插件挂不上。',
     retireWhen: '官方 registry 自带 createRequire 解析时。'
   },
 
   // ---- ui-behavior：视觉 / 文案 / 产品增强，缺失可用 -------------------------
-  '@deepseek-ai+dsh-client-ui-layout+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-layout+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '折叠侧栏宽度按平台区分（macOS 80 / 其他 56），纯几何。',
     retireWhen: '官方区分平台侧栏宽度时。'
   },
-  '@deepseek-ai+dsh-client-ui-sidebar+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-sidebar+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '侧栏 padding 与 data-dsh-sidebar-* 标记，纯样式。',
     retireWhen: '官方侧栏自带等效留白时。'
   },
-  '@deepseek-ai+dsh-client-ui-workspace+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-workspace+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
-    why: '工作区/会话行的样式、未读标记与搜索行渲染增强。',
+    why: '工作区/会话行的样式、未读标记与搜索行渲染增强（会话永久删除 UI 已随 0.1.5-rc.1 升级移除，见 patches/LAYERS.md）。',
     retireWhen: '官方工作区列表补齐未读与会话行样式时。'
   },
-  '@deepseek-ai+dsh-client-ui-settings-models+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-settings-models+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '模型设置页的 Provider 选择器、模态切换与目录 UX（含内联 CSS 注入）。',
     retireWhen: '官方设置页提供 Provider 选择与模态切换时。'
   },
-  '@deepseek-ai+dsh-client-ui-model-selection+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-model-selection+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '模型选择弹层的搜索框与样式。',
     retireWhen: '官方模型选择器自带搜索时。'
   },
-  '@deepseek-ai+dsh-client-ui-agent-preset+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-agent-preset+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '预设导入/导出与 Awesome Preset 浏览的文案与界面。',
     retireWhen: '官方提供预设包导入导出时（可同时撤掉 dsh-desktop-preset-transfer 插件）。'
   },
-  '@deepseek-ai+dsh-client-ui-chat+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-chat+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '会话内 QUOTA / FORBIDDEN 错误文案。缺失时退回原始错误文本。',
     retireWhen: '官方补齐这两种错误码的文案时。'
   },
-  '@deepseek-ai+dsh-client-ui-trajectory+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-trajectory+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '轨迹页 QUOTA / FORBIDDEN 错误文案。',
     retireWhen: '官方补齐这两种错误码的文案时。'
   },
-  '@deepseek-ai+dsh-client-ui-deliverables+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-client-ui-deliverables+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '交付物中的 Codex 风格本地路径引用解析，以及 paths 为 null 时的空数组兜底（旧行为是直接不渲染）。',
     retireWhen: '官方支持本地路径引用解析时。'
   },
-  '@deepseek-ai+dsh-llm-deepseek+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-llm-deepseek+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '把 HTTP 403 从 AUTH 拆成独立 FORBIDDEN 错误码。缺失时 403 显示为鉴权错误（文案不准，不影响运行）。',
     retireWhen: '官方错误码分类包含 FORBIDDEN 时。'
   },
-  '@deepseek-ai+dsh-llm-pi-ai+0.1.2-alpha.4.patch': {
+  '@deepseek-ai+dsh-llm-pi-ai+0.1.5-rc.1.patch': {
     layer: 'ui-behavior',
     why: '同上：消息文本中的 403 归类为 FORBIDDEN。',
     retireWhen: '官方错误码分类包含 FORBIDDEN 时。'
-  },
-  '@deepseek-ai+dsh-api-session-controller+0.1.2-alpha.4.patch': {
-    layer: 'ui-behavior',
-    why: '会话「永久删除」能力的客户端半边（session.delete RPC + SessionDeleteError）。缺失时删除会话会报错，其余会话功能正常。',
-    retireWhen: '官方提供会话永久删除时。'
-  },
-  '@deepseek-ai+dsh-session-persistence+0.1.2-alpha.4.patch': {
-    layer: 'ui-behavior',
-    why: '会话持久化的删除原语（assertDeletable / delete / deleteStored）。与上一条同属删除能力。',
-    retireWhen: '官方提供会话永久删除时。'
-  },
-  '@deepseek-ai+dsh-session-persistence-jsonl+0.1.2-alpha.4.patch': {
-    layer: 'ui-behavior',
-    why: 'JSONL 后端的 deleteStored（删除单个日志文件，保留共享项目目录）。同上。',
-    retireWhen: '官方提供会话永久删除时。'
-  },
-  '@deepseek-ai+dsh-workspace+0.1.2-alpha.4.patch': {
-    layer: 'ui-behavior',
-    why: 'forgetSession：删除会话后从 Workspace 与归档状态中摘除。同上。',
-    retireWhen: '官方提供会话永久删除时。'
   }
 }
 
@@ -156,7 +136,7 @@ export const PATCH_LAYERS = {
  * 从补丁文件名推导 npm 包名。
  *
  * `patch-package` 的命名规则是 `name+version.patch`，作用域包用 `+` 代替 `/`：
- * `@deepseek-ai+dsh-client-ui-chat+0.1.2-alpha.4.patch` → `@deepseek-ai/dsh-client-ui-chat`
+ * `@deepseek-ai+dsh-client-ui-chat+0.1.5-rc.1.patch` → `@deepseek-ai/dsh-client-ui-chat`
  *
  * @param {string} file 补丁文件名（含或不含 `.patch` 后缀）。
  * @returns {string | null} 包名；无法解析（段数不足或版本段为空）时返回 `null`。

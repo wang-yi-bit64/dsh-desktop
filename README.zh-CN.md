@@ -154,7 +154,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |
 | `npm run verify:drift` / `verify:drift:self-test` | 钉住的 `DSH_VERSION` 是否已落后于 npm dist-tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
 | `npm run report:patches` | 补丁健康度报告：把层 / 退役条件表与 `MANIFEST.json` 里逐条真实的 `applied/skipped/failed` 合并成一张表。manifest 缺失时如实标为不可用——**不伪造 applied**。 |
-| `npm run check:patch-applicability` / `--target=<v>` | 上游升级预检：18 个补丁在目标版本上哪些仍可用、在哪一段 hunk 断裂。约 4MB 下载，不必组装 300MB。零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器）。 |
+| `npm run check:patch-applicability` / `--target=<v>` | 上游升级预检：仓库内补丁在目标版本上哪些仍可用、在哪一段 hunk 断裂。约 4MB 下载，不必组装 300MB。零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器）。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L2 GUI 启动。 |
 

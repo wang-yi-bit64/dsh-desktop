@@ -124,7 +124,18 @@ if (!dshEntryPath) {
   process.stdout.write(`[harness-node] loading=${dshEntryPath}\n`)
   process.argv = [process.execPath, dshEntryPath, ...dshArguments]
   try {
-    await import(pathToFileURL(dshEntryPath).href)
+    const entry = await import(pathToFileURL(dshEntryPath).href)
+    // 上游在 0.1.5-rc.1 把 `dsh` CLI 从「顶层自执行」重构成
+    // `async function runCli()` + `if (import.meta.main) await runCli()`，并把它导出。
+    // 本包装器是 **import** 该入口（需要在进程内先装好 windowsHide 补丁、
+    // plugin safety guard 与 cold-start 投影），因此 `import.meta.main` 恒为 false
+    // ——CLI 不会自执行，进程静默以退出码 0 结束（表现为「就绪超时」而日志无任何报错）。
+    // 这里显式调用导出的 `runCli()`：
+    //   · 0.1.5-rc.1+：导出存在 → 调用，修复上述静默退出；
+    //   · 旧版（≤0.1.2-alpha.4）：入口顶层自执行、无 `runCli` 导出 → 不重复调用。
+    if (typeof entry?.runCli === 'function') {
+      await entry.runCli()
+    }
     process.stdout.write('[harness-node] DSH entry loaded\n')
   } catch (error) {
     report('DSH entry failed', error?.stack ?? error)

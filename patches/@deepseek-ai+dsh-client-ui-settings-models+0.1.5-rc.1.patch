@@ -38,28 +38,23 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +			document.head.appendChild(tag);
 +		}
  		var ModelsSection_module_css_default = {
- 			"addActions": "A_4Mua_addActions",
- 			"addBlock": "A_4Mua_addBlock",
-@@ -116,6 +148,11 @@
- 			"modelRow": "A_4Mua_modelRow",
- 			"notice": "A_4Mua_notice",
- 			"primaryButton": "A_4Mua_primaryButton",
+ 			"addActions": "zGbnIq_addActions",
+ 			"addBlock": "zGbnIq_addBlock",
+@@ -129,7 +161,13 @@
+ 			"selectInput": "zGbnIq_selectInput",
+ 			"setupCard": "zGbnIq_setupCard",
+ 			"switchThumb": "zGbnIq_switchThumb",
+-			"title": "zGbnIq_title"
++			"title": "zGbnIq_title",
 +			"providerButton": "A_4Mua_providerButton",
 +			"providerButtonSelected": "A_4Mua_providerButtonSelected",
 +			"providerKind": "A_4Mua_providerKind",
 +			"providerList": "A_4Mua_providerList",
 +			"providerName": "A_4Mua_providerName",
- 			"rowActions": "A_4Mua_rowActions",
- 			"rowCard": "A_4Mua_rowCard",
- 			"rowHead": "A_4Mua_rowHead",
-@@ -127,6 +164,7 @@
- 			"secondaryButton": "A_4Mua_secondaryButton",
- 			"section": "A_4Mua_section",
- 			"selectInput": "A_4Mua_selectInput",
-+			"selectionLabel": "A_4Mua_selectionLabel",
- 			"setupCard": "A_4Mua_setupCard",
- 			"switchThumb": "A_4Mua_switchThumb",
- 			"title": "A_4Mua_title"
++			"selectionLabel": "A_4Mua_selectionLabel"
+ 		};
+ 		//#endregion
+ 		//#region lib/types/client/EditorFooter.js
 @@ -158,6 +196,186 @@
  			});
  		}
@@ -335,16 +330,15 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			/** Buffer key for one capacity field; the row half moves when rows do. */
  			const bufferKey = (index, field) => `${String(index)}:${field}`;
  			const editCapacity = (index, field, text) => {
-@@ -690,12 +920,20 @@
- 								children: busy ? t("fetching") : t("fetchModels")
+@@ -691,11 +921,19 @@
  							})
  						]
-+					}),
+ 					}),
 +					(0, react_jsx_runtime.jsx)(ModelCatalogSearch, {
 +						value: props.modelQuery,
 +						onChange: props.onModelQueryChange,
 +						t
- 					}),
++					}),
  					models.length === 0 ? (0, react_jsx_runtime.jsx)("p", {
  						className: ModelsSection_module_css_default["modelEmpty"],
  						children: t("modelsEmpty")
@@ -414,7 +408,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					failure !== void 0 ? (0, react_jsx_runtime.jsx)("p", {
  						className: ModelsSection_module_css_default["error"],
  						children: failure
-@@ -1155,6 +1403,7 @@
+@@ -1164,6 +1412,7 @@
  			const [protocol, setProtocol] = (0, react.useState)(protocols[0] ?? "");
  			const [keyDraft, setKeyDraft] = (0, react.useState)("");
  			const [models, setModels] = (0, react.useState)([]);
@@ -422,7 +416,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			const [busy, setBusy] = (0, react.useState)(false);
  			const [failure, setFailure] = (0, react.useState)(void 0);
  			/**
-@@ -1212,6 +1461,11 @@
+@@ -1223,6 +1472,11 @@
  					setBusy(false);
  				}
  			};
@@ -434,7 +428,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			return (0, react_jsx_runtime.jsxs)("div", {
  				className: ModelsSection_module_css_default["editor"],
  				children: [
-@@ -1327,6 +1581,8 @@
+@@ -1343,6 +1597,8 @@
  					(0, react_jsx_runtime.jsx)(ModelListEditor, {
  						models,
  						onChange: setModels,
@@ -442,8 +436,8 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +						onModelQueryChange: setModelQuery,
  						probe: {
  							settingsNs: NS$1,
- 							baseURL,
-@@ -1346,18 +1602,27 @@
+ 							baseURL: normalizedBaseURL,
+@@ -1362,18 +1618,27 @@
  						className: ModelsSection_module_css_default["advancedHint"],
  						children: hint
  					}),
@@ -483,7 +477,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					})
  				]
  			});
-@@ -1445,6 +1710,8 @@
+@@ -1461,6 +1726,8 @@
  			const [keyState, setKeyState] = (0, react.useState)(void 0);
  			const [busy, setBusy] = (0, react.useState)(false);
  			const [failure, setFailure] = (0, react.useState)(void 0);
@@ -492,7 +486,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			const [committedOriginal, setCommittedOriginal] = (0, react.useState)(() => schema.getPath(namespace.user, settingsPath));
  			const [expectedRevision, setExpectedRevision] = (0, react.useState)(() => namespace.revision);
  			const root = (0, react.useMemo)(() => schema.rehydrate(namespace.schema), [namespace.schema, schema]);
-@@ -1565,6 +1832,15 @@
+@@ -1581,6 +1848,15 @@
  			const inheritedModels = () => {
  				return schema.getPath(namespace.base, [...settingsPath, "models"]) ?? schema.nodeAtPath(root, [...settingsPath, "models"])?.meta.default;
  			};
@@ -508,7 +502,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			/**
  			* The curated fields of one known adapter family. The family arrives
  			* narrowed so the per-family branches below are total: an unknown namespace
-@@ -1582,6 +1858,8 @@
+@@ -1598,6 +1874,8 @@
  				const catalogProps = {
  					models,
  					overridden: modelsOverridden,
@@ -517,7 +511,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					t,
  					disabled,
  					onChange: (next) => {
-@@ -1620,6 +1898,10 @@
+@@ -1636,6 +1914,10 @@
  					]
  				}), props.credentialOnly === true ? null : (0, react_jsx_runtime.jsxs)("details", {
  					className: ModelsSection_module_css_default["customized"],
@@ -528,7 +522,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					children: [(0, react_jsx_runtime.jsx)("summary", {
  						className: ModelsSection_module_css_default["customizedSummary"],
  						children: t("customized")
-@@ -1696,8 +1978,22 @@
+@@ -1712,8 +1994,22 @@
  					})]
  				})] });
  			};
@@ -552,7 +546,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  				children: [
  					props.hideTitle === true ? null : (0, react_jsx_runtime.jsxs)("div", {
  						className: ModelsSection_module_css_default["editorHeader"],
-@@ -1721,19 +2017,15 @@
+@@ -1737,19 +2033,15 @@
  						className: ModelsSection_module_css_default["advancedHint"],
  						children: `${t("model")} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}`
  					}),
@@ -581,7 +575,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					})
  				]
  			});
-@@ -1830,6 +2122,26 @@
+@@ -1846,6 +2138,26 @@
  		function providerCopy(template, target) {
  			return template.replace("{provider}", () => providerTargetLabel(target));
  		}
@@ -608,7 +602,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		/**
  		* Render the Models section content column.
  		* @param props - slot-delivered injected dependencies.
-@@ -1859,6 +2171,8 @@
+@@ -1875,6 +2187,8 @@
  			const [deleteFailure, setDeleteFailure] = (0, react.useState)(void 0);
  			const [savedTarget, setSavedTarget] = (0, react.useState)(void 0);
  			const [declaring, setDeclaring] = (0, react.useState)(false);
@@ -617,12 +611,12 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			const [dismissedSetup, setDismissedSetup] = (0, react.useState)(() => /* @__PURE__ */ new Set());
  			const announceSaved = (target) => {
  				controller.load().then(() => {
-@@ -1928,11 +2242,17 @@
- 			};
+@@ -1945,11 +2259,17 @@
  			const anyUsable = state.rows.some(providerUsable);
  			const configured = state.rows.filter((row) => row.configured);
--			const addable = state.rows.filter((row) => !row.configured && row.entry.settingsNs !== "");
-+			const addable = state.rows.filter((row) => !row.configured && row.entry.settingsNs !== "").sort((left, right) => {
+ 			const configurable = state.rows.filter((row) => state.namespaces.has(row.entry.settingsNs));
+-			const addable = configurable.filter((row) => !row.configured);
++			const addable = configurable.filter((row) => !row.configured).sort((left, right) => {
 +				const leftRank = SETTINGS_PROVIDER_RANK.get(left.entry.provider) ?? Number.MAX_SAFE_INTEGER;
 +				const rightRank = SETTINGS_PROVIDER_RANK.get(right.entry.provider) ?? Number.MAX_SAFE_INTEGER;
 +				return leftRank - rightRank || left.entry.displayName.localeCompare(right.entry.displayName);
@@ -636,7 +630,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			return (0, react_jsx_runtime.jsxs)("div", {
  				className: ModelsSection_module_css_default["section"],
  				children: [
-@@ -2067,20 +2387,62 @@
+@@ -2094,20 +2414,62 @@
  									children: [(0, react_jsx_runtime.jsx)("span", {
  										className: ModelsSection_module_css_default["fieldLabel"],
  										children: t("provider")
@@ -713,7 +707,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  									})]
  								}),
  								(0, react_jsx_runtime.jsx)(ProviderEditor, {
-@@ -2132,6 +2494,8 @@
+@@ -2159,6 +2521,8 @@
  									setDeclaring(false);
  									setAdding(true);
  									setEditing(targetOf(first));
@@ -721,14 +715,17 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +									setProviderQuery("");
  								},
  								children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 14 }), t("add")]
- 							}), (0, react_jsx_runtime.jsxs)("button", {
-@@ -2244,4 +2608,4 @@
--		const css$1 = "._2CJT8a_description{color:var(--dsw-alias-label-secondary);margin:0;font-size:14px;line-height:24px}._2CJT8a_editor{margin-top:24px}@media (width<=560px){._2CJT8a_editor{margin-top:20px}}";
-+		const css$1 = "._2CJT8a_description{color:var(--dsw-alias-label-secondary);margin:0;font-size:14px;line-height:24px}._2CJT8a_selectionLabel{color:var(--dsw-alias-label-primary);margin:20px 0 10px;font-size:13px;font-weight:500}._2CJT8a_providerList{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;display:grid}._2CJT8a_providerButton{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;flex-direction:column;align-items:flex-start;min-height:58px;padding:10px 12px;display:flex;cursor:pointer;text-align:left}._2CJT8a_providerButton:hover{background:var(--dsw-alias-interactive-bg-hover)}._2CJT8a_providerButtonSelected{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}._2CJT8a_providerName{font-size:14px;font-weight:500;line-height:20px}._2CJT8a_providerKind{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}._2CJT8a_editor{margin-top:24px}@media (width<=560px){._2CJT8a_editor{margin-top:18px}}";
+ 							}), state.namespaces.has("llm-pi-ai") && (0, react_jsx_runtime.jsxs)("button", {
+@@ -2268,7 +2632,7 @@
+ 		}
+ 		//#endregion
+ 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-settings-models/src/client/DeepSeekOnboardingDialog.module.css.mjs
+-		const css$1 = ".GL8Viq_description{color:var(--dsw-alias-label-secondary);margin:0;font-size:14px;line-height:24px}.GL8Viq_editor{margin-top:24px}@media (width<=560px){.GL8Viq_editor{margin-top:20px}}";
++		const css$1 = ".GL8Viq_description{color:var(--dsw-alias-label-secondary);margin:0;font-size:14px;line-height:24px}.GL8Viq_editor{margin-top:24px}@media (width<=560px){.GL8Viq_editor{margin-top:20px}}._2CJT8a_selectionLabel{color:var(--dsw-alias-label-primary);margin:20px 0 10px;font-size:13px;font-weight:500}._2CJT8a_providerList{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;display:grid}._2CJT8a_providerButton{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;flex-direction:column;align-items:flex-start;min-height:58px;padding:10px 12px;display:flex;cursor:pointer;text-align:left}._2CJT8a_providerButton:hover{background:var(--dsw-alias-interactive-bg-hover)}._2CJT8a_providerButtonSelected{border-color:var(--dsw-alias-brand-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}._2CJT8a_providerName{font-size:14px;font-weight:500;line-height:20px}._2CJT8a_providerKind{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}";
  		const tagId$1 = "@deepseek-ai/dsh-client-ui-settings-models/DeepSeekOnboardingDialog.module.css";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
  			const tag = document.createElement("style");
-@@ -2267,35 +2631,50 @@
+@@ -2294,35 +2658,50 @@
  		function assertNever$1(_value) {
  			throw new Error("unexpected DeepSeek onboarding state");
  		}
@@ -797,7 +794,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			const finishCredential = (changed) => {
  				if (!changed) {
  					complete();
-@@ -2633,6 +3012,8 @@
+@@ -2660,6 +3039,8 @@
  			deleting: "Deleting {provider}…",
  			add: "Add provider",
  			provider: "Provider",
@@ -806,7 +803,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			close: "Close",
  			cancel: "Cancel",
  			apply: "Apply",
-@@ -2664,7 +3045,16 @@
+@@ -2691,7 +3072,16 @@
  			contextWindowPlaceholder: "Uses the provider default",
  			maxTokens: "Max output tokens",
  			maxTokensPlaceholder: "Uses the provider default",
@@ -824,7 +821,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			addModel: "Add model",
  			removeModel: "Delete model",
  			modelsEmpty: "No models will be shown in the selector. Unlisted IDs can still be sent directly.",
-@@ -2712,10 +3102,14 @@
+@@ -2740,10 +3130,14 @@
  			welcomeBody: "DeepSeek Harness 0.1 remains in testing for Harness developers. Many areas need further improvement, and we welcome feedback from the developer community. DeepSeek Harness's core plugins and foundational APIs will continue to evolve rapidly over the coming months.\n\nWe look forward to exploring the limits of intelligence with developers around the world, building on open-source, open, reusable, and composable infrastructure. We welcome Harness developers everywhere to join the DSH plugin ecosystem.",
  			welcomeContinue: "Continue",
  			welcomeError: "The acknowledgement could not be saved. Please try again.",
@@ -842,7 +839,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			onboardingSaving: "Saving…",
  			keyRequired: "Enter an API key to continue."
  		};
-@@ -2735,6 +3129,8 @@
+@@ -2763,6 +3157,8 @@
  			deleting: "正在删除 {provider}…",
  			add: "添加提供方",
  			provider: "提供方",
@@ -851,7 +848,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			close: "关闭",
  			cancel: "取消",
  			apply: "保存",
-@@ -2766,7 +3162,16 @@
+@@ -2794,7 +3190,16 @@
  			contextWindowPlaceholder: "使用提供方默认值",
  			maxTokens: "最大输出 token 数",
  			maxTokensPlaceholder: "使用提供方默认值",
@@ -869,7 +866,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			addModel: "添加模型",
  			removeModel: "删除模型",
  			modelsEmpty: "模型选择器中将不显示任何模型；目录外 ID 仍可直接发送。",
-@@ -2814,10 +3219,14 @@
+@@ -2843,10 +3248,14 @@
  			welcomeBody: "DeepSeek Harness 目前的 0.1 版本仍处在面向 Harness 开发者进行测试的阶段，还有许多地方需要持续改进和打磨，希望听取广大开发者的反馈建议。预计 DeepSeek Harness 的核心插件以及基础 API 都会在接下来的一段时间内快速迭代、持续演化。\n\n我们期待与全球开发者一起，在开源、开放、可复用、可组合的基础设施之上，共同探索智能上限。欢迎全球 Harness 开发者加入 DSH 插件生态。",
  			welcomeContinue: "继续",
  			welcomeError: "暂时无法保存确认状态，请重试。",

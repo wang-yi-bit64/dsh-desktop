@@ -71,7 +71,7 @@ const resources = join(projectRoot, 'src-tauri', 'resources')
 const buildDir = join(projectRoot, 'build')
 const vendorDir = join(projectRoot, 'vendor')
 
-const DSH_VERSION = '0.1.2-alpha.4'
+const DSH_VERSION = '0.1.5-rc.1'
 const NODE_VERSION = '24.9.0'
 const PNPM_VERSION = '10.34.5'
 
@@ -205,11 +205,11 @@ for (const name of vendorPackages) {
 
 // Pin every patched package to the exact version its patch was made for.
 // Without overrides, npm resolves the dsh sub-dependency ranges (e.g.
-// ^0.1.2-alpha.4) to newer prereleases such as 0.1.2-rc.1, which the
-// tracked patches refuse to apply to.
+// ^0.1.5-rc.1) to the newest prerelease, which the tracked patches refuse to
+// apply to.
 const overrides = {}
 for (const file of readdirSafe(join(projectRoot, 'patches'))) {
-  // @deepseek-ai+dsh-client-ui-chat+0.1.2-alpha.4.patch
+  // @deepseek-ai+dsh-client-ui-chat+0.1.5-rc.1.patch
   const match = file.match(/^(.*)\+(\d+\.\d+\.\d+[^+]*)\.patch$/)
   if (!match) continue
   const packageName = match[1].replace(/\+/g, '/')

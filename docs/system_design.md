@@ -723,5 +723,5 @@ grep -rn "dsh_host::" src-tauri/src    # 逐项对照调用点清单，确认每
 | Cargo 离线 | **不可用**：本地 registry 缓存缺 `windows-sys` / `win32job` / `winreg`，缓存版本普遍偏旧（`async-trait` 仅 0.1.78，锁文件要 0.1.92） |
 | 网络 | `index.crates.io` HTTP 200 / 0.67s，`static.crates.io` 0.59s；国内镜像更慢 → **用默认源** |
 | 首次 `Updating crates.io index` | 可能耗时数分钟，第一次 `cargo check` 要给足 10 分钟以上 |
-| 真实 dsh 引擎 | **本机不存在**：`node_modules/` 未装、`src-tauri/resources/` 未组装、全局无 `dsh`；npm 上 `@deepseek-ai/dsh` 已漂到 `0.1.2-rc.1`，而 `patches/` 打的是 `0.1.2-alpha.4` |
+| 真实 dsh 引擎 | **本机不存在**：`node_modules/` 未装、`src-tauri/resources/` 未组装、全局无 `dsh`。（此行记录 **2026-09-11 勘察当时**的版本：`patches/` 打 `0.1.2-alpha.4`；该基线已于 2026-09-12 推进到 `0.1.5-rc.1`） |
 | `src-tauri` 全量编译 | 历史记录 >24 分钟，不作门禁 |
