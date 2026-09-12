@@ -31,6 +31,49 @@
 
 ---
 
+## 0.1 官方桌面版约束（升级前必须核对）
+
+> 官方 DSH 仓库（`deepseek-ai/deepseek-harness`）内含一个桌面应用（`apps/desktop`，Electron），
+> 截至 2026-09-12 **已实现但尚未公开发布**（上游设计笔记原文 "Desktop has not been released"）。
+> 它对本仓构成两条**硬约束**，每次升级都必须复核——它们不会因为「还没发布」而不生效，
+> 恰恰相反：一旦官方发布，违反约束的产物会直接撞车。
+
+### 约束一：`desktop` 是保留 profile 名（含所有大小写变体）
+
+官方桌面版**独占** `$DSH_HOME/profiles/desktop`，并拒绝 CLI 对该 profile 执行
+boot / config-dump / 插件管理。
+
+- [ ] 确认本仓**没有**任何 profile 字面量等于 `desktop`（大小写不敏感）。
+      自动化判据：`npm run verify:profile-names`（P1/P2/P3；改动 `SAFE_MODE_PROFILE` /
+      `HARNESS_CLI` 会让它变红）。
+- [ ] 本仓当前使用 `desktop-safe-mode`（安全模式）与裸子命令 `web`（默认）——**不要**改成 `desktop`。
+
+> 为什么本仓会被影响：本仓用 `--profile <name>` 启动 Harness（见
+> `crates/dsh-host/src/args.rs::profile_arguments`）。profile 名一旦撞上官方保留名，
+> `dsh` CLI 会按官方桌面版的规则接管它。
+
+### 约束二：官方桌面版采用更深的宿主协议，不要逼近它
+
+官方桌面**不是** `Desktop → localhost → dsh web` 这一层，而是：内置 Node + pnpm、
+私有 `@deepseek-ai/dsh-desktop-host` 子进程、`dsh-app://` 自定义 scheme、**不监听端口**、
+版本与 `@deepseek-ai/dsh` 锁死、独立预载（**没有** `window.dshDesktop` 这类全局）。
+
+- [ ] 不要为逼近官方形状而改写本仓的启动链路（本仓走 loopback HTTP，这是有意的、
+      也是本仓与官方桌面**并存**的基础）。
+- [ ] 若某个补丁或定制包引入 `window.dshDesktop*` 之类的 renderer 全局，视为回归——
+     该形状曾导致目录选择器必然失败（见 `AGENTS.md`「目录选择器必须走 Host seam」）。
+     自动化判据：`prepare-harness.mjs::assertPickerSurfaceIsHostBacked()`。
+- [ ] 官方桌面**不支持 Linux**（仅 mac-arm64/x64 + win-x64）。本仓的 Linux 出包是
+     与官方互补的发行战术（见 `docs/roadmap.md` §6 贯穿轨道 P1），升级后需复核 Linux 链路仍绿。
+
+### 约束三：上游版本漂移要主动监测，不要等升级时才发现
+
+- [ ] 跑 `npm run verify:drift`：把本仓 `DSH_VERSION` 与 npm dist-tag 比一次。
+      落后 ≥1 个 minor 或出现更晚的预发布阶段（如 alpha → rc）即非零退出；
+      网络不可用时打印 SKIP（**不等于「已核对」**）。
+
+---
+
 ## 1. 升级前：建立基线（不可跳过）
 
 没有基线就无法判断「升级后变差了」。四项都要留档。
@@ -64,7 +107,27 @@
 - [ ] 检查 `overrides` 段是否仍需保留（上游可能已修复相关问题，见 Step 5 的补丁退役）
 - [ ] `packages/*.tgz` 与 `vendor/*` 中声明依赖 DSH 版本的地方
 
-### Step 2 — 重生成补丁（最耗时、最易出错的一步）
+### Step 2 — 先跑适用性预检，再重生成补丁
+
+> **2026-09-12 起，Step 2 有一个零成本的入口**：`npm run check:patch-applicability -- --target=<版本>`
+> 只下载被补丁触及的十几个包（~4MB）到内存做干跑匹配，几秒内给出「干净 / 冲突（第几段 hunk）」清单，
+> **不必先组装 300MB**。它只判「上下文能否对上」，不判语义是否仍成立——但正是升级时最耗时的第一问。
+>
+> **已实测（2026-09-12，target = `0.1.2-rc.1`）**：18 个补丁中 **15 个上下文干净可用、3 个冲突**，
+> 且 3 个冲突全部是 `ui-behavior` 层（可按分级策略降级）：
+
+| 冲突补丁 | 冲突段 | 性质 |
+|---------|--------|------|
+| `@deepseek-ai+dsh-client-ui-agent-preset` | 3/18（hunk#3/#4/#12） | 预设导入/导出的文案块与 CSS 字符串整体位移 |
+| `@deepseek-ai+dsh-client-ui-settings-models` | 4/35（hunk#1/#2/#3/#28） | Provider 选择器与模态切换的上下文漂移 |
+| `@deepseek-ai+dsh-client-ui-workspace` | 6/49（hunk#3/#4/#13/#14/#15/#16） | 会话行样式与未读标记的上下文漂移 |
+
+> 三个都是**上下文漂移**（上游改了相邻行），不是前提失效。按 Step 2.3 的处理是「重生成补丁」：
+> 在对应包的 rc.1 源码上重新施加同样的改动，再用 `npx patch-package <pkg>` 出补丁。
+> 判定属于哪一类，见下表。**`functional` 3 个补丁全部干净**——这是最关键的信号：
+> 启动链路不需要重新设计，升级是一次「重做 3 个 UI 补丁」的可控工作。
+
+重生成补丁的逐个处理流程：
 
 对 `patches/` 下每个补丁，逐个处理：
 
