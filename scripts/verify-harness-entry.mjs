@@ -55,14 +55,27 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const entryPath = join(projectRoot, 'build', 'harness-node-entry.mjs')
+const watchdogModulePath = join(projectRoot, 'build', 'parent-death-watchdog.mjs')
+const mockHarnessPath = join(projectRoot, 'scripts', 'mock-harness.mjs')
+
+/** 读文件，缺失返回空串（用于「模块不存在也算 E4 失败」的判定）。 */
+function readFileSafe(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
 
 /**
  * 判定入口源码是否做了 `runCli` 兼容调用（纯函数，便于自检）。
  *
  * @param {string} text 入口源码
- * @returns {{e1:boolean, e2:boolean, e3:boolean, missing:string[]}}
+ * @param {{moduleSource?:string, mockSource?:string}} [sources] 覆盖磁盘读取
+ *   （自检用；省略时读真实文件）
+ * @returns {{e1:boolean, e2:boolean, e3:boolean, e4:boolean, missing:string[]}}
  */
-export function auditEntry(text) {
+export function auditEntry(text, sources = {}) {
   const src = String(text ?? '')
   // E1：动态 import 的返回值被接住（`const x = await import(...)`），而不是直接 `await import(...)`。
   const capturesImport = /(?:const|let|var)\s+\w+\s*=\s*await\s+import\s*\(/.test(src)
@@ -71,19 +84,25 @@ export function auditEntry(text) {
   const callsRunCli = /\.\s*runCli\s*\(\s*\)/.test(src)
   // E3：仍用 pathToFileURL(dshEntryPath) 动态加载上游 CLI。
   const dynamicLoad = /import\s*\(\s*pathToFileURL\s*\(\s*dshEntryPath\s*\)/.test(src)
-  // E4：macOS 父死看门狗（R-7 的可移植补法）。三条特征同时具备才算通过：
-  //   ① 平台判断（darwin / 强制开关）；② 用 `process.ppid` 拿到被监视的父 pid；
-  //   ③ 轮询定时器**没有 unref**——unref 的定时器在事件循环闲置时不会触发，
-  //      而 Harness 大部分时间正是闲置的。这是真机 CI 上第一版失效的原因，
-  //      必须钉住（否则又是一个「本地看着有、真机不生效」的静默缺陷）。
-  const hasPlatformGate =
-    /process\.platform\s*===\s*['"]darwin['"]/.test(src) ||
-    /DSH_PARENT_DEATH_WATCHDOG/.test(src)
-  const readsPpid = /process\.ppid/.test(src)
-  const usesSetInterval = /setInterval\s*\(/.test(src)
-  // 取看门狗那一行的 unref 使用：若整份文件里 `watchdog.unref()` 存在则视为误用。
-  const wrongUnref = /\bwatchdog\.unref\s*\(\s*\)/.test(src)
-  const watchdog = hasPlatformGate && readsPpid && usesSetInterval && !wrongUnref
+  // E4：macOS 父死看门狗（R-7）**存在且可用**。实现已抽到独立模块
+  // （`build/parent-death-watchdog.mjs`），入口与 mock 共用；这里检查：
+  //   ① 入口确实 import 并安装它；
+  //   ② 模块自身有 darwin 开关 + 读 ppid + 轮询定时器；
+  //   ③ 定时器**没有 unref**——unref 在事件循环闲置时不触发，而 Harness 大部分
+  //      时间正是闲置的（真机 CI 上第一版失效的确切原因）；
+  //   ④ mock-harness 也装了它——故障注入的 mock 模式**不经入口**
+  //      （node_entry 被整体替换成 mock-harness.mjs），只装在入口上等于没装。
+  const entryInstallsWatchdog = /installParentDeathWatchdog\s*\(/.test(src)
+  const moduleSource = sources.moduleSource ?? readFileSafe(watchdogModulePath)
+  // 模块判据：出现 darwin 平台门 + 读 ppid + 有轮询定时器 + 定时器未 unref。
+  // 平台门不绑定写法（`process.platform === 'darwin'` 或 `platform !== 'darwin'`
+  // 都算），只要求「出现 darwin 门」——具体写法由模块自身决定。
+  const moduleGate = /darwin/.test(moduleSource) && /platform/.test(moduleSource)
+  const modulePpid = /process\.ppid/.test(moduleSource)
+  const moduleInterval = /setInterval\s*\(/.test(moduleSource)
+  const moduleNoUnref = !/\.\s*unref\s*\(\s*\)/.test(moduleSource)
+  const mockSource = sources.mockSource ?? readFileSafe(mockHarnessPath)
+  const mockInstallsWatchdog = /installParentDeathWatchdog\s*\(/.test(mockSource)
 
   const missing = []
   if (!capturesImport) missing.push('E1 入口未接住 import 的返回值（无法访问导出的 runCli）')
@@ -94,18 +113,28 @@ export function auditEntry(text) {
     )
   }
   if (!dynamicLoad) missing.push('E3 未以 `import(pathToFileURL(dshEntryPath))` 加载上游 CLI')
-  if (!watchdog) {
-    const why = !hasPlatformGate
-      ? '缺平台判断'
-      : !readsPpid
+  if (!entryInstallsWatchdog) {
+    missing.push('E4a 入口未安装父死看门狗（`installParentDeathWatchdog()`）')
+  }
+  if (!(moduleGate && modulePpid && moduleInterval && moduleNoUnref)) {
+    const why = !moduleGate
+      ? '缺平台开关'
+      : !modulePpid
         ? '未读取 process.ppid'
-        : !usesSetInterval
+        : !moduleInterval
           ? '无轮询定时器'
-          : '看门狗被 unref()——闲置时不会触发，真机上等于没有'
-    missing.push(`E4 macOS 父死看门狗不可用（${why}；R-7：macOS 无 PR_SET_PDEATHSIG 等价物）`)
+          : '定时器被 unref()——闲置时不触发，真机上等于没有'
+    missing.push(`E4b 看门狗模块不可用（${why}；见 build/parent-death-watchdog.mjs）`)
+  }
+  if (!mockInstallsWatchdog) {
+    missing.push(
+      'E4c mock-harness 未安装看门狗——故障注入的 mock 模式**不经入口**' +
+        '（node_entry 被整体替换成 mock-harness.mjs），只装在入口上测不到任何东西'
+    )
   }
 
-  return { e1: capturesImport, e2: checksRunCli && callsRunCli, e3: dynamicLoad, e4: watchdog, missing }
+  const e4 = entryInstallsWatchdog && moduleGate && modulePpid && moduleInterval && moduleNoUnref && mockInstallsWatchdog
+  return { e1: capturesImport, e2: checksRunCli && callsRunCli, e3: dynamicLoad, e4, missing }
 }
 
 /** 自检：可证伪性——修复前的入口片段必须报 E2。 */
@@ -131,36 +160,51 @@ if (!dshEntryPath) { process.exitCode = 1 } else {
   const brokenResult = auditEntry(broken)
   check('坏夹具 → E2 报缺失', brokenResult.missing.some((m) => m.startsWith('E2')))
   check('坏夹具 → e2=false', brokenResult.e2 === false)
-  // 好夹具：修复后的写法（含 macOS 父死看门狗）
-  const fixed = `
+
+  // 好夹具：入口装看门狗 + 模块与 mock 都齐备
+  const goodEntry = `
 if (!dshEntryPath) { process.exitCode = 1 } else {
   process.argv = [process.execPath, dshEntryPath, ...dshArguments]
   try {
     const entry = await import(pathToFileURL(dshEntryPath).href)
     if (typeof entry?.runCli === 'function') { await entry.runCli() }
-    process.stdout.write('[harness-node] DSH entry loaded\\n')
   } catch (error) { process.exitCode = 1 }
 }
-if (process.platform === 'darwin') {
+installParentDeathWatchdog({ label: 'harness-node' })`
+  const goodModule = `
+export function installParentDeathWatchdog(){
+  if (process.platform !== 'darwin' && process.env.DSH_PARENT_DEATH_WATCHDOG !== '1') return false
   const parentPid = process.ppid
-  const parentAlive = () => { try { process.kill(parentPid, 0); return true } catch (e) { return e && e.code === 'EPERM' } }
-  if (parentAlive()) {
-    const watchdog = setInterval(() => { if (!parentAlive()) process.kill(process.pid, 'SIGTERM') }, 250)
-  }
+  setInterval(() => { process.kill(parentPid, 0) }, 250)
 }`
-  const fixedResult = auditEntry(fixed)
+  const goodMock = `installParentDeathWatchdog({ label: 'mock-harness' })`
+  const fixedResult = auditEntry(goodEntry, { moduleSource: goodModule, mockSource: goodMock })
   check('好夹具 → 无缺失', fixedResult.missing.length === 0)
   check('好夹具 → e4=true', fixedResult.e4 === true)
 
-  // 可证伪性（E4-a）：去掉看门狗，必须报 E4。
-  const noWatchdog = fixed.replace(/if \(process\.platform === 'darwin'[\s\S]*$/, '')
-  check('无看门狗夹具 → E4 报缺失', auditEntry(noWatchdog).missing.some((m) => m.startsWith('E4')))
-
-  // 可证伪性（E4-b）：看门狗被 unref（真机上失效的确切原因，必须报 E4）。
-  const unrefWatchdog = fixed.replace('}, 250)\n  }\n}', '}, 250)\n    watchdog.unref()\n  }\n}')
+  // 可证伪性（E4a）：入口不装看门狗 → 报 E4a
+  const noInstall = goodEntry.replace(/installParentDeathWatchdog[\s\S]*$/, '')
   check(
-    '看门狗被 unref → E4 报缺失',
-    auditEntry(unrefWatchdog).missing.some((m) => m.startsWith('E4') && m.includes('unref'))
+    '入口未装看门狗 → E4a',
+    auditEntry(noInstall, { moduleSource: goodModule, mockSource: goodMock }).missing.some((m) => m.startsWith('E4a'))
+  )
+
+  // 可证伪性（E4b）：模块给定时器加 unref（真机失效的确切原因）→ 报 E4b
+  const unrefModule = goodModule.replace(
+    'setInterval(() => { process.kill(parentPid, 0) }, 250)',
+    'const wdRef = setInterval(() => { process.kill(parentPid, 0) }, 250); wdRef.unref()'
+  )
+  check(
+    '看门狗被 unref → E4b',
+    auditEntry(goodEntry, { moduleSource: unrefModule, mockSource: goodMock })
+      .missing.some((m) => m.startsWith('E4b') && m.includes('unref'))
+  )
+
+  // 可证伪性（E4c）：mock 未装看门狗（故障注入不经入口，等于没防护）→ 报 E4c
+  check(
+    'mock 未装看门狗 → E4c',
+    auditEntry(goodEntry, { moduleSource: goodModule, mockSource: '// nothing' })
+      .missing.some((m) => m.startsWith('E4c'))
   )
 
   if (failed > 0) {

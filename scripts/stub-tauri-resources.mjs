@@ -42,6 +42,7 @@ const assets = [
   'harness-node-entry.mjs',
   'windows-child-process-hide.mjs',
   'plugin-safety-guard.mjs',
+  'parent-death-watchdog.mjs',
   'dsh-desktop.patch.yml',
   'dsh-desktop-safe.patch.yml',
   'splash.html',

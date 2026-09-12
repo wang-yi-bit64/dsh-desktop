@@ -35,6 +35,27 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 
+// 父死看门狗：**必须装在本脚本里**，不能只装在 `harness-node-entry.mjs` 上。
+// mock 模式会把 `node_entry` / `dsh_entry` 双双替换成本脚本（见
+// `crates/dsh-host-cli/src/commands/mod.rs::apply_mock_if_requested`），因此
+// 真实入口不在故障注入的路径上——只加在那里，macOS 的 A/B 孤儿断言测的就是
+// 「没有任何防护」的裸进程。
+//
+// 两种运行形态的模块位置不同，故按序尝试解析：
+//   · 仓库内直接跑（scripts/mock-harness.mjs）→ 模块在 ../build/
+//   · 组装出的 mock 资源树（两者平铺在同一目录）→ 模块在同级
+// 找不到也不致命：看门狗是 macOS 专项增强，缺失只意味着退回改动前的行为。
+let installParentDeathWatchdog = () => false
+for (const specifier of ['../build/parent-death-watchdog.mjs', './parent-death-watchdog.mjs']) {
+  try {
+    ;({ installParentDeathWatchdog } = await import(specifier))
+    break
+  } catch {
+    /* 试下一个位置 */
+  }
+}
+installParentDeathWatchdog({ label: 'mock-harness' })
+
 const args = process.argv.slice(2)
 
 function readOption(name, fallback) {

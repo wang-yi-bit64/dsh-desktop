@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { enforceWindowsChildProcessHide } from './windows-child-process-hide.mjs'
 import { installPluginSafetyGuards } from './plugin-safety-guard.mjs'
+import { installParentDeathWatchdog } from './parent-death-watchdog.mjs'
 
 // 只取用故障归因格式化：本进程需要的是「把 uncaughtException / unhandledRejection
 // 归类成 [dsh-plugin-fault] 并写日志」这一项能力。
@@ -69,66 +70,12 @@ if (process.platform === 'win32') {
   process.stdout.write('[harness-node] windowsHide enforcement enabled for child processes\n')
 }
 
-// Parent-death watchdog — macOS only.
+// Parent-death watchdog — macOS only（风险 R-7）。
 //
-// 各平台的「父死子亡」手段（见 crates/dsh-host/src/process.rs）：
-//   · Windows：Job Object（kernel 级）
-//   · Linux：prctl(PR_SET_PDEATHSIG)
-//   · macOS：**没有等价物**（风险 R-7）——此前只剩「进程组 + 下次启动清扫」
-//
-// 后果：宿主被 SIGTERM（场景 A）或被强杀（场景 B）后，Harness 仍会成为孤儿，
-// 直到**下一次**冷启动才被陈旧 pidfile 清扫掉。2026-09-12 把故障注入转为
-// 三平台硬门禁后，macOS 的 A/B 两项当场变红，暴露了这个长期缺口。
-//
-// 可移植的补法：父进程一旦消亡，本进程被 reparent，但**不要假设 ppid 变成某个
-// 固定值**（实测 macOS 上未必是 1）。改为主动探测父进程是否仍存在：
-// `process.kill(ppid, 0)` 在父进程已死于 ESRCH → 自我了断。这是 PDEATHSIG 的
-// 等价效果，且因为入口包装器是**我们自己的代码**，不必等上游。
-//
-// 保守约束（避免误杀正常运行的 Harness）：
-//   · 只在 macOS 启用（其余平台已有内核级机制）；
-//   · 「父进程从一开始就不存在」（kill 立即 ESRCH，例如 launchd 直拉）则不启用；
-//   · 间隔 500ms；用普通定时器而非 unref（unref 的定时器在事件循环闲着时可能
-//     不触发，而 Harness 大部分时间正是闲着的——这是第一版没生效的原因）。
-//
-// `DSH_PARENT_DEATH_WATCHDOG=1` 可在非 darwin 平台强制启用：本机（Windows）没有
-// macOS 可跑，这个开关让看门狗的**行为**能被本地实测（scripts/verify-harness-entry.mjs
-// 的 --self-test 之外，另有一条真跑用例），而不必每轮都靠三平台 CI 试错。
-const watchdogForced = process.env.DSH_PARENT_DEATH_WATCHDOG === '1'
-if (process.platform === 'darwin' || watchdogForced) {
-  const parentPid = process.ppid
-
-  /** 父进程是否仍存活；EPERM 表示存在但无权限（仍算存活）。 */
-  const parentAlive = () => {
-    if (parentPid <= 1) return false
-    try {
-      process.kill(parentPid, 0)
-      return true
-    } catch (error) {
-      return error?.code === 'EPERM'
-    }
-  }
-
-  if (parentAlive()) {
-    // 250ms：故障注入在杀掉宿主后 ~1.2s 就检查孤儿，需留出「探测 → SIGTERM →
-    // 进程真正消失」的余量。
-    //
-    // ⚠️ 这里**刻意不 unref()**：unref 的定时器在事件循环闲置时不会被触发，
-    // 而 Harness 大部分时间正是闲置的——第一版 unref 后看门狗在 macOS CI 上
-    // 从未运行（日志里连一行痕迹都没有）。代价是它会让进程保持存活；这是可接受
-    // 的，因为本进程的职责就是活着服务，父死时看门狗会自我了断。
-    const watchdog = setInterval(() => {
-      if (parentAlive()) return
-      clearInterval(watchdog)
-      process.stderr.write(
-        '[harness-node] parent process exited; shutting down (macOS parent-death watchdog)\n'
-      )
-      // 先让 Harness 有机会正常关闭；若它忽略 SIGTERM，1.5 秒后强制退出。
-      process.kill(process.pid, 'SIGTERM')
-      setTimeout(() => process.exit(0), 1500)
-    }, 250)
-  }
-}
+// macOS 没有 PR_SET_PDEATHSIG 等价物，宿主被杀后本进程会成为孤儿。看门狗补上
+// 这一环；它与 mock 入口**共用同一实现**（`parent-death-watchdog.mjs`），
+// 因此故障注入测到的就是真实行为。详见该模块文件头（含两个踩过的坑）。
+installParentDeathWatchdog({ label: 'harness-node' })
 
 // Materialize DSH Desktop's generation projection before any profile module
 // loads. Market operations run inside a live Harness, so they deliberately

@@ -322,6 +322,11 @@ function buildMockResourceDir() {
   // mock 模式下 CLI 会把入口整体替换为 <resource_dir>/mock-harness.mjs
   // （见 dsh-host-cli 的 apply_mock_if_requested），因此它必须落在资源目录根部。
   cpSync(join(projectRoot, 'scripts', 'mock-harness.mjs'), join(dir, 'mock-harness.mjs'))
+  // 父死看门狗与 mock 共用；mock 树平铺，模块落在同级（mock 会先试 ../build/）。
+  cpSync(
+    join(projectRoot, 'build', 'parent-death-watchdog.mjs'),
+    join(dir, 'parent-death-watchdog.mjs')
+  )
   for (const file of [
     'harness-node-entry.mjs',
     'plugin-safety-guard.mjs',

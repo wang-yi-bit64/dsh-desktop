@@ -113,6 +113,12 @@ function buildMockResourceDir() {
   mkdirSync(join(dir, 'node'), { recursive: true })
   cpSync(process.execPath, join(dir, 'node', nodeBinName))
   cpSync(join(projectRoot, 'scripts', 'mock-harness.mjs'), join(dir, 'mock-harness.mjs'))
+  // mock 与真实入口共用父死看门狗模块；mock 树是平铺布局，模块须落在同级
+  // （mock-harness.mjs 会先试 ../build/ 再试同级）。
+  cpSync(
+    join(projectRoot, 'build', 'parent-death-watchdog.mjs'),
+    join(dir, 'parent-death-watchdog.mjs')
+  )
   cpSync(join(projectRoot, 'build', 'dsh-desktop.patch.yml'), join(dir, 'dsh-desktop.patch.yml'))
   // 安全模式的 --patch 层：故障注入场景同样要能走安全模式启动路径。
   cpSync(

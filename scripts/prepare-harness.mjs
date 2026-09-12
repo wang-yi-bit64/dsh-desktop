@@ -305,6 +305,8 @@ const REQUIRED_FILES = [
   'harness-node-entry.mjs',
   'windows-child-process-hide.mjs',
   'plugin-safety-guard.mjs',
+  // harness-node-entry.mjs 的**直接** import（父死看门狗）；缺失则入口 import 抛错。
+  'parent-death-watchdog.mjs',
   'dsh-desktop.patch.yml',
   'dsh-desktop-safe.patch.yml',
   'MANIFEST.json',
@@ -343,6 +345,8 @@ function copyBuildFiles() {
     'harness-node-entry.mjs',
     'windows-child-process-hide.mjs',
     'plugin-safety-guard.mjs',
+    // harness-node-entry.mjs 直接 import 的父死看门狗（macOS R-7）。
+    'parent-death-watchdog.mjs',
     'dsh-desktop.patch.yml',
     // 安全模式的 --patch 层。缺失会让「Restart in Safe Mode」在启动时
     // 硬失败（C10：安全模式不做静默降级）。
