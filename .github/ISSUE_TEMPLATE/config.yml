@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions, ideas & showcase (Discussions)
+    url: https://github.com/wang-yi-bit64/dsh-desktop/discussions
+    about: How do I…? Wouldn't it be nice if…? Here is my setup. Open-ended topics live here, not in the issue tracker.

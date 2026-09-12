@@ -1,0 +1,141 @@
+name: Bug report
+description: Something in DSH Desktop (the Tauri shell) is broken or behaves unexpectedly.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. **中文填写也欢迎** — write in whichever language you prefer.
+
+        Before you file this, please export the redacted diagnostics bundle (steps at the bottom of
+        this form). It is the single most useful attachment for a shell problem, and it is **safe by
+        design**: credentials are stripped before the archive is written, and nothing is ever uploaded
+        anywhere.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the existing issues and discussions — this is not a duplicate.
+          required: true
+        - label: I am on the latest release (see Releases, or the app menu **DSH Desktop → Check for Updates…**).
+          required: true
+        - label: I understand this project is an unofficial shell around DeepSeek Harness, not a DeepSeek product.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: DSH Desktop version
+      description: The version in the installer filename, or shown on the updates page.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: The actual behaviour, including the exact error text or a screenshot if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1. Launch the app
+        2.
+        3.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app is involved?
+      description: Best guess is fine — this is only used for triage.
+      options:
+        - Startup / the app will not launch
+        - Harness fails to start or becomes unresponsive
+        - Safe Mode / crash recovery / error page
+        - Mobile bridge (phone pairing)
+        - Auto-update / install
+        - Logs page or diagnostics export
+        - Menu, window or other shell behaviour
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: safe-mode
+    attributes:
+      label: Safe Mode
+      description: If the app fell back to Safe Mode (or the error page named a suspected plugin fault), tick this and paste the 2–3 most relevant `harness.log` lines below.
+      options:
+        - label: The app fell back to Safe Mode, or the error page mentioned a suspected plugin fault.
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## Step 1 — Export a redacted diagnostics bundle (inside the app)
+
+        In the app menu bar: **Harness → Export Diagnostics…**
+
+        The shell writes a timestamped `diagnostics-<timestamp>.zip` and shows you its path. It contains
+        `desktop.log`, `harness.log` and `app.log`, the crash attribution verdict, an environment
+        snapshot and a manifest. Five redaction rules run **before** anything is written — the launch
+        token, `dsh-auth-*` cookies, API keys, proxy credentials and user-name path segments are
+        removed, and the bundle records how many of each were stripped, so "was it redacted?" is a
+        checkable fact rather than a promise.
+
+        (The same button exists on the in-app logs page, **Harness → View Logs…**, together with the
+        exact log file paths.)
+
+        ## Step 2 — Attach it
+
+        Click **Create** first, then drag the `.zip` into the comment box on the issue — GitHub attaches
+        it there. You may open the archive first and delete anything you are uncomfortable sharing: it
+        stays on your disk and is **never** uploaded automatically.
+
+        <details>
+        <summary>If the app does not start at all (the menu is unreachable)</summary>
+
+        Collect the logs from disk instead and attach them here:
+
+        | OS | Log folder |
+        |----|------------|
+        | Windows | `%APPDATA%\io.dsh.desktop\` |
+        | macOS | `~/Library/Application Support/io.dsh.desktop/` |
+        | Linux | `~/.local/share/io.dsh.desktop/` |
+
+        `desktop.log` is the shell's own log; `harness.log` is the Harness subprocess's. **These raw
+        files are *not* redacted** — `harness.log` contains the per-process launch token and
+        `dsh-auth-*` cookies in plain text — so review them before posting, or replace those values.
+        </details>
+  - type: checkboxes
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      options:
+        - label: I have exported the diagnostics bundle (or explained above why I cannot).
+          required: true
+  - type: textarea
+    id: diagnostics-detail
+    attributes:
+      label: Diagnostics bundle / relevant log lines
+      description: Paste anything you already have here; the archive itself can be attached after creating the issue.

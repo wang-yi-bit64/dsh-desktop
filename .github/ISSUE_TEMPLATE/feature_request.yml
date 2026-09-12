@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a concrete change or addition to DSH Desktop (the Tauri shell).
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **中文填写也欢迎** — write in whichever language you prefer.
+
+        Use this form when you have a fairly concrete proposal. For open-ended ideas, questions about
+        how something works, or showing off a setup, please start a
+        [Discussion](https://github.com/wang-yi-bit64/dsh-desktop/discussions) instead — GitHub issue
+        templates are for actionable, triage-able items.
+
+        One boundary to keep in mind: this repo is a **rubber-stamp shell** around the stock Harness
+        web UI, not a reimplementation of it. Proposals that add harness features belong upstream in
+        [`deepseek-ai/dsh`](https://github.com/deepseek-ai/dsh); proposals about how the desktop shell
+        wraps, launches, recovers or updates Harness belong here.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I checked the roadmap (`docs/roadmap.md`) and the disabled/archived features in `AGENTS.md` §7.2 — this is not already a settled decision.
+          required: true
+        - label: I searched the existing issues and discussions — this is not a duplicate.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The situation you are in, not the solution you have in mind. A concrete workflow that hurts today is more persuasive than a feature name.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including workarounds you already tried, and anything you found in the docs.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, mockups, links, or how other shells handle it.
+    validations:
+      required: false

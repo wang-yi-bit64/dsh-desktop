@@ -83,6 +83,8 @@ build/                  # Runtime injection and guard scripts
 patches/                # patch-package patches applied to the Harness tree + LAYERS.md tier manifest
 vendor/                 # Local desktop customization packages (dshmarket, etc.)
 packages/               # Vendored tgz overrides for patched packages
+.github/                # Workflows (ci / smoke / drift / release) + issue forms & Discussions entry point
+  ISSUE_TEMPLATE/         # Issue forms: bug_report.yml (embeds the redacted-diagnostics two-step guide), feature_request.yml, config.yml
 scripts/                # Build and testing helpers (prepare-harness, stub-tauri-resources, etc.)
   prepare-harness.mjs       # Assembles the bundled runtime into src-tauri/resources/ (tiered patch degradation; --strict restores fail-fast)
   stub-tauri-resources.mjs  # Compile-only stub resources for fresh checkouts / CI

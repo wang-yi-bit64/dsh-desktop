@@ -51,7 +51,7 @@
 
 ## 进度快照
 
-> 最后更新：2026-09-12（编制时，全部未开工）· 状态词表见 `AGENTS.md` §7.3
+> 最后更新：2026-09-12（0.2-D1 已收尾，其余未开工）· 状态词表见 `AGENTS.md` §7.3
 
 | 批次 | 项 | 状态 | 落地证据（编制时实测） |
 |------|----|------|----------------------|
@@ -66,7 +66,7 @@
 | 0.2-C | C1 补丁面审计（上游化候选标记） | ❌ 未开工 | `patches/` 现存 14 个补丁（0.1.5-rc.1 升级后），无上游化标记 |
 | 0.2-C | C2 首个上游 PR | ❌ 未开工 | 无 |
 | 0.2-C | C3 上游升级演练（实测适配成本） | ❌ 未开工 | `dsh-upgrade-checklist.md` 无演练记录节（与 H0 批次 I2「实跑升级清单」是同一件事，**并入时合并、勿重复立项**） |
-| 0.2-D | D1 Discussions + Issue 模板 | ❌ 未开工 | 仓库无 Discussions / 模板 |
+| 0.2-D | D1 Discussions + Issue 模板 | ✅ **已完成（2026-09-12）** | Discussions 已开启（GraphQL `hasDiscussionsEnabled: true`，六个默认分类）；`.github/ISSUE_TEMPLATE/` 下 `bug_report.yml`（内嵌脱敏诊断包两步指引）、`feature_request.yml`、`config.yml`（关闭空白 issue + Discussions 联系入口） |
 | 0.2-D | D2 应用内反馈入口 | ❌ 未开工 | `menu.rs` 菜单树无 Feedback 项 |
 | 0.2-D | D3 README 社区入口 | ❌ 未开工 | 无 |
 
@@ -256,6 +256,27 @@
 - **D3**：README / README.zh-CN 顶部加社区入口与「非官方、非 DeepSeek 产品」的
   明确标注（社区同类项目均已如此，这是合规与信任成本最低的做法）。
 - **验收**：模板生效（开一个测试 issue 验证渲染）；菜单项三平台可点。
+
+### D1 执行记录（2026-09-12）
+
+- **Discussions**：经 GitHub API 开启（`PATCH /repos/wang-yi-bit64/dsh-desktop {"has_discussions": true}`），
+  GraphQL 复核 `hasDiscussionsEnabled: true`；默认六个分类（Announcements / General / Ideas /
+  Polls / Q&A / Show and tell）原样保留，未另建自定义分类。
+- **模板**：`.github/ISSUE_TEMPLATE/` 下三个文件——
+  - `bug_report.yml`：12 个条目。正文内嵌**两步指引**（① 菜单「Harness → Export Diagnostics…」
+    导出脱敏包；② 建完 issue 后把 `.zip` 拖进评论区——GitHub 只允许对已创建的 issue 挂附件），
+    并给出「应用起不来、菜单点不到」时按平台取 `desktop.log` / `harness.log` 的路径表，
+    同时**显式警告原始日志未脱敏**（`harness.log` 含明文 launch token 与 `dsh-auth-*` cookie）。
+  - `feature_request.yml`：明确本仓是套壳，Harness 侧功能应提给上游 `deepseek-ai/dsh`。
+  - `config.yml`：`blank_issues_enabled: false`（关闭空白 issue，强制走模板）+ Discussions 联系入口。
+- **校验方式**：模板结构按 GitHub 官方 issue-form JSON Schema
+  （`json.schemastore.org/github-issue-forms.json`）逐条核对。该 Schema 明确 **`checkboxes`
+  不接受 `validations`**——勾选项的「必填」只能写在 option 的 `required` 上；首版误把 `required`
+  写在 attributes 层，已按 Schema 修正。这类错误不会让文件变成非法 YAML，只会让表单在 GitHub
+  侧渲染异常，因此不能靠「YAML 能解析」当通过判据。
+- **未纳入本项**：D2（应用内 Feedback 菜单项）、D3（README 社区入口 + 「非官方」标注）保持
+  ❌ 未开工。本项只交付 Discussions 与 issue 模板；发现渠道的**入口**（菜单 / README 顶部）
+  属 D2/D3，尚未落地。
 
 ---
 

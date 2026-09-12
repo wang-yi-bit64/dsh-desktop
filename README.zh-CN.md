@@ -83,6 +83,8 @@ build/                  # 运行时组装与辅助注入脚本
 patches/                # 应用到 Harness 依赖树的 patch-package 补丁 + LAYERS.md 分级清单
 vendor/                 # 本地桌面定制包（dshmarket 等）
 packages/               # 被打补丁包的 vendored tgz 覆盖
+.github/                # 工作流（ci / smoke / drift / release）+ Issue 表单与 Discussions 入口
+  ISSUE_TEMPLATE/         # Issue 表单：bug_report.yml（内嵌脱敏诊断包两步指引）、feature_request.yml、config.yml
 scripts/                # 构建与测试辅助（prepare-harness、stub-tauri-resources 等）
   prepare-harness.mjs       # 组装运行时到 src-tauri/resources/（补丁按级降级，--strict 恢复 fail-fast）
   stub-tauri-resources.mjs  # 全新 checkout / CI 用的仅编译桩资源
