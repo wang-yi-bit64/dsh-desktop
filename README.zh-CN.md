@@ -21,7 +21,7 @@
 - **Harness 核心生命周期** ✅ —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
-- **插件运行异常守护（进程内）** ✅ —— `plugin-safety-guard.mjs` 拦截未捕获异常与未处理 Promise 拒绝，产出 `[dsh-plugin-fault]` 归因信息，避免单个插件把整个 Harness 拖崩。
+- **插件运行异常守护（进程内）** ✅ —— `plugin-safety-guard.mjs` 拦截未捕获异常与未处理 Promise 拒绝，产出 `[dsh-plugin-fault]` 归因信息，让插件故障**可归因、可诊断**而不是静默发生。它运行在 **Harness 进程内**，因此**不隔离**崩溃的插件：该进程内的硬崩溃仍可能带走 Harness（见下方「已归档」的插件隔离条目——本仓库不得作相反表述）。
 - **安全模式与故障恢复** ✅ —— 自动检测启动失败原因并写入独立隔离 profile，随后**真正以该 profile 启动 Harness**（`--profile desktop-safe-mode` 搭配 `dsh-desktop-safe.patch.yml`，后者会摘掉常规补丁层挂载的产品插件），保障基础功能可用。注意：安全模式生效期间，壳层界面上**尚无任何提示**——该指示器属**刻意后置的功能**，见[后续计划](#后续计划尚未开工)。
 - **多 Profile 与会话管理** ✅ —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
 - **壳层结构化日志** ✅ —— `tauri-plugin-log` 落盘到 `app_data_dir/desktop.log`（5 MB × 2 轮转，含本地时区），与 Harness 侧 `harness.log` / `app.log` 分离，便于归因「是壳的问题还是 Harness 的问题」。
@@ -92,7 +92,10 @@ scripts/                # 构建与测试辅助（prepare-harness、stub-tauri-r
   smoke-launch.mjs          # CI 分层烟雾（L1 无头门禁 / L2 GUI xvfb）
   report-bundle-size.mjs    # 采集壳/安装包/资源树体积，写入 CI job summary
 docs/                   # 架构设计、契约定义与技术方案
-  dev-plan-disconnected-points.md   # 【当前主计划】断线点清单（D1~D11）与批次 A~G 施工记录
+  roadmap.md                        # 【顶层路线图】定位、边界与阶段序列（H0~H3）
+  dev-plan-hardening-and-differentiation.md  # 近端施工计划（路线图 H0 阶段）：风险清单 R1~R9 与批次 H~N
+  dev-plan-0.2-hardening.md         # 【产品与分发侧增补】批次 0.2-A~D：签名/公证、发布通道、体验底线、反馈闭环
+  dev-plan-disconnected-points.md   # 上一阶段主计划（已闭环）：断线点清单（D1~D11）与批次 A~G 施工记录
   dsh-desktop-redesign-architecture-and-plan.md  # 架构重构与开发执行完整计划
   system_design.md                  # 系统架构设计与不变量规范
   archive/                          # 已归档设计（刻意不做，代码已删，仅留作追溯）
@@ -147,6 +150,11 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
 | `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
 | `npm run verify:release-workflow` | 发布工作流自身的两个静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。 |
+| `npm run verify:profile-names` | 任何 profile 字面量都不得等于官方保留名 `desktop`（大小写不敏感）——官方桌面版独占该 profile。同时钉住两个契约锚点（`SAFE_MODE_PROFILE` 保持 `desktop-safe-mode`、`HARNESS_CLI` 保持裸子命令 `web`）。带可证伪性自检。 |
+| `npm run verify:claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |
+| `npm run verify:drift` / `verify:drift:self-test` | 钉住的 `DSH_VERSION` 是否已落后于 npm dist-tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
+| `npm run report:patches` | 补丁健康度报告：把层 / 退役条件表与 `MANIFEST.json` 里逐条真实的 `applied/skipped/failed` 合并成一张表。manifest 缺失时如实标为不可用——**不伪造 applied**。 |
+| `npm run check:patch-applicability` / `--target=<v>` | 上游升级预检：18 个补丁在目标版本上哪些仍可用、在哪一段 hunk 断裂。约 4MB 下载，不必组装 300MB。零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器）。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L2 GUI 启动。 |
 

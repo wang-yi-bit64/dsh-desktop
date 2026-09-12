@@ -152,6 +152,13 @@ jobs:
         if: inputs.scope != 'l1'
         run: npm run verify:harness-tree
 
+      # 补丁健康度（只有组装之后 `MANIFEST.json` 才有逐条的 applied/skipped/failed
+      # 证据）。写进 job summary，让「哪些补丁真的打上了」一眼可见——这正是
+      # docs/roadmap.md §5.3 要求的「补丁数趋势」可见性。此步是报告，不作门禁。
+      - name: Report patch health
+        if: inputs.scope != 'l1'
+        run: npm run report:patches -- --markdown
+
       - name: Verify bundled Node.js version
         if: inputs.scope != 'l1'
         shell: bash
@@ -169,12 +176,19 @@ jobs:
         run: node scripts/smoke-launch.mjs --level=1 --resource-mode=assembled
 
       # 故障注入：孤儿进程清理 + 退出码归因。这是唯一能证伪「子进程在宿主崩溃后
-      # 残留」的门禁——单测覆盖不到，因为要真的派生、真的杀。
-      # Windows 走 Job Object 路径，已本地跑通 10/10，作硬门禁；Linux/macOS 走
-      # PDEATHSIG / 进程组，尚无人工确认记录，先作**信息性**步骤（失败留档不阻断）。
+      # 残留」的门禁——单测覆盖不到，因为要真的派生、真的杀。INV-3 声称三平台
+      # 都有孤儿防护（Win32 Job Object / Linux PDEATHSIG+进程组 / macOS 进程组+
+      # 退出清扫），因此三平台都必须有**阻塞性**证据，否则「三平台都防护」只是一句
+      # 未经检验的话。
+      #
+      # 为什么现在可以转硬门禁（2026-09-12）：`scripts/fault-inject.mjs` 的
+      # `killProcess` 已按平台分支（Windows 走 taskkill，POSIX 走 SIGTERM/SIGKILL），
+      # `findOrphans` 也有 pgrep 路径——脚本本身是跨平台的。此前它只在 Windows 上
+      # 作硬门禁，其余平台 `continue-on-error`，等于把「未确认」长期停在那里。
+      # 本步骤**只出现在手动触发的 smoke.yml**（不进 ci.yml、不进 release.yml），
+      # 因此转硬门禁不会波及 PR 与发版链路，只会让「手动跑一次冒烟」如实反映结果。
       - name: Fault injection (orphan cleanup + exit-code attribution)
         if: inputs.fault_injection
-        continue-on-error: ${{ runner.os != 'Windows' }}
         run: npm run fault-inject
 
       # ---- 范围 full：打安装包并跑 L2 GUI 烟雾 ----
@@ -217,12 +231,21 @@ jobs:
           NO_STRIP: "1"
         run: npm run tauri -- build --bundles ${{ matrix.bundles }} -v
 
-      # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。软门禁（continue-on-error）：
-      # GUI 在 CI 上受窗口管理器 / WebKit 版本影响，偶发失败不应伪装成产品缺陷。
+      # L2：真实壳二进制启动观察窗 + 关闭后无孤儿。
+      #
+      # 门禁强度（2026-09-12 调整）：**Windows / macOS 转硬门禁**，Linux 仍为信息性。
+      # 原先是三平台一律 `continue-on-error`，理由是「GUI 受窗口管理器 / WebKit 版本
+      # 影响，偶发失败不应伪装成产品缺陷」——这个顾虑在 Linux（xvfb + WebKitGTK）上
+      # 确实成立，但把它一刀切成三平台全软，等于**删掉了「壳能不能起来」的唯一证据**。
+      # 折中：有真实窗口管理器的 Windows/macOS 作硬门禁；Linux 保留 xvfb 路径但失败不阻断，
+      # 待其稳定性有实测记录后再收紧。
+      #
+      # `--require-level2`：scope=full 已经打过包，二进制**必须**存在。缺了就是打包环节
+      # 出了问题，不该被当成「PR 分支没构建、预期 SKIP」轻轻放过。
       - name: Smoke L2 (GUI launch)
         if: inputs.scope == 'full'
-        continue-on-error: true
-        run: node scripts/smoke-launch.mjs --level=2
+        continue-on-error: ${{ runner.os == 'Linux' }}
+        run: node scripts/smoke-launch.mjs --level=2 --require-level2
 
       - name: Report bundle size
         if: inputs.scope == 'full'

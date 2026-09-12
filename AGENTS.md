@@ -36,7 +36,7 @@
   - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
-  - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证（6 类故障场景 / 10 项断言）；`npm run fault-inject`，CI 中 Windows 为硬门禁。
+  - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证（6 类故障场景 / 10 项断言）；`npm run fault-inject`，在 Smoke 工作流中为**三平台硬门禁**（2026-09-12 起；此前仅 Windows 硬、其余 `continue-on-error`）。
   - `verify-ipc-surface.mjs`：壳接口面一致性静态检查（命令定义 ↔ 注册 ↔ 前端 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记）。这类断线 `dead_code` 看不见，见 §7.3。
   - `verify-shell-pages.mjs`：壳内页面的**运行时**冒烟（DOM 桩里真跑内联脚本 + 逐个点按钮），检查 P1~P6：引用可解析 / 脚本不抛错 / 命令已注册 / **按钮都挂了监听** / 模板 id 前缀可解析 / **命令结果解包了封套**。抓 `verify-ipc-surface` 看不见的两类缺陷：`getElementById` 拿到 `null` 导致整页监听失效；HTML 留了按钮但脚本忘了绑。它曾当场抓到批次 E 引入的「`updates.html` 把封套当载荷用、整页永远不渲染」。
   - `verify-target.mjs`：打包目标守卫（构建主机 vs 目标平台）。目标来源优先级：argv → `TAURI_ENV_TARGET_TRIPLE` → `rustc -vV` host；`--self-test` 跑纯逻辑自检。
@@ -135,6 +135,24 @@ npm run verify:variants
 #     守两类「只有真跑 release 才炸」的缺陷——见「发布工作流的两个静默缺陷」一节
 npm run verify:release-workflow
 npm run verify:release-workflow:self-test
+
+# 18. 官方 profile 保留名守卫（`desktop` 大小写变体）+ 契约锚点；含自测
+npm run verify:profile-names
+npm run verify:profile-names:self-test
+
+# 19. 宣称纪律守卫（README ↔ AGENTS：禁止表述 / 状态词表 / §7.2 欠债登记）；含自测
+npm run verify:claims
+npm run verify:claims:self-test
+
+# 20. 上游版本漂移哨兵（真检查会因上游领先而红，跑在 nightly；CI 只跑自测）
+npm run verify:drift
+npm run verify:drift:self-test
+
+# 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
+npm run report:patches
+
+# 22. 上游升级预检：补丁在新版本上的适用性（~4MB，不必组装 300MB）
+npm run check:patch-applicability -- --target=0.1.2-rc.1
 
 # 15. 推进版本号（dry-run 先看，再真改）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
@@ -398,7 +416,10 @@ ERROR: Failed to deploy dependencies for existing files
 - **P4（薄壳收敛与诊断系统 2.0）✅ 已接线（2026-09-10 批次 D/E 闭环）**：前端结构化错误归因、**统一 IPC 封套（`IpcEnvelope<T>`，17 个命令全部收敛）**、**一键脱敏导出诊断包（`diagnostics_export`，5 类脱敏规则 + 正反用例）**、**应用内日志查看器（`logs.html`）**、**插件恢复页（可操作、有状态反馈）** 均已接线。证据获取路径现为四条：错误页 / 恢复页 / 日志页 / 原生菜单「Export Diagnostics…」。
 
 ## 6. 修改敏感模块前必读文档
-- `docs/dev-plan-disconnected-points.md`：**当前主计划**——断线点清单（D1~D11）与批次 A~G 的施工计划、进度快照与需裁决的决策点。**开工前先看它的「进度快照」表与 §4 决策点。**
+- `docs/roadmap.md`：**顶层路线图**——定位声明、边界原则与阶段序列（H0~H3）；定位与裁决冲突以它为权威。
+- `docs/dev-plan-hardening-and-differentiation.md`：**近端施工计划（路线图 H0 阶段）**——风险清单 R1~R9 与批次 H~N（风险哨兵 / 上游推进 / 门禁可信度 / 宣称纪律 / 构建卫生 / 运维韧性 / 差异化）。
+- `docs/dev-plan-0.2-hardening.md`：**产品与分发侧增补计划（批次 0.2-A~D）**——与 H0 互补：签名/公证、发布通道、桌面体验底线、上游 PR 候选、反馈闭环；它相对 H0 的独有覆盖与三处优先级冲突写在该文首「关系」一节，**是否并入 H0 及冲突如何裁决归用户**。
+- `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点清单（D1~D11）与裁决记录，留作追溯；「插件禁用语义」的证据链在这里（批次 C），0.2-B4 项要重走它。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md`：系统重构设计与开发全流程计划。
 - `docs/system_design.md`：核心系统架构设计、缺陷清单与契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**（裁定不做，代码已删）的两份设计文档；只在需要追溯设计意图或评估「要不要恢复」时读。
@@ -536,9 +557,15 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 
 | 工作流 | 文件 | 触发 | 做什么 |
 |--------|------|------|--------|
-| CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
+| CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，三个输入：`scope` / `os` / `fault_injection`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。**不发布任何东西** |
+| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` 真检查落后 npm dist-tag 即红。**不构建任何东西**——只回答「该规划升级了吗」 |
 | Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json` |
+
+- **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
+  `schedule`（每天一次）、新增 `drift.yml`。二者合起来让「main 的 HEAD 有没有烂」与「上游
+  是否已甩开我们」最迟 24 小时内被证实——成本是**一天一次**而非每次提交一次。它们**不替代**
+  发布前那两次手动 dispatch：定时 CI 不跑冒烟（起窗口那一步），drift 只比版本号。
 
 - **日常提交不触发任何 CI**（2026-09-11 起）：`ci.yml` 摘掉了 `push: main`，**推 tag 也不会跑它**
   （tag 归 `release.yml`；同一件事两处实现必然漂移，出包只留一个产地）。日常提交要的是快反馈，

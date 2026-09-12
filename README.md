@@ -21,7 +21,7 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 - **Harness Subprocess Lifecycle** ✅ — Spawns Harness on a reserved loopback port, extracts per-process launch tokens, and polls HTTP readiness.
 - **Watchdog & Crash Self-Healing (Supervisor)** ✅ — Embedded supervisor state machine with heartbeat checks, automatic restarts, and circuit breaking.
 - **Orphan Process Protection (INV-3)** ✅ — Win32 JobObject (`KILL_ON_JOB_CLOSE`) on Windows, `PR_SET_PDEATHSIG` + process groups on Linux, process groups + exit sweeping on macOS. No child survives a hard crash or exit of the shell.
-- **In-Process Plugin Fault Guard** ✅ — `plugin-safety-guard.mjs` intercepts uncaught exceptions and unhandled rejections, emitting `[dsh-plugin-fault]` attribution so one plugin cannot take down the whole Harness.
+- **In-Process Plugin Fault Guard** ✅ — `plugin-safety-guard.mjs` intercepts uncaught exceptions and unhandled rejections and emits `[dsh-plugin-fault]` attribution, so a plugin fault is **attributable and diagnosable** instead of silent. It runs **inside the Harness process**, so it does **not** isolate a crashing plugin: a hard crash in that process can still take Harness down (see the archived plugin-isolation item below — this repository must not claim otherwise).
 - **Safe Mode & Recovery** ✅ — Detects the startup failure cause and writes an isolated profile, then **actually boots Harness with it** (`--profile desktop-safe-mode` plus `dsh-desktop-safe.patch.yml`, which drops the product plugins that the normal patch layer mounts) so basic functionality stays available. Note: the shell does **not yet** show anything in the UI while safe mode is active — that indicator is a **deliberately deferred feature**, see [Planned](#planned-not-started).
 - **Multi-Profile & Session Management** ✅ — Built-in Session and Profile managers for managing persistent configuration, environment variables, and metadata.
 - **Structured Shell Logging** ✅ — `tauri-plugin-log` writes to `app_data_dir/desktop.log` (5 MB × 2 rotations, local timezone), kept separate from Harness-side `harness.log` / `app.log` so you can tell "shell problem" from "Harness problem".
@@ -92,7 +92,10 @@ scripts/                # Build and testing helpers (prepare-harness, stub-tauri
   smoke-launch.mjs          # Layered CI smoke (L1 headless gate / L2 GUI under xvfb)
   report-bundle-size.mjs    # Collects shell / installer / resource-tree sizes into the CI job summary
 docs/                   # Architecture designs, contract definitions, and specifications
-  dev-plan-disconnected-points.md   # CURRENT MAIN PLAN: disconnected-point inventory (D1~D11) + batch A~G execution log
+  roadmap.md                        # TOP-LEVEL ROADMAP: positioning, boundaries, stage sequence (H0~H3)
+  dev-plan-hardening-and-differentiation.md  # Near-term plan (roadmap H0 stage): risks R1~R9, batches H~N
+  dev-plan-0.2-hardening.md         # Product & distribution supplement (batches 0.2-A~D): signing, channels, desktop baseline, feedback loop
+  dev-plan-disconnected-points.md   # Previous main plan (closed): disconnected-point inventory (D1~D11) + batch A~G execution log
   dsh-desktop-redesign-architecture-and-plan.md  # Comprehensive redesign architecture & execution plan
   system_design.md                  # Core system design & invariant specifications
   archive/                          # ARCHIVED designs — dropped on purpose, code deleted, kept only for traceability
@@ -144,6 +147,11 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 | `npm run verify:commits` / `npm run verify:changelog` | Self-tests for the changelog generator and its commit parser. A generator that breaks and **silently emits an empty changelog** is worse than no generator: the release page would read "nothing changed". |
 | `npm run verify:target` | The build host and the packaging target are the same platform/arch — checked before 300 MB of runtime gets assembled into the bundle. |
 | `npm run verify:release-workflow` | The release workflow's own two silent failure modes: `tauri-action` inserts its own `build` and `--` (so `tauriScript` must not carry either), and shell variables must be `${braced}` when followed by non-ASCII punctuation (macOS bash 3.2 otherwise swallows it into the variable name). Both turned the first `v0.1.0` release fully red while every local gate stayed green. |
+| `npm run verify:profile-names` | No profile literal equals the official reserved name `desktop` (case-insensitive) — the official desktop app claims that profile for itself. Also pins the two contract anchors (`SAFE_MODE_PROFILE` stays `desktop-safe-mode`, `HARNESS_CLI` stays the bare `web`). Carries a falsifiability check. |
+| `npm run verify:claims` | README ↔ `AGENTS.md` claim discipline: phrases that `AGENTS.md` §7 forbids must not appear in either README, the five status words must be present in all three files, and every debt row in the §7.2 table must be registered. Carries a falsifiability check built from the pre-fix wording. |
+| `npm run verify:drift` / `verify:drift:self-test` | Whether the pinned `DSH_VERSION` has fallen behind npm's dist-tags. Fails on a minor-version or pre-release-stage gap, merely warns within the same stage, and prints `SKIP` (not "verified") when the registry is unreachable. The live check runs on a nightly schedule; CI runs only its self-test. |
+| `npm run report:patches` | Patch health report merging the layer/retire-condition table with the actual per-patch `applied/skipped/failed` recorded in `MANIFEST.json`. Reports — never fakes "applied" when the manifest is absent. |
+| `npm run check:patch-applicability` / `--target=<v>` | Pre-flight for an upstream bump: which of the 18 patches still apply to a target version, and at which hunk they break. ~4 MB download, no 300 MB assembly. Zero external binaries (Node `fetch` + `zlib` + bundled tar reader). |
 | `npm run fault-inject` | Orphan-process cleanup and exit-code attribution against a real `dsh-host-cli` binary (10 assertions). |
 | `npm run smoke:headless` / `npm run smoke` | Layered smoke: L1 headless (spawn → ready → serving → clean exit, no orphans) and L2 GUI launch. |
 

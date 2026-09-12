@@ -100,11 +100,21 @@ jobs:
           npm run verify:prune
           npm run verify:variants
           npm run verify:release-workflow
+          npm run verify:profile-names
+          npm run verify:drift:self-test
+          npm run verify:claims
           npm run verify:ipc-surface
           npm run verify:shell-pages
           npm run verify:harness-inject
           npm run verify:commits
           npm run verify:changelog
+
+      # 发布前**必须**知道自己在发布哪个上游基线。这里跑真检查（联网）但**不阻断**
+      # 发布：落后上游是「该规划升级了」，不是「这次发布有问题」——把提醒打在日志里，
+      # 由人判断是否在本次发布前推进（推进流程见 docs/dsh-upgrade-checklist.md）。
+      - name: Upstream drift check (informational)
+        continue-on-error: true
+        run: npm run verify:drift
 
   build:
     name: ${{ matrix.os }} / release
@@ -275,3 +285,9 @@ jobs:
       - name: Report bundle size
         if: always()
         run: node scripts/report-bundle-size.mjs --markdown
+
+      # 补丁健康度写进 job summary（组装后 MANIFEST.json 才有逐条证据）。
+      # 报告不作门禁——补丁失败的分级策略已由 prepare:harness 执行。
+      - name: Report patch health
+        if: always()
+        run: npm run report:patches -- --markdown

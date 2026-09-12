@@ -1,0 +1,56 @@
+name: Drift
+
+# 上游 DSH 版本漂移哨兵（定时任务）。
+#
+# ## 为什么独立成工作流、且跑真检查
+#
+# 本仓把 `@deepseek-ai/dsh` 钉在 `scripts/prepare-harness.mjs` 的 `DSH_VERSION`，
+# 并在其上叠加 18 个 patch-package 行级补丁。上游处于灰度迭代期、**明确声明会有
+# 破坏性变更**——落后越多，补丁冲突越会集中到某一次升级里一起爆发。
+#
+# `npm run verify:drift` 把这件事从「升级时才发现」变成「落后了就有人叫」：
+#   · 落后 ≥1 个 minor，或上游进入更晚的预发布阶段（alpha → rc）→ **失败**；
+#   · 同一预发布阶段内只落后补丁位 → 仅提示；
+#   · registry 取不到 → SKIP（**不等于「已核对」**）。
+#
+# ## 为什么不放进 ci.yml
+#
+# 真检查会因「上游领先于本仓」而红，而那是**待规划升级**的信号，不是「这个提交
+# 有问题」。挂在每次 PR/提交上会长期制造无法通过的红灯，最后只会被人无视。
+# 因此：`ci.yml` 只跑它的 **self-test**（纯逻辑，必过），真检查在这里按天跑，
+# 失败时由 GitHub 的失败通知叫人——这正是「哨兵」该有的行为。
+#
+# ## 触发
+#   · schedule：每天 03:17 UTC 一次
+#   · workflow_dispatch：随时手动跑
+#
+# 命令行等价：gh workflow run drift.yml
+
+on:
+  schedule:
+    # 非整点，避开 GitHub Actions 的整点排队高峰。
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: upstream DSH drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 纯逻辑自检先跑：一个写错了却静默放行的哨兵比没有哨兵更危险。
+      - name: Drift sentinel self-test
+        run: npm run verify:drift:self-test
+
+      # 真检查：联网比对 npm dist-tag。落后到阈值即非零退出，让定时任务变红。
+      # 网络不可达时脚本自行 SKIP（exit 0）并在日志里说明「未核对」。
+      - name: Upstream drift check
+        run: npm run verify:drift

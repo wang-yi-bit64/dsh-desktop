@@ -19,12 +19,28 @@ name: CI
 # clippy / 三平台矩阵，而 release.yml 的 preflight 只跑秒级静态门禁、看不见运行时行为。
 # 因此**发布前请先手动 dispatch 本工作流（拿静态+单测）并 dispatch 一次 Smoke（拿冒烟）
 # 且都确认全绿，再打 tag**。省略这一步，一个从未通过矩阵的提交会被直接打包发布。
+#
+# 2026-09-12 增设 `schedule`（每天一次）：这是上述代价的**部分补偿**——让 main 的 HEAD
+# 最迟每 24 小时被静态门禁 + clippy + 单测验一次，避免「长期没人验过」拖到发版才暴露。
+# 它是补充，**不是替代**发布前那两次手动 dispatch：定时任务不跑冒烟（起窗口那一步）。
 
 on:
   # 刻意不监听 `push`（含 main 与 tag）：日常提交零自动化，出包只在 release.yml，
   # 冒烟只在 smoke.yml（手动）。
   pull_request:
   workflow_dispatch:
+  # 定时跑一次（每天）——这是「日常零自动化」的**补偿机制**，不是把它加回来。
+  #
+  # 为什么需要它：摘掉 `push` 之后，`main` 的 HEAD 可能长期没人验过；而 release 的
+  # preflight 只跑秒级静态门禁、看不见单测与 clippy，于是「给一个从未通过矩阵的
+  # 提交打 tag」这件事没有任何自动化的最后一道网。定时跑把这道网补上，成本是
+  # **一天一次**（而非每次提交一次），既不为日常提交加负担，也让 main 的绿色
+  # 状态最迟在 24 小时内被证实或证伪。
+  #
+  # 定时任务固定在默认分支上运行（GitHub 的既有行为），因此检查的就是 main 的 HEAD。
+  schedule:
+    # 非整点，避开 Actions 的整点排队高峰（与 drift.yml 错开）。
+    - cron: '41 2 * * *'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -94,6 +110,35 @@ jobs:
       # 两者都让 v0.1.0 首次发布三平台全红，且本地门禁全绿——因此必须在这里独立成门禁。
       - name: Verify release workflow guards
         run: npm run verify:release-workflow:self-test
+
+      # 官方 profile 保留名守卫（纯静态，不联网）。官方桌面版独占 `desktop` 这个
+      # profile 名及其**全部大小写变体**（已实现、未发布）。本仓当前未使用保留名
+      # （安全模式是 `desktop-safe-mode`，默认是裸子命令 `web`），因此这是一道
+      # **防回归**门禁：哪天有人顺手把某个 profile 命名成 `desktop`，在这里就红。
+      # 同时校验两个契约锚点（SAFE_MODE_PROFILE / HARNESS_CLI）未被改向保留名。
+      - name: Verify DSH profile reserved-name guard
+        run: |
+          npm run verify:profile-names
+          npm run verify:profile-names:self-test
+
+      # 上游版本漂移哨兵的**自检**（纯逻辑 + 无网络分支，不联网）。它守住哨兵
+      # 自身的判定：落后 minor / 落后预发布阶段必须判失败，持平/领先必须判通过，
+      # 取不到 registry 必须落到 SKIP 而不是冒充「已核对」。
+      # ⚠️ 真检查（`npm run verify:drift`）**不放在这里**：它会因上游领先而红，
+      # 属于「提醒升级」而非「代码有问题」，挂在每次提交上会长期制造红灯噪声；
+      # 真检查跑在 `drift.yml` 的定时任务里。
+      - name: Verify upstream drift sentinel self-test
+        run: npm run verify:drift:self-test
+
+      # 宣称纪律守卫（README ↔ AGENTS）。它把 §7 的「不得过度宣称」与「欠债必须登记」
+      # 变成会失败的检查：禁止表述不得出现在 README；五种状态词表三处一致；§7.2 表里
+      # 每个 ⚠️ 未接线 / ❌ 未实现 行都必须登记销账。此前这类漂移只能靠人读 grep 输出，
+      # 2026-09-12 的评估正是这样抓到 README 一处「插件无法拖垮 Harness」的过度宣称。
+      # 自带可证伪性自检（把修复前的坏句当夹具，必须报红）。
+      - name: Verify claim discipline (README ↔ AGENTS)
+        run: |
+          npm run verify:claims
+          npm run verify:claims:self-test
 
       # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
       # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
