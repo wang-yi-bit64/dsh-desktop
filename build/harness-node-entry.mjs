@@ -80,30 +80,46 @@ if (process.platform === 'win32') {
 // 直到**下一次**冷启动才被陈旧 pidfile 清扫掉。2026-09-12 把故障注入转为
 // 三平台硬门禁后，macOS 的 A/B 两项当场变红，暴露了这个长期缺口。
 //
-// 可移植的补法：父进程一旦死亡，本进程会被 reparent 到 launchd，`process.ppid`
-// 变为 1。轮询它能以极小代价拿到 PDEATHSIG 的等价效果，而这是**我们自己的**
-// 入口包装器，不必等上游。
+// 可移植的补法：父进程一旦消亡，本进程被 reparent，但**不要假设 ppid 变成某个
+// 固定值**（实测 macOS 上未必是 1）。改为主动探测父进程是否仍存在：
+// `process.kill(ppid, 0)` 在父进程已死于 ESRCH → 自我了断。这是 PDEATHSIG 的
+// 等价效果，且因为入口包装器是**我们自己的代码**，不必等上游。
 //
 // 保守约束（避免误杀正常运行的 Harness）：
-//   · 只在 macOS 启用（其余平台已有内核级机制，不需要也不应加这层）；
-//   · 只在「启动时父进程不是 1」（即确实是被宿主派生）时启用——否则在
-//     launchd 直接拉起等场景下会立刻自杀；
-//   · 间隔 500ms 且 `unref()`，不阻止事件循环退出。
-if (process.platform === 'darwin' && process.ppid !== 1) {
-  const initialPpid = process.ppid
-  const watchdog = setInterval(() => {
-    if (process.ppid !== initialPpid || process.ppid === 1) {
+//   · 只在 macOS 启用（其余平台已有内核级机制）；
+//   · 「父进程从一开始就不存在」（kill 立即 ESRCH，例如 launchd 直拉）则不启用；
+//   · 间隔 500ms；用普通定时器而非 unref（unref 的定时器在事件循环闲着时可能
+//     不触发，而 Harness 大部分时间正是闲着的——这是第一版没生效的原因）。
+if (process.platform === 'darwin') {
+  const parentPid = process.ppid
+
+  /** 父进程是否仍存活；EPERM 表示存在但无权限（仍算存活）。 */
+  const parentAlive = () => {
+    if (parentPid <= 1) return false
+    try {
+      process.kill(parentPid, 0)
+      return true
+    } catch (error) {
+      return error?.code === 'EPERM'
+    }
+  }
+
+  if (parentAlive()) {
+    // 250ms：故障注入在杀掉宿主后 ~1.2s 就检查孤儿，需留出「探测 → SIGTERM →
+    // 进程真正消失」的余量。
+    const watchdog = setInterval(() => {
+      if (parentAlive()) return
+      clearInterval(watchdog)
       process.stderr.write(
         '[harness-node] parent process exited; shutting down (macOS parent-death watchdog)\n'
       )
-      clearInterval(watchdog)
-      // 用 SIGTERM 走正常关闭路径，让 Harness 有机会落地状态。
+      // 先让 Harness 有机会正常关闭；若它忽略 SIGTERM，1.5 秒后强制退出。
       process.kill(process.pid, 'SIGTERM')
-      // 兜底：若 Harness 忽略 SIGTERM，2 秒后强制退出。
-      setTimeout(() => process.exit(0), 2000).unref()
-    }
-  }, 500)
-  watchdog.unref()
+      setTimeout(() => process.exit(0), 1500)
+    }, 250)
+    // 看门狗本身不应阻止进程退出。
+    watchdog.unref()
+  }
 }
 
 // Materialize DSH Desktop's generation projection before any profile module
