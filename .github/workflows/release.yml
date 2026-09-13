@@ -100,6 +100,7 @@ jobs:
           npm run verify:prune
           npm run verify:variants
           npm run verify:release-workflow
+          npm run verify:cli-package
           npm run verify:profile-names
           npm run verify:drift:self-test
           npm run verify:claims
@@ -292,3 +293,139 @@ jobs:
       - name: Report patch health
         if: always()
         run: npm run report:patches -- --markdown
+
+  # ---------------------------------------------------------------------------
+  # CLI 产物：把 dsh-host-cli 作为可引用产物发布（见 docs/dev-plan-cli-distribution.md）
+  # ---------------------------------------------------------------------------
+  # 为什么单独成 job 而不是塞进 build：
+  #   · 它**不依赖 300MB 资源树**，也不需要 WebKit/GTK 等桌面依赖，因此跑得比出包快得多，
+  #     没必要绑在 build 后面（build 失败时 CLI 也该照常发布——两者是不同的产物）；
+  #   · build 的 matrix 要按平台传 --bundles，与这里的三平台同构但语义不同，混在一起
+  #     会让两件事的判据互相污染。
+  cli:
+    name: ${{ matrix.os }} / cli artifact
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 只缓存 workspace 根（不含 src-tauri）——CLI 的依赖树就是 dsh-host + clap，
+      # 与壳层完全不同，共用一个缓存 key 只会互相挤掉对方。
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: cli
+
+      # 不需要 `npm ci`：打包脚本只用 Node 内置模块（含 PowerShell / tar 子进程）。
+      - name: Build dsh-host-cli
+        run: cargo build --release -p dsh-host-cli
+
+      # 打包 + 三类校验（全部在脚本里，不放这里写 bash）：
+      #   1. 回读校验——解包后与原二进制逐字节一致、可执行位还在；
+      #   2. 产物执行自检——解包出来那一份真的跑 `--version` 与一次 `status`，
+      #      确认「哈希对得上但一执行就炸」（架构不符 / 缺动态库）不会漏过去；
+      #   3. manifest 落盘——下面的上传与发布说明都从它取文件名，不靠 glob 猜。
+      - name: Package and verify CLI artifact
+        run: npm run package:cli -- --bin target/release/dsh-host-cli --out dist/cli
+
+      # 传成 workflow artifact 而不是直接 `gh release upload`：release 由 build job 的
+      # tauri-action 创建，并行上传会撞「release 还不存在」。先落 artifact，
+      # 由下面的 cli-publish（needs: build）统一上传并**重新核验一遍**。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.os }}
+          path: dist/cli/*
+          if-no-files-found: error
+
+  cli-publish:
+    name: publish CLI artifacts
+    # needs: build 是硬性的：Release 对象由 build job 的 tauri-action 创建，
+    # 先于它上传会失败。needs: cli 同样是硬性的——少一个平台就是在发布一个
+    # 覆盖不全的产物集，而用户从资产列表上看不出少了哪个平台。
+    needs: [preflight, build, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: dist/cli
+
+      # 这里是**下载回来**的产物（走了一遍 artifact 存储），不是构建目录里的原件：
+      # 上传链路改坏文件这件事，本地怎么验都验不出来。逐平台核验归档 / 边车与
+      # manifest 三者是否一致。
+      - name: Verify downloaded artifacts against their manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          manifests=(dist/cli/*.manifest.json)
+          if [ ${#manifests[@]} -eq 0 ]; then
+            echo "::error::没有找到任何 CLI manifest——打包或 artifact 传递链路断了"
+            exit 1
+          fi
+          if [ ${#manifests[@]} -ne 3 ]; then
+            echo "::warning::期望 3 个平台的 CLI manifest，实际 ${#manifests[@]} 个"
+          fi
+          for manifest in "${manifests[@]}"; do
+            node scripts/package-cli.mjs --verify-download dist/cli --manifest "${manifest}"
+          done
+
+      - name: Upload artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # nullglob + 逐类断言：某个 glob 没命中时，裸 glob 会把字面量
+          # `dist/cli/*.tar.gz` 当文件名传给 gh，报「找不到该文件」——错误信息指向
+          # 一个不存在的路径，而不是「这类产物没产出来」。这里逐类点名。
+          shopt -s nullglob
+          files=()
+          for pattern in '*.zip' '*.tar.gz' '*.sha256' '*.manifest.json'; do
+            matched=(dist/cli/${pattern})
+            if [ ${#matched[@]} -eq 0 ]; then
+              echo "::error::dist/cli 下没有任何 ${pattern}——该类产物缺失，不应发布一个不完整的产物集"
+              exit 1
+            fi
+            files+=("${matched[@]}")
+          done
+          echo "将上传 ${#files[@]} 个文件："
+          printf '  %s\n' "${files[@]}"
+          # --clobber：workflow_dispatch 兜底重跑时会命中已存在的同名资产，
+          # 不带它就会因「asset already exists」失败（而不是覆盖成新构建）。
+          gh release upload "${TAG}" "${files[@]}" --clobber
+
+      # 把 CLI 产物写进 Release 正文，否则用户得自己去翻 Assets 列表才知道有它——
+      # 「可引用」的前提是**可发现**。渲染与幂等替换都在 package-cli.mjs 里
+      # （有自测钉着「重跑不会出现两遍表格」），这里只做读 / 写。
+      - name: Append a CLI download section to the release notes
+        env:
+          # GITHUB_REPOSITORY 由 runner 提供，渲染链接时要用；这里显式声明以便本地复现时也能读懂。
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOTES="$(mktemp)"
+          # `--jq '.body'` 对空正文返回字面量 null（不是空串）：直接喂给渲染器会得到
+          # 一段以 "null" 开头的正文。这里统一归一成空串。
+          gh release view "${TAG}" --json body --jq '.body // ""' > existing.md
+          node scripts/package-cli.mjs --release-notes dist/cli --tag "${TAG}" \
+            --existing-notes existing.md > "${NOTES}"
+          gh release edit "${TAG}" --notes-file "${NOTES}"
+          rm -f "${NOTES}" existing.md
