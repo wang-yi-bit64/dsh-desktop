@@ -7,6 +7,26 @@
 
 <!-- changelog-entries -->
 
+## [0.4.0] - 2026-09-13
+
+### ✨ 新功能
+
+- **release**: CLI 归档作为 Release 资产发布（cli + cli-publish 两个 job） ([15cb85d](https://github.com/wang-yi-bit64/dsh-desktop/commit/15cb85df09e6afc1b93ba909194e28f775fce6da))
+- **cli**: CLI 打包装箱脚本——命名/边车/manifest/回读校验/产物执行自检 ([57b4c1f](https://github.com/wang-yi-bit64/dsh-desktop/commit/57b4c1fa2e21f9bbd887b58bf09eeee32ddfdf55))
+
+### 📝 文档
+
+- 登记 CLI 可引用产物能力与分期计划 ([ca53f80](https://github.com/wang-yi-bit64/dsh-desktop/commit/ca53f80036ca49f5f0806a1343d6f6a1c69dd274))
+- 同步 0.3.0 发布结果与三平台验证结论 ([6b16ac4](https://github.com/wang-yi-bit64/dsh-desktop/commit/6b16ac4794987b48d8bd7022419c25f3e2fe7757))
+
+### ✅ 测试
+
+- **release-workflow**: 守卫覆盖 CLI 产物形状（按 job 切片 + CRLF 无关） ([7f3b32a](https://github.com/wang-yi-bit64/dsh-desktop/commit/7f3b32a56fe16454ef73e28e874dd4090e40debb))
+
+### 🔧 CI
+
+- 接入 CLI 打包与发布步骤原文演练门禁 ([920d211](https://github.com/wang-yi-bit64/dsh-desktop/commit/920d211466fac64336ff536c84b120b4f8229340))
+
 ## [0.3.0] - 2026-09-13
 
 ### ✨ 新功能
