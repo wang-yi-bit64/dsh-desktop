@@ -33,6 +33,7 @@
 - **插件恢复流程** ✅ —— 真正的恢复页（`frontend/plugin-recovery.html`），在疑似插件故障时从错误页进入。它调用 `recovery_status`（归因结论 + 嫌疑插件清单，数据直接来自 `dsh_host::diagnostics`）与 `recovery_action`（`safe-mode` / `restart` / `show-log` / `quit`），失败在页面上可见，并监听 `harness://status` 让重启过程真的可见。它**只提供非破坏性动作**——「卸载插件」为何刻意缺席见下方「已归档 / 计划中」。
 - **一键脱敏诊断包导出** ✅ —— 一键产出 `app_data_dir/exports/diagnostics-<时间戳>.zip`，内含三个日志文件、归因结论、环境快照与 `MANIFEST.json`。每个文本条目都过五条脱敏规则（launch token / `dsh-auth-*` cookie / 路径用户名段 / API key 形态 / 代理口令），且**每条规则的命中次数都写进包里**——因此「到底脱敏了没有」是可核对的事实，而不是一句承诺。错误页、日志页与应用菜单三处入口。
 - **应用内日志查看器** ✅ —— `frontend/logs.html` 读取 `harness.log` / `desktop.log` / `app.log` 的尾部（经 `logs_read`），显示文件大小，**在只显示尾部时明确标记**，并提供诊断导出与打开日志目录的入口。
+- **可下载的无头 CLI（`dsh-host-cli`）** ✅ —— 与桌面壳驱动的是同一份生命周期逻辑，但作为独立命令行产物发布：`start` / `stop` / `status` / `tail` / `probe` / `doctor`，无 GUI、不依赖 Tauri。每次发布给出各平台归档（Windows 为 `.zip`，其余 `.tar.gz`）与 `.sha256` 边车、`manifest.json`；打包链路在上传前会**解包回读**（逐字节一致、可执行位完好）并**真的执行一次解包出来的二进制**，上传后再核验一遍下载回来的那份。它**不**捆绑、不下载、不更新 runtime——用 `--resource <RES>` 指向一个已组装的 runtime。以 Release 资产形式发布，**不在**桌面安装包内。分期计划与尚未开工的 runtime 独立发布见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md)。
 
 ### 已归档 / 计划中（勿对外宣称可用）
 
@@ -151,7 +152,9 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
 | `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
 | `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
-| `npm run verify:release-workflow` | 发布工作流自身的两个静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。 |
+| `npm run verify:release-workflow` | 发布工作流自身的两个静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。现在还检查 CLI 产物的形状（打包步骤在位、上传带 `--clobber`、上传 `.sha256` 边车、发布 job 带 `needs: build`、三平台齐全），并要求发布正文段落**委托**给有自测的脚本，而不是内联在 YAML 里。 |
+| `npm run verify:cli-package` | CLI 打包链路（`scripts/package-cli.mjs`）：产物名由 `package.json` 与目标三元组推导（**不接受手写**）、`.sha256` 边车是 `sha256sum -c` 真能读的格式、归档解包回读逐字节一致且可执行位完好。同一脚本幂等地渲染 Release 正文表格，并带可伪证夹具——被篡改的解包内容、丢掉的可执行位、不匹配的边车、缺失的归档，全都必须判红。 |
+| `npm run verify:cli-publish` | 把 `cli-publish` job 的 `run:` 段落从 `release.yml` **原文抽出并逐字执行**，跑在一次性的最小检出布局里、用一个假 `gh` 截住网络：shell 语义、glob 展开、相对路径、`gh` 参数形状。它存在的理由是：手抄一份实现去验收，验的是抄件而不是真正发布的那段。它**不**替代真发布——假 `gh` 只断言「文件存在、非空、带了 `--clobber`」；跨平台的产物完整性由三平台发布矩阵覆盖。 |
 | `npm run verify:harness-entry` | 壳入口 ↔ 上游 `dsh` CLI 的调用约定兼容性：上游 0.1.5-rc.1 把 CLI 改成 `if (import.meta.main) runCli()`，因此**import** 它的包装器必须显式调用导出的 `runCli()`，否则进程以退出码 0 静默结束。同时钉住 macOS 父死看门狗——由入口**与 `mock-harness.mjs`** 共同安装（故障注入的 mock 模式会把入口整体替换掉）。带可证伪性自检。 |
 | `npm run verify:profile-names` | 任何 profile 字面量都不得等于官方保留名 `desktop`（大小写不敏感）——官方桌面版独占该 profile。同时钉住两个契约锚点（`SAFE_MODE_PROFILE` 保持 `desktop-safe-mode`、`HARNESS_CLI` 保持裸子命令 `web`）。带可证伪性自检。 |
 | `npm run verify:claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |

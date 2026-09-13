@@ -19,7 +19,7 @@
 - **`crates/dsh-host`**：无 GUI 依赖的纯 Rust 核心宿主库。
   - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断（`diagnostics.rs`）、**脱敏诊断包导出（`diagnostics_export.rs`，批次 D）**、**日志尾部读取（`logs_view.rs`，批次 D）**、Safe Mode 隔离 Profile、多 Profile/Session 管理。
   - **严格保持无 GUI / Headless 状态（不变量 INV-6）**。
-- **`crates/dsh-host-cli`**：`dsh-host` 的命令行工具前端（支持 `dsh-host start | status | stop | tail | doctor`）。
+- **`crates/dsh-host-cli`**：`dsh-host` 的命令行工具前端（支持 `dsh-host start | status | stop | tail | probe | doctor`）。**发布形态是可下载产物**：`release.yml` 的 `cli` job 三平台构建，`scripts/package-cli.mjs` 打包（命名 / `.sha256` 边车 / manifest / 回读校验 / 产物执行自检），`cli-publish` job 核验下载副本后上传到同一 Release。分期与触发条件见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md)——**该产物不含 runtime**，不要表述为「下载即用」。
 - **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志、一键脱敏诊断包导出、应用内日志查看器）。
   - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 17 个，**全部有前端调用方**）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`（其 `ALLOW_UNUSED_COMMANDS` 现在是**空表**，这是目标状态），理由与例外清单见 `commands.rs` 模块文档。
   - **命令返回形态**：所有命令返回 `CommandResult<T>` = `Result<IpcEnvelope<T>, String>`；**外层 `Result` 恒为 `Ok`**（仅为满足 Tauri 对 async 命令的编译要求），成败与错误码全在内层封套。**不要返回 `Err`**——那会让封套连同错误码一起丢失。细节见 `commands.rs` 模块文档。
@@ -160,12 +160,24 @@ npm run check:patch-applicability -- --target=0.1.5-rc.1
 npm run verify:harness-entry
 npm run verify:harness-entry:self-test
 
-# 15. 推进版本号（dry-run 先看，再真改）
+# 24. CLI 可引用产物：打包 / 命名 / sha256 边车 / 回读校验 / 产物执行自检（含自测）
+#     产物名由 package.json + 目标三元组推导；归档解包回读并真的执行一次
+npm run verify:cli-package
+#     真打一份产物（先 cargo build --release -p dsh-host-cli）
+npm run package:cli -- --bin target/release/dsh-host-cli --out dist/cli
+#     核验下载回来的那份（发布链路自证；manifest 由打包步骤落盘）
+npm run package:cli -- --verify-download dist/cli --manifest dist/cli/<base>.manifest.json
+
+# 25. cli-publish 发布步骤的**原文**演练（从 release.yml 抽出 run 块逐字执行，假 gh 截网）
+#     需要先把 CLI 构建成 release；在临时检出布局里跑，不动仓库 dist/
+npm run verify:cli-publish
+
+# 26. 推进版本号（dry-run 先看，再真改）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
 npm run version:set  -- 0.2.0              # 直接指定
 npm run version:bump -- minor --commit --tag   # 改文件 + 提交 + 打本地 tag（不推送）
 
-# 16. 变更日志（产物入库 / 供 Release 正文使用）
+# 27. 变更日志（产物入库 / 供 Release 正文使用）
 npm run changelog:write -- --version 0.2.0     # 写入 CHANGELOG.md
 npm run changelog:notes                        # 打印上个 tag..HEAD 的 Release 正文
 ```
@@ -493,6 +505,7 @@ ERROR: Failed to deploy dependencies for existing files
 - `docs/dev-plan-hardening-and-differentiation.md`：**近端施工计划（路线图 H0 阶段）**——风险清单 R1~R9 与批次 H~N（风险哨兵 / 上游推进 / 门禁可信度 / 宣称纪律 / 构建卫生 / 运维韧性 / 差异化）。
 - `docs/dev-plan-0.2-hardening.md`：**产品与分发侧增补计划（批次 0.2-A~D）**——与 H0 互补：签名/公证、发布通道、桌面体验底线、上游 PR 候选、反馈闭环；它相对 H0 的独有覆盖与三处优先级冲突写在该文首「关系」一节，**是否并入 H0 及冲突如何裁决归用户**。
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点清单（D1~D11）与裁决记录，留作追溯；「插件禁用语义」的证据链在这里（批次 C），0.2-B4 项要重走它。
+- `docs/dev-plan-cli-distribution.md`：**CLI / runtime 可引用产物的分期计划**（roadmap H1-c/H1-d）——Phase 1（CLI 归档 + sha256 + 回读校验，2026-09-13 已执行）与 Phase 2（runtime 独立发布，未开工，带触发条件与前置改造清单）。**动 CLI 发布形态前先读它**，尤其是「产物不含 runtime」这条边界。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md`：系统重构设计与开发全流程计划。
 - `docs/system_design.md`：核心系统架构设计、缺陷清单与契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**（裁定不做，代码已删）的两份设计文档；只在需要追溯设计意图或评估「要不要恢复」时读。
@@ -550,6 +563,8 @@ ERROR: Failed to deploy dependencies for existing files
 | 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label`；`MobileBridge::on_connected_change`（镜像上游 `onConnectedChange`）在配对状态翻转时回调 | 菜单构建时初始化，**手机侧 `POST /pair` 成功**、菜单配对/停止时均经 `refresh_bridge_status` 刷新（`lib.rs` setup 注册监听器） |
 | ↳ 页内手机状态指示器（Harness 侧边栏） | ✅ 已接线（2026-09-10） | `harness_ui.rs::INJECT_SCRIPT`（`include_str!` 内嵌 `frontend/harness-ui-inject.js`），挂在 `[data-dsh-sidebar-settings]` 下；状态下发 `push_phone_status` 走 `webview.eval`，**不新增 IPC 命令** | 两个推送点：连接翻转（`on_connected_change`）与页面加载完成（`on_page_load`）。**只做状态指示、不可点击**——配对/停止仍只走原生 `Phone` 菜单，因此它不渲染成按钮 |
 | **Harness 页注入机制（preload 等价物）** | ✅ 已接线（2026-09-10；同期更正「无初始化脚本」的误判） | 主窗口 builder 的 `initialization_script`（`lib.rs`）+ `frontend/harness-ui-inject.js`；脚本按 origin 自我早退（本地页与子框架不注入） | 无头行为自测 `npm run verify:harness-inject`（19 项断言 + 可证伪性检查，已进 CI） |
+| **CLI 可引用产物（`dsh-host-cli` 归档 + sha256）** | ✅ 已接线（2026-09-13） | `scripts/package-cli.mjs`（命名 / 边车 / manifest / 回读校验 / 产物执行自检 / 已发布核验）+ `release.yml` 的 `cli` / `cli-publish` job | 发布工作流三平台构建并上传到同一 Release；`ci.yml` 与 release preflight 跑 `verify:cli-package`。**产物不含 runtime**——归档 `README.txt` 与 Release 正文都显式写明，须用 `--resource` 指向已组装的 runtime；它**不在**桌面安装包内 |
+| ↳ runtime bundle 独立发布（Phase 2） | 🕓 **计划中**（带触发条件，刻意不做） | **无代码**。门槛与前置改造写在 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §4：出现第一个非本仓消费者，或开工 H3-a 运行时更新事务 / H2-a 兼容矩阵时才做；提前单独做就是为「可能有用的未来」建基础设施（同批次 F 归档 `dsh-model-gateway` 的判据） | **无** |
 
 ### 7.3 维护方式
 
@@ -633,7 +648,7 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 | CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，三个输入：`scope` / `os` / `fault_injection`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。**不发布任何东西** |
 | Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` 真检查落后 npm dist-tag 即红。**不构建任何东西**——只回答「该规划升级了吗」 |
-| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json` |
+| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；并行的 `cli` job 三平台构建 `dsh-host-cli` 归档（+ `.sha256` / `manifest.json`），由 `cli-publish` 核验下载副本后上传到同一 Release、把产物表写进正文 |
 
 - **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
   `schedule`（每天一次）、新增 `drift.yml`。二者合起来让「main 的 HEAD 有没有烂」与「上游
@@ -665,6 +680,19 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 - **`latest.json` 是更新链路的命门**：updater 端点指向
   `releases/latest/download/latest.json`。tauri-action 的 `uploadUpdaterJson`（默认开）负责生成上传；
   **它不在 Release 里，自动更新就是断的**。
+- **CLI 产物是 Release 的第二类资产，与桌面安装包各自独立**（2026-09-13 起）：`cli` job **不依赖
+  300MB 资源树**，因此与 `build` 并行跑、也能在 `build` 失败时照常产出——两者是不同的产物，
+  不该互相牵连。上传由 `cli-publish` 统一做，硬性 `needs: [preflight, build, cli]`：Release 对象
+  由 `build` 的 tauri-action 创建，先于它上传必失败；少一个平台则是在发布一个用户看不出缺口的
+  产物集。上传用 `--clobber`，因为 `workflow_dispatch` 重跑（发布失败后的正规补救通道）会命中
+  已存在的同名资产。
+  ⚠️ **CLI 归档里没有 runtime**：用户仍需要一个已组装的 runtime（安装目录的 resources、或源码
+  checkout 里的 `src-tauri/resources/`），用 `--resource` 指过去。归档自带的 `README.txt` 与
+  Release 正文都写明这一点——**不要把它表述为「下载即用」**。分期与 Phase 2 的触发条件见
+  [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md)。
+  ⏳ **状态口径（2026-09-13）**：这条链路已接线但**尚未在 runner 上真跑过**——本机验证覆盖
+  打包 / 解包 / 对真实资源树执行，以及 `verify:cli-publish` 的步骤原文演练（假 `gh`）。
+  第一次真实发布后应把结果（尤其 runner 上的三元组名与资产完整性）回写到上述开发计划 §3.5。
 
 ### 8.5 发布操作步骤（人看的）
 
@@ -701,3 +729,19 @@ git push origin main --follow-tags
 > dispatch 是你的提交在打 tag 前**唯一**几次会跑 `cargo test` / clippy / 真实进程冒烟的机会。
 > 跳过它们，Release 不会替你拦。只想要快速一档时，`smoke.yml` 用默认的 `scope=l1` 即可
 > （几十秒、不起窗口）；要复现发布形态就用 `scope=full`。
+
+**发布后核对（CLI 产物）**：`release.yml` 的 `cli-publish` 会自己核验一遍下载副本，但「产物在
+Release 页面上真的可下载」这件事只有人点一次才知道（`cli-publish` 读的是 workflow artifact，
+不是公开资产 URL）：
+
+```bash
+TAG=v0.3.0
+BASE="dsh-host-cli-${TAG#v}-x86_64-pc-windows-msvc"
+curl -fL -o "$BASE.zip" \
+  "https://github.com/wang-yi-bit64/dsh-desktop/releases/download/${TAG}/${BASE}.zip"
+curl -fL -o "$BASE.zip.sha256" \
+  "https://github.com/wang-yi-bit64/dsh-desktop/releases/download/${TAG}/${BASE}.zip.sha256"
+sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
+```
+
+正文里的 CLI 表格由 `--release-notes` 渲染（幂等，重跑不会出现两遍）。
