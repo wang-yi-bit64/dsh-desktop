@@ -121,10 +121,23 @@
 
 **验收判据**
 - `npm run verify:patches` 通过（14 个全部分级）；`check:patch-applicability --target=0.1.5-rc.1` 报全部干净。✅
-- ⏳ **待补**：`npm run prepare:harness -- --force` 真实组装 + `verify:harness-tree` 通过；
-  三平台 `smoke.yml -f scope=full` 全绿；`MANIFEST.json:patches[]` 无 `failed`；体积对比无异常膨胀。
-  > 这几项**必须由 CI 跑**（本机无 macOS/Linux，也无真实 Harness 冒烟条件），
-  > 是本次升级**尚未取得**的运行证据——在拿到之前不得声称「升级已验证」。
+- ✅ **脚本组装**：`prepare:harness --force` 真实组装 `14/14 applied` + `verify:harness-tree` 通过；
+  `MANIFEST.json:patches[]` 无 `failed`。
+- ✅ **三平台运行证据**：CI（三平台 test）与 Smoke `scope=full`（组装真实资源 + 打包 + L2 GUI +
+  故障注入）在**同一个提交**上全绿，并已随 **v0.3.0**（2026-09-13）发布。
+- ✅ **Smoke full 抓出的三个真实缺陷已修**（详见下）——这三条正是「运行证据」的价值所在：
+  静态门禁与旧软门禁全都看不见它们。
+
+**升级暴露的三个缺陷（均已修复，各带可证伪守卫）**
+
+1. **Windows：L2 找不到壳二进制** —— Cargo **workspace** 的 target 在仓库根 `target/release/`
+   （二进制与 bundle 资源都在那里），脚本却找 `src-tauri/target/release/`。`scope=full` 打完包
+   仍报「缺少壳二进制」。
+2. **Linux：AppImage 打包失败（musl 变体逃过剪枝）** —— rc.1 新引入的
+   `@deepseek-ai/node-addon-system-linux-x64` 用**裸 libc 目录名**（`bin/glibc/` + `bin/musl/`），
+   而剪枝脚本的安全丝只认 `linux-x64`/`linux_x64`，不认裸名 `glibc`。
+3. **macOS：孤儿防护缺口（R-7）** —— macOS 无 `PR_SET_PDEATHSIG` 等价物，故障注入 A/B 两项
+   变红。补法见 [`AGENTS.md` §3](../AGENTS.md) 与 `build/parent-death-watchdog.mjs`。
 
 **依赖**：H1（已交付）。
 
@@ -311,15 +324,16 @@
         └─ [决策点 1 裁决] ──> 批次 N（3d~2w，差异化）
 ```
 
-**当前状态（2026-09-12）**：按用户指定顺序 **H → I → J → K** 执行了一轮。结果如下：
+**当前状态（2026-09-13）**：按用户指定顺序 **H → I → J → K** 执行完毕（**I 已于 2026-09-13 补齐
+三平台验证并随 v0.3.0 发布**）。结果如下：
 
 | 批次 | 状态 | 交付 |
 |------|------|------|
 | **H** 风险哨兵 | ✅ 完成 | `verify:drift`（上游漂移哨兵，含自检）/ `verify:profile-names`（profile 保留名守卫，含可证伪性）/ 升级清单新增「官方桌面版约束」节；三者已进 CI，真检查进 `drift.yml` nightly |
 | **J** 门禁可信度 | ✅ 完成 | `smoke.yml`：故障注入转**三平台硬门禁**、L2 在 win/mac 转硬门禁（Linux 保留信息性）；`ci.yml` 增设**每日定时**以补偿「日常零自动化」 |
 | **K** 宣称纪律 | ✅ 完成 | 修正两份 README 的「插件无法拖垮 Harness」过度宣称；`verify:claims`（含 C1~C4 + 可证伪性自检）把 README↔AGENTS 一致性变成会失败的检查，已进 CI 与 release preflight |
-| **I** 上游推进 | 🟡 部分完成 | 交付预检工具 `check:patch-applicability` + 报告 `report:patches` + 实测结论（**15 干净 / 3 冲突**）；**版本号推进本身未执行**（需 3 个补丁语义重做 + 三平台验证窗口，理由见批次 I 节） |
+| **I** 上游推进 | ✅ 完成（2026-09-13） | 基线 `0.1.2-alpha.4` → **`0.1.5-rc.1`**（三路合并移植，14 个补丁全干净）；交付 `check:patch-applicability` 与 `report:patches`；**三平台 CI + Smoke full 全绿并随 v0.3.0 发布**（见批次 I 节） |
 
-已通过验证：全部 17 个既有门禁 + 4 个新守卫自检全绿；无头 cargo 门禁 `cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli` 全绿（0 失败）；四个工作流 YAML 均可解析。
+已通过验证（2026-09-13 复核）：静态门禁 19 项 + 4 个守卫自检全绿；无头 cargo 门禁 `cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli` 全绿（0 失败）；四个工作流 YAML 均可解析；三平台 CI 与 Smoke `scope=full` 在发布提交上全绿（**Smoke full 抓出并修掉三个真实缺陷**，见批次 I 节）。
 
-**下一步建议**：① 执行批次 I 的版本推进（升级清单 Step 1~2 已备好）；② 裁决路线图 §8 决策点 1（战略定位，解锁批次 N）；③ 批次 L（构建卫生，一天）与 M（运维韧性）。
+**下一步建议**：① 裁决路线图 §8 决策点 1（战略定位，解锁批次 N）；② 批次 L（构建可达性与配置卫生，一天）；③ 批次 M（运维韧性）；④ 批次 0.2-A（macOS/Windows 签名与公证，见 `dev-plan-0.2-hardening.md`——发布已到 0.3.0，未签名仍是发行硬伤）。

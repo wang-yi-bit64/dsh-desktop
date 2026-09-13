@@ -26,11 +26,15 @@
  *
  * ## 判据的边界（为什么不会误删）
  *
- * 只对**目录名本身充当平台选择器**的两种布局动手，这是有界的：
+ * 只对**目录名本身充当平台选择器**的三种布局动手，这是有界的：
  *
  *   1. `prebuilds/` 或 `prebuilt/` 目录内（prebuildify 约定）——其 loader 按
  *      `${platform}-${arch}` 查找，其余条目**按构造即不可达**；
- *   2. 文件名形如 `musl_*` / `musl-*` 的目录（koffi 布局），其前导 token 是 libc。
+ *   2. 文件名形如 `musl_*` / `musl-*` 的目录（koffi 布局），其前导 token 是 libc；
+ *   3. **裸 libc 名**做选择器（`bin/glibc/` 与 `bin/musl/` 并列）——0.1.5-rc.1 的
+ *      `@deepseek-ai/node-addon-system-linux-x64` 就是这种；Linux 目标的保留名因此
+ *      必须含 `glibc`，否则第 38 行那道安全丝认不出「同层有我们的变体」，
+ *      会放过同层的 `musl`（2026-09-12 Linux 打包失败的复发原因）。
  *
  * 包**名**里带平台后缀的（`@img/sharp-linux-x64`、`@vscode/ripgrep-linux-x64`）不碰：
  * npm 已按 `os`/`cpu` 字段过滤过它们。

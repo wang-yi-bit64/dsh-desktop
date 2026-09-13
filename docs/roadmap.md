@@ -142,12 +142,13 @@ clean startup → workspace open → session create → tool call → tool failu
 
 四个阶段 + 一条贯穿全程的轨道。时间以"投入"而非"日历"计，**每阶段独立可交付、可回滚**。
 
-### H0 — 加固与边界固化（近端，2~4 周）· 🟡 进行中（H/J/K 已完成，I 部分）
+### H0 — 加固与边界固化（近端，2~4 周）· 🟡 进行中（H/J/K/I 已完成，H0-f/L/M 未开工）
 
-> 2026-09-12 进度：批次 **H（风险哨兵）/ J（门禁可信度）/ K（宣称纪律）已完成**；
-> **I（上游推进）部分完成**（预检工具与实测已交付，版本号推进待三平台验证窗口）；
-> H0-f 边界契约、L（构建卫生）、M（运维韧性）尚未开工。详见
-> [`dev-plan-hardening-and-differentiation.md`](dev-plan-hardening-and-differentiation.md) §6。
+> 2026-09-13 进度：批次 **H（风险哨兵）/ J（门禁可信度）/ K（宣称纪律）/ I（上游推进）
+> 均已完成**——上游基线升到 `0.1.5-rc.1`，**三平台 CI 与 Smoke full 全绿**，并已随
+> **v0.3.0** 发布（2026-09-13）。Smoke full 当场抓出并修掉三个真实缺陷（Windows L2 路径、
+> Linux 裸 libc 变体、macOS 孤儿防护 R-7）。H0-f 边界契约、L（构建卫生）、M（运维韧性）
+> 尚未开工。详见 [`dev-plan-hardening-and-differentiation.md`](dev-plan-hardening-and-differentiation.md) §6。
 
 | 项 | 内容 | 依据 |
 |----|------|------|

@@ -113,19 +113,27 @@ boot / config-dump / 插件管理。
 > 只下载被补丁触及的十几个包（~4MB）到内存做干跑匹配，几秒内给出「干净 / 冲突（第几段 hunk）」清单，
 > **不必先组装 300MB**。它只判「上下文能否对上」，不判语义是否仍成立——但正是升级时最耗时的第一问。
 >
-> ### ✅ 0.1.2-alpha.4 → 0.1.5-rc.1 已完成（2026-09-12）
+> ### ✅ 0.1.2-alpha.4 → 0.1.5-rc.1 已完成（2026-09-13 全流程闭环）
 >
 > **做法**：不靠 `patch-package` 重新生成，而是**三路合并移植**——以 pristine alpha.4 为共同祖先，
 > 把 rc.1 上游的变化叠到「alpha.4 + 补丁」的意图状态上（`git merge-file ours base theirs`），
 > 冲突处逐条按语义裁定（CSS 类名 hash 改名取上游、类名映射并集、函数签名参数并集）。
 >
 > **结果**：14 个补丁（18 − 4，见下）在 `0.1.5-rc.1` 上**全部干净可用**
-> （`check:patch-applicability --target=0.1.5-rc.1` → clean 14 / conflict 0）。
+> （`check:patch-applicability --target=0.1.5-rc.1` → clean 14 / conflict 0），
+> 并已走完升级清单全流程：真实组装 `14/14 applied` → 三平台 CI + Smoke `scope=full` 全绿
+> → **随 v0.3.0 发布**（2026-09-13）。
 >
 > **⚠️ 本次升级移除了「会话永久删除」特性**（4 个后端补丁 + `client-ui-workspace` 里的删除 UI）：
 > rc.1 删除了承载该逻辑的 `PersistenceCoordinator` 类（该文件 1594 → 267 行），改为 handle 模型，
 > 补丁无法机械移植。详见 [`patches/LAYERS.md`](../patches/LAYERS.md) 的专门说明。
 > **这是本仓自加功能的降级，不是上游能力回退**——0.1.5-rc.1 本身同样没有会话永久删除。
+>
+> **⚠️ 本次升级还暴露并修复了三个与升级无直接关系、但只在真跑时才现形的缺陷**：
+> Windows L2 找错壳二进制路径（Cargo workspace 的 target 在仓库根）、Linux 的 musl 变体
+> 逃过剪枝（rc.1 新原生依赖用裸 libc 目录名 `bin/glibc` + `bin/musl`）、macOS 孤儿防护缺口
+> （R-7，无 `PR_SET_PDEATHSIG` 等价物，补了父死看门狗）。三者各带守卫，见 `AGENTS.md`。
+> **这是「升级必须走三平台烟雾」的最好证据**：静态门禁与旧软门禁全都看不见它们。
 >
 > 历史记录（仅供参考）：对中间版本 `0.1.2-rc.1` 的预检结果是 15 干净 / 3 冲突
 > （`agent-preset` / `settings-models` / `workspace`，均为 UI 层的上下文漂移）。

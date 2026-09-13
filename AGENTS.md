@@ -153,7 +153,12 @@ npm run verify:drift:self-test
 npm run report:patches
 
 # 22. 上游升级预检：补丁在新版本上的适用性（~4MB，不必组装 300MB）
-npm run check:patch-applicability -- --target=0.1.2-rc.1
+npm run check:patch-applicability -- --target=0.1.5-rc.1
+
+# 23. 壳入口 ↔ 上游 CLI 调用约定 + macOS 父死看门狗（含自测）
+#     守「上游改自执行方式」与「看门狗装错进程/unref」两类静默失效
+npm run verify:harness-entry
+npm run verify:harness-entry:self-test
 
 # 15. 推进版本号（dry-run 先看，再真改）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
@@ -221,7 +226,7 @@ api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
 3. **孤儿进程防护与进程管理（INV-3）**：
    - Windows 采用 Win32 `JobObject`（`KILL_ON_JOB_CLOSE`）。
    - Linux 采用 `PR_SET_PDEATHSIG` + 进程组。
-   - macOS 采用进程组 + **Node 入口侧父死看门狗**（入口轮询 `process.ppid`，见 `build/harness-node-entry.mjs` 与 `verify-harness-entry` 的 E4）+ 启动时退出扫描清理。
+   - macOS 采用进程组 + **Node 侧父死看门狗**（`build/parent-death-watchdog.mjs`，轮询 `process.kill(ppid, 0)`；**入口与 `mock-harness.mjs` 共同引用**——故障注入的 mock 模式会把入口整体替换成 mock，只装在入口上测不到）+ 启动时退出扫描清理。
    - 子进程必须保证在主程序异常崩溃或退出时不残留。
 4. **生命周期监督与自愈机制（Supervisor）**：
    - 内置状态机（Stopped -> Starting -> Healthy -> Degraded -> Crashed）。
@@ -359,9 +364,30 @@ if (typeof entry?.runCli === 'function') await entry.runCli()   // 新版显式�
 // 旧版（≤0.1.2-alpha.4）没有该导出，顶层自执行，不重复调用
 ```
 
-**守卫**：`npm run verify:harness-entry`（E1~E3，含以修复前写法为夹具的可证伪性检查），
+**守卫**：`npm run verify:harness-entry`（E1~E4，含以修复前写法为夹具的可证伪性检查），
 已进 CI 与 release preflight。**这类「上游改了自执行方式」属于升级时的隐形炸弹**：
 升级 DSH 版本后若 L1 报「就绪超时但日志无报错」，先查这里。
+
+### macOS 孤儿防护：父死看门狗必须装在被替换后的入口上（2026-09-12 修复，勿回归）
+
+风险 R-7：**macOS 没有 `PR_SET_PDEATHSIG` 等价物**（`crates/dsh-host/src/process.rs`），
+宿主被杀后 Harness 会成为孤儿，只等下次冷启动的陈旧 pidfile 清扫。三平台冒烟转为硬门禁后，
+故障注入的 A（SIGTERM 宿主）/ B（强杀宿主）当场变红，暴露了这个长期缺口。
+
+补法在 `build/parent-death-watchdog.mjs`。两个坑各花掉一轮 CI，**都写进该模块文件头**：
+
+1. **定时器不能 `unref()`**：unref 的定时器在事件循环闲置时不触发，而 Harness 大部分时间
+   正是闲置的。第一版 unref 之后看门狗在 macOS 上**从未运行**——日志里连一行痕迹都没有，
+   极易误判成「探测逻辑写错」。
+2. **必须装在实际执行的那个进程上**：故障注入的 mock 模式会把 `node_entry`/`dsh_entry`
+   **双双替换成 `mock-harness.mjs`**（`crates/dsh-host-cli/src/commands/mod.rs::apply_mock_if_requested`），
+   `harness-node-entry.mjs` 根本不在该路径上。只装在入口上，对故障注入**零作用**。
+   因此该模块由**入口与 mock 共同引用**。
+
+**守卫**：`verify:harness-entry` 的 E4a/E4b/E4c 三条分别钉住「入口装了看门狗」「模块可用且
+未 unref」「mock 也装了」，各有可证伪夹具。`DSH_PARENT_DEATH_WATCHDOG=1` 可在非 darwin
+平台强制启用——本机没有 macOS，这个开关让该行为能被**本地实测**（隔离验证：宿主被杀后
+mock 进程数 2 → 0），而不是每轮靠三平台 CI 试错。
 
 ### 补丁应用：`patch-package` 必须用「应用模式 + 相对 `--patch-dir`」（已修复，勿回归）
 
@@ -413,6 +439,21 @@ ERROR: Failed to deploy dependencies for existing files
 修法：`prepare:harness` 在瘦身之后、打包之前调用 [`scripts/prune-platform-variants.mjs`](scripts/prune-platform-variants.mjs) 剪掉外来变体。判据**有界**，只对「目录名本身充当平台选择器」的两种布局动手——`prebuilds/`（prebuildify 约定，其 loader 按 `platform-arch` 查找）与 koffi 的 `musl_*` 布局；包**名**里带平台后缀的（`@img/sharp-linux-x64`）不碰（npm 已按 `os`/`cpu` 过滤）。另有一道保险：prebuilds 目录之外只对**有同平台邻居**的目录按名删，永远不会删掉「最后一个能用的」。剪掉它们不影响运行时——我们发布的 node 是 glibc 链接的，koffi 按运行时 libc 选构建。
 
 `npm run verify:variants` 把判据钉住，并带**可伪证性检查**：把**现有**瘦身门禁 `pruneNodeModules()` 作用于同一棵树，必须复现出「`musl_x64/koffi.node` 原样幸存」——证明这个缺陷**逃得过当时全部门禁**（静态检查、L1 烟雾、Windows/macOS 打包全部看不出），断言才不是装饰。
+
+#### 复发（2026-09-12，rc.1 升级引入新布局）：裸 libc 目录名
+
+0.1.5-rc.1 引入新原生依赖 `@deepseek-ai/node-addon-system-linux-x64`，其布局是**裸 libc 名**：
+`bin/glibc/system.node` 与 `bin/musl/system.node` 并列。旧判据的安全丝 `oursIsHere` 只认
+`linux-x64` / `linux_x64`，**不认裸名 `glibc`**——于是 `bin/musl` 逃过剪枝，linuxdeploy 又在它
+上面 `Failed to run ldd`，Linux 打包再次失败。
+
+**修法**：Linux 目标的保留名补上 `glibc`（我们的产物就是 glibc 链接的），安全丝才能认出
+「同层有我们的变体」。`verify:variants` 加了该布局的夹具与断言（现 19 项），含一条反向断言：
+**没有 glibc 邻居的孤独 `bin/musl` 必须保留**——证明删除是「有邻居」驱动的，不是见到 musl 就删。
+
+> **升级 DSH 时请复核**：新版可能再带来新的「平台选择器目录名」写法。判据是**有界**的
+> （只动 prebuilds/ 与 libc 前缀目录），所以新布局不会自动被覆盖——打包若再报
+> `failed to run linuxdeploy`，先 `-v` 看是哪个 ELF 的依赖解析失败，再核对这里的判据。
 
 ### 发布工作流的两个静默缺陷（已修复，勿回归）
 

@@ -152,6 +152,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
 | `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
 | `npm run verify:release-workflow` | 发布工作流自身的两个静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。 |
+| `npm run verify:harness-entry` | 壳入口 ↔ 上游 `dsh` CLI 的调用约定兼容性：上游 0.1.5-rc.1 把 CLI 改成 `if (import.meta.main) runCli()`，因此**import** 它的包装器必须显式调用导出的 `runCli()`，否则进程以退出码 0 静默结束。同时钉住 macOS 父死看门狗——由入口**与 `mock-harness.mjs`** 共同安装（故障注入的 mock 模式会把入口整体替换掉）。带可证伪性自检。 |
 | `npm run verify:profile-names` | 任何 profile 字面量都不得等于官方保留名 `desktop`（大小写不敏感）——官方桌面版独占该 profile。同时钉住两个契约锚点（`SAFE_MODE_PROFILE` 保持 `desktop-safe-mode`、`HARNESS_CLI` 保持裸子命令 `web`）。带可证伪性自检。 |
 | `npm run verify:claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |
 | `npm run verify:drift` / `verify:drift:self-test` | 钉住的 `DSH_VERSION` 是否已落后于 npm dist-tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
