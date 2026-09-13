@@ -108,8 +108,18 @@ jobs:
       # tauri-action 的 tauriScript/args 拼装（重复 build → `unexpected argument`），
       # 以及 shell 变量紧邻非 ASCII 字符（macOS bash 3.2 会并入变量名）。
       # 两者都让 v0.1.0 首次发布三平台全红，且本地门禁全绿——因此必须在这里独立成门禁。
+      # 同一守卫现在还覆盖 CLI 可引用产物的形状判据（打包步骤 / --clobber / 边车上传 /
+      # needs: build / 下载后核验），并把 Release 正文里那段内联发布说明脚本
+      # **真跑一遍**——heredoc 在 YAML 里是纯文本，语法或 argv 写错只有真发布才炸。
       - name: Verify release workflow guards
         run: npm run verify:release-workflow:self-test
+
+      # CLI 打包链路自检（纯逻辑 + 当前平台真归档回读）。它守住三类「哈希对得上但
+      # 产物没用」的缺陷：产物名里的版本与 package.json 漂移、边车格式不是 sha256sum
+      # 能读的形状、归档丢掉可执行位。自带可伪证夹具（篡改 / 去执行位 / 边车不匹配 /
+      # 归档缺失都必须判红）。
+      - name: Verify CLI artifact packaging guard
+        run: npm run verify:cli-package
 
       # 官方 profile 保留名守卫（纯静态，不联网）。官方桌面版独占 `desktop` 这个
       # profile 名及其**全部大小写变体**（已实现、未发布）。本仓当前未使用保留名
@@ -213,6 +223,16 @@ jobs:
       # 测试依赖 tauri-build / 资源 glob，慢且偶发环境问题）。
       - name: "cargo test (headless fast gate: dsh-host + dsh-host-cli)"
         run: cargo test -p dsh-host -p dsh-host-cli
+
+      # CLI 发布步骤的**原文**演练：从 release.yml 抽取 cli-publish 的 run 块逐字执行，
+      # 用一个假 gh 截住网络调用。它覆盖「只有真发布才炸」的那一维（shell 语义、
+      # glob 展开、相对路径、gh 参数形状）。放在 cargo test 之后是因为它需要一个
+      # 已构建的 release 二进制——build 一次约一分钟，换来的是发布链路的真执行证据。
+      # ⚠️ 它排除的是「脚本写错了」，不是「环境不允许」（见脚本头部说明）。
+      - name: Build CLI and dry-run the publish steps
+        run: |
+          cargo build --release -p dsh-host-cli
+          npm run verify:cli-publish
 
       - name: cargo test
         run: cargo test --workspace
