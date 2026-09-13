@@ -690,9 +690,12 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
   checkout 里的 `src-tauri/resources/`），用 `--resource` 指过去。归档自带的 `README.txt` 与
   Release 正文都写明这一点——**不要把它表述为「下载即用」**。分期与 Phase 2 的触发条件见
   [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md)。
-  ⏳ **状态口径（2026-09-13）**：这条链路已接线但**尚未在 runner 上真跑过**——本机验证覆盖
-  打包 / 解包 / 对真实资源树执行，以及 `verify:cli-publish` 的步骤原文演练（假 `gh`）。
-  第一次真实发布后应把结果（尤其 runner 上的三元组名与资产完整性）回写到上述开发计划 §3.5。
+  ✅ **状态口径（2026-09-13，v0.4.0 已验证）**：这条链路已接线并在真实发布中跑通——
+  `release` 工作流 8 个 job 全绿，9 个 CLI 资产（3 平台 × 归档 / `.sha256` / manifest）上传完整，
+  从公开 URL 下载后核验与 manifest 逐字节一致，`cli-publish` 的下载后核验也通过。
+  真实产物名例如 `dsh-host-cli-v0.4.0-aarch64-apple-darwin.tar.gz`（macOS runner 是 ARM，
+  归档名里的三元组由 runner 的 `rustc -vV` host 决定）。核对记录见
+  [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §3.5.1。
 
 ### 8.5 发布操作步骤（人看的）
 

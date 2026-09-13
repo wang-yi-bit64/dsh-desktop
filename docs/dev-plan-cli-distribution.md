@@ -106,15 +106,23 @@ dsh-host-cli start  --resource <真树> → token acquired → ready http://127.
 另外：`verify:cli-publish` 逐字执行 `cli-publish` 的 `run:` 段落通过（核验步骤 + 正文渲染，
 上传步骤受本机归档格式限制已显式跳过，见 §3.4）。
 
-⏳ **尚未验证的一环：真实发布路径**。上面的证据全部来自本机与假 `gh`；`cli` / `cli-publish`
-两个 job 从未在 runner 上跑过。**第一次真实发布时必须逐项核对**（`v0.4.0` 或下一次发布）：
+### 3.5.1 首次真实发布已验证（v0.4.0，2026-09-13）
 
-- `cli` job 三平台是否都成功；生成的归档名里的三元组与 GitHub runner 的实际 host 是否一致
-  （runner 上 `rustc -vV` 的 host 决定名字，macOS 是 `aarch64-apple-darwin` 还是 `x86_64-*`
-  取决于 runner 型号——本机无法预判）；
-- `cli-publish` 的下载后核验是否通过（这一步会暴露 artifact 传递中的任何改动）；
-- 上传后的资产列表是否完整（3 平台 × 3 类 = 9 个文件 + 正文表格）；
-- Release 正文里的下载链接点开是否真能下到文件（§8.5 的「发布后核对」给了命令）。
+上面那份「尚未验证」清单已全部核对完毕，`release` 工作流 8 个 job 全绿：
+
+| 待核对项 | 结果 |
+|---|---|
+| `cli` job 三平台是否都成功 | ✅ 三平台全绿；打包、回读校验（含可执行位）、产物执行自检、artifact 上传均通过 |
+| runner 三元组名 | ✅ **`aarch64-apple-darwin`**（macOS runner 是 ARM）/ `x86_64-unknown-linux-gnu` / `x86_64-pc-windows-msvc`——与 §3.5 里担心的「本机无法预判」一致地由 runner 决定 |
+| `cli-publish` 下载后核验 | ✅ 通过（这一步会暴露 artifact 传递中的任何改动，没有暴露问题） |
+| 上传后资产完整性 | ✅ 9 个 CLI 文件（3 平台 × 归档 / `.sha256` / manifest）+ 4 类安装包 + `.sig` + `latest.json` |
+| Release 正文与下载链接 | ✅ 表格 3 行、幂等标记恰好 1 次、3 个链接逐一命中真实资产 |
+| 从公开 URL 下载并核对 | ✅ `sha256sum -c` OK；下载到的 sha256 与 manifest 逐字节一致；归档内可执行位为 `-rwxr-xr-x` |
+| 自动更新链路未被影响 | ✅ `latest.json` 指向 0.4.0，7 个平台条目签名齐全 |
+
+产物名（真实）：`dsh-host-cli-v0.4.0-{aarch64-apple-darwin.tar.gz,x86_64-pc-windows-msvc.zip,x86_64-unknown-linux-gnu.tar.gz}`
+
+后续发布可直接沿用本节结论；只有改动 `cli` / `cli-publish` 的结构或归档逻辑时才需要重新核对。
 
 ### 3.6 已知边界（不得含糊）
 
