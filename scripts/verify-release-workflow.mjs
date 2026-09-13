@@ -40,6 +40,19 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RELEASE_YML = join(projectRoot, '.github', 'workflows', 'release.yml')
 
 /**
+ * 读入工作流并**归一化行尾**。
+ *
+ * 判据里有多条按行切分/替换的断言（job 切片、可伪证夹具），它们必须与检出配置无关：
+ * git 的 `core.autocrlf` 会让同一份文件在这里是 CRLF、在那台机器上是 LF。
+ * `AGENTS.md` §7.3 明令守卫不得依赖检出配置——否则「本地绿、CI 红」会按平台随机出现。
+ *
+ * @returns {string} 归一化后的工作流文本
+ */
+function readWorkflow() {
+  return readFileSync(RELEASE_YML, 'utf8').replace(/\r\n/g, '\n')
+}
+
+/**
  * 从工作流文本里取出 tauri-action 步骤的 `tauriScript` 与 `args` 输入。
  *
  * 刻意只做**行级**解析（不引入 YAML 依赖）：定位 `uses: tauri-apps/tauri-action`
@@ -153,6 +166,137 @@ export function findUnbracedVarBeforeNonAscii(text) {
 }
 
 /**
+ * 取出某个 job 的 YAML 块（从 `name:` 行到下一个同级或更高级的键为止）。
+ *
+ * 判据必须**按 job 切片**再断言，不能用全局正则：`needs: [..., build, ...]` 这样的
+ * 形状只要文件里任何一处满足，全局匹配就会放行——而它要守的恰恰是**那一个** job。
+ * 切片刻意只做行级缩进判断，不引入 YAML 依赖：够用，且在重新排版时不会悄悄失效
+ * （找不到 job 会返回 null，调用方按「缺失」报红，而不是静默跳过）。
+ *
+ * @param {string} text 工作流全文
+ * @param {string} name job 名（如 `cli-publish`）
+ * @returns {string|null} job 块文本（未找到为 null）
+ */
+export function jobBlock(text, name) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => new RegExp(`^\\s{0,2}${name}:\\s*$`).test(line))
+  if (start < 0) return null
+  const indent = lines[start].match(/^\s*/)[0].length
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i]
+    if (!line.trim()) continue
+    const lineIndent = line.match(/^\s*/)[0].length
+    if (lineIndent <= indent && /^\s*[\w-]+:/.test(line)) return lines.slice(start, i).join('\n')
+  }
+  return lines.slice(start).join('\n')
+}
+
+/**
+ * 取出 Release 正文段落那一步是否**委托**给了有自测的脚本。
+ *
+ * 这里刻意**不再**去解析/执行 heredoc 内联脚本：那段逻辑已经搬进
+ * `scripts/package-cli.mjs`（`--release-notes`），其渲染与幂等性由
+ * `npm run verify:cli-package` 的自测覆盖。留在 YAML 里的内联脚本是**不可测**的
+ * ——YAML 解析器不碰 `run: |` 的内容，语法错 / argv 下标错只有真发布才炸，
+ * 而发布不可逆。因此本守卫改判「有没有委托出去」与「有没有内联脚本残留」。
+ *
+ * @param {string} text release.yml 全文
+ * @returns {{delegated: boolean, inlineHeredoc: boolean}}
+ */
+export function inspectNotesStep(text) {
+  const delegated = /--release-notes[\s\S]{0,400}--tag/.test(text)
+  const inlineHeredoc = /<<'NODE'/.test(text)
+  return { delegated, inlineHeredoc }
+}
+
+/**
+ * CLI 可引用产物在发布工作流里的形状判据。
+ *
+ * 每一条都对应一类**只在真发布时暴露**的失败：
+ *   · 构建/打包步骤缺席 —— 产物根本没产出来，而工作流是绿的；
+ *   · 上传不用 `--clobber` —— workflow_dispatch 兜底重跑时因资产已存在而失败
+ *     （而重跑正是发布失败后的补救通道）；
+ *   · 发布 job 不 `needs: build` —— Release 对象由 build 的 tauri-action 创建，
+ *     先于它上传会失败；
+ *   · 不传 `.sha256` 边车 —— 用户拿到归档却无从核对，「可引用」少了最关键的一环；
+ *   · 平台不齐 —— 发布一个缺平台的产物集，用户从资产列表上看不出来；
+ *   · Release 正文段落靠内联脚本 —— 不可测（见 {@link inspectNotesStep}）。
+ *
+ * @param {string} text release.yml 全文
+ * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
+ */
+export function checkCliArtifactShape(text) {
+  const problems = []
+  const buildJob = jobBlock(text, 'cli')
+  const publishJob = jobBlock(text, 'cli-publish')
+
+  if (!buildJob) {
+    problems.push('没有 `cli` job——CLI 产物根本没产出')
+  } else {
+    if (!/cargo build --release -p dsh-host-cli/.test(buildJob)) {
+      problems.push('`cli` job 没有构建步骤（cargo build --release -p dsh-host-cli）')
+    }
+    if (!/npm run package:cli/.test(buildJob)) {
+      problems.push('`cli` job 没有调用打包脚本（npm run package:cli）——命名 / sha256 / 回读校验都会缺失')
+    }
+    for (const os of ['windows-latest', 'macos-latest', 'ubuntu-latest']) {
+      if (!buildJob.includes(os)) problems.push(`\`cli\` job 的平台矩阵缺 ${os}`)
+    }
+    if (!/upload-artifact/.test(buildJob)) {
+      problems.push('`cli` job 没有把产物落成 workflow artifact——cli-publish 将无物可取')
+    }
+  }
+
+  if (!publishJob) {
+    problems.push('没有 `cli-publish` job——产物没有被上传到 Release')
+  } else {
+    if (!/needs:\s*\[[^\]]*\bbuild\b[^\]]*\]/.test(publishJob)) {
+      problems.push('`cli-publish` 未声明 needs: build——Release 对象由 build 的 tauri-action 创建，先上传必失败')
+    }
+    if (!/\bcli\b/.test(publishJob.match(/needs:\s*\[([^\]]*)\]/)?.[1] ?? '')) {
+      problems.push('`cli-publish` 的 needs 里没有 cli——会在产物还没构建完时就去取')
+    }
+    if (!/gh release upload[\s\S]{0,600}--clobber/.test(publishJob)) {
+      problems.push('上传 CLI 产物时没有 --clobber——workflow_dispatch 兜底重跑会因「资产已存在」失败')
+    }
+    // 四类产物必须逐类点名（归档两种 + 边车 + manifest）。少了边车这一类，
+    // 用户拿到归档却无从核对，「可引用」就少了最关键的一环。
+    for (const [label, pattern] of [
+      ['zip 归档', /'\*\.zip'/],
+      ['tar.gz 归档', /'\*\.tar\.gz'/],
+      ['sha256 边车', /'\*\.sha256'/],
+      ['manifest', /'\*\.manifest\.json'/]
+    ]) {
+      if (!pattern.test(publishJob)) {
+        problems.push(`上传时没有包含 ${label}（${pattern.source}）——产物集不完整`)
+      }
+    }
+    // `shopt -s nullglob`：不设它，某个 glob 没命中时 bash 会把字面量
+    // `dist/cli/*.tar.gz` 当文件名传给 gh，报错指向一个不存在的路径，
+    // 而不是「这类产物缺失」。
+    if (!/shopt -s nullglob/.test(publishJob)) {
+      problems.push('上传步骤没有 `shopt -s nullglob`——glob 未命中时会传出字面量路径，错误信息会误导')
+    }
+    if (!/--verify-download/.test(publishJob)) {
+      problems.push('没有核验「下载回来的」产物（--verify-download）——artifact 存储链路改坏文件本地验不出来')
+    }
+    // `gh ... --jq '.body'` 对空正文返回字面量 null，会把 "null" 写进新正文。
+    if (/'\.body\b[^']*'/.test(publishJob) && !/\.body \/\/ ""/.test(publishJob)) {
+      problems.push(`读取 Release 正文时未做 null 归一（应为 '.body // ""'）——空正文会变成字面量 null`)
+    }
+  }
+
+  const notes = inspectNotesStep(text)
+  if (!notes.delegated) {
+    problems.push('Release 正文的 CLI 段落没有委托给 package-cli.mjs（--release-notes + --tag）')
+  }
+  if (notes.inlineHeredoc) {
+    problems.push("release.yml 里残留内联脚本（<<'NODE'）——YAML 内的脚本不可测，应移入有自测的脚本")
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
  * 自测：对真实文件跑一遍判据，并用两份**已知缺陷夹具**做可伪证性检查。
  *
  * @returns {{passed: number}} 通过项数
@@ -166,7 +310,7 @@ export function selfTest() {
     if (!condition) failures.push(message)
   }
 
-  const text = readFileSync(RELEASE_YML, 'utf8')
+  const text = readWorkflow()
 
   // 1) 真实工作流：tauri-action 的参数必须能展开成合法 argv。
   const { tauriScript, args } = extractTauriActionInputs(text)
@@ -201,6 +345,82 @@ export function selfTest() {
   check(findUnbracedVarBeforeNonAscii('echo "v${TAG}x"').length === 0, '可伪证性：`${TAG}` 花括号写法不应被命中')
   check(findUnbracedVarBeforeNonAscii('# 注释里的 $TAG）不算').length === 0, '可伪证性：注释行不应被命中')
 
+  // 4) 真实工作流：CLI 可引用产物的形状。
+  const cli = checkCliArtifactShape(text)
+  check(cli.ok, `release.yml：CLI 产物形状不合法 → ${cli.problems.join('；')}`)
+
+  // 4a) 可伪证性：把每条判据各自打回缺陷写法，必须判红。
+  const withoutClobber = text.replace(/(gh release upload[\s\S]{0,400}?) --clobber/, '$1')
+  check(
+    !checkCliArtifactShape(withoutClobber).ok,
+    '可伪证性：去掉 --clobber 必须判红（否则重跑通道的缺陷拦不住）'
+  )
+  // 四类产物写在同一条 `for pattern in …` 行上，去掉其中一项即可证伪该条判据。
+  const withoutSidecar = text.replace(/'\*\.sha256' ?/, '')
+  check(!checkCliArtifactShape(withoutSidecar).ok, '可伪证性：不传 .sha256 边车必须判红')
+  const withoutManifest = text.replace(/'\*\.manifest\.json'/, '')
+  check(!checkCliArtifactShape(withoutManifest).ok, '可伪证性：不传 manifest 必须判红')
+  const withoutBuildNeed = text.replace(/needs: \[preflight, build, cli\]/, 'needs: [preflight, cli]')
+  check(!checkCliArtifactShape(withoutBuildNeed).ok, '可伪证性：去掉 needs: build 必须判红')
+  const withoutVerify = text.replace(/--verify-download/g, '--noop')
+  check(!checkCliArtifactShape(withoutVerify).ok, '可伪证性：去掉下载后核验必须判红')
+  const withoutPackage = text.replace(/npm run package:cli/g, 'echo skipped')
+  check(!checkCliArtifactShape(withoutPackage).ok, '可伪证性：去掉打包步骤必须判红')
+
+  // 5) 可伪证性：Release 正文段落改为「必须委托、不得内联」。
+  const delegatedOnly = text.replace(/--release-notes/g, '--noop')
+  check(!checkCliArtifactShape(delegatedOnly).ok, '可伪证性：不委托段落渲染必须判红')
+  const withInline = `${text}\n          node - x <<'NODE'\n          console.log(1)\n          NODE\n`
+  check(
+    !checkCliArtifactShape(withInline).ok,
+    '可伪证性：工作流里出现内联脚本（<<\'NODE\'）必须判红——YAML 内的脚本不可测'
+  )
+  check(inspectNotesStep(text).delegated, '真实工作流必须委托 package-cli.mjs 渲染段落')
+
+  // 6) 按 job 切片本身要能被证伪：切不出块、或切错块都必须被察觉。
+  check(jobBlock(text, 'cli-publish') !== null, 'jobBlock 必须能切出 cli-publish')
+  check(jobBlock(text, 'cli-publish').includes('gh release upload'), '切出的 cli-publish 块必须含上传步骤')
+  check(!jobBlock(text, 'cli-publish').includes('uses: tauri-apps/tauri-action'), '切出的 cli-publish 块不得混入 build job')
+  check(jobBlock(text, 'no-such-job-xyz') === null, '不存在的 job 必须返回 null（而不是悄悄返回全文）')
+  // 平台判据必须只看 cli job：把 cli 的平台去掉，即便 build 的矩阵里还有这些平台也要判红。
+  const cliBlockStart = text.indexOf('cli:')
+  const buildOnly = text.slice(0, cliBlockStart) + text.slice(text.indexOf('cli-publish:'))
+  check(
+    !checkCliArtifactShape(buildOnly).ok,
+    '可伪证性：删掉 cli job 必须判红（平台齐全不能由 build 的矩阵冒充）'
+  )
+  // 6a) 上传图省事的写法必须判红：不设 nullglob、以及不做正文 null 归一。
+  //     注意 `shopt -s nullglob` 在文件里出现两次（核验步骤与上传步骤各一次），
+  //     夹具必须**全部**去掉——只去第一处时上传步骤仍然合规，断言会假红为「没判红」。
+  const withoutNullglob = text.replace(/shopt -s nullglob\n/g, '')
+  check(!checkCliArtifactShape(withoutNullglob).ok, '可伪证性：去掉 shopt -s nullglob 必须判红')
+  const withoutBodyNorm = text.replace(/\.body \/\/ ""/, '.body')
+  check(
+    !checkCliArtifactShape(withoutBodyNorm).ok,
+    '可伪证性：去掉正文 null 归一（.body // ""）必须判红'
+  )
+  check(
+    !checkCliArtifactShape(text.replace(/needs: \[preflight, build, cli\]/, 'needs: [preflight, build]')).ok,
+    '可伪证性：needs 里去掉 cli 必须判红'
+  )
+
+  // 7) 判据必须与检出配置无关（AGENTS §7.3）：同一份工作流换成 CRLF 也须得出同样结论。
+  //    缺了这条，上面那些按行切分/替换的断言会在 CRLF 检出下悄悄失效——
+  //    「本地绿、CI 红」按平台随机出现，而根因在行尾。
+  //
+  //    夹具从**原始字节**造：先归一到 LF 再转成 CRLF，这样无论本机检出是哪种行尾，
+  //    拿到的都是一份确定的 CRLF 文本（直接在可能已是 CRLF 的读入结果上替换
+  //    `\n` → `\r\n` 会得到 `\r\r\n`，那种畸形文本证明不了任何事）。
+  const crlf = readFileSync(RELEASE_YML, 'utf8').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')
+  check(
+    checkCliArtifactShape(crlf.replace(/\r\n/g, '\n')).ok === checkCliArtifactShape(text).ok,
+    '可伪证性：归一化行尾后判定必须一致（判据不得依赖检出配置）'
+  )
+  check(
+    !checkCliArtifactShape(crlf.replace(/\r\n/g, '\n').replace(/shopt -s nullglob\n/g, '')).ok,
+    '可伪证性：CRLF 检出下去掉 nullglob 同样必须判红'
+  )
+
   if (failures.length > 0) {
     throw new Error(`发布工作流守卫失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
   }
@@ -208,7 +428,7 @@ export function selfTest() {
 }
 
 function run() {
-  const text = readFileSync(RELEASE_YML, 'utf8')
+  const text = readWorkflow()
   const { tauriScript, args } = extractTauriActionInputs(text)
   const argv = simulateTauriActionArgv(tauriScript ?? '', args ?? '')
   const tokens = String(tauriScript ?? '').trim().split(/\s+/).filter(Boolean)
