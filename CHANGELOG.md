@@ -7,6 +7,23 @@
 
 <!-- changelog-entries -->
 
+## [0.3.0] - 2026-09-13
+
+### ✨ 新功能
+
+- **harness**: 升级内置 DSH 运行时 0.1.2-alpha.4 → 0.1.5-rc.1 ([7a1d5ef](https://github.com/wang-yi-bit64/dsh-desktop/commit/7a1d5efad1a7e6c198e99e2713bf74a1c03e8e7a))
+
+### 🐛 修复
+
+- **macos**: 看门狗抽成共用模块并装到 mock 上——故障注入不经真实入口 ([4dc4f12](https://github.com/wang-yi-bit64/dsh-desktop/commit/4dc4f128722fc0da6da9811ba7306518ca62c4eb))
+- **macos**: 看门狗去掉 unref——闲置时定时器不触发，真机上等于没有 ([d94e672](https://github.com/wang-yi-bit64/dsh-desktop/commit/d94e67282620096f4b0eb42bc71f998e1efc1cff))
+- **macos**: 父死看门狗改为主动探测父进程存活 ([bb977fe](https://github.com/wang-yi-bit64/dsh-desktop/commit/bb977fef42568f1890f8fca42145cbfc3eee0c0c))
+- **ci**: 修复三平台冒烟暴露的三个真实缺陷 ([b8c18f1](https://github.com/wang-yi-bit64/dsh-desktop/commit/b8c18f17043c9729fe458e19366659e78f7da3c5))
+
+### 🧹 其他
+
+- **github**: 新增 Issue 模板与 Discussions 入口（0.2-D1） ([f9c8513](https://github.com/wang-yi-bit64/dsh-desktop/commit/f9c8513ff030c3959e50b9a7719896e89c343840))
+
 ## [0.2.0] - 2026-09-12
 
 ### ✨ 新功能
