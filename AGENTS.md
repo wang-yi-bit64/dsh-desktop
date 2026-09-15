@@ -499,6 +499,42 @@ ERROR: Failed to deploy dependencies for existing files
 
 两条判据都带**可伪证性检查**：把上述旧写法当夹具，断言必须变红。
 
+### 把构建目标插进 `run:` 字符串：只有 Windows 的 job 红（2026-09-15 实测，已修复勿回归）
+
+首次双通道 Smoke 出现**三平台结论相反**的场面：Windows 的 job 红，macOS/Linux 正常。
+日志指向 `node scripts/prepare-harness.mjs --dsh-target=`（**空值**），因为 workflow 里写的是
+
+```yaml
+run: npm run prepare:harness -- --dsh-target="${DSH_TARGET}"
+```
+
+Windows runner 的**默认 shell 是 PowerShell**（不是 bash），那行里的变量引用没有被展开成
+期望的值，参数退化成 `--dsh-target=`，node 读到空串后按设计抛错。macOS/Linux 的 bash 正确展开，
+于是同一份工作流在两个平台上给出相反的结论——而**根因只是 shell 不同**。
+
+**修法（勿改回）**：目标名走**环境变量**，不要插进 `run:` 字符串。
+
+```yaml
+env:
+  DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
+run: npm run prepare:harness
+```
+
+`resolveDshTargetArg()`（`scripts/dsh-targets.mjs`）因此支持三条来源，优先级为
+**CLI 参数 > `DSH_TARGET` 环境变量 > 默认目标**。这样 workflow 里不再有任何 shell 引用，
+任何 shell 都只是「启动进程、设一个变量」。与本仓给 `TAURI_SIGNING_PRIVATE_KEY` 用 env
+而非内联插值是同一套理由（那次防密钥进日志，这次防 shell 改写语义）。
+
+**守卫**：`verify:release-workflow` 的 `checkDualChannelShape` 判定组装步骤必须是
+`env: DSH_TARGET` + `npm run prepare:harness` 的形状，并新增 `findInterpolatedTargetArg`
+扫「`--dsh-target=` 与 `${{ … }}` 同行」的写法；可伪证夹具就是这次真实炸过的形状。
+`dsh-targets.mjs --self-test` 另有四条断言钉住环境变量分支（含「环境变量里的未知目标
+必须报错」——静默回退默认目标等于捆错运行时）。
+
+> **同类风险提醒**：任何「把 `${{ … }}` 插进 `run:` 字符串当参数」的写法都有这个隐患。
+> 本仓口径是**能用 env 就用 env**；确实需要插值时，先问「Windows 的 PowerShell 会不会
+> 给出不同结果」。
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)
