@@ -7,6 +7,27 @@
 
 <!-- changelog-entries -->
 
+## [0.5.0-next.1] - 2026-09-15
+
+### ✨ 新功能
+
+- **harness**: 双上游运行时通道（next = DSH 0.1.5-rc.2 / alpha = DSH 0.1.6-alpha.1） ([2ae5e1a](https://github.com/wang-yi-bit64/dsh-desktop/commit/2ae5e1acd8dd5dc5f67d8631b38a566bb3126824))
+
+### 🐛 修复
+
+- **harness**: 构建钩子改为只校验——beforeBuildCommand 会覆盖另一条通道的资源树 ([84cb94f](https://github.com/wang-yi-bit64/dsh-desktop/commit/84cb94fe949a18691e2e3cf53d399c25c8c79397))
+- **ci**: 构建目标改用 env 传值——shell 插值在 Windows runner 上会被丢掉 ([1d3a831](https://github.com/wang-yi-bit64/dsh-desktop/commit/1d3a831089b6a78043e92e7f8640eb8181219c99))
+
+### 📝 文档
+
+- **agents**: 记录 beforeBuildCommand 覆盖资源树的事故（第三种契约形态） ([c467da5](https://github.com/wang-yi-bit64/dsh-desktop/commit/c467da5de38af36b8cbaa9034616da5066783ace))
+- **agents**: 记录「构建目标插进 run: 字符串 → 只有 Windows 红」的真实事故 ([75dacf8](https://github.com/wang-yi-bit64/dsh-desktop/commit/75dacf89e24b540ad152ee576685fe5ca91ac4e6))
+- 回写 v0.4.0 首次真实发布结果（CLI 产物链路已跑通） ([be5fcf5](https://github.com/wang-yi-bit64/dsh-desktop/commit/be5fcf519b37235a9d3aa5ec4945039c7ce22a98))
+
+### 🧹 其他
+
+- Add `pullfrog.yml` workflow ([574f61e](https://github.com/wang-yi-bit64/dsh-desktop/commit/574f61ee7a71b9e2e5a6c44d777dd4d6a20c4d90))
+
 ## [0.4.0] - 2026-09-13
 
 ### ✨ 新功能
