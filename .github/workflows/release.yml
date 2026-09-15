@@ -191,10 +191,15 @@ jobs:
       # 内置哪条上游运行时通道由 tag 决定（见 preflight）：`0.5.0-next.1` 组装
       # next 线（DSH rc）、`0.6.0-alpha.1` 组装 alpha 线。版本号与运行时因此
       # 天然一致，不需要在 tag 之外再声明一次通道。
+      #
+      # 用 env 传目标名，**不要**写成 `--dsh-target="${DSH_TARGET}"`：Windows
+      # runner 的默认 shell 是 PowerShell，那次写法把值丢掉（参数退化成
+      # `--dsh-target=`），只有 Windows 的 Smoke job 红，macOS/Linux 正常——
+      # 三个平台给出相反结论，根因却只是 shell 不同。
       - name: Prepare harness resources
         env:
           DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
-        run: npm run prepare:harness -- --dsh-target="${DSH_TARGET}"
+        run: npm run prepare:harness
 
       # 组装树健全性（与 ci.yml 的 bundle job 同一套规则，发布前再拦一次）。
       - name: Verify assembled harness tree

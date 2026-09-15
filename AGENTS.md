@@ -33,7 +33,9 @@
   - `plugin-safety-guard.mjs`：`formatFaultDetails` **已接线**（被 `harness-node-entry.mjs` 的未捕获异常/拒绝处理器消费）。**这是当前唯一生效的插件防护，且只在进程内**——同进程的插件崩溃仍可能带走 Harness。
   - `plugin-worker-host.mjs` 已于 2026-09-10 随批次 F 删除（连同 `PluginWorkerClient`）：它实现完整但从未接线，且不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系）。理由见该文件删除时的提交与 §7.2 归档行。
 - **`scripts/`**：
-  - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
+  - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；**按 `--dsh-target=<name>` 选组装哪条上游通道**（版本、补丁目录、vendored 目录、staging 目录全由 [`dsh-targets.mjs`](scripts/dsh-targets.mjs) 推导）；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性，并要求 MANIFEST 的 `target` 与本次目标一致（`resources/` 两通道共用，否则会交付另一条线的树）；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
+  - `dsh-targets.mjs`：**双上游通道的唯一事实源**——目标名 ↔ npm dist-tag ↔ DSH 版本，以及「版本号 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
+  - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
   - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证（6 类故障场景 / 10 项断言）；`npm run fault-inject`，在 Smoke 工作流中为**三平台硬门禁**（2026-09-12 起；此前仅 Windows 硬、其余 `continue-on-error`）。
@@ -146,15 +148,25 @@ npm run verify:profile-names:self-test
 npm run verify:claims
 npm run verify:claims:self-test
 
-# 20. 上游版本漂移哨兵（真检查会因上游领先而红，跑在 nightly；CI 只跑自测）
+# 20. 上游版本漂移哨兵（**逐通道**对照各自的 dist-tag；真检查会因上游领先而红，
+#     跑在 nightly；CI 只跑自测）
 npm run verify:drift
 npm run verify:drift:self-test
 
+# 20b. 双上游通道：目标表自检（目标名 ↔ 通道 ↔ 版本；未知通道必须失败不得回退）
+npm run verify:targets
+
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
+#     默认按 MANIFEST 里记录的 target 取补丁表，也可 --dsh-target=<name> 指定
 npm run report:patches
 
 # 22. 上游升级预检：补丁在新版本上的适用性（~4MB，不必组装 300MB）
-npm run check:patch-applicability -- --target=0.1.5-rc.1
+#     `--dsh-target` 选**哪一套补丁**，`--target` 是**待检的上游版本**，两者不同
+npm run check:patch-applicability -- --dsh-target=next --target=0.1.6-alpha.1
+
+# 22b. 移植补丁后**重算行号**（patch-package 按行号定位，偏移超 ±20 行即失败；
+#      只按内容搜索的预检会漏报这类失败，真实组装才炸——见 §8.6）
+node scripts/recount-patches.mjs --dsh-target=<next|alpha> --pristine=<未打补丁的包根>
 
 # 23. 壳入口 ↔ 上游 CLI 调用约定 + macOS 父死看门狗（含自测）
 #     守「上游改自执行方式」与「看门狗装错进程/unref」两类静默失效
@@ -551,7 +563,9 @@ ERROR: Failed to deploy dependencies for existing files
 | **一键脱敏诊断包 `diagnostics.zip`** | ✅ **已接线（2026-09-10 批次 D）** | `crates/dsh-host/src/diagnostics_export.rs`（5 类脱敏规则：launch token / `dsh-auth-*` cookie / 路径用户名段 / API key / 代理口令；每条有正反用例 + 端到端「产物内无原文」断言）；产物落 `app_data_dir/exports/` | 命令 `diagnostics_export` ← 错误页「导出诊断包」按钮、`logs.html` 同功能按钮、菜单「Harness → Export Diagnostics…」（三者都显示产物路径） |
 | LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
-| 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]` |
+| 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`（分级表按**包名**索引）、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]`（含 `target` 字段标明通道） |
+| **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道直接失败）；`smoke.yml` 有 `dsh_target` 输入；`verify:patches` 逐目标检查、`verify:drift` 逐通道对照 dist-tag。见 §8.6 |
+| ↳ 补丁行号重算（移植到另一条上游线时） | ✅ 已接线 | `scripts/recount-patches.mjs` + `check-patch-applicability` 的 ±20 窗口判据 | 升级/移植工序；`patch-package` 按行号定位且偏移超 ±20 行即失败，只按内容搜索的预检会漏报——见 §8.6 |
 | **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **17 个命令全部**返回 `CommandResult<T>`；四个页面（error / plugin-recovery / logs / updates）均解包 `success` |
 | ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
 | **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
@@ -647,9 +661,9 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 | 工作流 | 文件 | 触发 | 做什么 |
 |--------|------|------|--------|
 | CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
-| Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，三个输入：`scope` / `os` / `fault_injection`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。**不发布任何东西** |
-| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` 真检查落后 npm dist-tag 即红。**不构建任何东西**——只回答「该规划升级了吗」 |
-| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；并行的 `cli` job 三平台构建 `dsh-host-cli` 归档（+ `.sha256` / `manifest.json`），由 `cli-publish` 核验下载副本后上传到同一 Release、把产物表写进正文 |
+| Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，四个输入：`scope` / `os` / `fault_injection` / `dsh_target`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。`dsh_target` 选组装哪条上游通道（`next` / `alpha`）。**不发布任何东西** |
+| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` **逐通道**对照各自的 npm dist-tag（`next` 对 `next`、`alpha` 对 `alpha`），落后即红。**不构建任何东西**——只回答「该规划升级了吗」 |
+| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + **从 tag 的预发布通道名推导 `dsh_target`** + 秒级静态门禁）→ 三平台并行出包并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；并行的 `cli` job 三平台构建 `dsh-host-cli` 归档（+ `.sha256` / `manifest.json`），由 `cli-publish` 核验下载副本后上传到同一 Release、把产物表写进正文 |
 
 - **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
   `schedule`（每天一次）、新增 `drift.yml`。二者合起来让「main 的 HEAD 有没有烂」与「上游
@@ -749,3 +763,38 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 ```
 
 正文里的 CLI 表格由 `--release-notes` 渲染（幂等，重跑不会出现两遍）。
+
+### 8.6 双上游运行时通道（next / alpha）
+
+自 2026-09-15 起，本仓**同时维护两条上游运行时通道**，各自钉一个 DSH 版本、持有一套
+补丁与 vendored 覆盖包：
+
+| 目标 | 上游线 | 固定的 DSH | 补丁 / vendored | 对应的桌面版本形态 |
+|------|--------|-----------|----------------|------------------|
+| `next`（默认） | npm `next` dist-tag | `0.1.5-rc.2` | `patches/next/`、`packages/next/` | `0.5.0-next.1` |
+| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.1` | `patches/alpha/`、`packages/alpha/` | `0.6.0-alpha.1` |
+
+- **唯一事实源是 [`scripts/dsh-targets.mjs`](scripts/dsh-targets.mjs)** 的 `DSH_TARGETS`：
+  目标名 ↔ 通道 ↔ 版本号。`prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target=<name>`
+  从该表推导（含该目标的补丁目录、vendored 目录与 staging 目录 `harness-deps/<target>/`）。
+- **桌面版本号的预发布后缀就是通道名**，这不是装饰：`release.yml` 的 preflight 用
+  `node scripts/dsh-targets.mjs --channel-of "$VERSION"` 从 tag 反推该组装哪个运行时，
+  因此**不需要在 tag 之外再声明一次通道**。未知通道（如 `0.5.0-beta.1`）**直接失败**，
+  不回退默认目标——静默回退会产出「版本号说 beta、运行时却是 next 线」的包，
+  而这类错配只有用户装上才会发现（updater 的版本比较会跟着一起错）。
+- **两条线的补丁做的是同一件事，只是行号随上游版本变化**。因此 `patch-layers.mjs` 的
+  分级表按**包名**索引：新增一条上游线**不需要**动它；只有引入新包才要补登记。
+- **移植补丁必须重算行号**：`patch-package` 按 `@@ -N` 的行号定位，偏移取 0、-1、+1…
+  **超过 ±20 行即放弃**。而「把补丁从一条线复制到另一条、只改文件名」会让行号漂到
+  20 行以上——此时只按内容搜索的预检（`check:patch-applicability`）报 clean，
+  真实组装报 failed，缺陷只在下载 300MB 之后才暴露（2026-09-15 alpha 线移植实测：
+  `trajectory` 漂 135 行、`llm-deepseek` 漂 369 行）。修法与守卫：
+  `node scripts/recount-patches.mjs --dsh-target=<target> --pristine=<未打补丁的包根>`，
+  外加预检里那条按 ±20 窗口判定的断言（含可证伪自检）。
+- **prerelease 不会污染 stable 更新链路**：GitHub 的 `releases/latest` 天然不含 prerelease，
+  而 updater 端点正是指向 `releases/latest/download/latest.json`。守护这条性质的是
+  `verify:release-workflow` 里「prerelease 标记必须从版本号派生」的断言——标记一旦硬编码，
+  预发布就会被标成正式版并被 stable 端点取到。
+- **发布前两条线各自都要有证据**：`smoke.yml` 的 `dsh_target` 输入分别跑一次
+  `scope=full`；`verify:patches` 已在 CI 里逐目标检查。若只验默认目标，
+  另一条线的补丁可以整目录漏登记而无人发现——而它同样会发布给用户。

@@ -42,7 +42,7 @@
  * 退出码：`0` 正常 · `1` 自检失败或未知通道 · `2` 参数错误。
  */
 
-import { argv, exit } from 'node:process'
+import { argv, env as processEnv, exit } from 'node:process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -147,22 +147,39 @@ export function targetForVersion(version) {
 }
 
 /**
- * 从 argv 解析 `--dsh-target=<name>`（缺省为 {@link DEFAULT_TARGET}）。
+ * 解析构建目标：`--dsh-target=<name>` → 环境变量 `DSH_TARGET` → 默认目标。
  *
- * 刻意不用 `--target`：`prepare-harness.mjs` 已经把 `--target=<platform>/<arch>`
+ * ## 为什么必须有环境变量这条路（2026-09-15 的真实事故）
+ *
+ * CI 里最自然的写法是 `npm run prepare:harness -- --dsh-target="${DSH_TARGET}"`，
+ * 但在 **Windows runner**（默认 shell 是 PowerShell）上那次调用把值丢了：参数变成
+ * `--dsh-target=`，node 读到空串后抛错，Windows 的 Smoke job 全红，而 macOS/Linux
+ * 两个平台**正常通过**——三个平台给出相反的结论，原因只是 shell 不同。
+ *
+ * 用环境变量传值把这段 shell 引用整个消掉：workflow 里只写
+ * `env: { DSH_TARGET: … }` + `run: npm run prepare:harness`，任何 shell 都只是
+ * 启动一个进程、设一个变量。这与本仓给 `TAURI_SIGNING_PRIVATE_KEY` 用 env 而非
+ * 内联插值是同一套理由（那次是防密钥进日志，这次是防 shell 改写语义）。
+ *
+ * 刻意**不用** `--target`：`prepare-harness.mjs` 已经把 `--target=<platform>/<arch>`
  * 用于**打包目标**守卫，`check-patch-applicability.mjs` 又把 `--target=<版本>` 用于
  * **待检的上游版本**。三个概念各占一个参数名，避免读的人（和写的人）弄混。
  *
  * @param {string[]} args 命令行参数（不含 node 与脚本名）。
+ * @param {Record<string, string|undefined>} [env] 环境变量（默认 `process.env`）。
  * @returns {string} 目标名。
- * @throws {Error} `--dsh-target=` 为空或指向未知目标。
+ * @throws {Error} 传了 `--dsh-target=` 但为空、或指向未知目标。
  */
-export function resolveDshTargetArg(args = argv.slice(2)) {
+export function resolveDshTargetArg(args = argv.slice(2), env = processEnv) {
   const raw = args.find((arg) => arg.startsWith('--dsh-target='))
-  if (raw === undefined) return DEFAULT_TARGET
-  const value = raw.slice('--dsh-target='.length).trim()
-  if (value.length === 0) throw new Error('--dsh-target= 后面必须跟目标名（如 next / alpha）')
-  return resolveTarget(value).name
+  if (raw !== undefined) {
+    const value = raw.slice('--dsh-target='.length).trim()
+    if (value.length === 0) throw new Error('--dsh-target= 后面必须跟目标名（如 next / alpha）')
+    return resolveTarget(value).name
+  }
+  const fromEnv = String(env?.DSH_TARGET ?? '').trim()
+  if (fromEnv.length > 0) return resolveTarget(fromEnv).name
+  return DEFAULT_TARGET
 }
 
 /** 自检：纯逻辑，不联网、不读磁盘。 */
@@ -213,6 +230,14 @@ export function selfTest() {
   throws('--dsh-target= 空值必须抛错', () => resolveDshTargetArg(['--dsh-target=']))
   eq('缺省 --dsh-target 落默认目标', resolveDshTargetArg([]), DEFAULT_TARGET)
   eq('显式 --dsh-target', resolveDshTargetArg(['--dsh-target=alpha']), 'alpha')
+
+  // 环境变量分支（CI 用这条：避免 shell 引用把值丢掉）。
+  eq('DSH_TARGET 环境变量生效', resolveDshTargetArg([], { DSH_TARGET: 'alpha' }), 'alpha')
+  eq('CLI 参数优先于环境变量', resolveDshTargetArg(['--dsh-target=next'], { DSH_TARGET: 'alpha' }), 'next')
+  eq('空 DSH_TARGET 落默认目标', resolveDshTargetArg([], { DSH_TARGET: '   ' }), DEFAULT_TARGET)
+  eq('未设 DSH_TARGET 落默认目标', resolveDshTargetArg([], {}), DEFAULT_TARGET)
+  // 可证伪性：环境变量里的未知目标同样必须报错——静默回退默认目标会捆错运行时。
+  throws('DSH_TARGET 是未知目标必须抛错', () => resolveDshTargetArg([], { DSH_TARGET: 'beta' }))
 
   if (failures.length > 0) {
     throw new Error(`dsh-targets 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)

@@ -305,7 +305,9 @@ export function checkCliArtifactShape(text) {
  *     （版本号与运行时不一致，用户装上才发现）；
  *   · 不经过 `dsh-targets.mjs --channel-of` 而自己猜通道 —— tag 后缀与目标表的
  *     对应关系会有两份实现，早晚漂移；
- *   · `prepare:harness` 不带 `--dsh-target` —— 同上，组装的是默认目标；
+ *   · 组装步骤**不用 env 传目标名** —— 真实事故：`--dsh-target="${DSH_TARGET}"`
+ *     在 Windows runner（PowerShell）上把值丢掉了，参数退化成 `--dsh-target=`，
+ *     只有 Windows 的 job 红、macOS/Linux 正常。用 env 传值把 shell 引用整个消掉；
  *   · prerelease 标记硬编码 —— 预发布会被标成正式版，进而进 `releases/latest`，
  *     stable 用户收到一个 rc 更新（这正是 `latest.json` 那条命门）。
  *
@@ -334,8 +336,16 @@ export function checkDualChannelShape(text) {
   if (!build) {
     problems.push('没有 `build` job')
   } else {
-    if (!/prepare:harness\s+--\s+--dsh-target/.test(build)) {
-      problems.push('`build` 组装资源时没传 --dsh-target——会组装默认目标，与 tag 声明的通道不符')
+    // 目标名必须经 env 传；把 `${{ … }}` 插进 run 字符串里会被 shell 改写语义。
+    const prepareStep = /- name: Prepare harness resources[\s\S]{0,400}?run:\s*\n?\s*npm run prepare:harness/
+    if (!prepareStep.test(build)) {
+      problems.push(
+        '`build` 的组装步骤不是 `env: DSH_TARGET` + `npm run prepare:harness` 的形状——' +
+          '用 shell 插值传目标名在 Windows（PowerShell）上会被丢掉'
+      )
+    }
+    if (!/Prepare harness resources[\s\S]{0,200}DSH_TARGET:/.test(build)) {
+      problems.push('`build` 的组装步骤没有通过 env 传 DSH_TARGET')
     }
     if (!/prerelease:\s*\$\{\{\s*needs\.preflight\.outputs\.prerelease/.test(build)) {
       problems.push(
@@ -346,6 +356,27 @@ export function checkDualChannelShape(text) {
   }
 
   return { ok: problems.length === 0, problems }
+}
+
+/**
+ * 扫出「把 `${{ … }}` 插进 run 字符串来传构建目标」的写法。
+ *
+ * 这份判据独立成函数是为了能对 smoke.yml 复用：两份工作流各有自己的组装步骤，
+ * 但踩的是同一个坑（shell 改写语义），因此判据也应是同一条。
+ *
+ * @param {string} text 工作流全文
+ * @returns {Array<{line: number, snippet: string}>} 命中清单
+ */
+export function findInterpolatedTargetArg(text) {
+  const hits = []
+  const lines = text.split(/\r?\n/)
+  lines.forEach((line, index) => {
+    if (line.trimStart().startsWith('#')) return // 注释不是可执行行
+    if (/--dsh-target=/.test(line) && /\$\{\{/.test(line)) {
+      hits.push({ line: index + 1, snippet: line.trim() })
+    }
+  })
+  return hits
 }
 
 /**
@@ -486,9 +517,33 @@ export function selfTest() {
     !checkDualChannelShape(text.replace(/dsh-targets\.mjs --channel-of/, 'echo next')).ok,
     '可伪证性：不用 dsh-targets.mjs 推导通道必须判红（两套映射必然漂移）'
   )
+  // 可证伪性：**真实炸过的**写法——把 `${{ … }}` 插进 run 字符串传目标名。
+  // Windows runner（PowerShell）上它把值丢掉，只有 Windows 的 job 红。
+  // 夹具要把 env 传值那一行去掉、换成插值写法（只换 run 会留下 env，判据仍绿）。
+  const interpolated = text.replace(
+    /env:\n\s*DSH_TARGET: \$\{\{ needs\.preflight\.outputs\.dsh_target \}\}\n(\s*)run: npm run prepare:harness/,
+    'run: npm run prepare:harness -- --dsh-target="${{ needs.preflight.outputs.dsh_target }}"'
+  )
   check(
-    !checkDualChannelShape(text.replace(/npm run prepare:harness -- --dsh-target="\$\{DSH_TARGET\}"/, 'npm run prepare:harness')).ok,
-    '可伪证性：组装不传 --dsh-target 必须判红'
+    !checkDualChannelShape(interpolated).ok,
+    '可伪证性：把 env 传值换成 run 内插值必须判红（Windows PowerShell 会丢掉它）'
+  )
+  check(
+    findInterpolatedTargetArg(interpolated).length > 0,
+    '可伪证性：插值写法必须同时被 findInterpolatedTargetArg 命中'
+  )
+  check(
+    /Prepare harness resources[\s\S]{0,200}env:/.test(text),
+    '真实工作流：组装步骤必须用 env 传 DSH_TARGET'
+  )
+  // 可证伪性：检查器必须能认出插值写法本身。
+  check(
+    findInterpolatedTargetArg('        run: npm run prepare:harness -- --dsh-target="${{ inputs.x }}"').length === 1,
+    '可伪证性：findInterpolatedTargetArg 必须能命中 --dsh-target 插值写法'
+  )
+  check(
+    findInterpolatedTargetArg('        run: npm run prepare:harness').length === 0,
+    '可伪证性：不带 --dsh-target 的写法不应被命中'
   )
   check(
     !checkDualChannelShape(
