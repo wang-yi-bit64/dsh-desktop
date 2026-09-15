@@ -863,3 +863,16 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 - **发布前两条线各自都要有证据**：`smoke.yml` 的 `dsh_target` 输入分别跑一次
   `scope=full`；`verify:patches` 已在 CI 里逐目标检查。若只验默认目标，
   另一条线的补丁可以整目录漏登记而无人发现——而它同样会发布给用户。
+
+> ✅ **首发记录（2026-09-15）**：两条通道同日发出，各自 8/8 release job 绿、19 个资产、
+> `prerelease: true`；三平台 CI 与 Smoke `scope=full`（真实资源树 L1 + 打包 + L2 GUI + 故障注入）
+> 在 tag 指向的**同一提交**上全绿。
+>
+> | 版本 | 内置运行时 | 备注 |
+> |---|---|---|
+> | `v0.5.0-next.1` | DSH `0.1.5-rc.2` | rc.1 → rc.2，14 个补丁全部干净可用 |
+> | `v0.6.0-alpha.1` | DSH `0.1.6-alpha.1` | 补丁按语义重做（含行号重算），两处有意差异见 `patches/LAYERS.md` |
+>
+> 实测确认 `releases/latest` 仍指向 `v0.4.0`——**预发布没有污染 stable 更新链路**。
+> 首次发布当场抓到并修掉两个真实缺陷（见上文两节事故记录：Windows shell 传参丢值、
+> `beforeBuildCommand` 覆盖资源树），两个都只在三平台真跑时才暴露。

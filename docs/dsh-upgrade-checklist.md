@@ -150,7 +150,31 @@ boot / config-dump / 插件管理。
 > 历史记录（仅供参考）：对中间版本 `0.1.2-rc.1` 的预检结果是 15 干净 / 3 冲突
 > （`agent-preset` / `settings-models` / `workspace`，均为 UI 层的上下文漂移）。
 
-重生成补丁的逐个处理流程：
+> ### ✅ 双通道首发：next → 0.1.5-rc.2、alpha → 0.1.6-alpha.1（2026-09-15 全流程闭环）
+>
+> 本次不再「推进唯一基线」，而是**新增一条并行的上游通道**（见 `AGENTS.md` §8.6）：
+> `next` 由 rc.1 前进到 rc.2，`alpha` 为新建目标。两条线各有 14 个补丁，分别随
+> **v0.5.0-next.1** 与 **v0.6.0-alpha.1** 发布（各 8/8 release job 绿、19 资产、
+> `prerelease: true`；三平台 CI 与 Smoke `scope=full` 在 tag 的同一提交上全绿）。
+>
+> **两条线的移植成本差得很远，这个差值本身是经验**：
+> - `0.1.5-rc.1 → rc.2`：预检 **14 个全 clean**，机械改名即可。
+> - 新建 `alpha`（0.1.6-alpha.1）：预检 **10 clean / 4 conflict**，其中一条是 `functional` 层
+>   （`@deepseek-ai/dsh` 本体的依赖声明）。alpha 把 workspace 的 `SessionTree` / `FlatList` 从
+>   `useSessions` 改成了 `list` prop、订单模型换成 `saveSessionOrder`，**逐块解三路合并会把旧结构
+>   带回来**——因此改成「在 alpha 纯净树上重建我们的改动」。两处有意差异（不再移植依赖未定义
+>   `window.dshDesktop` 的「在 Finder 中打开」；deliverables 取上游实现只留本仓增强）记在
+>   [`patches/LAYERS.md`](../patches/LAYERS.md)。
+>
+> **⚠️ 本次踩到一个只在真实组装时才炸的坑，已加守卫**：`patch-package` 按 hunk **行号**定位，
+> 偏移超 **±20 行**即放弃；只改文件名的复制会让行号漂到 20 行以上（`trajectory` 漂 135 行、
+> `llm-deepseek` 漂 369 行），此时按内容搜索的预检仍判 clean。修法是 Step 2.2 的
+> `recount-patches.mjs`；预检也已补上 ±20 窗口判据（含可证伪自检）。
+>
+> **⚠️ 同批还修复了两个只在三平台真跑时暴露的缺陷**（详见 `AGENTS.md` §8 后续两节）：
+> `run:` 字符串里插 `${{ … }}` 传目标名在 Windows runner（PowerShell）上丢值（只有 Windows 红）；
+> `tauri.conf.json` 的 `beforeBuildCommand` 会重新组装、**覆盖另一条通道刚组好的资源树**
+> （alpha 的包装的却是 next 运行时，而所有步骤都绿）。两者各带可证伪守卫。
 
 重生成补丁的逐个处理流程：
 
