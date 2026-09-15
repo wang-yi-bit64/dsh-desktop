@@ -50,6 +50,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       dsh_target: ${{ steps.resolve.outputs.dsh_target }}
+      dsh_version: ${{ steps.resolve.outputs.dsh_version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,7 +91,12 @@ jobs:
           # 通道 → 构建目标；未知通道以非零退出（node 脚本自己报错）。
           DSH_TARGET="$(node scripts/dsh-targets.mjs --channel-of "$VERSION")"
           echo "dsh_target=$DSH_TARGET" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG version=$VERSION prerelease=$PRE dsh_target=$DSH_TARGET"
+          # 目标 → 该目标固定的上游版本。发布正文要用它声明「本版内置哪个运行时」：
+          # 双通道下这是用户选版本时最先看的信息，而变更日志的提交区间**不保证**提到
+          # 它（alpha 线的区间常常只有版本提交一条，正文会近乎空白）。
+          DSH_VERSION="$(node scripts/dsh-targets.mjs --version-of "$DSH_TARGET")"
+          echo "dsh_version=$DSH_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$VERSION prerelease=$PRE dsh_target=$DSH_TARGET dsh_version=$DSH_VERSION"
 
       # 版本号三处（package.json / tauri.conf.json / Cargo.toml）一致性 + tag 匹配。
       # 这条是发布链路最关键的防线：tag 与版本号不一致时，打出来的包会自称另一个
@@ -235,11 +241,18 @@ jobs:
         shell: bash
         env:
           TAG: ${{ needs.preflight.outputs.tag }}
+          DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
+          DSH_VERSION: ${{ needs.preflight.outputs.dsh_version }}
         run: |
           set -euo pipefail
           PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           {
             echo 'body<<RELEASE_NOTES_EOF'
+            # 运行时基线横幅：双通道下，「这一版内置哪个 DSH」是用户选版本时最先看的
+            # 信息，而变更日志的提交区间**不保证**提到它——alpha 线的区间常常只有
+            # 版本提交一条，正文会近乎空白。用 preflight 推导出的值显式声明，不靠
+            # 提交历史碰巧写对。
+            echo "> 内置运行时：**DSH \`${DSH_VERSION}\`**（\`${DSH_TARGET}\` 通道）"$'\n'
             # 变量一律用 ${VAR} 花括号形式：macOS runner 的 bash 3.2 在无 UTF-8
             # locale 时，不会把紧跟其后的全角标点当作变量名的终止符——`$TAG）`
             # 会被解析成变量 `TAG）`，报 `TAG）: unbound variable`（Linux/Windows

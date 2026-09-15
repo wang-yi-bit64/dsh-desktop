@@ -354,6 +354,19 @@ export function checkDualChannelShape(text) {
           '进而进 releases/latest，stable 用户会收到 rc 更新'
       )
     }
+    // 发布正文必须显式声明「本版内置哪个 DSH 运行时」：双通道下这是用户选版本时
+    // 最先看的信息，而变更日志的提交区间不保证提到它（alpha 线的区间常常只有版本
+    // 提交一条，正文会近乎空白）。判据按**内容**判（正文里出现运行时横幅），
+    // 不按写法判——这样它守的是结果，而不是某一种实现方式。
+    if (!/内置运行时[\s\S]{0,80}DSH_VERSION|DSH_VERSION[\s\S]{0,80}通道/.test(build)) {
+      problems.push(
+        '发布正文没有声明内置的 DSH 运行时基线——用户无从判断这一版捆的是哪条通道' +
+          '（双通道下这是选版本时最关键的信息）'
+      )
+    }
+    if (!/dsh_version:.*steps\.resolve\.outputs\.dsh_version/.test(preflight ?? '')) {
+      problems.push('`preflight` 没有把 dsh_version 暴露给 build——正文的运行时横幅取不到值')
+    }
   }
 
   return { ok: problems.length === 0, problems }

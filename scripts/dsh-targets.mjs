@@ -257,6 +257,21 @@ function main() {
     }
     return
   }
+  if (args.includes('--version-of')) {
+    const value = args[args.indexOf('--version-of') + 1]
+    if (value === undefined) {
+      console.error('用法：node scripts/dsh-targets.mjs --version-of <目标名>')
+      exit(2)
+    }
+    try {
+      console.log(resolveTarget(value).dshVersion)
+    } catch (error) {
+      console.error(error.message)
+      exit(1)
+    }
+    return
+  }
+
   if (args.includes('--channel-of')) {
     const value = args[args.indexOf('--channel-of') + 1]
     if (value === undefined) {
