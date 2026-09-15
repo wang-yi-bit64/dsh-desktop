@@ -49,6 +49,7 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
+      dsh_target: ${{ steps.resolve.outputs.dsh_target }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,9 +62,14 @@ jobs:
         with:
           node-version: 20
 
-      # 解析 tag → 版本 → 是否预发布。三者后续都要用，集中在一处产出，
-      # 避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
-      - name: Resolve tag, version and prerelease flag
+      # 解析 tag → 版本 → 是否预发布 → **该组装哪条 DSH 通道**。四者都要用，
+      # 集中在一处产出，避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
+      #
+      # `dsh_target` 由**版本号的预发布通道名**决定（`0.6.0-alpha.1` → alpha 线、
+      # `0.5.0-next.1` → next 线），与 `scripts/dsh-targets.mjs` 的总表同源。
+      # 未知通道（如 `beta`）**直接失败**，不回退默认目标——静默回退会产出
+      # 「版本号说 beta、运行时却是 next 线」的包，而用户要装上才发现。
+      - name: Resolve tag, version, prerelease flag and DSH target
         id: resolve
         run: |
           set -euo pipefail
@@ -81,7 +87,10 @@ jobs:
             console.log(m[1] ? "true" : "false");
           ' "$VERSION")
           echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG version=$VERSION prerelease=$PRE"
+          # 通道 → 构建目标；未知通道以非零退出（node 脚本自己报错）。
+          DSH_TARGET="$(node scripts/dsh-targets.mjs --channel-of "$VERSION")"
+          echo "dsh_target=$DSH_TARGET" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$VERSION prerelease=$PRE dsh_target=$DSH_TARGET"
 
       # 版本号三处（package.json / tauri.conf.json / Cargo.toml）一致性 + tag 匹配。
       # 这条是发布链路最关键的防线：tag 与版本号不一致时，打出来的包会自称另一个
@@ -179,8 +188,13 @@ jobs:
       - name: Verify packaging target
         run: npm run verify:target
 
+      # 内置哪条上游运行时通道由 tag 决定（见 preflight）：`0.5.0-next.1` 组装
+      # next 线（DSH rc）、`0.6.0-alpha.1` 组装 alpha 线。版本号与运行时因此
+      # 天然一致，不需要在 tag 之外再声明一次通道。
       - name: Prepare harness resources
-        run: npm run prepare:harness
+        env:
+          DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
+        run: npm run prepare:harness -- --dsh-target="${DSH_TARGET}"
 
       # 组装树健全性（与 ci.yml 的 bundle job 同一套规则，发布前再拦一次）。
       - name: Verify assembled harness tree

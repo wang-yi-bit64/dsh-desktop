@@ -43,12 +43,14 @@ import { fileURLToPath } from 'node:url'
 
 import {
   CRITICAL_LAYER,
-  PATCHES_DIR,
   auditPatchLayers,
   layerOf,
   listPatchFiles,
   packageNameFromPatchFile
 } from './patch-layers.mjs'
+
+// 构建目标（双通道）的单一事实源：DSH 版本、该目标的补丁目录与 vendored 目录。
+import { packagesDirFor, patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
 // 打包目标守卫（见下方 `--target` 段）。import 模块级无副作用：
 // verify-target.mjs 的 CLI 入口有「主模块」判定保护。
@@ -66,12 +68,25 @@ import { pruneForeignPlatformVariants } from './prune-platform-variants.mjs'
 import { verifyNoEscapingLinks, verifyPluginBareImports } from './verify-harness-tree.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const staging = join(projectRoot, 'harness-deps')
-const resources = join(projectRoot, 'src-tauri', 'resources')
 const buildDir = join(projectRoot, 'build')
 const vendorDir = join(projectRoot, 'vendor')
 
-const DSH_VERSION = '0.1.5-rc.1'
+// ---------------------------------------------------------------------------
+// 构建目标：决定内置哪个上游 DSH 版本、用哪一套补丁与 vendored 覆盖包。
+// 双通道（next / alpha）并存，见 [`dsh-targets.mjs`](./dsh-targets.mjs)。
+//   next  → DSH 0.1.5-rc.2   （默认）
+//   alpha → DSH 0.1.6-alpha.1
+// 每个目标有自己的 staging 目录（harness-deps/<target>/），因此两条线可以
+// 交替组装、互不污染（同一目录会让幂等指纹在两条线之间来回失效）。
+// ---------------------------------------------------------------------------
+const dshTarget = resolveDshTargetArg(process.argv)
+const target = resolveTarget(dshTarget)
+const DSH_VERSION = target.dshVersion
+const patchesDir = patchesDirFor(dshTarget)
+const vendoredDir = packagesDirFor(dshTarget)
+const staging = join(projectRoot, 'harness-deps', dshTarget)
+const resources = join(projectRoot, 'src-tauri', 'resources')
+
 const NODE_VERSION = '24.9.0'
 const PNPM_VERSION = '10.34.5'
 
@@ -205,11 +220,11 @@ for (const name of vendorPackages) {
 
 // Pin every patched package to the exact version its patch was made for.
 // Without overrides, npm resolves the dsh sub-dependency ranges (e.g.
-// ^0.1.5-rc.1) to the newest prerelease, which the tracked patches refuse to
+// ^0.1.5-rc.2) to the newest prerelease, which the tracked patches refuse to
 // apply to.
 const overrides = {}
-for (const file of readdirSafe(join(projectRoot, 'patches'))) {
-  // @deepseek-ai+dsh-client-ui-chat+0.1.5-rc.1.patch
+for (const file of readdirSafe(patchesDir)) {
+  // @deepseek-ai+dsh-client-ui-chat+0.1.5-rc.2.patch
   const match = file.match(/^(.*)\+(\d+\.\d+\.\d+[^+]*)\.patch$/)
   if (!match) continue
   const packageName = match[1].replace(/\+/g, '/')
@@ -218,8 +233,8 @@ for (const file of readdirSafe(join(projectRoot, 'patches'))) {
 
 // A few registry tarballs were republished with content that no longer
 // matches the tracked patches (same version string, different bytes). Those
-// are vendored as tgz under packages/ and override the registry entirely.
-const vendoredDir = join(projectRoot, 'packages')
+// are vendored as tgz under packages/<target>/ and override the registry
+// entirely.
 for (const file of readdirSafe(vendoredDir)) {
   const match = file.match(/^(.*)-(\d+\.\d+\.\d+.*)\.tgz$/)
   if (!match) continue
@@ -255,6 +270,9 @@ function buildManifest(lockfilePath) {
     fingerprint,
     generatedAt: new Date().toISOString(),
     lockfileHash: sha256(readFileSync(lockfilePath, 'utf8')),
+    // `target` 是运行时侧判「这份资源属于哪条通道」的唯一依据；
+    // versions.dsh 只是它推导出的版本，两者一起记，避免把目标名读成版本名。
+    target: dshTarget,
     versions: {
       dsh: DSH_VERSION,
       node: NODE_VERSION,
@@ -270,9 +288,10 @@ function buildManifest(lockfilePath) {
 // ---------------------------------------------------------------------------
 // 0. 幂等检查：输入指纹未变且产物完整 → 直接复用，保证可复现且不拖慢内环。
 // ---------------------------------------------------------------------------
-const patchesFingerprint = existsSync(join(projectRoot, 'patches'))
-  ? directoryFingerprint(join(projectRoot, 'patches'))
-  : 'no-patches'
+const patchesFingerprint = existsSync(patchesDir) ? directoryFingerprint(patchesDir) : 'no-patches'
+// vendored tgz 是**按字节冻结**的覆盖包，其内容直接决定产物内容；不进指纹的话，
+// 换一个 tgz 而版本串没变（正是 vendoring 要处理的场景）会命中快速路径复用旧树。
+const vendoredFingerprint = existsSync(vendoredDir) ? directoryFingerprint(vendoredDir) : 'no-vendored'
 // `build/` is copied verbatim into resources/ (entry wrapper, guard, patch
 // layer, pages) but is not a dependency, so without its own digest an edit
 // there leaves the fingerprint unchanged — the fast path then reuses the stale
@@ -283,12 +302,14 @@ const patchesFingerprint = existsSync(join(projectRoot, 'patches'))
 const buildFingerprint = existsSync(buildDir) ? directoryFingerprint(buildDir) : 'no-build'
 const fingerprint = sha256(
   JSON.stringify({
+    target: dshTarget,
     dshVersion: DSH_VERSION,
     nodeVersion: NODE_VERSION,
     pnpmVersion: PNPM_VERSION,
     dependencies,
     overrides,
     patches: patchesFingerprint,
+    vendored: vendoredFingerprint,
     build: buildFingerprint
   })
 )
@@ -380,14 +401,31 @@ function copyBuildFiles() {
  * MANIFEST would silently rewrite a truthful `patches: [...]` into `patches: []`
  * — i.e. the fast path would erase the evidence of which patches landed, which
  * is exactly the accident B1 exists to make visible.
- * @returns {object[]} The prior record, or `[]` when absent/unreadable.
+ *
+ * **Only reused when the manifest was produced for the same target.** `resources/`
+ * is shared by both channels, so switching `--dsh-target` must not let the fast
+ * path declare "inputs unchanged" and hand back the other line's tree (that is a
+ * package whose version string says alpha while its runtime is next). The
+ * fingerprint already includes `target`, but comparing `target` explicitly keeps
+ * the reason visible at the point of the check.
+ * @returns {object[]} The prior record, or `[]` when absent/unreadable/other target.
  */
 function priorPatchReport() {
   try {
     const prior = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    if (prior.target !== dshTarget) return []
     return Array.isArray(prior.patches) ? prior.patches : []
   } catch {
     return []
+  }
+}
+
+/** `resources/` 当前装的是哪个目标（由 MANIFEST 判断；无从判断时为 `null`）。 */
+function currentResourcesTarget() {
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8')).target ?? null
+  } catch {
+    return null
   }
 }
 
@@ -395,13 +433,15 @@ if (!forceRebuild) {
   let manifestMatches = false
   if (resourcesComplete() && existsSync(manifestPath)) {
     try {
-      manifestMatches = JSON.parse(readFileSync(manifestPath, 'utf8')).fingerprint === fingerprint
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      // 两个条件缺一不可：指纹一致（输入没变）且目标一致（同一通道）。
+      manifestMatches = manifest.fingerprint === fingerprint && manifest.target === dshTarget
     } catch {
       manifestMatches = false
     }
   }
   if (manifestMatches) {
-    log(`输入未变（fingerprint ${fingerprint.slice(0, 12)}…），跳过重新组装（--force 可强制）`)
+    log(`输入未变（fingerprint ${fingerprint.slice(0, 12)}…，目标 ${dshTarget}），跳过重新组装（--force 可强制）`)
     process.exit(0)
   }
   // 快速路径：组装产物（resources/）与 staging 的 package.json + lockfile
@@ -410,7 +450,14 @@ if (!forceRebuild) {
   // （--force 可强制完整重组）。build/ 的产物不参与 install，指纹变化时在此
   // 单独同步，否则对 harness-node-entry.mjs 之类的修改会被快速路径静默丢掉。
   const stagingLockfile = join(staging, 'package-lock.json')
-  if (resourcesComplete() && existsSync(stagingLockfile) && stagingInputsMatch()) {
+  if (
+    resourcesComplete() &&
+    existsSync(stagingLockfile) &&
+    stagingInputsMatch() &&
+    // resources/ 是全目标共用的：切到另一条通道时必须重新组装，否则会把上一条
+    // 线的树当成「本次的产物」交给打包（版本号说 alpha、运行时却是 next）。
+    currentResourcesTarget() === dshTarget
+  ) {
     copyBuildFiles()
     // node_modules 是上次完整组装时打过补丁的，本路径不重新打补丁，
     // 因此继承旧 MANIFEST 的逐补丁记录（而非默认空数组）。
@@ -450,8 +497,12 @@ writeFileSync(
   )}\n`
 )
 
-// patch-package reads ./patches relative to the working directory.
-cpSync(join(projectRoot, 'patches'), join(staging, 'patches'), { recursive: true })
+// patch-package reads ./patches relative to the working directory. Only this
+// target's patch set is staged: applying the other channel's patches here would
+// either fail outright or, worse, apply a diff whose context happens to match
+// while its intent belongs to a different upstream version.
+cpSync(patchesDir, join(staging, 'patches'), { recursive: true })
+log(`staged patches for target ${dshTarget} (DSH ${DSH_VERSION}) from ${patchesDir}`)
 
 // ---------------------------------------------------------------------------
 // 2. Install the dependency tree from the npm registry.
@@ -495,13 +546,13 @@ assertPickerSurfaceIsHostBacked()
  * @returns {void}
  */
 function applyTieredPatches() {
-  const files = listPatchFiles()
+  const files = listPatchFiles(dshTarget)
   if (files.length === 0) {
-    log('patches/ 为空，跳过补丁阶段')
+    log(`patches/${dshTarget}/ 为空，跳过补丁阶段`)
     return
   }
 
-  for (const problem of auditPatchLayers()) {
+  for (const problem of auditPatchLayers(dshTarget)) {
     // 分级表漂移不阻断组装（CI 的 `--self-test` 才是硬门禁），但必须可见。
     log(`⚠️ 分级表问题：${problem}`)
   }
@@ -600,7 +651,7 @@ function applySinglePatch(file) {
   const patchDir = mkdtempSync(join(staging, '.dsh-patch-'))
   const relativePatchDir = basename(patchDir)
   try {
-    copyFileSync(join(PATCHES_DIR, file), join(patchDir, file))
+    copyFileSync(join(patchesDir, file), join(patchDir, file))
     const result = runCaptured(
       'npx',
       ['patch-package', '--patch-dir', relativePatchDir, '--error-on-fail'],

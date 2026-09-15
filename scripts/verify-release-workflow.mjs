@@ -297,6 +297,58 @@ export function checkCliArtifactShape(text) {
 }
 
 /**
+ * 双通道发布形状的判据（2026-09-15 起）。
+ *
+ * 每条都对应一类**只在真发布时暴露**的失败：
+ *   · preflight 不产出 `dsh_target` —— build job 无从知道该组装哪条上游线，
+ *     只能落回默认目标，于是 `0.6.0-alpha.1` 的包里装的是 next 线的运行时
+ *     （版本号与运行时不一致，用户装上才发现）；
+ *   · 不经过 `dsh-targets.mjs --channel-of` 而自己猜通道 —— tag 后缀与目标表的
+ *     对应关系会有两份实现，早晚漂移；
+ *   · `prepare:harness` 不带 `--dsh-target` —— 同上，组装的是默认目标；
+ *   · prerelease 标记硬编码 —— 预发布会被标成正式版，进而进 `releases/latest`，
+ *     stable 用户收到一个 rc 更新（这正是 `latest.json` 那条命门）。
+ *
+ * @param {string} text release.yml 全文
+ * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
+ */
+export function checkDualChannelShape(text) {
+  const problems = []
+  const preflight = jobBlock(text, 'preflight')
+  const build = jobBlock(text, 'build')
+
+  if (!preflight) {
+    problems.push('没有 `preflight` job——目标解析无从发生')
+  } else {
+    if (!/dsh_target:.*steps\.resolve\.outputs\.dsh_target/.test(preflight)) {
+      problems.push('`preflight` 没有把 dsh_target 作为 job output 暴露——下游只能落回默认目标')
+    }
+    if (!/dsh-targets\.mjs\s+--channel-of/.test(preflight)) {
+      problems.push(
+        '`preflight` 没有用 `scripts/dsh-targets.mjs --channel-of` 推导目标——' +
+          '自己写一套 tag→目标的映射会与 dsh-targets.mjs 漂移'
+      )
+    }
+  }
+
+  if (!build) {
+    problems.push('没有 `build` job')
+  } else {
+    if (!/prepare:harness\s+--\s+--dsh-target/.test(build)) {
+      problems.push('`build` 组装资源时没传 --dsh-target——会组装默认目标，与 tag 声明的通道不符')
+    }
+    if (!/prerelease:\s*\$\{\{\s*needs\.preflight\.outputs\.prerelease/.test(build)) {
+      problems.push(
+        '`build` 的 prerelease 标记没有从版本号派生——硬编码会让预发布被标成正式版，' +
+          '进而进 releases/latest，stable 用户会收到 rc 更新'
+      )
+    }
+  }
+
+  return { ok: problems.length === 0, problems }
+}
+
+/**
  * 自测：对真实文件跑一遍判据，并用两份**已知缺陷夹具**做可伪证性检查。
  *
  * @returns {{passed: number}} 通过项数
@@ -419,6 +471,30 @@ export function selfTest() {
   check(
     !checkCliArtifactShape(crlf.replace(/\r\n/g, '\n').replace(/shopt -s nullglob\n/g, '')).ok,
     '可伪证性：CRLF 检出下去掉 nullglob 同样必须判红'
+  )
+
+  // 8) 真实工作流：双通道发布形状（tag 后缀 → 构建目标、prerelease 标记）。
+  const dual = checkDualChannelShape(text)
+  check(dual.ok, `release.yml：双通道形状不合法 → ${dual.problems.join('；')}`)
+
+  // 8a) 可伪证性：把每条判据各自打回缺陷写法，必须判红。
+  check(
+    !checkDualChannelShape(text.replace(/dsh_target:.*\n/, '')).ok,
+    '可伪证性：preflight 不暴露 dsh_target 必须判红（否则 build 只能落回默认目标）'
+  )
+  check(
+    !checkDualChannelShape(text.replace(/dsh-targets\.mjs --channel-of/, 'echo next')).ok,
+    '可伪证性：不用 dsh-targets.mjs 推导通道必须判红（两套映射必然漂移）'
+  )
+  check(
+    !checkDualChannelShape(text.replace(/npm run prepare:harness -- --dsh-target="\$\{DSH_TARGET\}"/, 'npm run prepare:harness')).ok,
+    '可伪证性：组装不传 --dsh-target 必须判红'
+  )
+  check(
+    !checkDualChannelShape(
+      text.replace(/prerelease: \$\{\{ needs\.preflight\.outputs\.prerelease == 'true' \}\}/, 'prerelease: false')
+    ).ok,
+    '可伪证性：prerelease 硬编码必须判红（预发布会污染 stable 更新链路）'
   )
 
   if (failures.length > 0) {

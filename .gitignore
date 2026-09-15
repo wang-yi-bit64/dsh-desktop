@@ -37,3 +37,6 @@ Thumbs.db
 
 # 临时升级工作区（0.1.5-rc.1 移植；完成后删除）
 .upgrade-scratch/
+
+# 补丁行号重算脚本的临时树
+.recount-tmp/

@@ -52,6 +52,14 @@ on:
         required: true
         default: true
         type: boolean
+      dsh_target:
+        description: '组装哪条上游运行时通道（next = DSH rc 线；alpha = DSH alpha 线）'
+        required: true
+        default: next
+        type: choice
+        options:
+          - next
+          - alpha
 
 jobs:
   # 把 `os` 选择解析成矩阵。集中在一处产出，免得每个 job 各写一遍同样的映射
@@ -121,6 +129,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      # 补丁分级自检：**两个目标都查**。只验默认目标意味着另一条线的补丁可以
+      # 整目录漏登记而无人发现——而那条线同样会发布给用户。
+      - name: Verify patch layers (all targets)
+        run: npm run verify:patches
+
       # L1 的前置：脚本直接使用 target/debug 下的 dsh-host-cli。
       - name: Build host CLI
         run: cargo build -p dsh-host-cli
@@ -144,7 +157,9 @@ jobs:
 
       - name: Prepare harness resources
         if: inputs.scope != 'l1'
-        run: npm run prepare:harness
+        env:
+          DSH_TARGET: ${{ inputs.dsh_target }}
+        run: npm run prepare:harness -- --dsh-target="${DSH_TARGET}"
 
       # 组装树健全性：树内不得有逃出树外的符号链接；桌面插件入口的裸导入必须能在
       # 树内解析（否则 Harness 启动即 `Cannot find package '<dep>'`）。

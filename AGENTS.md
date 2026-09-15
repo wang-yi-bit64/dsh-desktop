@@ -49,7 +49,8 @@
 - **`.github/workflows/`**：`ci.yml`（PR / 手动；**刻意不监听 `push`**——日常提交零自动化）、`smoke.yml`（**仅手动**触发冒烟：`l1` / `assembled` / `full` 三档）、`release.yml`（推 `v*` tag / 手动指定 tag）。三者分工见 §8.4——CI 负责**静态验证**，Smoke 负责**按需起的真实进程验证**，Release 负责**出包与发布**，互不重复。
 - **`.github/ISSUE_TEMPLATE/`**：Issue 表单（YAML form，非 markdown 模板）。`bug_report.yml` 内嵌**脱敏诊断包两步指引**（菜单「Harness → Export Diagnostics…」导出 → 建完 issue 后拖进评论区，因为 GitHub 只允许对已创建的 issue 挂附件），并给出应用起不来时按平台取日志的路径表，同时**显式声明原始日志未脱敏**；`feature_request.yml` 明确 Harness 侧功能应提给上游；`config.yml` 关闭空白 issue 并挂 Discussions 联系入口。GitHub Discussions 已于 2026-09-12 开启（分类见 `docs/dev-plan-0.2-hardening.md` 批次 0.2-D）。**表单结构必须按 `json.schemastore.org/github-issue-forms.json` 核对**：`checkboxes` 不接受 `validations`，勾选项的必填写在 option 的 `required` 上——写错不会让 YAML 非法，只会让表单在 GitHub 侧渲染异常，「YAML 能解析」不能当通过判据。
 - **`CHANGELOG.md`**：**生成物，勿手工编辑**（改动会在下次生成时被覆盖）。数据源是 git 提交历史，见 §8.3。
-- **`patches/`**：`patch-package` 补丁 + [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。
+- **`patches/<target>/`**：`patch-package` 补丁，**按上游运行时通道分目录**（`next` / `alpha`，见 §8.6）+ [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。分级表按**包名**索引——新增一条通道不需要动登记表。
+- **`packages/<target>/`**：按目标分目录的 vendored 覆盖包（被上游重新发布过、需要冻结字节的 tgz）。
 - **`docs/`**：架构设计、契约定义、不变量与技术规范：
   - `dsh-desktop-redesign-architecture-and-plan.md`：最新系统架构重构设计与执行计划。
   - `system_design.md`：核心系统架构设计、契约定义与不变量清单。

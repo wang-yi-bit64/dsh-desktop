@@ -17,7 +17,8 @@
   "scripts": {
     "prepare:harness": "node scripts/prepare-harness.mjs",
     "prepare:harness:strict": "node scripts/prepare-harness.mjs --force --strict",
-    "verify:patches": "node scripts/patch-layers.mjs --self-test",
+    "verify:patches": "node scripts/verify-patch-layers.mjs",
+    "verify:targets": "node scripts/dsh-targets.mjs --self-test",
     "verify:prune": "node scripts/prune-harness-deps.mjs --self-test",
     "verify:variants": "node scripts/prune-platform-variants.mjs --self-test",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",

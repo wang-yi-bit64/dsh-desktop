@@ -81,11 +81,19 @@ jobs:
         with:
           node-version: 20
 
-      # 补丁分级自检：patches/ 目录与 scripts/patch-layers.mjs 的登记表必须一致，
-      # 且每个补丁文件名都能推导出包名。这是纯静态检查（不装依赖），放在最前面
+      # 补丁分级自检：patches/<target>/ 目录与 scripts/patch-layers.mjs 的登记表必须
+      # 一致，且每个补丁文件名都能推导出包名。这是纯静态检查（不装依赖），放在最前面
       # 快速失败——补丁登记缺失会让 prepare:harness 在打包时才报错，代价高得多。
-      - name: Verify patch layer manifest
+      # **逐目标检查**：双通道各有自己的补丁集，只验默认目标会让另一条线的补丁
+      # 整目录漏登记、或文件名版本段停在旧值而无人发现（那条线同样会发布给用户）。
+      - name: Verify patch layer manifest (all targets)
         run: npm run verify:patches
+
+      # 构建目标总表自检：目标名 ↔ 通道 ↔ 版本号的解析规则，以及「未知通道不得
+      # 回退默认目标」这条硬约束（通道解析决定装哪个运行时，回退 = 出错包的运行时）。
+      # 纯逻辑，不联网。
+      - name: Verify DSH build target table
+        run: npm run verify:targets
 
       # 依赖树瘦身判据的自检。`prepare:harness` 会把 node_modules 里「像开发产物」
       # 的目录整目录删掉以缩小安装包，而 `doc` / `docs` 这类名字在某些包里恰好是

@@ -40,7 +40,8 @@ import { argv } from 'node:process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { listPatchFiles, layerOf, packageNameFromPatchFile, PATCHES_DIR, LAYERS } from './patch-layers.mjs'
+import { listPatchFiles, layerOf, packageNameFromPatchFile, LAYERS } from './patch-layers.mjs'
+import { DEFAULT_TARGET, patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_MANIFEST = join(projectRoot, 'src-tauri', 'resources', 'MANIFEST.json')
@@ -112,6 +113,20 @@ export function summarize(files, manifest) {
   }
 }
 
+/**
+ * 读 MANIFEST 里记录的组装目标（老 manifest 没有该字段时为 `null`）。
+ *
+ * @param {string} path manifest 路径
+ * @returns {string|null} 目标名
+ */
+export function readManifestTarget(path = DEFAULT_MANIFEST) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')).target ?? null
+  } catch {
+    return null
+  }
+}
+
 /** 自检：纯逻辑，不读真实 MANIFEST。 */
 function selfTest() {
   let failed = 0
@@ -165,8 +180,22 @@ function main() {
     manifestArgIndex >= 0 && argv[manifestArgIndex + 1] ? resolve(argv[manifestArgIndex + 1]) : DEFAULT_MANIFEST
   const markdown = argv.includes('--markdown')
 
-  const files = listPatchFiles()
+  // 报告必须按**实际组装的目标**取补丁表：两条通道的补丁文件名不同，拿错目录
+  // 会把「另一条线的补丁」标成 absent（读起来像「一个都没打上」）。
+  // 判据优先用 MANIFEST 里记录的 target（那是组装期的事实），其次用参数，最后默认。
   const manifest = loadPatchResults(manifestPath)
+  let target = DEFAULT_TARGET
+  try {
+    target = resolveDshTargetArg(argv.slice(2))
+  } catch (error) {
+    console.error(error.message)
+    process.exitCode = 2
+    return
+  }
+  const manifestTarget = readManifestTarget(manifestPath)
+  if (manifestTarget !== null && !argv.includes('--dsh-target')) target = manifestTarget
+
+  const files = listPatchFiles(target)
   const summary = summarize(files, manifest)
   const rel = (p) => p.replace(projectRoot, '').replace(/^[\\/]/, '').replace(/\\/g, '/')
   const statusCell = (row) => (row.status === null ? '—' : row.status)
@@ -176,7 +205,7 @@ function main() {
     lines.push('## 补丁健康度')
     lines.push('')
     lines.push(
-      `补丁总数 **${summary.total}** · functional **${summary.functional}** · 可退役候选 **${summary.retireCandidates}**`
+      `目标 **${target}** · 补丁总数 **${summary.total}** · functional **${summary.functional}** · 可退役候选 **${summary.retireCandidates}**`
     )
     if (manifest.hasPatchRecords) {
       lines.push(
@@ -207,7 +236,8 @@ function main() {
   }
 
   console.log('[report-patches] 补丁健康度报告')
-  console.log(`  源目录 : ${rel(PATCHES_DIR)}`)
+  console.log(`  目标   : ${target}（DSH ${resolveTarget(target).dshVersion}）`)
+  console.log(`  源目录 : ${rel(patchesDirFor(target))}`)
   const manifestNote = manifest.hasPatchRecords
     ? '（已读取）'
     : manifest.present

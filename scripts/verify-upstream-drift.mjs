@@ -45,6 +45,8 @@ import { argv, env, exit } from 'node:process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { DSH_TARGETS, listTargetNames, resolveTarget } from './dsh-targets.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const prepareScript = join(projectRoot, 'scripts', 'prepare-harness.mjs')
 
@@ -240,6 +242,19 @@ async function selfTest() {
   check('readDshVersion(缺失)', readDshVersion('const OTHER = 1'), null)
   check('distTagsUrl', distTagsUrl('https://registry.npmjs.org/'), `https://registry.npmjs.org/-/package/@deepseek-ai%2Fdsh/dist-tags`)
 
+  // 双通道：每个目标都要能被解析、且 channel 是一个真实存在的 npm dist-tag 名。
+  // 注意**不能**要求版本后缀等于 channel：上游的 `next` 现在就指向一个 `rc` 版本
+  // （dist-tag 是「哪条发布线」，预发布阶段是「这条线走到哪一步了」，两者独立）。
+  // 真正要守的是 channel 别写成不存在的 tag——那样哨兵会静默退回 `latest`，
+  // 把一条自己管着的线误报成「落后」或「持平」。
+  check('目标数 ≥ 2（双通道并存）', listTargetNames().length >= 2, true)
+  for (const name of listTargetNames()) {
+    const t = resolveTarget(name)
+    check(`目标 ${name} 的 channel 与键一致`, t.channel, name)
+    check(`目标 ${name} 的 channel 是已知 dist-tag 名`, ['latest', 'next', 'alpha'].includes(t.channel), true)
+    check(`目标 ${name} 自身不落后于自己`, judgeDrift(t.dshVersion, t.dshVersion).ok, true)
+  }
+
   // 无网络 → 必须落到 skip（既不判失败，也不冒充「已核对」）
   const offline = await fetchDistTags({ registry: 'http://127.0.0.1:9', timeoutMs: 1500 })
   check('无网络 → skip', offline.status, 'skip')
@@ -251,59 +266,60 @@ async function selfTest() {
   console.log('verify-upstream-drift self-test: 全部通过（含无网络 → SKIP 分支）')
 }
 
-/** 主流程。 */
+/** 主流程：两条通道各自对照它对应的 dist-tag 检查一次。 */
 async function main() {
   if (argv.includes('--self-test')) {
     await selfTest()
     return
   }
 
-  let text = ''
-  try {
-    text = readFileSync(prepareScript, 'utf8')
-  } catch {
-    text = ''
-  }
-  const current = readDshVersion(text)
-  if (!current) {
-    console.error('[verify:drift] 无法从 scripts/prepare-harness.mjs 读到 DSH_VERSION')
-    exit(1)
-  }
-
   const registry = env.DSH_REGISTRY || DEFAULT_REGISTRY
   const timeoutMs = Number(env.DSH_DRIFT_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS
   const result = await fetchDistTags({ registry, timeoutMs })
 
+  const targets = listTargetNames().map((name) => ({
+    name,
+    channel: DSH_TARGETS[name].channel,
+    current: resolveTarget(name).dshVersion
+  }))
+
   if (result.status !== 'ok') {
     console.log(`[verify:drift] SKIP —— ${result.reason}`)
-    console.log(`  pinned DSH_VERSION = ${current}`)
+    for (const t of targets) console.log(`  ${t.name.padEnd(6)} pinned DSH ${t.current}`)
     console.log('  ⚠️ SKIP 不等于「已核对」：只是这次没连上 registry，漂移未知。')
     return
   }
 
   const { latest, next, alpha } = result.tags
-  const drift = judgeDrift(current, latest)
-
   console.log('[verify:drift] 上游 DSH 版本漂移检查')
-  console.log(`  pinned (scripts/prepare-harness.mjs) : ${current}`)
-  console.log(`  npm latest                          : ${latest}`)
-  if (next) console.log(`  npm next                            : ${next}`)
-  if (alpha) console.log(`  npm alpha                           : ${alpha}`)
+  console.log(`  npm latest : ${latest}`)
+  if (next) console.log(`  npm next   : ${next}`)
+  if (alpha) console.log(`  npm alpha  : ${alpha}`)
   console.log('')
 
-  if (drift.level === 'patch-behind') {
-    console.log(`  ⚠️  ${drift.message}`)
-    return
-  }
-  if (drift.ok) {
-    console.log(`  ✅ ${drift.message}`)
-    return
+  let blocked = 0
+  for (const target of targets) {
+    // 各通道对照**自己的** dist-tag：next 线追 `next`，alpha 线追 `alpha`；
+    // 没有对应 tag 时退回 `latest`（那正是「这条线还没被上游单独标记」的意思）。
+    const upstream = result.tags[target.channel] ?? latest
+    const drift = judgeDrift(target.current, upstream)
+    const prefix = `  [${target.name} → npm ${target.channel}]`
+    if (drift.level === 'patch-behind') {
+      console.log(`${prefix} ⚠️  ${drift.message}`)
+    } else if (drift.ok) {
+      console.log(`${prefix} ✅ ${drift.message}`)
+    } else {
+      blocked += 1
+      console.error(`${prefix} ❌ ${drift.message}`)
+    }
   }
 
-  console.error(`  ❌ ${drift.message}`)
-  console.error('  上游以破坏性变更迭代；落后越多，补丁冲突越会集中到一次升级里爆发。')
-  console.error('  处理步骤见 docs/dsh-upgrade-checklist.md —— 本哨兵只负责「提前叫」。')
-  exit(1)
+  if (blocked > 0) {
+    console.error('')
+    console.error('  上游以破坏性变更迭代；落后越多，补丁冲突越会集中到一次升级里爆发。')
+    console.error('  处理步骤见 docs/dsh-upgrade-checklist.md —— 本哨兵只负责「提前叫」。')
+    exit(1)
+  }
 }
 
 // ESM「主模块」判定：仅当被直接执行（而非 import）时跑 CLI。

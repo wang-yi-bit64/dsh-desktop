@@ -147,7 +147,8 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:ipc-surface` | 命令定义 ↔ `generate_handler!` 注册 ↔ 页面 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记。`src-tauri` 是 rlib，没人调用的 `pub` 命令**不会**触发 `dead_code`——这是唯一能抓到「写了但没接线」的东西。 |
 | `npm run verify:shell-pages` | 把每个壳页面的内联脚本放进 DOM 桩里真跑一遍，并**逐个点一遍按钮**。抓 `getElementById` 返回 `null`（脚本会就此中断，**该页所有监听全部失效**），以及 HTML 留了按钮却没挂监听。 |
 | `npm run verify:harness-inject` | Harness 页注入脚本的 DOM 行为，含**可证伪性检查**：把脚本回退成上游行为，断言必须变红。 |
-| `npm run verify:patches` | `patches/` 与 `scripts/patch-layers.mjs` 的分级清单一致，且每个补丁文件名都能推导出包名。 |
+| `npm run verify:patches` | `patches/<target>/` 与 `scripts/patch-layers.mjs` 的分级清单一致——**逐目标**各查一遍（`next` 与 `alpha`）：只验默认目标会让另一条线的补丁整目录漏登记、或版本段停在旧值而无人发现。每个补丁文件名仍须能推导出包名；分级表按**包名**索引，因此新增一条通道不需要动它。 |
+| `npm run verify:targets` | 构建目标总表本身（`scripts/dsh-targets.mjs`，别与 `verify:target` 混淆）：通道 ↔ 目标 ↔ 钉住的上游版本、版本号 → 目标的解析规则，以及「未知预发布通道不得回退默认目标」这条硬约束（静默回退会产出「版本号说一条线、运行时却是另一条线」的包）。纯逻辑，不联网。 |
 | `npm run verify:prune` / `npm run verify:variants` | 决定出厂 `node_modules` 形状的两条剪枝规则：哪些开发产物目录可安全删除（看**内容**不看名字——`yaml/dist/doc` 是运行时路径），以及哪些外来平台原生变体必须在 linuxdeploy 扫描 AppDir 前清掉。两条都带针对旧判据的可伪证性检查。 |
 | `npm run verify:version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
 | `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
@@ -158,7 +159,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run verify:harness-entry` | 壳入口 ↔ 上游 `dsh` CLI 的调用约定兼容性：上游 0.1.5-rc.1 把 CLI 改成 `if (import.meta.main) runCli()`，因此**import** 它的包装器必须显式调用导出的 `runCli()`，否则进程以退出码 0 静默结束。同时钉住 macOS 父死看门狗——由入口**与 `mock-harness.mjs`** 共同安装（故障注入的 mock 模式会把入口整体替换掉）。带可证伪性自检。 |
 | `npm run verify:profile-names` | 任何 profile 字面量都不得等于官方保留名 `desktop`（大小写不敏感）——官方桌面版独占该 profile。同时钉住两个契约锚点（`SAFE_MODE_PROFILE` 保持 `desktop-safe-mode`、`HARNESS_CLI` 保持裸子命令 `web`）。带可证伪性自检。 |
 | `npm run verify:claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |
-| `npm run verify:drift` / `verify:drift:self-test` | 钉住的 `DSH_VERSION` 是否已落后于 npm dist-tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
+| `npm run verify:drift` / `verify:drift:self-test` | 两条通道是否各自落后于**自己的** npm dist-tag——`next` 对照 `next` tag、`alpha` 对照 `alpha` tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
 | `npm run report:patches` | 补丁健康度报告：把层 / 退役条件表与 `MANIFEST.json` 里逐条真实的 `applied/skipped/failed` 合并成一张表。manifest 缺失时如实标为不可用——**不伪造 applied**。 |
 | `npm run check:patch-applicability` / `--target=<v>` | 上游升级预检：仓库内补丁在目标版本上哪些仍可用、在哪一段 hunk 断裂。约 4MB 下载，不必组装 300MB。零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器）。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
@@ -227,13 +228,32 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 
 > 为什么不用 GitHub 内置的 `--generate-notes`：它按**已合并 PR** 归纳，而本仓库全程直推 `main`（`gh pr list --state all` 为空）。实测其产出只有一行 `**Full Changelog**: …`、零条目。
 
+### 运行时通道（next / alpha）
+
+壳层内置的上游运行时**双通道并行维护**：每条通道各自钉一个 `@deepseek-ai/dsh` 版本，并各持一套补丁（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）：
+
+| 通道 | 上游线 | 钉住的 DSH 版本 | 对应桌面版本示例 |
+|------|--------|----------------|------------------|
+| `next`（默认线） | npm `next` dist-tag（rc 阶段） | `0.1.5-rc.2` | `0.5.0-next.1` |
+| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.1.6-alpha.1` | `0.6.0-alpha.1` |
+
+桌面版本号的**预发布后缀就是它捆的那条通道名**：`0.5.0-next.1` 捆 DSH rc 线，`0.6.0-alpha.1` 捆 DSH alpha 线。发布流程从 tag 本身反推构建目标（`scripts/dsh-targets.mjs --channel-of`），**tag 后缀因此自动决定组装哪条运行时**——不需要在 tag 之外再声明一次通道。后缀不对应任何已知通道的 tag（例如 `beta`）会**直接让发布失败**，而不是回退到默认目标：静默回退会产出「版本号说一条线、运行时却是另一条线」的包，这类错配只有用户装上之后才会被发现。
+
+本地组装某条通道用 `--dsh-target`（缺省 `next`）：
+
+```bash
+npm run prepare:harness -- --dsh-target=alpha
+```
+
+> 预发布版本**不进入** stable 更新链路：updater 端点读的是 `releases/latest/download/latest.json`，而 GitHub 的「latest release」按定义不含 prerelease。因此 `-next.N` / `-alpha.N` 只会到达显式安装它的用户。
+
 ### 发布工作流
 
 | 工作流 | 触发 | 做什么 |
 |--------|------|--------|
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | 任意 PR / 手动（**刻意不监听 `push`**） | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) | **仅手动**（`workflow_dispatch`） | 按需跑的冒烟测试，用 `scope` 分档：`l1`（mock 资源树 L1 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。**不发布任何东西** |
-| [`.github/workflows/release.yml`](.github/workflows/release.yml) | **推 `v*` tag** / 手动指定 tag | `preflight`（版本↔tag 一致性 + 秒级静态门禁）→ 三平台并行出包，**创建/更新 GitHub Release** 并上传安装包、`.sig` 签名与 `latest.json` |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | **推 `v*` tag** / 手动指定 tag | `preflight`（版本↔tag 一致性、按 tag 解析运行时通道 + 秒级静态门禁）→ 三平台并行出包，**创建/更新 GitHub Release** 并上传安装包、`.sig` 签名与 `latest.json` |
 
 - **日常提交不触发任何 CI**：`ci.yml` 不再监听 `push`（也从不监听 tag——出包只有一个产地 `release.yml`）。静态门禁 + 单测已够一次提交拿到快反馈；组装 300MB 运行时、打包、起窗口这些成本高的动作不该挂在每次提交上。
 - **冒烟测试改为手动触发**：L1/L2 冒烟**从 `ci.yml` 迁到独立的 `smoke.yml`**，只由 `workflow_dispatch` 触发。保留能力、去掉自动化正是目的——需要时能跑，平时不占额度。三种 `scope` 对应三档成本；`gh workflow run smoke.yml -f scope=l1` 是命令行等价物。它用的是**同一批脚本与同一套断言**，所以这是搬家，不是另立一套判据。

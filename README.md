@@ -144,7 +144,8 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 | `npm run verify:ipc-surface` | Command definitions ↔ `generate_handler!` registration ↔ page `invoke`/`listen` ↔ `local_page` targets ↔ `#[allow(dead_code)]` registrations. `src-tauri` is an rlib, so `dead_code` never fires for a `pub` command nobody calls — this is the only thing that catches "written but never wired". |
 | `npm run verify:shell-pages` | Every shell page's inline script is executed in a DOM shim and **every button is clicked**. Catches `getElementById` returning `null` (which aborts the rest of the script and silently kills *every* listener on that page) and buttons left in the HTML with no listener attached. |
 | `npm run verify:harness-inject` | The Harness-page injection script's DOM behaviour, including a **falsifiability check**: the script is reverted to upstream's behaviour and the assertions are required to go red. |
-| `npm run verify:patches` | `patches/` and the tier manifest in `scripts/patch-layers.mjs` agree, and every patch filename yields a derivable package name. |
+| `npm run verify:patches` | `patches/<target>/` and the tier manifest in `scripts/patch-layers.mjs` agree — checked **for every channel** (`next` and `alpha`), because a single-target check would let the other line's patches go unregistered or keep a stale version segment. Every patch filename must still yield a derivable package name; the manifest is indexed by package name, so adding a channel does not touch it. |
+| `npm run verify:targets` | The DSH build-target table itself (`scripts/dsh-targets.mjs` — not to be confused with `verify:target`): channel ↔ target ↔ pinned upstream version, version → target derivation, and the hard rule that an **unknown pre-release channel must not fall back** to the default target (a silent fallback would ship a package whose version names one line and whose runtime is the other). Pure logic, no network. |
 | `npm run verify:prune` / `npm run verify:variants` | The two prune rules that shape the shipped `node_modules` tree: which dev-artifact directories are safe to delete (content, not name — `yaml/dist/doc` is a runtime path), and which foreign-platform native variants must go before linuxdeploy scans the AppDir. Both carry a falsifiability check against the previous rule. |
 | `npm run verify:version` | The version is identical in `package.json` (single source of truth), `tauri.conf.json` (inherits it), and `Cargo.toml` (synced by script); on a tag build it additionally checks **the tag matches the version**. A mismatch makes the installer claim a different version, and the updater's version comparison decides whether to offer an update based on it — one mistake affects every installed user. |
 | `npm run verify:commits` / `npm run verify:changelog` | Self-tests for the changelog generator and its commit parser. A generator that breaks and **silently emits an empty changelog** is worse than no generator: the release page would read "nothing changed". |
@@ -155,7 +156,7 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 | `npm run verify:harness-entry` | The shell entry's call-convention compatibility with upstream's `dsh` CLI: upstream 0.1.5-rc.1 turned the CLI into `if (import.meta.main) runCli()`, so a wrapper that **imports** it must call the exported `runCli()` or the process exits 0 silently. Also pins the macOS parent-death watchdog — installed by the entry **and** by `mock-harness.mjs`, because fault injection's mock mode replaces the entry entirely. Carries a falsifiability check. |
 | `npm run verify:profile-names` | No profile literal equals the official reserved name `desktop` (case-insensitive) — the official desktop app claims that profile for itself. Also pins the two contract anchors (`SAFE_MODE_PROFILE` stays `desktop-safe-mode`, `HARNESS_CLI` stays the bare `web`). Carries a falsifiability check. |
 | `npm run verify:claims` | README ↔ `AGENTS.md` claim discipline: phrases that `AGENTS.md` §7 forbids must not appear in either README, the five status words must be present in all three files, and every debt row in the §7.2 table must be registered. Carries a falsifiability check built from the pre-fix wording. |
-| `npm run verify:drift` / `verify:drift:self-test` | Whether the pinned `DSH_VERSION` has fallen behind npm's dist-tags. Fails on a minor-version or pre-release-stage gap, merely warns within the same stage, and prints `SKIP` (not "verified") when the registry is unreachable. The live check runs on a nightly schedule; CI runs only its self-test. |
+| `npm run verify:drift` / `verify:drift:self-test` | Whether either channel has fallen behind **its own** npm dist-tag — `next` against the `next` tag, `alpha` against the `alpha` tag. Fails on a minor-version or pre-release-stage gap, merely warns within the same stage, and prints `SKIP` (not "verified") when the registry is unreachable. The live check runs on a nightly schedule; CI runs only its self-test. |
 | `npm run report:patches` | Patch health report merging the layer/retire-condition table with the actual per-patch `applied/skipped/failed` recorded in `MANIFEST.json`. Reports — never fakes "applied" when the manifest is absent. |
 | `npm run check:patch-applicability` / `--target=<v>` | Pre-flight for an upstream bump: which tracked patches still apply to a target version, and at which hunk they break. ~4 MB download, no 300 MB assembly. Zero external binaries (Node `fetch` + `zlib` + bundled tar reader). |
 | `npm run fault-inject` | Orphan-process cleanup and exit-code attribution against a real `dsh-host-cli` binary (10 assertions). |
@@ -225,13 +226,32 @@ git push origin main --follow-tags          # pushing the tag triggers the relea
 
 > Why not GitHub's built-in `--generate-notes`: it summarises **merged PRs**, and this repository pushes straight to `main` (`gh pr list --state all` is empty). Measured output was a single line, `**Full Changelog**: …`, with zero entries.
 
+### Runtime channels (next / alpha)
+
+The upstream runtime the shell bundles is maintained on **two channels in parallel**. Each channel pins its own `@deepseek-ai/dsh` version and owns its own patch set (`patches/<target>/`) and vendored override packages (`packages/<target>/`):
+
+| Channel | Upstream line | Pinned DSH | Desktop version example |
+|---------|---------------|-----------|-------------------------|
+| `next` (default) | npm `next` dist-tag (rc stage) | `0.1.5-rc.2` | `0.5.0-next.1` |
+| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.1.6-alpha.1` | `0.6.0-alpha.1` |
+
+The desktop version's **pre-release suffix names the channel it bundles**: `0.5.0-next.1` ships the DSH rc line, `0.6.0-alpha.1` ships the DSH alpha line. The release workflow derives the build target from the tag itself (`scripts/dsh-targets.mjs --channel-of`), so **the tag suffix chooses the runtime** — there is no second channel declaration to keep in sync. A tag naming no known channel (say `beta`) **fails the release** rather than falling back to the default target: a silent fallback would produce a package whose version says one line while its runtime is another, and that mismatch would only surface after users installed it.
+
+To assemble a channel locally, pass `--dsh-target` (defaults to `next`):
+
+```bash
+npm run prepare:harness -- --dsh-target=alpha
+```
+
+> Pre-releases do not enter the stable update path: the updater endpoint reads `releases/latest/download/latest.json`, and GitHub's "latest release" excludes pre-releases by construction. A `-next.N` / `-alpha.N` build therefore reaches only users who install it explicitly.
+
 ### Release workflow
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | any PR / manual (deliberately **not** on `push`) | Three-platform `test` (static gates + clippy + unit tests). No resource assembly, no bundling, no smoke. |
 | [`.github/workflows/smoke.yml`](.github/workflows/smoke.yml) | **manual only** (`workflow_dispatch`) | Smoke testing on demand, tiered by `scope`: `l1` (mock resource tree L1 + optional fault injection), `assembled` (assemble the real resource tree, then L1 on it), `full` (also bundle installers + L2 GUI smoke + size report). Publishes nothing. |
-| [`.github/workflows/release.yml`](.github/workflows/release.yml) | **push a `v*` tag** / manual with a tag | `preflight` (version↔tag consistency + second-scale static gates) → three platforms build in parallel, **create/update the GitHub Release** and upload installers, `.sig` signatures and `latest.json` |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | **push a `v*` tag** / manual with a tag | `preflight` (version↔tag consistency, runtime-channel resolution, second-scale static gates) → three platforms build in parallel, **create/update the GitHub Release** and upload installers, `.sig` signatures and `latest.json` |
 
 - **No CI on everyday commits**: `ci.yml` no longer listens on `push` (nor on tags — bundling has exactly one producer, `release.yml`). Static gates plus unit tests are what a commit needs for fast feedback; assembling 300 MB of runtime, bundling and launching windows are too expensive to hang off every commit.
 - **Smoke testing is manual**: the L1/L2 smoke jobs **moved out of `ci.yml` into the dedicated `smoke.yml`**, triggered only by `workflow_dispatch`. Keeping the capability while dropping the automation is the point — runnable when you need it, not consuming minutes on every push. Three `scope` values map to three cost tiers; `gh workflow run smoke.yml -f scope=l1` is the CLI equivalent. It reuses the same scripts and assertions as before, so this is a move, not a second set of criteria.

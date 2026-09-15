@@ -52,10 +52,10 @@ import { argv, env, exit } from 'node:process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { PATCHES_DIR, listPatchFiles, layerOf, packageNameFromPatchFile } from './patch-layers.mjs'
+import { listPatchFiles, layerOf, packageNameFromPatchFile } from './patch-layers.mjs'
+import { patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const prepareScript = join(projectRoot, 'scripts', 'prepare-harness.mjs')
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 
 /**
@@ -170,34 +170,63 @@ function findNearest(lines, block, around) {
 }
 
 /**
- * 判定单个 hunk 能否应用到一个文件（含 fuzz）。
+ * `patch-package` 定位 hunk 时允许的行号偏移上限。
+ *
+ * 依据其 `dist/patch/apply.js::applyPatch`：`fuzzingOffset` 依次取
+ * 0、-1、+1、-2、+2 …，`Math.abs(fuzzingOffset) > 20` 即放弃。也就是说
+ * **行号漂移超过 20 行的 hunk，patch-package 一定应用不了**——哪怕上下文
+ * 一模一样。
+ *
+ * 这个常量是本脚本与真实组装之间唯一的判据差：内容搜索（本文件的
+ * `findNearest`）比它宽松，`patch-package` 比它严格。不把这条并进来的话，
+ * 一份「从别的上游版本复制过来、只改了文件名」的补丁会被判成 clean，
+ * 然后**只在真实组装时**炸掉——2026-09-15 的 alpha 线移植就是这么翻车的
+ * （0.1.6-alpha.1 的 `trajectory` 第三个 hunk 漂了 135 行）。
+ */
+export const PATCH_PACKAGE_FUZZ_LIMIT = 20
+
+/**
+ * 判定单个 hunk 能否应用到一个文件（含 fuzz），并报告行号漂移。
  * @param {string[]} fileLines 目标文件按行切分
  * @param {{oldStart:number, lines:{type:string,text:string}[]}} hunk
  * @param {number} maxFuzz
- * @returns {{ok:boolean, fuzz:number, index:number}}
+ * @returns {{ok:boolean, fuzz:number, index:number, drift:number, withinFuzzLimit:boolean}}
  */
 export function hunkApplies(fileLines, hunk, maxFuzz = DEFAULT_FUZZ) {
   const { text: block, types } = expectedBlock(hunk.lines)
-  if (block.length === 0) return { ok: true, fuzz: 0, index: -1 } // 纯新增块，恒可应用
+  if (block.length === 0) {
+    return { ok: true, fuzz: 0, index: -1, drift: 0, withinFuzzLimit: true } // 纯新增块，恒可应用
+  }
   for (let fuzz = 0; fuzz <= maxFuzz; fuzz += 1) {
     for (let lead = 0; lead <= fuzz; lead += 1) {
       const trail = fuzz - lead
       const trimmed = trimContext(block, types, lead, trail)
       if (!trimmed) continue
       const idx = findNearest(fileLines, trimmed, Math.max(0, hunk.oldStart - 1))
-      if (idx >= 0) return { ok: true, fuzz, index: idx }
+      if (idx >= 0) {
+        // 漂移 = 实际命中位置与补丁声明的行号之差。patch-package 只在这个
+        // 差值 ≤ 20 时才会命中（见 PATCH_PACKAGE_FUZZ_LIMIT）。
+        const drift = Math.abs(idx - Math.max(0, hunk.oldStart - 1))
+        return { ok: true, fuzz, index: idx, drift, withinFuzzLimit: drift <= PATCH_PACKAGE_FUZZ_LIMIT }
+      }
     }
   }
-  return { ok: false, fuzz: -1, index: -1 }
+  return { ok: false, fuzz: -1, index: -1, drift: -1, withinFuzzLimit: false }
 }
 
 /**
  * 判定一份补丁（多文件多 hunk）能否整体应用到一棵源码树。
  *
+ * `ok` 有两层含义，都必要：
+ *   · **内容**对得上（本函数据此返回 `index`）；
+ *   · **行号**没有漂出 patch-package 的 ±20 窗口（否则它定位不到）。
+ * 第二层用 `ok` 一并表达——调用方要的是「真实组装能不能打上」，而不是
+ * 「理论上有没有这样一段文本」。
+ *
  * @param {{file:string, hunks:any[]}[]} parsed 解析结果
  * @param {(relPath:string)=>string[]|null} readLines 按补丁里的相对路径取目标文件的行
  * @param {number} [maxFuzz] 允许的上下文模糊行数（默认 `DEFAULT_FUZZ`，即严格）
- * @returns {{ok:boolean, files:{file:string, missing:boolean, failedHunks:{index:number, oldStart:number}[], total:number}[]}}
+ * @returns {{ok:boolean, files:{file:string, missing:boolean, failedHunks:{index:number, oldStart:number}[], driftedHunks:{index:number, oldStart:number, drift:number}[], total:number}[]}}
  */
 export function patchApplies(parsed, readLines, maxFuzz = DEFAULT_FUZZ) {
   const files = []
@@ -206,15 +235,20 @@ export function patchApplies(parsed, readLines, maxFuzz = DEFAULT_FUZZ) {
     const lines = readLines(entry.file)
     if (!lines) {
       ok = false
-      files.push({ file: entry.file, missing: true, failedHunks: [], total: entry.hunks.length })
+      files.push({ file: entry.file, missing: true, failedHunks: [], driftedHunks: [], total: entry.hunks.length })
       continue
     }
     const failedHunks = []
+    const driftedHunks = []
     entry.hunks.forEach((hunk, index) => {
-      if (!hunkApplies(lines, hunk, maxFuzz).ok) failedHunks.push({ index: index + 1, oldStart: hunk.oldStart })
+      const verdict = hunkApplies(lines, hunk, maxFuzz)
+      if (!verdict.ok) failedHunks.push({ index: index + 1, oldStart: hunk.oldStart })
+      else if (!verdict.withinFuzzLimit) {
+        driftedHunks.push({ index: index + 1, oldStart: hunk.oldStart, drift: verdict.drift })
+      }
     })
-    if (failedHunks.length > 0) ok = false
-    files.push({ file: entry.file, missing: false, failedHunks, total: entry.hunks.length })
+    if (failedHunks.length > 0 || driftedHunks.length > 0) ok = false
+    files.push({ file: entry.file, missing: false, failedHunks, driftedHunks, total: entry.hunks.length })
   }
   return { ok, files }
 }
@@ -239,13 +273,28 @@ export function targetPackageVersion(fileName, currentDshVersion, targetVersion)
 }
 
 /**
- * 从 `prepare-harness.mjs` 读 `DSH_VERSION`。
+ * 从 `patch-layers.mjs` 兼容入口读 DSH 版本（保留旧测试契约）。
+ *
+ * 版本锚点已搬到 `scripts/dsh-targets.mjs`（双通道的单一事实源），但本函数的
+ * 语义仍是「从源码文本里抓 `const DSH_VERSION = '…'`」——便于自检不读盘。
+ * 真实取版本请用 {@link dshVersionForTarget}。
+ *
  * @param {string} text
  * @returns {string|null}
  */
 export function readDshVersion(text) {
   const m = /const\s+DSH_VERSION\s*=\s*['"]([^'"]+)['"]/.exec(text ?? '')
   return m ? m[1] : null
+}
+
+/**
+ * 取某个构建目标的 DSH 版本（补丁预检的「当前版本」）。
+ *
+ * @param {string} target 目标名。
+ * @returns {string} 版本串。
+ */
+export function dshVersionForTarget(target) {
+  return resolveTarget(target).dshVersion
 }
 
 /**
@@ -407,13 +456,28 @@ function selfTest() {
   // 文件缺失也必须算失败（不能因为读不到就当通过）
   check('目标文件缺失 → ok=false', patchApplies(parsed, () => null).ok, false)
 
-  // 严格匹配（与 patch-package 一致）：行号位移不影响（按内容找），但被改的上下文行必须报冲突。
+  // 严格匹配（与 patch-package 一致）：行号位移不影响**内容**判定（按内容找），
+  // 但位移超过 patch-package 的 ±20 窗口时它一定打不上——此时必须判 red。
   const shifted = ['const prepad = -1;', 'const keep = 1;', 'const old = 2;', 'const tail = 4;']
-  check('行号位移（内容不变）→ ok', patchApplies(parsed, () => shifted).ok, true)
-  // 可证伪性：显式放宽 fuzz 时，被改的**边缘**上下文行才会被容忍——证明严格/宽松确有区别。
+  check('行号轻微位移（≤20）→ ok', patchApplies(parsed, () => shifted).ok, true)
+  // 可伪证性：把目标整体往下推 30 行，内容仍在但漂移超窗 —— patch-package 打不上。
+  const farShifted = [...Array(30).fill('const filler = 0;'), 'const keep = 1;', 'const old = 2;', 'const tail = 4;']
+  check('行号大位移（>20）→ ok=false', patchApplies(parsed, () => farShifted).ok, false)
+  check(
+    '行号大位移 → 记为 driftedHunks 而非 failedHunks',
+    patchApplies(parsed, () => farShifted).files[0].driftedHunks.length,
+    1
+  )
+  check(
+    '行号大位移 → 报出漂移量',
+    patchApplies(parsed, () => farShifted).files[0].driftedHunks[0].drift > PATCH_PACKAGE_FUZZ_LIMIT,
+    true
+  )
+  // 可伪证性：显式放宽 fuzz 时，被改的**边缘**上下文行才会被容忍——证明严格/宽松确有区别。
   const brokenOne = ['const header = 0;', 'const keep = 1;', 'const old = 2;', 'const CHANGED = 4;']
   check('边缘行改动 + fuzz=0 → 冲突', patchApplies(parsed, () => brokenOne).ok, false)
   check('边缘行改动 + fuzz=1 → 容忍', patchApplies(parsed, () => brokenOne, 1).ok, true)
+  check('Fuzz 上限常量与 patch-package 一致（±20）', PATCH_PACKAGE_FUZZ_LIMIT, 20)
 
   // targetPackageVersion：DSH 家族跟随目标，独立版本号保持
   check('DSH 家族版本跟随', targetPackageVersion('@deepseek-ai+dsh+0.1.2-alpha.4.patch', '0.1.2-alpha.4', '0.1.2-rc.1'), '0.1.2-rc.1')
@@ -433,25 +497,34 @@ async function main() {
     return
   }
 
+  // 预检的目标有两层含义，别弄混：
+  //   · `--dsh-target=<name>` 选**哪一套补丁**（以及它的当前 DSH 基线）；
+  //   · `--target=<版本>` 是**待检的上游版本**（升级候选）。
+  // 默认从 next 线的补丁集出发。
+  let patchTarget
+  try {
+    patchTarget = resolveDshTargetArg(argv.slice(2))
+  } catch (error) {
+    console.error(error.message)
+    exit(2)
+  }
+
   const targetArg = argv.find((arg) => arg.startsWith('--target='))
   const targetVersion = targetArg ? targetArg.slice('--target='.length) : ''
   if (!targetVersion) {
-    console.error('用法：node scripts/check-patch-applicability.mjs --target=<版本>')
-    console.error('  例：node scripts/check-patch-applicability.mjs --target=0.1.2-rc.1')
+    console.error('用法：node scripts/check-patch-applicability.mjs --target=<版本> [--dsh-target=<next|alpha>]')
+    console.error('  例：node scripts/check-patch-applicability.mjs --target=0.1.6-alpha.1 --dsh-target=next')
     exit(2)
   }
 
-  const current = readDshVersion(readFileSync(prepareScript, 'utf8'))
-  if (!current) {
-    console.error('无法从 scripts/prepare-harness.mjs 读到 DSH_VERSION')
-    exit(2)
-  }
+  const current = dshVersionForTarget(patchTarget)
 
   const registry = env.DSH_REGISTRY || DEFAULT_REGISTRY
-  const files = listPatchFiles()
+  const patchDir = patchesDirFor(patchTarget)
+  const files = listPatchFiles(patchTarget)
 
   console.log('[check-patch-applicability] 补丁适用性预检')
-  console.log(`  当前 DSH_VERSION : ${current}`)
+  console.log(`  补丁集           : patches/${patchTarget}/（当前 DSH ${current}）`)
   console.log(`  目标版本         : ${targetVersion}`)
   console.log(`  补丁数           : ${files.length}`)
   console.log(`  registry         : ${registry}`)
@@ -471,7 +544,7 @@ async function main() {
       results.push({ file, layer: layerOf(file).layer, status: 'skip', detail: fetchResult.reason })
       continue
     }
-    const parsed = parsePatch(readFileSync(join(PATCHES_DIR, file), 'utf8'))
+    const parsed = parsePatch(readFileSync(join(patchDir, file), 'utf8'))
     const applied = patchApplies(parsed, makeReader(fetchResult.files, pkg))
     results.push({
       file,
@@ -493,13 +566,23 @@ async function main() {
     } else {
       const total = r.files.reduce((n, f) => n + f.total, 0)
       const bad = r.files.reduce((n, f) => n + f.failedHunks.length, 0)
+      const drifted = r.files.reduce((n, f) => n + f.driftedHunks.length, 0)
       const missing = r.files.filter((f) => f.missing).map((f) => f.file)
       const hunks = r.files
         .flatMap((f) => f.failedHunks.map((h) => `hunk#${h.index}@${h.oldStart}`))
         .join(', ')
+      const drifts = r.files
+        .flatMap((f) => f.driftedHunks.map((h) => `hunk#${h.index}@${h.oldStart}(漂移 ${h.drift} 行)`))
+        .join(', ')
       console.log(`  ❌ conflict [${r.layer.padEnd(11)}] ${r.file}`)
       if (missing.length > 0) console.log(`        目标文件缺失：${missing.join(', ')}`)
       if (hunks) console.log(`        ${bad}/${total} 段 hunk 未匹配：${hunks}`)
+      if (drifts) {
+        console.log(
+          `        ${drifted}/${total} 段 hunk 内容匹配但行号漂移超过 ${PATCH_PACKAGE_FUZZ_LIMIT} 行：${drifts}`
+        )
+        console.log('        （patch-package 按行号定位，漂移超窗即失败——用 --recount 重算行号）')
+      }
     }
   }
 
