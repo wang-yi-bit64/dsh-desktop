@@ -50,7 +50,7 @@ import {
 } from './patch-layers.mjs'
 
 // 构建目标（双通道）的单一事实源：DSH 版本、该目标的补丁目录与 vendored 目录。
-import { packagesDirFor, patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
+import { DEFAULT_TARGET, packagesDirFor, patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
 // 打包目标守卫（见下方 `--target` 段）。import 模块级无副作用：
 // verify-target.mjs 的 CLI 入口有「主模块」判定保护。
@@ -97,6 +97,12 @@ const forceRebuild = process.argv.includes('--force')
 // 补丁失败策略：默认按 patches/LAYERS.md 的分级（functional 才中断构建）；
 // `--strict` 让所有层都 fail-fast，等价于分级引入前的行为。
 const strictPatches = process.argv.includes('--strict')
+
+// `--check`：只校验 resources/ 是否就是本次目标的当前产物，永不组装。
+// 供 `tauri.conf.json` 的 beforeDevCommand / beforeBuildCommand 使用——
+// 那两个钩子在 tauri 内部触发，拿不到 workflow 里显式选的目标，若照旧组装就会
+// 把刚组好的另一条线覆盖掉（见下方 `if (checkOnly)` 段的完整说明）。
+const checkOnly = process.argv.includes('--check')
 
 // 打包目标平台守卫：`--target=<platform>/<arch>`（例：`--target=win32/x64`）。
 //
@@ -427,6 +433,45 @@ function currentResourcesTarget() {
   } catch {
     return null
   }
+}
+
+if (checkOnly) {
+  // `--check`：只断言「resources/ 就是本次目标的当前产物」，**绝不组装**。
+  //
+  // 为什么需要这个模式（2026-09-15 的真实缺陷）：`tauri.conf.json` 的
+  // `beforeBuildCommand` 会在 tauri build 内部再跑一次 `prepare:harness`。
+  // 那一步若按默认目标组装，就会把刚组好的另一条线**整个覆盖掉**——alpha 的
+  // 安装包与 L2 冒烟于是实际装的是 next 线运行时，而所有步骤都是绿的
+  // （实测于 alpha 线 Smoke 的 macOS 日志：同一 job 里出现了第二次组装 next）。
+  //
+  // 组装与打包是两个动作：组装由人在 workflow 里显式选目标（`--dsh-target`），
+  // 打包只该**校验**「树还是那棵树」。`beforeBuildCommand` 因此改成 `--check`。
+  if (resourcesComplete()) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      if (manifest.fingerprint === fingerprint && manifest.target === dshTarget) {
+        log(`resources/ 已就绪且与目标 ${dshTarget} 一致（fingerprint ${fingerprint.slice(0, 12)}…）`)
+        process.exit(0)
+      }
+      const held = manifest.target ?? '(未知)'
+      console.error(
+        `[prepare-harness] resources/ 与本次目标不一致：\n` +
+          `  实际装载：${held}\n` +
+          `  本次目标：${dshTarget}（DSH ${DSH_VERSION}）\n` +
+          `  resources/ 是两条通道共用的，继续打包会产出「版本号与运行时不同线」的安装包。\n` +
+          `  先按目标组装：npm run prepare:harness -- --dsh-target=${dshTarget} --force`
+      )
+      process.exit(1)
+    } catch (error) {
+      console.error(`[prepare-harness] 读不到可用的 MANIFEST.json（${manifestPath}）：${error.message}`)
+      process.exit(1)
+    }
+  }
+  console.error(
+    '[prepare-harness] resources/ 不完整（缺少 tauri.conf.json → bundle.resources 要求的条目）。\n' +
+      `  先组装：npm run prepare:harness${dshTarget === DEFAULT_TARGET ? '' : ` -- --dsh-target=${dshTarget}`}`
+  )
+  process.exit(1)
 }
 
 if (!forceRebuild) {

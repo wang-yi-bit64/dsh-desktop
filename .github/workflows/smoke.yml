@@ -245,6 +245,13 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # ★ 必须带目标：`tauri.conf.json` 的 `beforeBuildCommand` 会在 tauri build
+          # 内部**再跑一次** `npm run prepare:harness`。那一步若拿不到 DSH_TARGET，
+          # 就会按默认目标（next）重新组装 resources/，把上面刚组装好的 alpha 树
+          # 覆盖掉——于是 alpha 的 L2 冒烟与安装包实际装的是 **next 线的运行时**，
+          # 也就是「版本号说 alpha、运行时是 next」，而所有步骤都是绿的。
+          # （2026-09-15 实测：alpha 的 macOS job 日志里能看到第二次组装 next。）
+          DSH_TARGET: ${{ inputs.dsh_target }}
           # Ubuntu 24.04+ 的 `.relr.dyn` 段令 linuxdeploy 自带的旧 strip 失败 →
           # NO_STRIP=1 是官方 workaround（AppImage 内二进制不 strip，体积略增）。
           NO_STRIP: "1"

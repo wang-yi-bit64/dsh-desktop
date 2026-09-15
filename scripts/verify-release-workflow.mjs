@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RELEASE_YML = join(projectRoot, '.github', 'workflows', 'release.yml')
+const TAURI_CONF = join(projectRoot, 'src-tauri', 'tauri.conf.json')
 
 /**
  * 读入工作流并**归一化行尾**。
@@ -380,6 +381,41 @@ export function findInterpolatedTargetArg(text) {
 }
 
 /**
+ * 扫出「把 tauri 的构建钩子写成会**重新组装**资源」的写法。
+ *
+ * `tauri.conf.json` 的 `beforeDevCommand` / `beforeBuildCommand` 会在 tauri 内部
+ * 触发，那一步拿不到 workflow 显式选的目标。若它们跑的是**组装**（而非 `--check`
+ * 校验），就会按默认目标重新组装 `resources/`，把上一步刚组好的另一条线整个覆盖
+ * ——2026-09-15 实测：alpha 的 Smoke 日志里同一 job 出现第二次组装 next，于是
+ * alpha 的安装包与 L2 冒烟实际装的是 next 线运行时，而所有步骤都是绿的。
+ *
+ * @param {string} text tauri.conf.json 全文
+ * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
+ */
+export function checkTauriHooksAreCheckOnly(text) {
+  const problems = []
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    return { ok: false, problems: [`tauri.conf.json 不是合法 JSON：${error.message}`] }
+  }
+  const build = parsed?.build ?? {}
+  for (const hook of ['beforeDevCommand', 'beforeBuildCommand']) {
+    const value = build[hook]
+    if (typeof value !== 'string') continue
+    if (!/prepare:harness/.test(value)) continue
+    if (!/--check\b/.test(value)) {
+      problems.push(
+        `${hook} 会**重新组装**资源（"${value}"）——tauri 内部触发时拿不到目标，` +
+          '会按默认目标覆盖另一条通道的树。改成 `npm run prepare:harness -- --check`（只校验）'
+      )
+    }
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
  * 自测：对真实文件跑一遍判据，并用两份**已知缺陷夹具**做可伪证性检查。
  *
  * @returns {{passed: number}} 通过项数
@@ -536,6 +572,22 @@ export function selfTest() {
     /Prepare harness resources[\s\S]{0,200}env:/.test(text),
     '真实工作流：组装步骤必须用 env 传 DSH_TARGET'
   )
+
+  // 9) tauri 的构建钩子必须是 `--check`（只校验），否则会在 tauri 内部按默认目标
+  //    重新组装、覆盖另一条通道刚组好的树。
+  const tauriConf = readFileSync(TAURI_CONF, 'utf8')
+  const hooks = checkTauriHooksAreCheckOnly(tauriConf)
+  check(hooks.ok, `tauri.conf.json：构建钩子必须是只校验 → ${hooks.problems.join('；')}`)
+
+  // 9a) 可伪证性：打回旧写法（会重新组装）必须判红。
+  check(
+    !checkTauriHooksAreCheckOnly(
+      tauriConf.replace(/npm run prepare:harness -- --check/g, 'npm run prepare:harness')
+    ).ok,
+    '可伪证性：构建钩子写成会重新组装的形状必须判红（会覆盖另一条通道的树）'
+  )
+  // 9b) 反向：没有 prepare:harness 的钩子不该被判红（判据只针对这条命令）。
+  check(checkTauriHooksAreCheckOnly('{"build":{"beforeBuildCommand":"echo hi"}}').ok, '可伪证性：无关命令不应被命中')
   // 可证伪性：检查器必须能认出插值写法本身。
   check(
     findInterpolatedTargetArg('        run: npm run prepare:harness -- --dsh-target="${{ inputs.x }}"').length === 1,

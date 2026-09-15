@@ -5,8 +5,8 @@
   "identifier": "io.dsh.desktop",
   "build": {
     "frontendDist": "./frontend",
-    "beforeDevCommand": "npm run prepare:harness",
-    "beforeBuildCommand": "npm run prepare:harness"
+    "beforeDevCommand": "npm run prepare:harness -- --check",
+    "beforeBuildCommand": "npm run prepare:harness -- --check"
   },
   "app": {
     "withGlobalTauri": true,

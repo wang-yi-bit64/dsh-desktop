@@ -275,6 +275,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # ★ 必须带目标：`tauri.conf.json` 的 `beforeBuildCommand` 会在 tauri build
+          # 内部**再跑一次** `npm run prepare:harness`。那一步若拿不到 DSH_TARGET，
+          # 就会按默认目标（next）重新组装 resources/，把上一段刚组装好的目标树覆盖掉
+          # ——发布出去的安装包与它的版本号会指向不同的上游线，而所有步骤都是绿的。
+          # （2026-09-15 在 alpha 线的 Smoke 日志里实测到这次覆盖。）
+          DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
           # Ubuntu 24.04+ 的 .relr.dyn 段令 linuxdeploy 的旧 strip 失败 →
           # `failed to run linuxdeploy`；NO_STRIP=1 为官方 workaround
           # （详见 ci.yml Build installers 步骤注释）。
