@@ -535,6 +535,35 @@ run: npm run prepare:harness
 > 本仓口径是**能用 env 就用 env**；确实需要插值时，先问「Windows 的 PowerShell 会不会
 > 给出不同结果」。
 
+### `beforeBuildCommand` 会把另一条通道的资源树整个覆盖（2026-09-15 实测，已修复勿回归）
+
+比上一条更严重：alpha 线的 Smoke 日志里，**同一个 job 出现了第二次组装**——tauri build
+跑到一半，`tauri.conf.json` 的 `beforeBuildCommand`（当时是 `npm run prepare:harness`）
+又执行了一次组装。那一步在 tauri 内部触发，**拿不到 workflow 里显式选的目标**，于是按
+默认目标（next）重新组装 `resources/`，把上一步刚组好的 alpha 树覆盖掉。
+
+后果是「**版本号说 alpha、运行时是 next**」：alpha 的安装包与 L2 GUI 冒烟实际测的是
+next 线的运行时，而**所有步骤都是绿的**——没有任何一步报错，因为每一步单独看都没问题。
+这是本仓「跨语言/跨层契约问题」的第三种形态：不是形状变了，而是**同一个位置被写了两遍，
+后写的赢了，且没人知道**。
+
+**修法（勿改回）**：组装与打包是两个动作。组装由人在 workflow 里显式选目标
+（`env: DSH_TARGET` + `npm run prepare:harness`）；打包只该**校验**「树还是那棵树」，
+因此两个钩子都改成 `--check`：
+
+```jsonc
+"beforeDevCommand": "npm run prepare:harness -- --check",
+"beforeBuildCommand": "npm run prepare:harness -- --check"
+```
+
+`prepare-harness.mjs --check` **绝不组装**：它断言 `resources/` 的指纹与 `MANIFEST.target`
+都等于本次目标；不一致时打印「实际装载 vs 本次目标」并给出正确的组装命令，退出码 1。
+
+**守卫**：`verify:release-workflow` 的 `checkTauriHooksAreCheckOnly` 读 `tauri.conf.json`，
+断言这两个钩子（凡是调用 `prepare:harness` 的）必须带 `--check`；可伪证夹具就是被打回
+旧写法的同一份配置。⚠️ 改动这两个钩子前先想清楚：**它们跑在 tauri 内部，看不见 workflow
+的 env**——任何在那里「重新组装」的写法都必然会按默认目标覆盖当前树。
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)
