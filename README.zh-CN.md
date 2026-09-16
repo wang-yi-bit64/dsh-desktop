@@ -44,7 +44,7 @@
 ## 环境要求
 
 - [Rust 工具链](https://rustup.rs/)（stable，建议 `>= 1.85`）
-- [Node.js](https://nodejs.org/)（v18+，用于构建工具链）
+- [Node.js](https://nodejs.org/)（v24 —— 见 [`.nvmrc`](.nvmrc)，用于构建工具链）
 - [Tauri v2](https://v2.tauri.app/start/prerequisites/) 对应的平台构建依赖（WebView2 / WebKit / WebKitGTK）
 
 ## 快速开始

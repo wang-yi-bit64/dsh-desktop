@@ -61,7 +61,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
 
       # 解析 tag → 版本 → 是否预发布 → **该组装哪条 DSH 通道**。四者都要用，
       # 集中在一处产出，避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
@@ -182,7 +182,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install build tooling

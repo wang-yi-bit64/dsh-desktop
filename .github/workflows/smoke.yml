@@ -126,7 +126,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       # 补丁分级自检：**两个目标都查**。只验默认目标意味着另一条线的补丁可以

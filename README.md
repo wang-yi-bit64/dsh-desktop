@@ -44,7 +44,7 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 ## Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (stable, `>= 1.85` recommended)
-- [Node.js](https://nodejs.org/) (v18+; used for build scripts and packaging tooling)
+- [Node.js](https://nodejs.org/) (v24 — see [`.nvmrc`](.nvmrc); used for build scripts and packaging tooling)
 - Platform build prerequisites for [Tauri v2](https://v2.tauri.app/start/prerequisites/) (WebView2 / WebKit / WebKitGTK as appropriate).
 
 ## Getting Started
