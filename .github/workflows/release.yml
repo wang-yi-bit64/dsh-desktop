@@ -52,16 +52,16 @@ jobs:
       dsh_target: ${{ steps.resolve.outputs.dsh_target }}
       dsh_version: ${{ steps.resolve.outputs.dsh_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # fetch-depth: 0 —— 生成变更说明需要「上一个 tag..本 tag」的完整区间，
           # 浅克隆拿不到 tag 与历史（GitHub 默认只取 1 个提交、不含 tag）。
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
 
       # 解析 tag → 版本 → 是否预发布 → **该组装哪条 DSH 通道**。四者都要用，
       # 集中在一处产出，避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
@@ -151,7 +151,7 @@ jobs:
           - os: ubuntu-latest
             bundles: deb,appimage
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight.outputs.tag }}
@@ -180,9 +180,9 @@ jobs:
             .
             src-tauri
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install build tooling
@@ -349,7 +349,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.preflight.outputs.tag }}
 
@@ -377,7 +377,7 @@ jobs:
       # 传成 workflow artifact 而不是直接 `gh release upload`：release 由 build job 的
       # tauri-action 创建，并行上传会撞「release 还不存在」。先落 artifact，
       # 由下面的 cli-publish（needs: build）统一上传并**重新核验一遍**。
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: cli-${{ matrix.os }}
           path: dist/cli/*
@@ -391,11 +391,11 @@ jobs:
     needs: [preflight, build, cli]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.preflight.outputs.tag }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: cli-*
           merge-multiple: true

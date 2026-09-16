@@ -94,7 +94,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # GUI（L2）与打安装包需要 GTK / xvfb；L1 是无头的，用不上，故只对 full 装。
       # xvfb 让 L2 在无显示器的 runner 上也能起窗口。
@@ -124,9 +124,9 @@ jobs:
             .
             src-tauri
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       # 补丁分级自检：**两个目标都查**。只验默认目标意味着另一条线的补丁可以
@@ -280,7 +280,7 @@ jobs:
       # 失败时把烟雾报告留档——这一层的失败通常只在日志里可读。
       - name: Upload smoke logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: smoke-${{ inputs.scope }}-logs-${{ matrix.os }}
           if-no-files-found: ignore

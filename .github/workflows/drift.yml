@@ -40,11 +40,11 @@ jobs:
     name: upstream DSH drift
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
 
       # 纯逻辑自检先跑：一个写错了却静默放行的哨兵比没有哨兵更危险。
       - name: Drift sentinel self-test

@@ -55,7 +55,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -77,9 +77,9 @@ jobs:
             .
             src-tauri
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
 
       # 补丁分级自检：patches/<target>/ 目录与 scripts/patch-layers.mjs 的登记表必须
       # 一致，且每个补丁文件名都能推导出包名。这是纯静态检查（不装依赖），放在最前面
