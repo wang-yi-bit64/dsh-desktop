@@ -128,7 +128,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-
+          cache-dependency-path: package-lock.json
       # 补丁分级自检：**两个目标都查**。只验默认目标意味着另一条线的补丁可以
       # 整目录漏登记而无人发现——而那条线同样会发布给用户。
       - name: Verify patch layers (all targets)

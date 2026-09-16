@@ -61,5 +61,8 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
     "patch-package": "^8.0.1"
+  },
+  "engines": {
+    "node": ">=24.19.0 <25"
   }
 }

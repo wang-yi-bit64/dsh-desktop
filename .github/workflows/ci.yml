@@ -53,7 +53,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os:
+          - windows-latest
+          - macos-latest
+          - ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -80,7 +83,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-
+          cache: npm
+          cache-dependency-path: package-lock.json
       # 补丁分级自检：patches/<target>/ 目录与 scripts/patch-layers.mjs 的登记表必须
       # 一致，且每个补丁文件名都能推导出包名。这是纯静态检查（不装依赖），放在最前面
       # 快速失败——补丁登记缺失会让 prepare:harness 在打包时才报错，代价高得多。

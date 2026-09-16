@@ -62,7 +62,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-
+          cache: npm
+          cache-dependency-path: package-lock.json
       # 解析 tag → 版本 → 是否预发布 → **该组装哪条 DSH 通道**。四者都要用，
       # 集中在一处产出，避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
       #
@@ -184,7 +185,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-
+          cache-dependency-path: package-lock.json
       - name: Install build tooling
         run: npm ci
 
