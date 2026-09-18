@@ -7,6 +7,23 @@
 
 <!-- changelog-entries -->
 
+## [0.6.0-alpha.2] - 2026-09-18
+
+### ✨ 新功能
+
+- **harness**: alpha 线推进到 DSH 0.1.6-alpha.2（13 个补丁，两处退役） ([4b15129](https://github.com/wang-yi-bit64/dsh-desktop/commit/4b151299e8ffc7dbec035c46729cc0dc674b0f08))
+
+### 📝 文档
+
+- 回写 alpha.2 推进（补丁 14 → 13，两处退役） ([6140f7f](https://github.com/wang-yi-bit64/dsh-desktop/commit/6140f7fbbfff892f8e6e0629f181894330639633))
+- 回写双通道首发结果（v0.5.0-next.1 / v0.6.0-alpha.1） ([ed693dd](https://github.com/wang-yi-bit64/dsh-desktop/commit/ed693dd6a4cc3ef527d12b8be8daf977525af764))
+
+### 🔧 CI
+
+- 固定 Node 版本并启用 npm 缓存 ([4f4bdc3](https://github.com/wang-yi-bit64/dsh-desktop/commit/4f4bdc3d7e22c207a3457d4a94e177aef5b01ed3))
+- 使用 .nvmrc 统一 Node 版本 ([baa8cd5](https://github.com/wang-yi-bit64/dsh-desktop/commit/baa8cd55a3be719fb5a838f12b8402f74e0e12d0))
+- 升级 GitHub Actions 依赖与 Node 版本 ([13c9003](https://github.com/wang-yi-bit64/dsh-desktop/commit/13c90035adb593538e7022a4d115bf0a71194305))
+
 ## [0.5.0-next.1] - 2026-09-15
 
 ### ✨ 新功能
