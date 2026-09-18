@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js
-@@ -105,7 +105,30 @@ window.__ModuleLoader__.load({
+@@ -168,7 +168,30 @@ window.__ModuleLoader__.load({
  			showPickerBeta: "Beta",
  			showPickerDescription: "When enabled, new tasks can choose Standard, PTC, Creator, Minimal, and custom modes. When disabled, all new tasks use the default mode (Standard by default; configurable). Only affects new tasks.",
  			enablePickerToSetDefault: "Turn on Agent mode selection to choose a default",
@@ -33,7 +33,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		};
  		/** Simplified Chinese copy. */
  		const zh = {
-@@ -165,7 +188,30 @@ window.__ModuleLoader__.load({
+@@ -228,7 +251,30 @@ window.__ModuleLoader__.load({
  			showPickerBeta: "beta",
  			showPickerDescription: "开启后，新任务可选择标准、PTC、创造、极简及自定义模式；关闭后统一使用默认模式（默认为标准模式，可自定义）。仅影响新任务。",
  			enablePickerToSetDefault: "请先开启 Agent 模式选择，再设置默认模式",
@@ -65,7 +65,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		};
  		//#endregion
  		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-agent-preset/src/client/AgentPresetLabel.module.css.mjs
-@@ -221,7 +267,7 @@ window.__ModuleLoader__.load({
+@@ -284,7 +330,7 @@ window.__ModuleLoader__.load({
  		}
  		//#endregion
  		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-agent-preset/src/client/AgentPresetSeat.module.css.mjs
@@ -74,7 +74,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		const tagId$1 = "@deepseek-ai/dsh-client-ui-agent-preset/AgentPresetSeat.module.css";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
  			const tag = document.createElement("style");
-@@ -243,7 +289,18 @@ window.__ModuleLoader__.load({
+@@ -306,7 +352,18 @@ window.__ModuleLoader__.load({
  			"seat-char-in": "cubgiG_seat-char-in",
  			"seat-icon-in": "cubgiG_seat-icon-in",
  			"seatIcon": "cubgiG_seatIcon",
@@ -94,7 +94,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		};
  		//#endregion
  		//#region lib/types/client/AgentPresetSeat.js
-@@ -264,6 +321,8 @@ window.__ModuleLoader__.load({
+@@ -327,6 +384,8 @@ window.__ModuleLoader__.load({
  		const INTRO_CHAR_STAGGER_MS = 40;
  		const INTRO_TEXT_REVEAL_MS = 200;
  		const INTRO_CHAR_FADE_MS = 400;
@@ -103,9 +103,9 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		/**
  		* How long a refused switch holds before fading.
  		*
-@@ -292,6 +351,15 @@ window.__ModuleLoader__.load({
- 		function AgentPresetSeat({ load, select, introduced, useAgentPresetSeat, t }) {
+@@ -356,6 +415,15 @@ window.__ModuleLoader__.load({
  			const state = useAgentPresetSeat((snapshot) => snapshot);
+ 			const main = useSessionRetainInfo((info) => sessionId === void 0 || (info?.retainedBy.mainView ?? 0) > 0);
  			const [open, setOpen] = (0, react.useState)(false);
 +			const [query, setQuery] = (0, react.useState)("");
 +			const [recentIds, setRecentIds] = (0, react.useState)(() => {
@@ -119,7 +119,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  			const toastSeq = (0, react.useRef)(0);
  			const [toast, setToast] = (0, react.useState)(null);
  			const pickerVisible = (0, react.useRef)(state.showPicker);
-@@ -340,30 +408,107 @@ window.__ModuleLoader__.load({
+@@ -404,30 +472,107 @@ window.__ModuleLoader__.load({
  					children: character
  				}, index))
  			}) : label;
@@ -243,7 +243,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  					const picked = state.options.find((option) => option.id === id);
  					/* v8 ignore next */
  					const name = picked === void 0 ? id : presetDisplayText(picked, t).name;
-@@ -380,8 +525,10 @@ window.__ModuleLoader__.load({
+@@ -444,8 +589,10 @@ window.__ModuleLoader__.load({
  					});
  				},
  				align: "start",
@@ -255,7 +255,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  				anchor: (0, react_jsx_runtime.jsxs)("button", {
  					type: "button",
  					className: AgentPresetSeat_module_css_default.seat,
-@@ -600,6 +747,8 @@ window.__ModuleLoader__.load({
+@@ -664,6 +811,8 @@ window.__ModuleLoader__.load({
  			rows: [],
  			copy: null,
  			view: null,
@@ -264,7 +264,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  			pendingDelete: null,
  			deleting: false,
  			revealedPaths: {}
-@@ -617,6 +766,17 @@ window.__ModuleLoader__.load({
+@@ -681,6 +830,17 @@ window.__ModuleLoader__.load({
  			if (!PRESET_ID.test(draft.id)) return "idInvalid";
  			if (rows.some((row) => row.id === draft.id)) return "idTaken";
  		}
@@ -282,7 +282,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		/** Reads the roster and drives the copy dialog, viewer, and location reveals. */
  		var AgentPresetSectionController = class {
  			ctx;
-@@ -851,6 +1011,143 @@ window.__ModuleLoader__.load({
+@@ -915,6 +1075,143 @@ window.__ModuleLoader__.load({
  					[id]: path
  				} });
  			}
@@ -426,7 +426,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  			/**
  			* Ask for confirmation before deleting one preset.
  			* @param id - the preset to delete, or null to dismiss the confirmation.
-@@ -928,7 +1225,7 @@ window.__ModuleLoader__.load({
+@@ -992,7 +1289,7 @@ window.__ModuleLoader__.load({
  			const tag = document.createElement("style");
  			tag.dataset.plugin = "@deepseek-ai/dsh-client-ui-agent-preset";
  			tag.dataset.pluginCss = tagId;
@@ -435,7 +435,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  			document.head.appendChild(tag);
  		}
  		var AgentPresetSection_module_css_default = {
-@@ -971,7 +1268,14 @@ window.__ModuleLoader__.load({
+@@ -1035,7 +1332,14 @@ window.__ModuleLoader__.load({
  			"secondaryButton": "rtSEdW_secondaryButton",
  			"section": "rtSEdW_section",
  			"title": "rtSEdW_title",
@@ -451,7 +451,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		};
  		//#endregion
  		//#region lib/types/client/AgentPresetSection.js
-@@ -1058,6 +1362,84 @@ window.__ModuleLoader__.load({
+@@ -1122,6 +1426,84 @@ window.__ModuleLoader__.load({
  				})
  			});
  		}
@@ -536,7 +536,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  		/**
  		* Render one card's description, clamped by CSS and offered in full on hover.
  		* The tooltip is attached only while the text is actually cut off, so a short
-@@ -1105,6 +1487,7 @@ window.__ModuleLoader__.load({
+@@ -1169,6 +1551,7 @@ window.__ModuleLoader__.load({
  		function AgentPresetSection(props) {
  			const { useAgentPresetSection, t, load } = props;
  			const state = useAgentPresetSection((snapshot) => snapshot);
@@ -544,7 +544,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  			const viewedId = state.view?.id;
  			const viewedRow = viewedId === void 0 ? void 0 : state.rows.find((row) => row.id === viewedId);
  			const viewedTitle = state.view === null ? "" : viewedRow === void 0 ? state.view.title : presetDisplayText(viewedRow, t).name;
-@@ -1145,9 +1528,40 @@ window.__ModuleLoader__.load({
+@@ -1209,9 +1592,40 @@ window.__ModuleLoader__.load({
  			return (0, react_jsx_runtime.jsxs)("div", {
  				className: AgentPresetSection_module_css_default.section,
  				children: [
@@ -588,7 +588,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  					}),
  					(0, react_jsx_runtime.jsx)("p", {
  						className: AgentPresetSection_module_css_default.intro,
-@@ -1287,6 +1701,17 @@ window.__ModuleLoader__.load({
+@@ -1351,6 +1765,17 @@ window.__ModuleLoader__.load({
  														},
  														children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCopyOutline16, {})
  													}),
@@ -606,7 +606,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  													row.trust === "user" ? (0, react_jsx_runtime.jsx)("button", {
  														type: "button",
  														className: `${AgentPresetSection_module_css_default.iconButton} ${AgentPresetSection_module_css_default.iconDanger}`,
-@@ -1323,6 +1748,15 @@ window.__ModuleLoader__.load({
+@@ -1387,6 +1812,15 @@ window.__ModuleLoader__.load({
  							setCopyName: props.setCopyName
  						}
  					}),
@@ -622,7 +622,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js 
  					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
  						open: state.view !== null,
  						onClose: () => {
-@@ -1703,6 +2137,15 @@ window.__ModuleLoader__.load({
+@@ -1795,6 +2229,15 @@ window.__ModuleLoader__.load({
  				},
  				confirmCopy: () => section.confirmCopy(),
  				openLocation: (id) => section.openLocation(id),

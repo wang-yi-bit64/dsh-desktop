@@ -40,3 +40,4 @@ Thumbs.db
 
 # 补丁行号重算脚本的临时树
 .recount-tmp/
+.port-alpha2/

@@ -64,7 +64,7 @@ export const DSH_TARGETS = {
   },
   alpha: {
     channel: 'alpha',
-    dshVersion: '0.1.6-alpha.1',
+    dshVersion: '0.1.6-alpha.2',
     summary: '上游 alpha 线（下一 minor 的早期预览）——与 next 线并行维护'
   }
 }

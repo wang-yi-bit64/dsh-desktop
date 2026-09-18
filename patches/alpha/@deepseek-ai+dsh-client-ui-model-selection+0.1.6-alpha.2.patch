@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js
-@@ -405,15 +405,71 @@ window.__ModuleLoader__.load({
+@@ -479,15 +479,71 @@ window.__ModuleLoader__.load({
  		* store/verbs) + the standard locale seat.
  		* @returns the trigger and, while open, the two-level menu.
  		*/
@@ -73,7 +73,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  			const menuRef = (0, react.useRef)(null);
  			const [menuPos, setMenuPos] = (0, react.useState)(null);
  			const itemRefs = (0, react.useRef)([]);
-@@ -427,6 +483,7 @@ window.__ModuleLoader__.load({
+@@ -501,6 +557,7 @@ window.__ModuleLoader__.load({
  					...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: model.reasoning.defaultEffort }
  				}
  			}))), [state.groups]);
@@ -81,17 +81,19 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  			const currentChoice = choices[state.current === null ? -1 : choices.findIndex((c) => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)];
  			const reasoning = currentChoice?.model.reasoning;
  			const effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort;
-@@ -457,6 +514,9 @@ window.__ModuleLoader__.load({
- 					document.removeEventListener("mousedown", closeOutside);
- 				};
- 			}, [open]);
+@@ -543,6 +600,11 @@ window.__ModuleLoader__.load({
+ 				const cell = itemRefs.current[intent === "effort" ? 1 : 0];
+ 				(cell !== null && cell !== void 0 && !cell.disabled ? cell : triggerRef.current)?.focus();
+ 			}, [open, pane]);
++			// 进入 model 面板时把焦点交给搜索框（本仓增强：上游没有搜索，因此这条焦点
++			// 规则在上游不存在；`searchRef` 由本文件的搜索框增强声明）。
 +			(0, react.useEffect)(() => {
 +				if (open && pane === "model") searchRef.current?.focus();
 +			}, [open, pane]);
  			(0, react.useLayoutEffect)(() => {
  				if (!open) {
  					setMenuPos(null);
-@@ -493,12 +553,14 @@ window.__ModuleLoader__.load({
+@@ -579,12 +641,14 @@ window.__ModuleLoader__.load({
  			if (!available) return null;
  			const show = () => {
  				setPane("root");
@@ -106,34 +108,27 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  				if (restoreFocus) queueMicrotask(() => {
  					triggerRef.current?.focus();
  				});
-@@ -507,12 +569,16 @@ window.__ModuleLoader__.load({
- 				const items = itemRefs.current.filter((item) => item !== null);
- 				if (items.length === 0) return;
- 				const active = items.findIndex((item) => item === document.activeElement);
--				items[(Math.max(active, 0) + offset + items.length) % items.length]?.focus();
-+				const next = active < 0 ? offset > 0 ? 0 : items.length - 1 : (active + offset + items.length) % items.length;
-+				items[next]?.focus();
- 			};
+@@ -607,7 +671,10 @@ window.__ModuleLoader__.load({
  			const onRootKeyDown = (event) => {
  				if (event.key === "Escape" && open) {
  					event.preventDefault();
--					if (pane !== "root") setPane("root");
+-					if (pane !== "root") back(pane);
 +					if (pane !== "root") {
-+						setPane("root");
++						back(pane);
 +						setModelQuery("");
 +					}
  					else close(true);
  					return;
  				}
-@@ -628,6 +694,7 @@ window.__ModuleLoader__.load({
- 								role: "menuitem",
+@@ -742,6 +809,7 @@ window.__ModuleLoader__.load({
  								className: ModelSelect_module_css_default.cell,
  								onClick: () => {
+ 									drill("model");
 +									setModelQuery("");
- 									setPane("model");
  								},
  								children: [
-@@ -662,6 +729,23 @@ window.__ModuleLoader__.load({
+ 									(0, react_jsx_runtime.jsx)("span", {
+@@ -775,6 +843,23 @@ window.__ModuleLoader__.load({
  								]
  							})] }),
  							pane === "model" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
@@ -157,7 +152,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  								state.status === "loading" && (0, react_jsx_runtime.jsx)("div", {
  									className: ModelSelect_module_css_default.status,
  									children: t("status.loading")
-@@ -689,7 +773,7 @@ window.__ModuleLoader__.load({
+@@ -802,7 +887,7 @@ window.__ModuleLoader__.load({
  								}, failure.id)),
  								(0, react_jsx_runtime.jsx)("div", {
  									className: clsx(ModelSelect_module_css_default.groups, "scrollable"),
@@ -166,7 +161,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  										const headingId = `${id}-${group.id}`;
  										return (0, react_jsx_runtime.jsxs)("section", {
  											role: "group",
-@@ -733,6 +817,10 @@ window.__ModuleLoader__.load({
+@@ -846,6 +931,10 @@ window.__ModuleLoader__.load({
  								state.status === "ready" && choices.length === 0 && (0, react_jsx_runtime.jsx)("div", {
  									className: ModelSelect_module_css_default.empty,
  									children: t("empty.models")
@@ -177,7 +172,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  								})
  							] }),
  							pane === "effort" && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [state.error !== null && lastActionRef.current === "load" && (0, react_jsx_runtime.jsxs)("div", {
-@@ -806,12 +894,15 @@ window.__ModuleLoader__.load({
+@@ -919,6 +1008,8 @@ window.__ModuleLoader__.load({
  			"menu.aria": "模型与推理等级",
  			"menu.model": "模型",
  			"menu.effort": "推理等级",
@@ -186,6 +181,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  			"effort.providerDefault": "Default",
  			"status.loading": "正在刷新模型列表…",
  			"error.action": "模型操作失败：{message}",
+@@ -926,6 +1017,7 @@ window.__ModuleLoader__.load({
  			"action.reload": "重新加载",
  			"warning.groupLoad": "{name} 加载失败：{message}",
  			"empty.models": "没有可用的模型。",
@@ -193,7 +189,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  			"blocked.composer": "当前模型不可用，请先选择模型",
  			"empty.efforts": "当前模型未提供推理等级。"
  		};
-@@ -830,12 +921,15 @@ window.__ModuleLoader__.load({
+@@ -944,6 +1036,8 @@ window.__ModuleLoader__.load({
  			"menu.aria": "Model and reasoning effort",
  			"menu.model": "Model",
  			"menu.effort": "Effort",
@@ -202,6 +198,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.
  			"effort.providerDefault": "Default",
  			"status.loading": "Refreshing model list…",
  			"error.action": "Model operation failed: {message}",
+@@ -951,6 +1045,7 @@ window.__ModuleLoader__.load({
  			"action.reload": "Reload",
  			"warning.groupLoad": "{name} failed to load: {message}",
  			"empty.models": "No models available.",
