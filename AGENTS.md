@@ -162,7 +162,7 @@ npm run report:patches
 
 # 22. 上游升级预检：补丁在新版本上的适用性（~4MB，不必组装 300MB）
 #     `--dsh-target` 选**哪一套补丁**，`--target` 是**待检的上游版本**，两者不同
-npm run check:patch-applicability -- --dsh-target=next --target=0.1.6-alpha.1
+npm run check:patch-applicability -- --dsh-target=next --target=0.1.6-alpha.2
 
 # 22b. 移植补丁后**重算行号**（patch-package 按行号定位，偏移超 ±20 行即失败；
 #      只按内容搜索的预检会漏报这类失败，真实组装才炸——见 §8.6）
@@ -836,8 +836,12 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 
 | 目标 | 上游线 | 固定的 DSH | 补丁 / vendored | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.1.5-rc.2` | `patches/next/`、`packages/next/` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.1` | `patches/alpha/`、`packages/alpha/` | `0.6.0-alpha.1` |
+| `next`（默认） | npm `next` dist-tag | `0.1.5-rc.2` | `patches/next/`（14 个）、`packages/next/` | `0.5.0-next.1` |
+| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `0.6.0-alpha.2` |
+
+> **两条线的补丁数可以不同，这是正常的**：`alpha` 线上游已补齐平台化侧栏宽度，
+> 本仓那条补丁按 `retireWhen` 退役（14 → 13）；`next` 线尚未跟进到同版本，因此仍保留。
+> 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
 - **唯一事实源是 [`scripts/dsh-targets.mjs`](scripts/dsh-targets.mjs)** 的 `DSH_TARGETS`：
   目标名 ↔ 通道 ↔ 版本号。`prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target=<name>`
@@ -872,7 +876,12 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 > |---|---|---|
 > | `v0.5.0-next.1` | DSH `0.1.5-rc.2` | rc.1 → rc.2，14 个补丁全部干净可用 |
 > | `v0.6.0-alpha.1` | DSH `0.1.6-alpha.1` | 补丁按语义重做（含行号重算），两处有意差异见 `patches/LAYERS.md` |
+> | `v0.6.0-alpha.2` | DSH `0.1.6-alpha.2` | **补丁 14 → 13**（`layout` 按 `retireWhen` 退役、vendored 覆盖包退役）；上游反向采纳了我们的键盘导航修复 |
 >
 > 实测确认 `releases/latest` 仍指向 `v0.4.0`——**预发布没有污染 stable 更新链路**。
 > 首次发布当场抓到并修掉两个真实缺陷（见上文两节事故记录：Windows shell 传参丢值、
 > `beforeBuildCommand` 覆盖资源树），两个都只在三平台真跑时才暴露。
+>
+> **alpha.2 是「上游追上我们」的第一次**：平台化侧栏宽度被上游原生实现（我们那条退役）、
+> 键盘导航修复被上游反向采纳。这说明补丁面在收缩——维持这些补丁的成本在下降，
+> 而不是无限增长。

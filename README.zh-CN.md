@@ -235,7 +235,7 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 | 通道 | 上游线 | 钉住的 DSH 版本 | 对应桌面版本示例 |
 |------|--------|----------------|------------------|
 | `next`（默认线） | npm `next` dist-tag（rc 阶段） | `0.1.5-rc.2` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.1.6-alpha.1` | `0.6.0-alpha.1` |
+| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.1.6-alpha.2` | `0.6.0-alpha.2` |
 
 桌面版本号的**预发布后缀就是它捆的那条通道名**：`0.5.0-next.1` 捆 DSH rc 线，`0.6.0-alpha.1` 捆 DSH alpha 线。发布流程从 tag 本身反推构建目标（`scripts/dsh-targets.mjs --channel-of`），**tag 后缀因此自动决定组装哪条运行时**——不需要在 tag 之外再声明一次通道。后缀不对应任何已知通道的 tag（例如 `beta`）会**直接让发布失败**，而不是回退到默认目标：静默回退会产出「版本号说一条线、运行时却是另一条线」的包，这类错配只有用户装上之后才会被发现。
 

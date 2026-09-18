@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag（当前 `0.1.5-rc.2`） | `patches/next/` | `packages/next/` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag（当前 `0.1.6-alpha.1`） | `patches/alpha/` | `packages/alpha/` | `0.6.0-alpha.1` |
+| `alpha` | npm `alpha` dist-tag（当前 `0.1.6-alpha.2`） | `patches/alpha/` | `packages/alpha/` | `0.6.0-alpha.2` |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -76,7 +76,7 @@
 
 下表按**包名**列（两个目标同名同判据）；实际文件名带各自目标的版本段，
 如 `patches/next/@deepseek-ai+dsh+0.1.5-rc.2.patch` 与
-`patches/alpha/@deepseek-ai+dsh+0.1.6-alpha.1.patch`。
+`patches/alpha/@deepseek-ai+dsh+0.1.6-alpha.2.patch`。
 
 ### functional（3 个）
 
@@ -86,12 +86,12 @@
 | `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 
-### ui-behavior（11 个）
+### ui-behavior（next 11 个 / alpha 10 个）
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
-| `dsh-client-ui-layout` | 折叠侧栏宽度按平台区分（macOS 80 / 其他 56），纯几何 | 官方区分平台宽度 |
-| `dsh-client-ui-sidebar` | 侧栏 padding 与 `data-dsh-sidebar-*` 标记，纯样式 | 官方侧栏自带等效留白 |
+| ~~`dsh-client-ui-layout`~~ | 🗄️ **已退役（2026-09-16，alpha 线）**：折叠侧栏宽度按平台区分（macOS 80 / 其他 56）。上游 alpha.2 把宽度参数化并由 `data-platform` 推导，实现更完整（macOS 折叠收到 0、含 Windows 标题栏），本仓补丁删除。**next 线仍在用**，待该线跟进到同版本时一并退役 | 官方区分平台宽度 ← **已满足** |
+| `dsh-client-ui-sidebar` | 注入壳层锚点属性（`data-dsh-sidebar-root` / `-wide` / `-settings`），供 Harness 页注入脚本挂载手机状态指示器。**自定义 padding 已于 2026-09-16 移除**（上游原生适配 macOS，叠加会成双份留白） | 官方侧栏暴露等效锚点（本仓注入脚本可挂到官方标记上）时 |
 | `dsh-client-ui-workspace` | 工作区/会话行样式、未读标记、搜索行渲染 | 官方列表补齐未读与行样式 |
 | `dsh-client-ui-settings-models` | 模型设置页 Provider 选择器、模态切换、目录 UX | 官方设置页提供等价能力 |
 | `dsh-client-ui-model-selection` | 模型选择弹层搜索框与样式 | 官方自带搜索 |
@@ -101,6 +101,50 @@
 | `dsh-client-ui-deliverables` | Codex 风格本地路径引用解析；`paths` 为 `null` 时的空数组兜底 | 官方支持本地路径引用解析 |
 | `dsh-llm-deepseek` | 把 HTTP 403 从 `AUTH` 拆成独立 `FORBIDDEN` 码；缺失时 403 显示为鉴权错误（文案不准，不影响运行） | 官方错误码分类含 `FORBIDDEN` |
 | `dsh-llm-pi-ai` | 同上：消息文本中的 403 归类为 `FORBIDDEN` | 同上 |
+
+### alpha 线（0.1.6-alpha.2）的移植裁定（2026-09-16）
+
+上游 alpha 通道从 `0.1.6-alpha.1` 前进到 `alpha.2`。预检显示 **9 个补丁是纯行号漂移**
+（`recount-patches.mjs` 重算即可）、**5 个有真实内容冲突**；按 `retireWhen` 逐条裁定后
+**13 个补丁**（原 14 个，退役 1 个）。
+
+**两处退役——上游补上了同类能力，我们的实现被取代：**
+
+1. **`dsh-client-ui-layout`（整条补丁退役）**。我们做的是「折叠侧栏宽度按平台区分」
+   （UA 嗅探 macOS → 80px）。上游把折叠宽度**参数化**了：
+   `computeColumns(viewport, sidebar, rightbar, collapsedWidth = 56)`，由
+   `documentElement.dataset.platform === "darwin" || hasAttribute("data-windows-titlebar")`
+   推导，macOS 折叠时**直接收到 0**、其他平台 56，并处理了 Windows 标题栏。
+   这正是该补丁 `retireWhen` 写明的条件（「官方区分平台侧边栏宽度时」），且上游实现
+   比我们的 UA 嗅探更完整（后者还会在 Windows 上误判）。
+2. **`dsh-client-ui-sidebar` 的自定义 padding（补丁保留，功能缩减）**。上游已原生适配
+   macOS：`topStrip` 元素 + `[data-platform=darwin]` 规则 + `-webkit-app-region: drag`
+   拖拽区 + `[data-sidebar-collapsed]` 下的交通灯留白。我们的 UA 嗅探 padding 会与之
+   **叠加成双份留白**，因此移除。该补丁现在只做一件事：**注入壳层锚点属性**
+   （`data-dsh-sidebar-root` / `data-dsh-sidebar-wide` / `data-dsh-sidebar-settings`）——
+   注入脚本（`src-tauri/frontend/harness-ui-inject.js`）依赖它们，不能退役。
+
+**一处上游反向采纳：** `dsh-client-ui-model-selection` 的键盘导航修复
+（`active < 0` 时按 `moveFocus` 方向落到首/尾）上游已自行实现且语义一致——取上游写法。
+同包的**搜索框增强上游仍没有**，保留。
+
+**其余冲突按「上游新结构 + 保留我们的增强」合并：**
+
+- **`settings-models`**：上游把模型行重构成 `ModelRow` 组件、以 `ModelInputTypes` 取代我们的
+  `ModelImageInputToggle`（前者的 fieldset 支持「未覆写时显示继承值」，更完整；我们的
+  `modelImageInput*` 三个文案键随之删除）。我们的**目录搜索**与**每模型推理等级**上游都没有
+  （后者上游源码明确注释「刻意不做」——理由是 provider 级控件不合理，而每模型能力由 composer
+  的模型选择器提供，正是我们做的形态）。接入方式：遍历源换成 `visibleModels`（保留搜索过滤，
+  条目自带原始下标，`ModelRow` 正需要它），推理等级经 `ModelRow` 新增的 `advancedExtra` 插槽注入。
+- **`workspace`**：上游把 `useSessionPendingInteraction` 重命名为 `useSessionStatus`、会话行加了
+  标题裁剪（`titleRef` / `revealClippedTitle`）与 `padding-inline-start` 缩进，并把内联会话树
+  重构成 `renderGroup` 闭包（支持嵌套工作区）。未读标记与右键菜单按新结构重新接入。
+- **`agent-preset`**：上游给 `AgentPresetSeat` 加了 `sessionId` / `useSessionRetainInfo`，
+  我们的搜索框状态（`query` / `recentIds`）按新签名保留。
+
+**vendored 覆盖包全部退役：** `packages/alpha/` 原有的三个 tgz 已验证**不再需要**——逐个用
+registry 内容做应用判定，13 个补丁全部干净可用（vendoring 的前提是「上游静默重发布过 tarball、
+同版本号不同字节」，这次不成立）。删除后真实组装仍 13/13 applied。
 
 ### alpha 线（0.1.6-alpha.1）的移植裁定（2026-09-15）
 
@@ -148,12 +192,17 @@
 > **本次升级的验证状态**：`0.1.5-rc.1` 的 14 个补丁已于 2026-09-13 通过完整验证并随
 > **v0.3.0** 发布（三平台 CI + Smoke full 全绿）。两条通道于 2026-09-15 首次发布：
 >
-> | 版本 | 上游 | 证据 |
-> |---|---|---|
-> | **v0.5.0-next.1** | DSH `0.1.5-rc.2` | 本机真实组装 14/14 + L1 5/5；三平台 CI + Smoke `scope=full` 全绿；release 8/8 job 绿、19 资产 |
-> | **v0.6.0-alpha.1** | DSH `0.1.6-alpha.1` | 同上（alpha 线补丁为本次按语义重做，非机械移植） |
+> | 版本 | 上游 | 补丁数 | 证据 |
+> |---|---|---|---|
+> | **v0.5.0-next.1** | DSH `0.1.5-rc.2` | 14 | 本机真实组装 14/14 + L1 5/5；三平台 CI + Smoke `scope=full` 全绿；release 8/8 job 绿、19 资产 |
+> | **v0.6.0-alpha.1** | DSH `0.1.6-alpha.1` | 14 | 同上（alpha 线补丁为本次按语义重做，非机械移植） |
+> | **v0.6.0-alpha.2** | DSH `0.1.6-alpha.2` | **13** | 本机真实组装 13/13 + L1 5/5（`layout` 退役、vendored 覆盖包退役）；三平台证据由 Release 流程产出 |
 >
-> 两者均为 `prerelease: true`，且实测确认 `releases/latest` 仍指向 `v0.4.0`——
+> `0.1.6-alpha.1 → alpha.2` 是首次出现**补丁净减少**的一次推进（14 → 13）：上游补齐了
+> 平台化侧栏宽度，我们那条补丁按 `retireWhen` 退役。这正是补丁退役机制想要的方向——
+> 补丁数随上游成熟而下降，而不是只增不减。
+>
+> 三者均为 `prerelease: true`，且实测确认 `releases/latest` 仍指向 `v0.4.0`——
 > 预发布**不会**进入 stable 更新链路。
 
 ---

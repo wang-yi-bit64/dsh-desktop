@@ -233,7 +233,7 @@ The upstream runtime the shell bundles is maintained on **two channels in parall
 | Channel | Upstream line | Pinned DSH | Desktop version example |
 |---------|---------------|-----------|-------------------------|
 | `next` (default) | npm `next` dist-tag (rc stage) | `0.1.5-rc.2` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.1.6-alpha.1` | `0.6.0-alpha.1` |
+| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.1.6-alpha.2` | `0.6.0-alpha.2` |
 
 The desktop version's **pre-release suffix names the channel it bundles**: `0.5.0-next.1` ships the DSH rc line, `0.6.0-alpha.1` ships the DSH alpha line. The release workflow derives the build target from the tag itself (`scripts/dsh-targets.mjs --channel-of`), so **the tag suffix chooses the runtime** — there is no second channel declaration to keep in sync. A tag naming no known channel (say `beta`) **fails the release** rather than falling back to the default target: a silent fallback would produce a package whose version says one line while its runtime is another, and that mismatch would only surface after users installed it.
 

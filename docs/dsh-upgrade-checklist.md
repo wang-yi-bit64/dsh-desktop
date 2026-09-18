@@ -2,7 +2,7 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.1.5-rc.2`、alpha 线 `0.1.6-alpha.1`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
+> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.1.5-rc.2`、alpha 线 `0.1.6-alpha.2`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
 ---
@@ -149,6 +149,31 @@ boot / config-dump / 插件管理。
 >
 > 历史记录（仅供参考）：对中间版本 `0.1.2-rc.1` 的预检结果是 15 干净 / 3 冲突
 > （`agent-preset` / `settings-models` / `workspace`，均为 UI 层的上下文漂移）。
+
+> ### ✅ alpha 通道推进：0.1.6-alpha.1 → alpha.2（2026-09-16；**补丁净减少 14 → 13**）
+>
+> 首次出现**补丁数下降**的一次推进，也是首次出现「上游追上我们」：
+>
+> - **`dsh-client-ui-layout` 整条退役**：上游把折叠侧栏宽度参数化（`computeColumns(…, collapsedWidth)`
+>   并由 `data-platform` 推导），比我们的 UA 嗅探更完整（macOS 折叠收到 0、含 Windows 标题栏）。
+>   这正是该补丁 `retireWhen`（「官方区分平台侧边栏宽度时」）写明的条件——**按判据退役，不是丢功能**。
+> - **`dsh-client-ui-sidebar` 缩减为纯锚点注入**：上游已原生适配 macOS（`topStrip` + `-webkit-app-region`），
+>   我们的自定义 padding 会叠加成双份留白；而锚点属性（`data-dsh-sidebar-*`）是注入脚本的挂载点，必须保留。
+> - **键盘导航修复被上游反向采纳**（`model-selection` 的 `moveFocus`），取上游写法。
+> - **vendored 覆盖包三个 tgz 全部退役**：逐个用 registry 内容做应用判定，13 个补丁全部干净可用
+>   （vendoring 的前提「上游静默重发布过 tarball」不成立）。删除后真实组装仍 13/13。
+>
+> 其余冲突按「上游新结构 + 保留我们的增强」合并：`settings-models` 上游把模型行重构成 `ModelRow`、
+> 以 `ModelInputTypes` 取代我们的图像输入控件（我们的**搜索**与**每模型推理等级**上游都没有，
+> 分别经 `visibleModels` 遍历与新增的 `advancedExtra` 插槽接入）；`workspace` 上游把
+> `useSessionPendingInteraction` 重命名为 `useSessionStatus` 并把内联会话树重构成 `renderGroup`，
+> 未读标记按新结构重新接入。
+>
+> **两个可复用的流程经验**：
+> 1. **先跑 `recount-patches.mjs` 处理纯行号漂移**——14 个「冲突」里 9 个其实只是漂移，
+>    自动重算后只剩 5 个真冲突，人工量大幅下降。
+> 2. **「退役 vs 保留」要看上游是否真的覆盖了同一行为**：`layout` 被完整覆盖 → 退役；
+>    `sidebar` 的锚点是注入脚本的**契约**（`data-dsh-sidebar-*`），上游没有等价物 → 只缩减、不退役。
 
 > ### ✅ 双通道首发：next → 0.1.5-rc.2、alpha → 0.1.6-alpha.1（2026-09-15 全流程闭环）
 >
