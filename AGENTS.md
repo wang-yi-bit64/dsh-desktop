@@ -449,6 +449,39 @@ Harness 出现未处理的 Promise 拒绝：Error: Cannot find module '../doc/di
 
 实测（真实 `yaml` 包，203 → 153 个文件）：`dist/doc/directives.js`、`Document.js` 存活，同目录 5 个 `.d.ts` 仍被删除；整个 staging 内有 **42 个**这类「名字像开发产物但含运行时模块」的目录，旧判据会全部误删。取舍明确：**误删只会得到一个起不来的包，少删只是少省一点体积**，所以判据一律偏向「宁可不删」。
 
+### 上游靠 optionalDependencies 塞进整套外部程序：安装包体积翻倍（2026-09-18 实测，**预期行为**）
+
+`v0.6.0-alpha.2` 的安装包比 `alpha.1` **翻了一倍多**（Windows 53.6 → 126.3 MB、dmg 81.3 → 170.1 MB），
+四个平台**同时**增大。根因不是打包配置出错，而是上游 alpha.2 新增的文档预览能力把**一整套
+LibreOffice** 装进了运行时：
+
+| 包 | unpackedSize | 说明 |
+|---|---|---|
+| `@deepseek-ai/libreoffice-kit-win32-x64` | 325.1 MB | ≈ 我们看到的资源树增量（+324.8 MB） |
+| `@deepseek-ai/libreoffice-kit-darwin-arm64` | 255.1 MB | macOS 那份 |
+| `@deepseek-ai/libreoffice-kit-wasm` | 185.4 MB | wasm 回退 |
+
+依赖链是 `@deepseek-ai/dsh-office-to-pdf` →（**普通 `dependencies`**）`libreoffice-kit`
+→（`optionalDependencies`）`libreoffice-kit-<platform>`——**npm 按平台只装一个**，
+这是上游的有意设计，不是误装。
+
+**判据（下次再遇到体积翻倍时按这个查）**：
+1. **看是不是全平台一起涨**。全平台涨 → 资源树内容变化；只有某个平台涨 → 平台相关打包问题。
+2. **`du -sm staging/node_modules/@deepseek-ai/* | sort -rn`** 找出体积主项——新建的外部程序包
+   会立刻显形（本例 330 MB 对第二名 8 MB，一眼可见）。
+3. **查依赖链的声明位置**：在 `dependencies` 里就是必装的；在 `optionalDependencies` 里
+   是按平台/可选装的。这决定「能不能剪」以及「剪了会失去什么功能」。
+
+> ⚠️ **这类体积变化必须在升级时主动记录，不能等用户来问**。`docs/dsh-upgrade-checklist.md`
+> Step 6 早已要求「增量异常（> 30MB）时确认原因」并写入 `release` job summary 的
+> `report-bundle-size`——但 2026-09-18 那次 alpha.2 升级**漏跑了这一步**，体积翻倍两小时后
+> 由用户发现。**体积对比与补丁验证同等重要**：补丁失败会让应用起不来，体积失控会让用户不再
+> 下载（这两者都是「交付质量」的一部分）。
+
+**本仓的取舍（已裁定，2026-09-18）**：**接受**这个体积。理由是文档预览是上游新增的
+用户可见能力，剪掉它等于本仓单方面删功能，与「不删上游能力」的一贯口径冲突；
+真要减重应走上游（让 LibreOffice 变成真正的可选组件，由用户按需下载）。
+
 ### linuxdeploy 撞上外来平台原生变体：AppImage 打包的静默杀手（已修复，勿回归）
 
 Linux 的 `build` job 曾**连续多轮**以 `failed to run linuxdeploy` 收场，而 tauri-bundler 在默认日志级别下**吞掉 linuxdeploy 的 stderr**，CI 上只留下一句无信息量的错误（deb 正常，因为 deb 不解析 ELF 依赖；Windows/macOS 不经过 linuxdeploy，全绿——所以红灯只出现在一个平台）。用 `-v` 拿到真实报错才定位：

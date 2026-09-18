@@ -174,6 +174,27 @@ boot / config-dump / 插件管理。
 >    自动重算后只剩 5 个真冲突，人工量大幅下降。
 > 2. **「退役 vs 保留」要看上游是否真的覆盖了同一行为**：`layout` 被完整覆盖 → 退役；
 >    `sidebar` 的锚点是注入脚本的**契约**（`data-dsh-sidebar-*`），上游没有等价物 → 只缩减、不退役。
+>
+> **⚠️ 体积：安装包翻倍，原因是上游新增文档预览能力（本次流程漏记，事后补）**
+>
+> | 平台 | alpha.1 | alpha.2 | 变化 |
+> |---|---|---|---|
+> | Windows exe | 53.6 MB | 126.3 MB | ×2.36 |
+> | macOS dmg | 81.3 MB | 170.1 MB | ×2.09 |
+> | Linux deb | 90.6 MB | 143.8 MB | ×1.59 |
+> | Linux AppImage | 161.7 MB | 208.5 MB | ×1.29 |
+>
+> 资源树 `harness/` 从 **153.4 MB → 478.2 MB（+324.8 MB）**，主项是上游 alpha.2 新增的
+> `@deepseek-ai/libreoffice-kit-win32-x64`（**325.1 MB**，内含整套 LibreOffice；
+> darwin-arm64 那份 255.1 MB）。依赖链：`dsh-office-to-pdf` →（普通 `dependencies`）
+> `libreoffice-kit` →（`optionalDependencies`）`libreoffice-kit-<platform>`，
+> **npm 按平台只装一个，是上游的有意设计**。
+>
+> **取舍已裁定：接受**。文档预览是上游新增的用户可见能力，剪掉它等于本仓单方面删功能，
+> 与「不删上游能力」的一贯口径冲突；真要减重应推动上游把它改成真正可选的组件。
+>
+> **流程教训**：Step 6 早已要求「增量 > 30MB 时确认原因」，但这次升级**跳过了体积对比**，
+> 体积翻倍直到用户发现才被注意到。已在 Step 6 补上具体的定位方法与「必须写明原因」的要求。
 
 > ### ✅ 双通道首发：next → 0.1.5-rc.2、alpha → 0.1.6-alpha.1（2026-09-15 全流程闭环）
 >
@@ -280,6 +301,23 @@ npm run size:report
 
 - [ ] 与 Step 1 的基线对比，记录资源树增量。依赖树增长是 DSH 升级最常见的隐性代价。
 - [ ] 增量异常（例如 > 30MB）时，先确认不是新增了重复依赖或误把 devDependencies 打进资源树。
+- [ ] **体积有显著变化时，把「为什么变大」写进本次升级记录**（本清单的完成记录段 +
+      `AGENTS.md`）。⚠️ 2026-09-18 的 alpha.2 升级漏了这一步：上游新增文档预览能力、
+      把一整套 LibreOffice 打进运行时，资源树 +324.8 MB、安装包翻倍，**直到用户发现才被注意到**。
+      补丁验证与体积对比同等重要——前者让应用能起来，后者决定用户是否愿意下载。
+
+**怎么快速定位体积主项**：
+
+```bash
+# 1. 全平台都涨 → 资源树内容变化；只有某平台涨 → 该平台的打包问题
+# 2. 找出体积主项（新建的外部程序包会立刻显形）
+du -sm src-tauri/resources/harness/node_modules/@deepseek-ai/* | sort -rn | head
+# 3. 查它的依赖声明位置：dependencies = 必装；optionalDependencies = 按平台/可选装
+grep -n '"dependencies"\|"optionalDependencies"' -A 10 <该包>/package.json
+```
+
+判据参考：`dependencies` 里的是**必装**（要减重只能剪枝并接受功能缺失，或推动上游改成可选）；
+`optionalDependencies` 里的通常带 `os`/`cpu`/平台后缀，**npm 已按平台过滤**，不该手删。
 
 ### Step 7 — 文档与状态口径同步
 
