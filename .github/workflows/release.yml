@@ -121,6 +121,7 @@ jobs:
           npm run verify:drift:self-test
           npm run verify:claims
           npm run verify:ipc-surface
+          npm run verify:ipc-surface:self-test
           npm run verify:shell-pages
           npm run verify:harness-inject
           npm run verify:harness-entry

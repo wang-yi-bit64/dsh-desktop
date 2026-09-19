@@ -17,7 +17,7 @@
 
 - **内置运行时** ✅ —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
 - **独立契约库 (`dsh-contracts`)** ✅ —— 彻底剥离 UI 依赖，提炼统一常量、**标准错误码总表 (`E1xxx`~`E7xxx`)**、前后端 IPC 封套 (`IpcEnvelope<T>`，其 `error` 载荷为类型化的 `AppError`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
-- **全命令面统一 IPC 封套** ✅ —— **17 个命令全部**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
+- **全命令面统一 IPC 封套** ✅ —— **20 个命令全部**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
 - **Harness 核心生命周期** ✅ —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
@@ -25,10 +25,13 @@
 - **安全模式与故障恢复** ✅ —— 自动检测启动失败原因并写入独立隔离 profile，随后**真正以该 profile 启动 Harness**（`--profile desktop-safe-mode` 搭配 `dsh-desktop-safe.patch.yml`，后者会摘掉常规补丁层挂载的产品插件），保障基础功能可用。注意：安全模式生效期间，壳层界面上**尚无任何提示**——该指示器属**刻意后置的功能**，见[后续计划](#后续计划尚未开工)。
 - **多 Profile 与会话管理** ✅ —— 内置 Session / Profile 状态管理与元数据持久化，支持多环境无缝切换。
 - **壳层结构化日志** ✅ —— `tauri-plugin-log` 落盘到 `app_data_dir/desktop.log`（5 MB × 2 轮转，含本地时区），与 Harness 侧 `harness.log` / `app.log` 分离，便于归因「是壳的问题还是 Harness 的问题」。
-- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从应用菜单「Phone Pairing (LAN)…」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。菜单的 `Phone` 子菜单会实时显示桥状态（off / listening / paired），Harness 侧边栏另有一枚对应的**页内状态指示器**——注意本应用**尚无系统托盘**。
+- **移动桥接 (Mobile Bridge)** ✅ —— 局域网 HTTP 服务，配对页内置二维码与配对令牌，转发 RPC 到 Harness。默认**不监听**，需从应用菜单「Phone Pairing (LAN)…」显式启动；受 Harness 的 `dsh-auth-*` cookie 握手与会话令牌双重约束，进程退出即失效。菜单的 `Phone` 子菜单会实时显示桥状态（off / listening / paired）——托盘菜单里同样有一份——Harness 侧边栏另有一枚对应的**页内状态指示器**。
   - 该指示器由壳层注入到 Harness 页面（见下方[Harness 页面注入](#harness-页面注入)）。它**只表示状态、刻意不可点击**：配对与停止在原生 `Phone` 菜单里，壳层不会为了复制一个菜单项而向 Harness 这个远程 origin 开 IPC 入口。文案随连接状态切换（「手机未连接」/「手机已连接」），侧边栏收起且未配对时保持隐藏。
 - **桌面深度定制** ✅ —— 通过 `patch-package` 补丁以及传给 `web --patch` 的 `patch.yml` 层应用桌面品牌资源与 UI 行为。补丁按 `functional` / `ui-behavior` / `brand` 三层分级（见 [`patches/LAYERS.md`](patches/LAYERS.md)），失败时默认降级并在 `MANIFEST.json` 的 `patches[]` 逐条留证；`--strict` 可恢复全量 fail-fast。
-- **单实例锁定** ✅ —— 第二次启动时聚焦已有窗口，避免重复拉起多实例。
+- **单实例锁定** ✅ —— 第二次启动时把已有窗口带到前台（若它正停在托盘里，会先把它取回），避免重复拉起多实例。
+- **系统托盘** ✅ —— 应用常驻托盘，**关窗只是把窗口收进托盘而不是退出**：Harness 与局域网手机桥继续运行——这正是「手机连着一直开着的桌面」这个用法的前提。托盘菜单项**复用应用菜单的 id 与分发**，因此同一个动作不会因为「从哪儿点的」而行为不同；菜单里另有两行实时状态（Harness 相位、手机桥状态）。Windows 上左键单击切换窗口显隐；Linux **完全没有托盘点击事件**（`libappindicator` 后端不派发），因此那边靠菜单里的「Show Window」回到窗口；macOS 用单色模板图标，保证在深色菜单栏里依然清晰。退出（托盘 / 菜单 / 错误页三处）都会**先停 Harness 再退出**，而不是交给操作系统强杀。
+  - 若托盘本身创建失败（例如 Linux 上没有 AppIndicator 支持），壳层**保持旧行为**：关窗即退出——一个把自己藏起来、又没有托盘能把用户带回来的窗口，会让进程变得无从触达。
+- **应用内反馈入口** ✅ —— **DSH Desktop → Send Feedback…**（托盘与应用错误页同样有入口）会打开一个本地反馈页，在用户离开应用去 GitHub **之前**就回答「我该带上什么」：页面自己从 `MANIFEST.json` 读出应用版本、**运行时通道**（`next` / `alpha`）、内置 DSH 版本与补丁统计，提供一键脱敏诊断包导出，再把用户交给四个白名单出口（Bug 表单 / 功能建议表单 / Discussions / 上游 Harness），全部经系统浏览器打开。应用自身不上传任何内容——贴什么、附什么由用户决定。通道之所以要写清楚：两条上游线共用同一批桌面版本号，光看版本号认不出运行时。
 - **自动更新** ✅ —— `tauri-plugin-updater` 已注册，检查 → 下载 → 择机重启安装的完整链路均已接线，并配有应用内更新页（`frontend/updates.html`，由应用菜单「检查更新」打开）。更新源为**本仓库**（`wang-yi-bit64/dsh-desktop`），验签使用**本项目自有**的 minisign 密钥。发布正式包前请先读[自动更新与签名密钥](#自动更新与签名密钥)。
 - **插件恢复流程** ✅ —— 真正的恢复页（`frontend/plugin-recovery.html`），在疑似插件故障时从错误页进入。它调用 `recovery_status`（归因结论 + 嫌疑插件清单，数据直接来自 `dsh_host::diagnostics`）与 `recovery_action`（`safe-mode` / `restart` / `show-log` / `quit`），失败在页面上可见，并监听 `harness://status` 让重启过程真的可见。它**只提供非破坏性动作**——「卸载插件」为何刻意缺席见下方「已归档 / 计划中」。
 - **一键脱敏诊断包导出** ✅ —— 一键产出 `app_data_dir/exports/diagnostics-<时间戳>.zip`，内含三个日志文件、归因结论、环境快照与 `MANIFEST.json`。每个文本条目都过五条脱敏规则（launch token / `dsh-auth-*` cookie / 路径用户名段 / API key 形态 / 代理口令），且**每条规则的命中次数都写进包里**——因此「到底脱敏了没有」是可核对的事实，而不是一句承诺。错误页、日志页与应用菜单三处入口。
@@ -72,10 +75,10 @@ crates/
   dsh-host/             # 无 GUI 核心宿主库（子进程管理、Supervisor 监督器、崩溃诊断、日志环形缓冲、脱敏诊断包导出、日志尾部读取）
   dsh-host-cli/         # dsh-host 命令行工具（支持 start / status / stop / tail / doctor 等）
 src-tauri/
-  frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、插件恢复页、更新页、日志查看器）
+  frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、插件恢复页、更新页、日志查看器、反馈页）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
   src/                  # Tauri 桌面应用层（窗口管理、应用菜单、IPC 命令、安全模式切换、LAN 手机桥、壳层日志、自动更新）
-    commands.rs             # 完整 IPC 命令面：17 个命令，全部返回 IpcEnvelope<T>
+    commands.rs             # 完整 IPC 命令面：20 个命令，全部返回 IpcEnvelope<T>
     logging.rs              # 壳层结构化日志（desktop.log，5MB × 2 轮转）
     mobile_bridge.rs        # 局域网手机桥（配对页 + dsh-auth-* cookie 握手 + RPC 转发）
 build/                  # 运行时组装与辅助注入脚本
@@ -120,7 +123,7 @@ docs/                   # 架构设计、契约定义与技术方案
 | P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
 | P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | 🗄️ **已归档（2026-09-10）**：从未有调用方，且根本不在插件挂载路径上；整体删除而非留着腐烂。只剩进程内故障归因 |
 | P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | 🗄️ **已归档（2026-09-10）**：已从 workspace 整体移除；归档文档保留恢复判据 |
-| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：17 个命令全部返回 `IpcEnvelope<T>`；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：20 个命令全部返回 `IpcEnvelope<T>`；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
 
 ### 后续计划（尚未开工）
 

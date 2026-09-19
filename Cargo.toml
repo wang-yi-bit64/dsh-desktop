@@ -60,7 +60,13 @@ tokio = { version = "1", features = [
 ] }
 
 # Tauri 与插件（仅 src-tauri 使用，版本在此统一）
-tauri = { version = "2", features = [] }
+#
+# `tray-icon` 是系统托盘（批次 0.2-B1）的前提：Tauri 2 把托盘做进 core，
+# 不需要额外插件（见 `src-tauri/src/tray.rs`）。开启它会连带启用 `tray-icon`
+# crate（三平台各有一套后端）；Linux 后端链接 libappindicator，而三个工作流的
+# apt 安装步骤里早已包含 `libappindicator3-dev`（原本为 WebKitGTK 的同类依赖
+# 而装），因此 CI 侧无需改动。
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 # updater 的默认 `rustls-tls` 后端会拉入 `ring`（C 源码，编译需要 gcc/clang）。

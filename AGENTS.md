@@ -17,13 +17,13 @@
   - 核心职责：集中定义常量与契约标识（`CX-1` ~ `CX-9`）、**标准错误码总表（`E1xxx`~`E7xxx`，见 `src/errors.rs` 的 `codes` 模块）**、前后端统一 IPC 封套（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）、JSON-RPC 2.0 规范（唯一契约源，`dsh-host` 等下游 crate 仅 re-export）、生命周期阶段与崩溃诊断类型。
   - **错误码按族号对应类别**：`E1xxx` 环境 / `E2xxx` 网络 / `E3xxx` 进程 / `E4xxx` 鉴权 / `E5xxx` 插件 / `E6xxx` 模型网关 / `E7xxx` 内部。族号与类别的对应关系有测试守着（`errors.rs::every_code_family_maps_to_its_category`），改一处必须改另一处。
 - **`crates/dsh-host`**：无 GUI 依赖的纯 Rust 核心宿主库。
-  - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断（`diagnostics.rs`）、**脱敏诊断包导出（`diagnostics_export.rs`，批次 D）**、**日志尾部读取（`logs_view.rs`，批次 D）**、Safe Mode 隔离 Profile、多 Profile/Session 管理。
+  - 核心职责：子进程派生、跨平台孤儿进程防护、URL/Token 捕获、HTTP 就绪探测、日志滚动轮转、Supervisor 监督器、崩溃归因诊断（`diagnostics.rs`）、**脱敏诊断包导出（`diagnostics_export.rs`，批次 D）**、**日志尾部读取（`logs_view.rs`，批次 D）**、**组装清单读取端（`runtime_manifest.rs`，批次 0.2-D2）**、Safe Mode 隔离 Profile、多 Profile/Session 管理。
   - **严格保持无 GUI / Headless 状态（不变量 INV-6）**。
 - **`crates/dsh-host-cli`**：`dsh-host` 的命令行工具前端（支持 `dsh-host start | status | stop | tail | probe | doctor`）。**发布形态是可下载产物**：`release.yml` 的 `cli` job 三平台构建，`scripts/package-cli.mjs` 打包（命名 / `.sha256` 边车 / manifest / 回读校验 / 产物执行自检），`cli-publish` job 核验下载副本后上传到同一 Release。分期与触发条件见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md)——**该产物不含 runtime**，不要表述为「下载即用」。
-- **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志、一键脱敏诊断包导出、应用内日志查看器）。
-  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 17 个，**全部有前端调用方**）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`（其 `ALLOW_UNUSED_COMMANDS` 现在是**空表**，这是目标状态），理由与例外清单见 `commands.rs` 模块文档。
+- **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志、一键脱敏诊断包导出、应用内日志查看器、**系统托盘（批次 0.2-B1）**、**应用内反馈入口（批次 0.2-D2）**）。
+  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 20 个，**全部有前端调用方**）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`（其 `ALLOW_UNUSED_COMMANDS` 现在是**空表**，这是目标状态），理由与例外清单见 `commands.rs` 模块文档。
   - **命令返回形态**：所有命令返回 `CommandResult<T>` = `Result<IpcEnvelope<T>, String>`；**外层 `Result` 恒为 `Ok`**（仅为满足 Tauri 对 async 命令的编译要求），成败与错误码全在内层封套。**不要返回 `Err`**——那会让封套连同错误码一起丢失。细节见 `commands.rs` 模块文档。
-  - **`src-tauri/frontend/`**：本地静态页共 5 个——`index.html`（启动屏）、`error.html`（结构化错误页 + 插件故障归因 + 诊断包导出 + 恢复页入口）、`plugin-recovery.html`（恢复页）、`updates.html`（更新页）、`logs.html`（日志查看器）。**均已接线、均可达**（`safe-mode.html` 已于 2026-09-10 删除，理由见批次 C）。
+  - **`src-tauri/frontend/`**：本地静态页共 6 个——`index.html`（启动屏）、`error.html`（结构化错误页 + 插件故障归因 + 诊断包导出 + 恢复页 / 反馈页入口）、`plugin-recovery.html`（恢复页）、`updates.html`（更新页）、`logs.html`（日志查看器）、`feedback.html`（反馈页）。**均已接线、均可达**（`safe-mode.html` 已于 2026-09-10 删除，理由见批次 C）。
 > 🗄️ **已归档并删除（2026-09-10，批次 F）**：`crates/dsh-model-gateway`（多模型工具调用网关）
 > 与 `crates/dsh-host` 的插件隔离模块。两者均无运行时消费者，按 §7.3 的裁定「冻结并归档」处理——
 > 代码删除，设计文档移入 [`docs/archive/`](docs/archive/)。**不要在未重新裁定的情况下把它们加回来**：
@@ -43,6 +43,7 @@
   - `verify-shell-pages.mjs`：壳内页面的**运行时**冒烟（DOM 桩里真跑内联脚本 + 逐个点按钮），检查 P1~P6：引用可解析 / 脚本不抛错 / 命令已注册 / **按钮都挂了监听** / 模板 id 前缀可解析 / **命令结果解包了封套**。抓 `verify-ipc-surface` 看不见的两类缺陷：`getElementById` 拿到 `null` 导致整页监听失效；HTML 留了按钮但脚本忘了绑。它曾当场抓到批次 E 引入的「`updates.html` 把封套当载荷用、整页永远不渲染」。
   - `verify-target.mjs`：打包目标守卫（构建主机 vs 目标平台）。目标来源优先级：argv → `TAURI_ENV_TARGET_TRIPLE` → `rustc -vV` host；`--self-test` 跑纯逻辑自检。
   - `generate-app-icons.mjs`：**macOS 手工工具**（依赖 `sips` / `iconutil`），刻意无 npm 入口、不进 CI；定位与产物去向见其文件头注释。
+  - `generate-tray-icons.mjs`：**跨平台手工工具**（自带 PNG 编解码，只用 Node 的 `zlib`），从 `build/app-icon.png` 派生两份**托盘**资产——`icons/tray-32.png`（Windows/Linux 方块）与 `icons/tray-template.png`（macOS 单色模板，按亮度从方块里提字形遮罩）。同样无 npm 入口、不进 CI：产物已入库，只在品牌源图变化时重跑。**为什么不能直接复用窗口图标**见该脚本头部。
   - `smoke-launch.mjs`：CI 分层烟雾（L1 无头 / L2 GUI），见 §2。
   - `report-bundle-size.mjs`：采集壳/安装包/资源树体积，写入 CI job summary（§7 期望管理）。
   - `conventional-commits.mjs`：Conventional Commits 解析器（**共享库**，被下面两个脚本复用）。解析 / 归类 / 版本建议都收在这里，避免两个 CLI 各写一份、对同一条提交给出两种说法。含 `--self-test`。
@@ -597,6 +598,52 @@ next 线的运行时，而**所有步骤都是绿的**——没有任何一步�
 旧写法的同一份配置。⚠️ 改动这两个钩子前先想清楚：**它们跑在 tauri 内部，看不见 workflow
 的 env**——任何在那里「重新组装」的写法都必然会按默认目标覆盖当前树。
 
+### 托盘与 `menu.rs` 的两条前提被证伪（2026-09-18 批次 0.2-B1 实测）
+
+托盘批次（`src-tauri/src/tray.rs`）一次性推翻了 `menu.rs` 模块文档里两句**当时看起来
+合理、实际不成立**的断言。两句都还留在该模块文档里（已就地更正），这里记下原因，
+**不要照着旧结论写代码**：
+
+1. **「`muda::MenuItem` 是 `Rc`，非 `Send`/`Sync`，不能放进托管状态」——对 `muda` 成立，
+   对 Tauri 的包装类型不成立。** `tauri::menu::MenuItem<R>` 是 `Arc<MenuItemInner<R>>`，
+   而 `MenuItemInner` 由 `gen_wrappers!` 宏带着 `unsafe impl Send/Sync` 生成（每次访问都经
+   `run_on_main_thread` 派发，句柄本身只是「远程控制句柄」）。因此 `TrayHandles { status,
+   mobile_status }` 直接 `app.manage(...)` 是安全的。**推论**：那条「不能托管」的结论曾把
+   实现推向「每次重新定位句柄」，而这条路在托盘上**根本不存在**——`TrayIcon` 只有
+   `set_menu`，**没有 `menu()` 读取器**。
+2. **「状态刷新走 `AppHandle::menu()` 定位句柄」也走不通。** `Menu::get` / `Submenu::get`
+   **只查直接子项且不跨菜单**，所以应用菜单的 `Phone` 状态行与托盘里的同名项是**两份**
+   独立对象，刷一处不会顺带刷另一处。只刷一处就会得到「菜单说已连接、托盘说未启动」——
+   同一份状态的两种说法，而用户最可能看的正是托盘那一份。`refresh_bridge_status` 因此
+   同刷两处。
+
+**另外两条只有写代码才会撞上的约束（同样容易静默失效）**：
+
+- **`app.exit()` 不经过 `CloseRequested`。** 托盘把关窗改成「隐藏」之后，如果退出路径仍
+  只调 `app.exit(0)`，唯一的停机点就消失了，Harness 只能被 JobObject / PDEATHSIG **强杀**
+  （来不及落盘收尾）。因此 `lib.rs::shutdown`（先收手机桥、再收 Harness）成为**所有** Quit
+  路径的必经点：`menu.rs` 的 `app-quit`、`commands.rs` 的 `app_quit` 与 `recovery_action:"quit"`。
+- **托盘的 gtk 后端在缺库时 `panic!`，会连带把应用启动带崩。** `libappindicator-sys` 把
+  库句柄放在 `Lazy<Library>` 里，`libayatana-appindicator3.so.1` / `libappindicator3.so.1`
+  两个名字都加载不到时**直接 panic**（其 `backcompat` 特性认无 `.1` 后缀的名字，**默认关闭**，
+  所以只探这两个名字才准）。这个 panic 从 `builder.build()` 穿出 `setup` → 应用**整个**起不来，
+  而改动前那种机器上应用是能正常启动的——等于引入了一个启动期回归。修法：`tray.rs::create`
+  里先 `dlopen` 探测同样的两个名字，探不到就返回错误、**根本不进入**会 panic 的路径；
+  外加 `catch_unwind` 兜住其它 panic 点（临时图标文件写失败也会 `unwrap`）。
+  `lib.rs` 只记 error 日志，应用照常启动，关窗行为自动退回「关窗即退出」。
+
+**守卫**：`verify:ipc-surface` 的 **E7**（菜单项 id ↔ `handle_menu_event` 分支）。托盘与应用
+菜单**共用同一批 id**（`menu.rs` 的 `pub const MENU_ID_*`），而「加了菜单项忘了接处理器」
+的后果是一个**点了完全没反应**的项——没有编译错误、没有日志、没有既有守卫能看见。
+E7 只认两种合法写法：`match` 臂**与守卫式早退**（`if id == CONST { …; return }`，
+`tray-show` 用的是后者）；只认前者会对正确实现误报（实测发生过）。`--self-test` 用三组夹具
+（缺分支 / 守卫式早退 / 注释里的 id）钉住该判定本身，已进 CI 与 release preflight。
+
+⚠️ **托盘没有自动门禁**：CI 容器里没有系统托盘区，L2 冒烟**测不了**托盘的存在与交互。
+本项验收的实测 / 未实测分界与三平台手工清单写在
+[`docs/dev-plan-0.2-hardening.md`](docs/dev-plan-0.2-hardening.md) 的「批次 0.2-B1 执行记录」——
+**不要因为「门禁全绿」就认为托盘在三平台都验过**。
+
 ---
 
 ## 5. 架构演进与路线图 (P0~P4)
@@ -609,7 +656,7 @@ next 线的运行时，而**所有步骤都是绿的**——没有任何一步�
 - **P1（生命周期监督与自愈）✅ 已接线**：Supervisor 监督器、状态流转与退避重试、LogRing 环形缓冲、崩溃归因分析（`diagnostics.rs`）与 Safe Mode 隔离 Profile。
 - **P2（插件分级隔离与看门狗）🗄️ 已归档（2026-09-10，批次 F）**：Tier 0/1/2 分级沙箱、JSON-RPC 2.0 通信、连续错误断路器曾实现且有单测，但**从未有任何运行时调用方**，且不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系）。按 `docs/dev-plan-disconnected-points.md` §4 决策点 3 裁定「冻结并归档」：`plugin_worker.rs`、`plugin-worker-host.mjs`、`PluginWorkerClient` 全部删除，设计文档移入 `docs/archive/`。**当前生效的插件防护只有 `plugin-safety-guard.mjs` 的进程内 `formatFaultDetails` 归因**——同进程的插件崩溃仍可能带走 Harness。
 - **P3（多模型工具网关与基准测试）🗄️ 已归档（2026-09-10，批次 F）**：Schema 降级清洗、多厂商方言适配、微秒级基准均已实现并测试通过，但无运行时消费者。按同一裁定从 workspace 移除（目录 + members + `[workspace.dependencies]`），设计文档移入 `docs/archive/model_gateway_design.md`。恢复前置条件仍见该文档的「退出条件」段。
-- **P4（薄壳收敛与诊断系统 2.0）✅ 已接线（2026-09-10 批次 D/E 闭环）**：前端结构化错误归因、**统一 IPC 封套（`IpcEnvelope<T>`，17 个命令全部收敛）**、**一键脱敏导出诊断包（`diagnostics_export`，5 类脱敏规则 + 正反用例）**、**应用内日志查看器（`logs.html`）**、**插件恢复页（可操作、有状态反馈）** 均已接线。证据获取路径现为四条：错误页 / 恢复页 / 日志页 / 原生菜单「Export Diagnostics…」。
+- **P4（薄壳收敛与诊断系统 2.0）✅ 已接线（2026-09-10 批次 D/E 闭环）**：前端结构化错误归因、**统一 IPC 封套（`IpcEnvelope<T>`，当时 17 个命令全部收敛；现 **20** 个，见 §7.2）**、**一键脱敏导出诊断包（`diagnostics_export`，5 类脱敏规则 + 正反用例）**、**应用内日志查看器（`logs.html`）**、**插件恢复页（可操作、有状态反馈）** 均已接线。证据获取路径现为五条：错误页 / 恢复页 / 日志页 / **反馈页** / 原生菜单「Export Diagnostics…」。
 
 ## 6. 修改敏感模块前必读文档
 - `docs/roadmap.md`：**顶层路线图**——定位声明、边界原则与阶段序列（H0~H3）；定位与裁决冲突以它为权威。
@@ -664,7 +711,7 @@ next 线的运行时，而**所有步骤都是绿的**——没有任何一步�
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`（分级表按**包名**索引）、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]`（含 `target` 字段标明通道） |
 | **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道直接失败）；`smoke.yml` 有 `dsh_target` 输入；`verify:patches` 逐目标检查、`verify:drift` 逐通道对照 dist-tag。见 §8.6 |
 | ↳ 补丁行号重算（移植到另一条上游线时） | ✅ 已接线 | `scripts/recount-patches.mjs` + `check-patch-applicability` 的 ±20 窗口判据 | 升级/移植工序；`patch-package` 按行号定位且偏移超 ±20 行即失败，只按内容搜索的预检会漏报——见 §8.6 |
-| **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **17 个命令全部**返回 `CommandResult<T>`；四个页面（error / plugin-recovery / logs / updates）均解包 `success` |
+| **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **20 个命令全部**返回 `CommandResult<T>`；五个页面（error / plugin-recovery / logs / updates / feedback）均解包 `success` |
 | ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
 | **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
 | ↳ 更新源归属与签名密钥 | ✅ 已闭环（2026-09-10） | `plugins.updater.endpoints` 指向 `github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`；配置里的 `pubkey` 与 `~/.tauri/dsh-desktop.key.pub` **逐字节一致** | 私钥经 CI Secret `TAURI_SIGNING_PRIVATE_KEY` 注入（无口令），本地离线备份在 `~/.tauri/backup/` |
@@ -678,6 +725,11 @@ next 线的运行时，而**所有步骤都是绿的**——没有任何一步�
 | **Harness 页注入机制（preload 等价物）** | ✅ 已接线（2026-09-10；同期更正「无初始化脚本」的误判） | 主窗口 builder 的 `initialization_script`（`lib.rs`）+ `frontend/harness-ui-inject.js`；脚本按 origin 自我早退（本地页与子框架不注入） | 无头行为自测 `npm run verify:harness-inject`（19 项断言 + 可证伪性检查，已进 CI） |
 | **CLI 可引用产物（`dsh-host-cli` 归档 + sha256）** | ✅ 已接线（2026-09-13） | `scripts/package-cli.mjs`（命名 / 边车 / manifest / 回读校验 / 产物执行自检 / 已发布核验）+ `release.yml` 的 `cli` / `cli-publish` job | 发布工作流三平台构建并上传到同一 Release；`ci.yml` 与 release preflight 跑 `verify:cli-package`。**产物不含 runtime**——归档 `README.txt` 与 Release 正文都显式写明，须用 `--resource` 指向已组装的 runtime；它**不在**桌面安装包内 |
 | ↳ runtime bundle 独立发布（Phase 2） | 🕓 **计划中**（带触发条件，刻意不做） | **无代码**。门槛与前置改造写在 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §4：出现第一个非本仓消费者，或开工 H3-a 运行时更新事务 / H2-a 兼容矩阵时才做；提前单独做就是为「可能有用的未来」建基础设施（同批次 F 归档 `dsh-model-gateway` 的判据） | **无** |
+| **系统托盘 + 关窗驻留** | ✅ **已接线（2026-09-18 批次 0.2-B1）** | `src-tauri/src/tray.rs`（图标 / 菜单 / 事件 / 状态行）+ `window.rs::reveal_main_window`（show → unminimize → focus 三步）；图标资产 `icons/tray-32.png` 与 `icons/tray-template.png` 由 `scripts/generate-tray-icons.mjs` 派生；`tauri` 开 `tray-icon` feature（`Cargo.toml`） | `lib.rs` setup 建托盘（失败只记日志、启动继续）；`on_window_event` 的 `CloseRequested` 改为 `prevent_close` + `hide`；菜单事件与应用菜单**共用** `menu::handle_menu_event` 与同一批 id。**无自动门禁**：托盘区在 CI 容器里不存在，验收靠三平台手工（见 §2 与 0.2-B1 记录） |
+| ↳ 驻留期的退出语义 | ✅ 已接线 | `lib.rs::shutdown`（先收手机桥、再收 Harness）；`menu.rs` / `commands.rs` 的 Quit 与 `app_quit` 均先 await 它 | 托盘 / 应用菜单 / 错误页三处 Quit。**为什么必须做**：`app.exit()` 不经过 `CloseRequested`，不先停机就只能由 JobObject / PDEATHSIG 强杀子进程 |
+| ↳ 托盘后端缺失时的降级 | ✅ 已接线（2026-09-18，**防启动期回归**） | `tray.rs::appindicator_available`（Linux 用 `dlopen` 探 `libayatana-appindicator3.so.1` / `libappindicator3.so.1`）+ `catch_unwind` 兜底 | `create()` 在任何 `dlopen` 失败 / panic 时返回错误而不 panic；`lib.rs` 只记 error 日志，**应用照常启动**，关窗行为自动退回「关窗即退出」。理由：`libappindicator-sys` 用 `Lazy<Library>` + `panic!`，不先探测会把整个应用带崩 |
+| **应用内反馈入口** | ✅ **已接线（2026-09-18 批次 0.2-D2）** | `src-tauri/src/feedback.rs`（`Channel` 四值白名单 + `context()`）+ `frontend/feedback.html` + `crates/dsh-contracts/src/constants.rs` 的 **CX-13** 四个渠道 URL + `crates/dsh-host/src/runtime_manifest.rs`（从 `MANIFEST.json` 读通道 / DSH 版本 / 补丁统计） | 命令 `feedback_context`（页面取版本与路径）、`feedback_open`（打开页面，错误页按钮亦走它）、`feedback_channel_open`（白名单内打开浏览器）；菜单 / 托盘的「Send Feedback…」经 `window::show_feedback_page`。**应用自身不上传任何内容**——只读本机信息 + 调 `opener` |
+| ↳ 反馈页的「该带什么」自述 | ✅ 已接线 | `feedback.rs::context()`（版本 / 平台 / 通道 / DSH 版本 / 补丁 applied-failed-skipped / 诊断包与日志目录）+ `runtime_manifest::RuntimeManifest::identity_line` | 读不到 `MANIFEST.json` 时**不报错**，改以 `manifest_readable: false` + `manifest_error` 如实上报（§7.1 规则 3）——反馈页恰恰是「安装可能坏了」时最需要打开的页面 |
 
 ### 7.3 维护方式
 
@@ -701,6 +753,7 @@ next 线的运行时，而**所有步骤都是绿的**——没有任何一步�
 - **跨语言断言必须可证伪**：新增「X 一定会发生」这类关于页面 / 脚本行为的断言时，按 `scripts/verify-harness-inject.mjs` 的模式配一段**变体回退检查**——把被守护的行为打回旧写法，断言必须变红，否则断言是装饰。同时守卫**不得依赖检出配置**（行尾、路径分隔符）：CRLF 检出下必须与 LF 表现一致。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
 - **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
+  - 其中 **E7（菜单项 id ↔ `handle_menu_event` 分支）** 是批次 0.2-B1 新增的：托盘与应用菜单**共用同一批 id**，而「加了菜单项忘了接处理器」的后果是一个点了完全没反应的项——没有编译错误、没有日志、没有既有守卫能看见。`--self-test` 用三组夹具（缺分支 / 守卫式早退 / 注释里的 id）钉住该判定本身，已进 CI 与 release preflight。
 
 ---
 

@@ -19,6 +19,8 @@
 //! | [`logs`] | 日志环形缓冲、滚动落盘、失败归因、级别前缀 | C7 |
 //! | [`logging`] | 宿主日志（`app.log`）落盘门面 + 级别过滤 | C7 |
 //! | [`transport`] | 统一传输协议（Named Pipe / UDS / HTTP）；RPC 消息模型 re-export 自 `dsh-contracts::rpc`（唯一契约源） | — |
+//! | [`logs_view`] | 日志文件尾部读取（应用内日志查看器的读取端） | C7 |
+//! | [`runtime_manifest`] | 组装清单读取端（运行时自述：通道 / DSH 版本 / 补丁统计） | 任务 0.3 |
 //! | [`launch`] | 上述模块的编排（spawn → 日志泵 → 就绪等待） | C1–C7 |
 //! | [`error`] | 统一错误类型 + 退出码映射 + 归因降级 | — |
 
@@ -35,6 +37,7 @@ pub mod logs_view;
 pub mod paths;
 pub mod process;
 pub mod readiness;
+pub mod runtime_manifest;
 pub mod safe_mode;
 pub mod session;
 pub mod stop;
@@ -54,6 +57,7 @@ pub use logs::{FailureCause, LogLevel, LogLine, LogRing, LogSource};
 pub use logs_view::{LogFile, LogSlice};
 pub use paths::Layout;
 pub use readiness::{ProbeConfig, ReadinessOutcome};
+pub use runtime_manifest::RuntimeManifest;
 pub use safe_mode::{
     ensure_safe_mode_profile, generate_isolated_profile_config, SafeModeContext, SafeModeManager,
 };

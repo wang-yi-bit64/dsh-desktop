@@ -169,8 +169,13 @@ jobs:
       # 已经借此捕获过真实事故：error.html 调用了不存在的 `harness_start_safe_mode`
       # （注册名是 `safe_mode_action`），异常被 .catch 吞掉 → 按钮静默失效。
       # 纯静态、不需 npm install，放最前面快速失败。
+      # E7（菜单项 ↔ handle_menu_event 分支）由托盘批次引入：同一批菜单 id 现在被
+      # 应用菜单与托盘**两个**菜单引用，「加了项忘了接处理器」不会有编译错误，
+      # 只会得到一个点了没反应的菜单项。--self-test 用三组夹具钉住该判定本身。
       - name: Verify shell IPC surface
-        run: npm run verify:ipc-surface
+        run: |
+          npm run verify:ipc-surface
+          npm run verify:ipc-surface:self-test
 
       # 壳内页面的**运行时**冒烟。上一条只比对命令名；这一条把每个页面的内联脚本
       # 放进 DOM 桩里真跑一遍，并逐个点一遍按钮，因此能抓到 E1~E6 看不见的两类缺陷：

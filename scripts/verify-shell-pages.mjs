@@ -303,7 +303,43 @@ function syntheticEnvelope(name) {
       return {
         success: true,
         data: { path: 'C:/tmp/exports/diagnostics-1.zip', bytes: 1, entries: [], redactions: [] },
-        timestamp_ms: 0,
+        timestamp_ms: 0
+      }
+    // 反馈页（批次 0.2-D2）：`feedback_context` 的 `data` 必须是一个**完整**对象，
+    // 否则 `render()` 会走进 `if (!data) return` 早退，复制按钮永远拿不到文本
+    // （P4 只检查监听器挂没挂，看不出「点了什么都不发生」）。这里刻意造出
+    // 「清单读不到」的形态，因为那正是页面里唯一带条件渲染的分支。
+    case 'feedback_context':
+      return {
+        success: true,
+        data: {
+          app_version: '0.7.0',
+          platform: 'win32',
+          arch: 'x86_64',
+          runtime_channel: 'alpha',
+          runtime_version: '0.1.6-alpha.2',
+          runtime_identity: 'DSH 0.1.6-alpha.2 · channel alpha',
+          patch_summary: '13 applied, 0 failed, 0 skipped',
+          manifest_readable: true,
+          manifest_error: null,
+          exports_dir: 'C:/tmp/exports',
+          log_dir: 'C:/tmp/logs',
+          channels: {
+            bug: 'https://github.com/wang-yi-bit64/dsh-desktop/issues/new?template=bug_report.yml',
+            feature:
+              'https://github.com/wang-yi-bit64/dsh-desktop/issues/new?template=feature_request.yml',
+            discussions: 'https://github.com/wang-yi-bit64/dsh-desktop/discussions',
+            upstream: 'https://github.com/deepseek-ai/dsh',
+            repository: 'https://github.com/wang-yi-bit64/dsh-desktop'
+          }
+        },
+        timestamp_ms: 0
+      }
+    case 'feedback_open':
+      return {
+        success: true,
+        data: 'https://github.com/wang-yi-bit64/dsh-desktop/discussions',
+        timestamp_ms: 0
       }
     // 刻意返回一个**业务失败**封套：页面若不检查 `success` 就会被抓到。
     case 'harness_open':

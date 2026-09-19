@@ -51,24 +51,94 @@
 
 ## 进度快照
 
-> 最后更新：2026-09-12（0.2-D1 已收尾，其余未开工）· 状态词表见 `AGENTS.md` §7.3
+> 最后更新：2026-09-18（0.2-B1 + 0.2-D2 已收尾）· 状态词表见 `AGENTS.md` §7.3
 
-| 批次 | 项 | 状态 | 落地证据（编制时实测） |
+| 批次 | 项 | 状态 | 落地证据 |
 |------|----|------|----------------------|
 | 0.2-A | A1 macOS 代码签名 + 公证 | ❌ 未开工 | `release.yml` / `tauri.conf.json` grep `APPLE\|signingIdentity\|codesign` 零命中 |
 | 0.2-A | A2 Windows 代码签名 | 🕓 决策点 1 | 同上 |
-| 0.2-A | A3 发布通道约定（stable / preview） | ❌ 未开工 | 更新端点仅 `releases/latest/download/latest.json` 单条；§8.2 已有 prerelease 约定但未与更新链路打通 |
+| 0.2-A | A3 发布通道约定（stable / preview） | ❌ 未开工 | 更新端点仅 `releases/latest/download/latest.json` 单条；§8.2 已有 prerelease 约定但未与更新链路打通。**注**：双上游通道（§8.6）已先一步落地，「通道」一词现在有两个含义（上游运行时线 vs 用户可见发布通道），A3 指的是后者 |
 | 0.2-A | A4 更新私钥运维演练 | ❌ 未开工 | `~/.tauri/backup/` 有备份约定，无恢复演练记录（与 H0 批次 M1 的 runbook 合并执行可省一份） |
-| 0.2-B | B1 系统托盘 | ❌ 未开工 | 全仓 grep `tray` 零命中；README 自认 "no system tray yet" |
-| 0.2-B | B2 开机自启动（默认关） | ❌ 未开工 | `src-tauri/Cargo.toml` 无 `tauri-plugin-autostart` |
+| 0.2-B | B1 系统托盘 | ✅ **已完成（2026-09-18）** | `src-tauri/src/tray.rs`（图标 / 菜单 / 事件 / 状态行 + 平台分支）、`window.rs::reveal_main_window`、`on_window_event` 的关窗改隐藏、`lib.rs::shutdown`（退出前优雅停机）、`scripts/generate-tray-icons.mjs` + 两份入库图标资产。**决策点 2 采用 A（关窗=隐藏到托盘）**，见下文 B1 执行记录 |
+| 0.2-B | B2 开机自启动（默认关） | ❌ 未开工 | `src-tauri/Cargo.toml` 无 `tauri-plugin-autostart`。**与 B1 的联动**：托盘已让应用具备常驻形态，自启动现在是「锦上添花」而非前置 |
 | 0.2-B | B3 Safe Mode 界面横幅 | 🕓 计划中（前置条件已满足，待开工） | 注入机制 `harness_ui.rs::INJECT_SCRIPT` + `verify:harness-inject`（19 项断言 + 可证伪检查）已落地；对应 `AGENTS.md` §7.2「计划中」行 |
 | 0.2-B | B4 插件禁用语义**重新核验** | ❌ 未开工 | 批次 C 裁决记录在 `dev-plan-disconnected-points.md` §3/§4 决策点 4 |
-| 0.2-C | C1 补丁面审计（上游化候选标记） | ❌ 未开工 | `patches/` 现存 14 个补丁（0.1.5-rc.1 升级后），无上游化标记 |
-| 0.2-C | C2 首个上游 PR | ❌ 未开工 | 无 |
+| 0.2-C | C1 补丁面审计（上游化候选标记） | ❌ 未开工 | `patches/` 现存 13 个（alpha 线；next 线 14 个），无上游化标记 |
+| 0.2-C | C2 首个上游 PR | ❌ 未开工 | 无。**注**：alpha.2 升级时上游反向采纳了本仓的键盘导航修复（见 §8.6），属事实上的上游化，但未走 PR 流程 |
 | 0.2-C | C3 上游升级演练（实测适配成本） | ❌ 未开工 | `dsh-upgrade-checklist.md` 无演练记录节（与 H0 批次 I2「实跑升级清单」是同一件事，**并入时合并、勿重复立项**） |
 | 0.2-D | D1 Discussions + Issue 模板 | ✅ **已完成（2026-09-12）** | Discussions 已开启（GraphQL `hasDiscussionsEnabled: true`，六个默认分类）；`.github/ISSUE_TEMPLATE/` 下 `bug_report.yml`（内嵌脱敏诊断包两步指引）、`feature_request.yml`、`config.yml`（关闭空白 issue + Discussions 联系入口） |
-| 0.2-D | D2 应用内反馈入口 | ❌ 未开工 | `menu.rs` 菜单树无 Feedback 项 |
+| 0.2-D | D2 应用内反馈入口 | ✅ **已完成（2026-09-18）** | `src-tauri/src/feedback.rs` + `frontend/feedback.html` + 3 条命令（`feedback_context` / `feedback_open` / `feedback_channel_open`）+ CX-13 四个渠道常量 + `crates/dsh-host/src/runtime_manifest.rs`；入口在「DSH Desktop」菜单、托盘菜单与错误页三处。**比原计划（纯 `open_url` 链接）多做了一步**，理由见 D2 执行记录 |
 | 0.2-D | D3 README 社区入口 | ❌ 未开工 | 无 |
+
+---
+
+## 批次 0.2-B1 执行记录（2026-09-18）
+
+**范围**：托盘图标 + 菜单 + 关窗驻留 + 退出语义。**决策点 2 采用 A**（关窗=隐藏到托盘），
+理由是它与手机桥的存在意义直接绑定：桥的价值在于「人在别处、Harness 在跑」，而旧行为
+（关窗即退出）恰好把这一刻销毁。B2 自启动仍未做，托盘不依赖它。
+
+**实现要点（每条都对应一个会被踩的坑）**：
+
+1. **托盘菜单与应用菜单共用 id，而不是各写一份**：`menu.rs` 把 11 个菜单 id 提成
+   `pub const`，两个菜单都引用同一批常量、事件都汇进 `menu::handle_menu_event`。
+   各写一遍字符串的话，「托盘里的重启忘了走安全模式 profile 落盘」不会有任何编译错误。
+2. **平台分支是必需的，不是优化**：Linux **没有**托盘点击事件（`libappindicator` 后端
+   不派发 `TrayIconEvent`），若照 Windows 那样关掉「左键出菜单」，Linux 用户会得到一个
+   **点了没反应**的图标——因此 Linux 保留左键菜单、靠菜单项唤回窗口；macOS 的菜单栏图标
+   原生就是「点击即菜单」，另需单色模板图（彩色方块在深色菜单栏里糊成一团）。
+3. **关窗拦截必须能自证「托盘真的在」**：`CloseRequested` 里先查 `tray_by_id`，查不到就
+   **不隐藏**、退回旧语义（关窗即退出）。否则托盘创建失败的环境（无 AppIndicator 的
+   Linux）会得到一个既没有窗口、也没有托盘入口的进程，用户只能去任务管理器结束它。
+4. **退出必须先优雅停机**：`app.exit()` **不经过** `CloseRequested`，托盘把唯一的停机点
+   改掉之后，不显式停机就只能由 JobObject / PDEATHSIG **强杀** Harness（来不及落盘收尾）。
+   因此 `lib.rs::shutdown` 成为所有 Quit 路径的必经点。
+5. **Linux 的 `libappindicator` 缺失会让应用 panic 退出**（实测读源码确认）：
+   `libappindicator-sys` 用 `Lazy<Library>` 加载 `libayatana-appindicator3.so.1` /
+   `libappindicator3.so.1`，两个都失败时**直接 `panic!`**（`backcompat` 特性认无 `.1`
+   后缀的名字，但默认关闭）。该 panic 从 `builder.build()` 穿出 `setup` 会把**整个应用**
+   带崩——对一个「没有托盘就少个便利设施」的功能来说不可接受。修法：先 `dlopen` 探测同样
+   两个名字（探不到就返回错误，不进会 panic 的路径），外加 `catch_unwind` 兜住其它 panic。
+
+**验收（如实记录）**：**本项无自动门禁**——CI 容器里没有系统托盘区，托盘的存在与交互
+**测不了**。已验证的部分与未验证的部分必须分开写：
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 托盘创建、图标渲染 | ✅ 实测（Windows） | 交互式跑 debug 构建：`desktop.log` 有 `system tray created (id=main-tray)`，通知区可见图标 |
+| 关窗→隐藏、进程存活 | ✅ 实测（Windows） | 点关闭按钮后日志出现 `main window hidden to the tray; Harness keeps running`，进程仍在（`tasklist` 命中） |
+| 唤回窗口 | ✅ 实测（Windows） | 二次启动触发 single-instance 回调（与托盘点击共用 `reveal_main_window`），窗口从隐藏态回到前台 |
+| 反馈页与渠道外链 | ✅ 实测（Windows） | 错误页「报告问题…」→ 页面渲染出真实版本 / 通道 / 路径；点「Bug 报告」后日志 `feedback channel opened: bug (…bug_report.yml)`，系统浏览器打开预填表单 |
+| **托盘菜单展开与各项点击** | ⚠️ **未实测** | 自动化工具拒绝向系统 shell 区域派发原始输入；**待三平台手工验收**（展开菜单、逐项点击、核对与菜单栏同名项行为一致） |
+| **Linux / macOS 的托盘行为** | ⚠️ **未实测** | 本机只有 Windows。**待三平台手工验收**，重点：Linux 用菜单「Show Window」唤回（无点击事件）、macOS 模板图标在浅/深色菜单栏下都清晰 |
+
+> 手工验收清单（发给测试者）：① 托盘图标存在且清晰；② 右键（Linux/macOS 为左键）展开菜单，
+> 11 项文案正确；③ 点「Show Window」→ 窗口出现；④ 关窗 → 图标仍在、进程仍在、Harness 未重启
+> （端口不变）；⑤ 菜单「Restart Harness」→ 真的重启（端口变化）；⑥ 「Quit DSH Desktop」→
+> 进程退出且**没有**残留 node 子进程；⑦ 断网或删掉 `libappindicator` 后启动 → 应用**仍能起来**、
+> 关窗即退出。
+
+## 批次 0.2-D2 执行记录（2026-09-18）
+
+**范围**：应用内反馈入口。原计划是一条纯 `open_url` 的菜单项（D2 原文：「纯菜单项，
+**不新增 IPC 命令**，`verify:ipc-surface` 无需变更」）；实际做成**一个应用内页面 + 3 条命令**。
+**这是一处有意的范围扩张**，判据如下——若认定不该扩张，回退成本是一条菜单项，因此把理由写全：
+1. **原方案的断点**：直接 `open_url` 到 issue 模板，用户落地时看到的是「请先导出诊断包、
+   附上版本与平台」的指引——而他此刻**已经离开了应用**，想照做还得切回来找菜单。模板写得
+   再清楚，也改变不了「指引与执行不在同一处」。
+2. **双通道让「版本号」不再自述运行时**（§8.6）：`next` 与 `alpha` 线共用同一批桌面版本号，
+   光看版本号推不出内置的是哪条上游线。反馈页把 `MANIFEST.json` 的 `target` / `versions.dsh` /
+   `patches[]` 直接读出来，**这是壳自己才有的信息**，用户复制粘贴即可。
+3. **隐私姿态不变**：页面只读本机信息、只调 `opener` 打开浏览器，**不上传任何内容**。
+   三个外链出口走**白名单**（`Channel` 四值），拒绝任意 URL——否则本地页等价于获得了一个
+   「以宿主身份打开任意链接」的能力。
+4. 新增的 `runtime_manifest.rs` 落在 `dsh-host`（无头 crate）而非 `src-tauri`：它是纯读文件 +
+   解析，**能不能在没有窗口系统的机器上被测试**的判据指向无头侧（§3 第 1 条），且已有
+   5 条单测（含桩清单 / 损坏清单 / 未知 outcome 三组边界）。
+
+**验收**：`feedback_context` 返回值与 `MANIFEST.json` 实际内容一致（实测：桩清单下正确显示
+`unknown`）；`feedback_channel_open` 的四个渠道实测打开到正确地址；白名单越界返回 `E7002`
+（单测钉住，含 `""` / `BUG` / `javascript:` 三个负例）。
 
 ---
 
@@ -131,18 +201,30 @@
 
 ### B1 系统托盘
 
-- **现状**：全仓无 tray 代码；README 自认 "no system tray yet"。关窗即退，无后台驻留。
+> ✅ **已于 2026-09-18 交付**。执行记录（含实测 / 未实测的分界与手工验收清单）见文首
+> 「批次 0.2-B1 执行记录」。下面保留的是**原计划原文**，其中第 3 条的前提已被证伪、
+> 第 4 条已按决策点 2 = A 落地——两处都在执行记录里写明了实际做法。
+
+- **现状（编制时）**：全仓无 tray 代码；README 自认 "no system tray yet"。关窗即退，无后台驻留。
+  → **现已不成立**：见本文件「批次 0.2-B1 执行记录」。
 - **做法**：
   1. `tauri` crate 开 `tray-icon` feature（Tauri 2 内置，无需新插件）；
   2. 托盘菜单**复用 `menu.rs` 的 id 与事件分发**（`handle_menu_event` 的 match 直接多
      出托盘来源）：显示/隐藏主窗口、Harness 状态信息行（禁用项，复用
      `refresh_bridge_status` 的既有模式）、Restart Harness、Restart in Safe Mode、
      View Logs…、Quit；
-  3. ⚠️ 遵守 `menu.rs` 模块文档的既有教训：`muda::MenuItem` 是 `Rc`（非 `Send/Sync`），
-     状态刷新走 `AppHandle::menu()` 定位句柄的同一套路，不把句柄塞进托管状态；
-  4. 关窗行为依 **0.2-决策点 2**（推荐 A：关窗=隐藏到托盘）。若选 A，需在
-     `on_window_event` 拦 `CloseRequested` 并 `prevent_close()` + `hide()`，同时让
-     single-instance 的二次启动路径做 `show()` + 前置（现在只 focus，得补 unhide）。
+  3. ⚠️ ~~遵守 `menu.rs` 模块文档的既有教训：`muda::MenuItem` 是 `Rc`（非 `Send/Sync`），
+     状态刷新走 `AppHandle::menu()` 定位句柄的同一套路，不把句柄塞进托管状态~~。
+     **该前提在执行时被证伪**：那句话对 **`muda` 自己的类型**成立，对 **Tauri 的包装类型
+     不成立**（`tauri::menu::MenuItem<R>` 是 `Arc<MenuItemInner<R>>`，后者带
+     `unsafe impl Send/Sync` 且每次访问都经 `run_on_main_thread` 派发）。更关键的是
+     **托盘没有 `menu()` 读取器**（只有 `set_menu`），所以「重新定位句柄」这条路根本走不通。
+     实际做法：`TrayHandles { status, mobile_status }` 托管在应用状态里。
+  4. 关窗行为依 **0.2-决策点 2**，**实际采用 A**（关窗=隐藏到托盘）：`on_window_event` 拦
+     `CloseRequested` → `prevent_close()` + `hide()`；single-instance 二次启动改调
+     `window::reveal_main_window`（show → unminimize → focus 三步，缺一步就是「点了没反应」）。
+     另补一处计划里没有的：**所有 Quit 路径先 `shutdown()` 再 `exit()`**——`app.exit()` 不经过
+     `CloseRequested`，不补就会让 Harness 只能被强杀。
 - **验收（诚实声明）**：xvfb 下 L2 冒烟**无法**断言托盘（无系统托盘区），本项无自动
   门禁，走三平台手工验收清单（托盘存在、菜单项与原生菜单行为一致、关窗行为符合
   0.2-决策点 2 的选择、二次启动 unhide）。此项如实记入验收记录。
@@ -250,9 +332,10 @@
 
 - **D1**：开启 GitHub Discussions；Issue 模板（bug 报告模板内嵌两步指引：先用应用内
   「Export Diagnostics…」导出**脱敏**诊断包、再附上——把本仓的隐私卖点变成工作流）。
-- **D2**：应用内反馈入口——「DSH Desktop」子菜单加「Feedback / Report Issue…」→
-  `opener().open_url()` 指向 Discussions（先例：`mobile-pair` 已用 `open_url` 打开
-  系统浏览器；纯菜单项，**不新增 IPC 命令**，`verify:ipc-surface` 无需变更）。
+- **D2**：应用内反馈入口。**原计划**：「DSH Desktop」子菜单加「Feedback / Report Issue…」→
+  `opener().open_url()` 直接指向 Discussions（纯菜单项，不新增 IPC 命令）。
+  **实际交付（2026-09-18）**：改为打开**应用内反馈页**，即上面那条只保留了「外链出口」
+  这一半；执行记录与范围扩张判据见本文件「批次 0.2-D2 执行记录」一节（在进度快照之后）。
 - **D3**：README / README.zh-CN 顶部加社区入口与「非官方、非 DeepSeek 产品」的
   明确标注（社区同类项目均已如此，这是合规与信任成本最低的做法）。
 - **验收**：模板生效（开一个测试 issue 验证渲染）；菜单项三平台可点。
@@ -289,6 +372,10 @@
 2. **0.2-决策点 2 — 托盘关窗行为**（阻塞 B1 实现；仅在 0.2-B 保持 P1 或按需立项时生效）：
    A 关窗=隐藏到托盘（推荐，与自启动配合是常驻形态）；B 关窗=退出、托盘仅快速入口。
    注意与 single-instance 二次启动的配合需要实现时验证。
+   ✅ **2026-09-18 已按 A 实现**（`on_window_event` 拦 `CloseRequested` → `prevent_close` +
+   `hide`；二次启动与托盘点击共用 `reveal_main_window`）。补充一条实现时才暴露的约束：
+   **托盘创建失败的环境必须回退到 B**（关窗即退出）——隐藏一个没有托盘入口可唤回的窗口，
+   等于让进程无从触达；判据是 `tray_by_id(TRAY_ID).is_some()`。
 3. **0.2-决策点 3 — 插件禁用是否开发**（阻塞于 B4 核验结论）：仅当核验确认上游已提供
    可逆停用语义时立项；否则维持 🕓 并刷新核验日期。
 4. **0.2-决策点 4 — 公网隧道（手机桥）**：**明确不排进本计划**。与 local-first 安全姿态
@@ -332,6 +419,11 @@
   → 0.2-B3（横幅 + Exit Safe Mode 菜单项）
   → 0.2-B4（核验 → 0.2-决策点 3 裁决 → 视结论决定是否开发）
 ```
+
+**已完成**：0.2-D1（2026-09-12）、**0.2-B1 + 0.2-D2（2026-09-18）**。
+B1 与 D2 同日做是有理由的：托盘的「常驻 + 菜单复用」让反馈入口多了一个落点
+（窗口藏起来时用户仍需能报问题），而 D2 的页面又依赖 B1 建立的
+`window::reveal_main_window`（否则从托盘点菜单打开页面时窗口不会出现）。
 
 > **与 H0 批次（H~N）的排期关系**：0.2-D 与 H0 的 K（宣称纪律）同为「当天项」，建议同周；
 > 0.2-A3~A4 同理。0.2-B 的去留取决于路线图决策点 1；0.2-A1/A2 取决于 0.2-决策点 1。

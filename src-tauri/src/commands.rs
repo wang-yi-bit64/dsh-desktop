@@ -245,9 +245,14 @@ fn reveal_path(app: &tauri::AppHandle, path: &std::path::Path) -> CommandResult<
 }
 
 /// 退出应用。
+///
+/// 先 [`crate::shutdown`] 再退出：`app.exit(0)` 不经过窗口的 `CloseRequested`
+/// （自批次 0.2-B1 起，那条路径本来就只负责「藏窗」），若直接调用，Harness
+/// 只能被 JobObject / PDEATHSIG 强杀——来不及落盘收尾。见 `lib.rs::shutdown`。
 #[tauri::command]
 pub async fn app_quit(webview: WebviewWindow, app: tauri::AppHandle) -> CommandResult<()> {
     guard!(webview);
+    crate::shutdown(&app).await;
     app.exit(0);
     ok(())
 }
@@ -380,6 +385,7 @@ pub async fn recovery_action(
             reveal_path(&app, &dir)
         }
         "quit" => {
+            crate::shutdown(&app).await;
             app.exit(0);
             ok(())
         }
@@ -416,10 +422,78 @@ pub async fn safe_mode_action(
             }
         }
         "quit" => {
+            crate::shutdown(&app).await;
             app.exit(0);
             ok(())
         }
         other => failed(IpcEnvelope::unknown_action(other)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 反馈（批次 0.2-D2）
+// ---------------------------------------------------------------------------
+
+/// 反馈页需要的**本机事实**（版本 / 运行时通道 / 补丁统计 / 路径）。
+///
+/// 全部由壳自己算，不让页面去拼——用户不该为了报一个 bug 先学会读
+/// `MANIFEST.json`，而「我装的是哪条通道」在双通道并存之后已经不是看一眼版本号
+/// 就能回答的问题（见 `docs/dev-plan-0.2-hardening.md` §8.6）。
+#[tauri::command]
+pub async fn feedback_context(
+    webview: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+) -> CommandResult<crate::feedback::FeedbackContext> {
+    guard!(webview);
+    ok(crate::feedback::context(&state))
+}
+
+/// 打开应用内反馈页（错误页的「报告问题…」按钮）。
+///
+/// 命名沿用 [`recovery_open`] 的约定：**打开页面**用 `*_open`，打开外部渠道用
+/// `feedback_channel_open`。错误页是用户最需要这个入口的地方——应用正坏着的时候
+/// 才有话要说，而反馈页就在这一步把「该带什么」摆出来。
+#[tauri::command]
+pub async fn feedback_open(webview: WebviewWindow) -> CommandResult<()> {
+    guard!(webview);
+    window::show_feedback_page(webview.app_handle());
+    ok(())
+}
+
+/// 在系统浏览器打开一个**白名单内**的反馈渠道。
+///
+/// # 为什么是白名单而不是「传任意 URL」
+///
+/// 命令面对本地页开放（INV-2），而本地页的脚本可以被我们自己的补丁改动影响。
+/// 若这里接受任意 URL，页面就等价于获得了一个「以宿主身份打开任意链接」的能力；
+/// 白名单把可打开的目标收敛到 [`crate::feedback::Channel`] 的四个枚举值，越界请求
+/// 得到 `E7002`（未知动作）而不是一次静默跳转。
+///
+/// # 为什么需要这个命令
+///
+/// 页面里的 `<a href>` 走不通：`lib.rs` 的导航白名单把非可信 http(s) 交给系统
+/// 浏览器，但那条路径依赖 `on_navigation` 被触发——本地页上的 `target="_blank"`
+/// 会更早命中 `on_new_window` 的 `NewWindowResponse::Deny`。经命令面打开是唯一
+/// 有明确回执的路径（成功 / 失败都能在页面上显示）。
+#[tauri::command]
+pub async fn feedback_channel_open(
+    webview: WebviewWindow,
+    app: tauri::AppHandle,
+    channel: String,
+) -> CommandResult<String> {
+    guard!(webview);
+    let Some(channel) = crate::feedback::Channel::parse(&channel) else {
+        return failed(IpcEnvelope::unknown_action(&channel));
+    };
+    let url = channel.url();
+    match app.opener().open_url(url, None::<&str>) {
+        Ok(()) => {
+            log::info!("feedback channel opened: {} ({url})", channel.key());
+            ok(url.to_string())
+        }
+        Err(error) => failed(internal(format!(
+            "cannot open {url} in the system browser: {error}"
+        ))),
     }
 }
 

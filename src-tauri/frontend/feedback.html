@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <!--
+      与 logs.html 同一套 CSP：本地页只允许内联脚本与样式，不联网。
+      页面本身**不发任何请求**——所有信息由 feedback_context 命令从本机读取，
+      三个出口都只是把用户送到系统浏览器（见 src-tauri/src/feedback.rs）。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src 'self' file: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>DSH Desktop · Feedback</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #141416;
+        --panel: #1c1c1f;
+        --line: #2e2e33;
+        --ink: #e8e8ea;
+        --muted: #9a9aa2;
+        --accent: #4d6bfe;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; }
+      body { display: flex; flex-direction: column; color: var(--ink); background: var(--bg); }
+      header {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+        padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+      }
+      h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+      .spacer { flex: 1 1 auto; }
+      .action {
+        min-height: 30px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px;
+        color: var(--ink); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+      }
+      .action:hover { background: rgba(255,255,255,.06); }
+      .action.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+      .action[disabled] { opacity: .55; cursor: default; }
+      .notice { margin: 0; padding: 8px 16px; color: #fca5a5; background: rgba(220,38,38,.12); font-size: 12px; }
+      .notice[hidden] { display: none; }
+      .notice.success { color: #8ee0ae; background: rgba(38,122,74,.16); }
+      main { flex: 1 1 auto; overflow: auto; padding: 16px; }
+      section { margin: 0 0 22px; max-width: 760px; }
+      h2 { margin: 0 0 8px; font-size: 13px; font-weight: 650; }
+      p { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+      dl {
+        display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;
+        margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px;
+        background: rgba(127,127,127,.06); font-size: 12px;
+      }
+      dt { color: var(--muted); }
+      dd { margin: 0; font-family: Consolas, "Courier New", ui-monospace, monospace; word-break: break-all; }
+      .warn { color: #ffd08a; }
+      .channels { display: flex; gap: 8px; flex-wrap: wrap; }
+      button.channel {
+        min-height: 32px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+        color: var(--ink); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+      }
+      button.channel:hover { background: rgba(255,255,255,.06); }
+      button.channel.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+      button.channel[disabled] { opacity: .55; cursor: default; }
+      @media (max-width: 620px) {
+        dl { grid-template-columns: 1fr; }
+        h1 { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1 id="title">Send feedback</h1>
+      <span class="spacer"></span>
+      <button class="action" id="copy"></button>
+      <button class="action" id="export"></button>
+      <button class="action primary" id="back"></button>
+    </header>
+    <p class="notice" id="notice" hidden></p>
+    <main>
+      <section>
+        <h2 id="about-title"></h2>
+        <p id="about-body"></p>
+      </section>
+      <section>
+        <h2 id="env-title"></h2>
+        <p id="env-body"></p>
+        <dl id="env"></dl>
+      </section>
+      <section>
+        <h2 id="channels-title"></h2>
+        <p id="channels-body"></p>
+        <div class="channels">
+          <button class="channel primary" id="channel-bug" data-channel="bug"></button>
+          <button class="channel" id="channel-feature" data-channel="feature"></button>
+          <button class="channel" id="channel-discussions" data-channel="discussions"></button>
+          <button class="channel" id="channel-upstream" data-channel="upstream"></button>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const zh = navigator.language.toLowerCase().startsWith('zh');
+      const copy = zh
+        ? {
+            title: '发送反馈',
+            aboutTitle: '怎么报最有效',
+            aboutBody:
+              '这是一个非官方桌面外壳（不是 DeepSeek 产品）。请把「外壳本身」的问题报到这里：启动、崩溃恢复、更新、托盘、菜单、手机桥。' +
+              'Harness 自身的功能问题（模型、会话、插件行为）属于上游，请走最后一个入口。',
+            envTitle: '报告里请带上这些',
+            envBody:
+              '下面这些由应用自己读出来，点「复制」即可粘贴进 issue。它们决定了我们能否复现你的问题——' +
+              '尤其是「运行时通道」：同一个桌面版本号可能装着不同上游线的运行时。',
+            channelsTitle: '去哪儿报',
+            channelsBody:
+              'Bug 与功能建议是预填好的表单；Discussions 适合用法提问与想法。三个入口都只会用系统浏览器打开页面——' +
+              '应用不会替你发送任何内容。',
+            issues: 'Bug 报告',
+            feature: '功能建议',
+            discussions: '讨论 / 提问',
+            upstream: '上游 Harness',
+            copy: '复制信息',
+            copied: '已复制到剪贴板，粘贴到 issue 正文即可。',
+            export: '导出诊断包',
+            back: '返回 Harness',
+            appVersion: '应用版本',
+            platform: '操作系统',
+            runtimeChannel: '运行时通道',
+            runtimeVersion: '内置 DSH 版本',
+            patches: '补丁状态',
+            logDir: '日志目录',
+            exportsDir: '诊断包目录',
+            manifestMissing: '读不到组装清单（安装可能不完整）：',
+            exported: (path, rules) =>
+              `诊断包已导出：${path}\n已按 ${rules} 类规则脱敏（token / cookie / 用户名 / API key）。把它拖进 issue 评论区即可。`,
+            opened: (url) => `已用系统浏览器打开：${url}`,
+            copiedFailed: '复制失败',
+            copyUnavailable: '这个环境不支持剪贴板命令（Ctrl+C 手动复制即可）。',
+            failed: '操作失败',
+            noReturn: 'Harness 尚未就绪，暂时无处可返回。',
+            unknown: '未知',
+          }
+        : {
+            title: 'Send feedback',
+            aboutTitle: 'How to report something useful',
+            aboutBody:
+              'This is an unofficial desktop shell (not a DeepSeek product). Report problems with the shell itself here: ' +
+              'startup, crash recovery, updates, tray, menus, the phone bridge. Problems with Harness itself ' +
+              '(models, sessions, plugin behaviour) belong upstream — that is the last button.',
+            envTitle: 'What to include',
+            envBody:
+              'The values below are read by the app itself — press Copy and paste them into the issue. They decide whether ' +
+              'we can reproduce your problem, especially the runtime channel: the same desktop version can carry different upstream builds.',
+            channelsTitle: 'Where to report',
+            channelsBody:
+              'Bug and feature reports open pre-filled forms; Discussions is for questions and ideas. All three just open a page ' +
+              'in your system browser — the app never sends anything for you.',
+            issues: 'Report a bug',
+            feature: 'Request a feature',
+            discussions: 'Discussions',
+            upstream: 'Upstream Harness',
+            copy: 'Copy details',
+            copied: 'Copied to the clipboard — paste it into the issue body.',
+            export: 'Export diagnostics',
+            back: 'Back to Harness',
+            appVersion: 'App version',
+            platform: 'Operating system',
+            runtimeChannel: 'Runtime channel',
+            runtimeVersion: 'Bundled DSH version',
+            patches: 'Patches',
+            logDir: 'Log folder',
+            exportsDir: 'Diagnostics folder',
+            manifestMissing: 'The assembly manifest could not be read (the install may be incomplete): ',
+            exported: (path, rules) =>
+              `Diagnostics bundle exported: ${path}\nRedacted with ${rules} rule class(es) (tokens, cookies, user names, API keys). Drag it into the issue comment box.`,
+            opened: (url) => `Opened in your system browser: ${url}`,
+            copiedFailed: 'Copy failed',
+            copyUnavailable: 'Clipboard API is unavailable here (copy manually with Ctrl+C).',
+            failed: 'Action failed',
+            noReturn: 'Harness is not ready yet, so there is nothing to return to.',
+            unknown: 'unknown',
+          }
+
+      const invoke = window.__TAURI__?.core?.invoke
+      const noticeEl = document.getElementById('notice')
+      const envEl = document.getElementById('env')
+      const buttons = {
+        copy: document.getElementById('copy'),
+        export: document.getElementById('export'),
+        back: document.getElementById('back'),
+        bug: document.getElementById('channel-bug'),
+        feature: document.getElementById('channel-feature'),
+        discussions: document.getElementById('channel-discussions'),
+        upstream: document.getElementById('channel-upstream'),
+      }
+
+      // 静态文案（与语言无关的部分在这里一次写好，避免 HTML 里留占位英文）。
+      document.getElementById('title').textContent = copy.title
+      document.getElementById('about-title').textContent = copy.aboutTitle
+      document.getElementById('about-body').textContent = copy.aboutBody
+      document.getElementById('env-title').textContent = copy.envTitle
+      document.getElementById('env-body').textContent = copy.envBody
+      document.getElementById('channels-title').textContent = copy.channelsTitle
+      document.getElementById('channels-body').textContent = copy.channelsBody
+      buttons.copy.textContent = copy.copy
+      buttons.export.textContent = copy.export
+      buttons.back.textContent = copy.back
+      buttons.bug.textContent = copy.issues
+      buttons.feature.textContent = copy.feature
+      buttons.discussions.textContent = copy.discussions
+      buttons.upstream.textContent = copy.upstream
+
+      /** 最近一次读到的上下文；复制与渲染共用。 */
+      let context = null
+
+      /** 显示失败原因；反馈页的用户多半正处在「有东西坏了」的场景。 */
+      function fail(label, error) {
+        const code = error && error.code ? `${error.code}: ` : ''
+        const detail = error && error.message ? error.message : String(error)
+        noticeEl.textContent = `${label} — ${code}${detail}`
+        noticeEl.classList.remove('success')
+        noticeEl.hidden = false
+      }
+
+      function succeed(message) {
+        noticeEl.textContent = message
+        noticeEl.classList.add('success')
+        noticeEl.hidden = false
+      }
+
+      function clearNotice() {
+        noticeEl.hidden = true
+        noticeEl.textContent = ''
+        noticeEl.classList.remove('success')
+      }
+
+      /**
+       * 执行一个壳命令并解包封套。
+       *
+       * 与 error.html / logs.html 同一约定：命令面把业务失败表达成
+       * `success=false` 的**成功返回**，只看 promise 是否 reject 会把失败当成功。
+       */
+      function run(command, label, args, button, onSuccess) {
+        if (!invoke) {
+          fail(label, zh ? '宿主桥不可用' : 'host bridge unavailable')
+          return
+        }
+        clearNotice()
+        if (button) button.disabled = true
+        invoke(command, args)
+          .then((envelope) => {
+            if (button) button.disabled = false
+            if (envelope && envelope.success === false) {
+              fail(label, envelope.error || {})
+              return
+            }
+            if (onSuccess) onSuccess(envelope ? envelope.data : undefined)
+          })
+          .catch((error) => {
+            if (button) button.disabled = false
+            fail(label, error)
+          })
+      }
+
+      function row(term, value, warn) {
+        const dt = document.createElement('dt')
+        dt.textContent = term
+        const dd = document.createElement('dd')
+        dd.textContent = value
+        if (warn) dd.classList.add('warn')
+        envEl.append(dt, dd)
+      }
+
+      /** 把上下文渲染成「用户可直接粘贴」的形状。 */
+      function render(data) {
+        if (!data) return
+        context = data
+        envEl.textContent = ''
+        row(copy.appVersion, data.app_version || copy.unknown)
+        row(copy.platform, `${data.platform || copy.unknown} (${data.arch || copy.unknown})`)
+        row(copy.runtimeChannel, data.runtime_channel || copy.unknown)
+        row(copy.runtimeVersion, data.runtime_version || copy.unknown)
+        row(copy.patches, data.patch_summary || copy.unknown, data.manifest_readable === false)
+        row(copy.exportsDir, data.exports_dir || copy.unknown)
+        row(copy.logDir, data.log_dir || copy.unknown)
+        if (data.manifest_readable === false) {
+          row(zh ? '清单读取失败' : 'Manifest error', `${copy.manifestMissing}${data.manifest_error || ''}`, true)
+        }
+      }
+
+      /** 复制进剪贴板的文本：issue 正文里直接贴得下的一段纯文本。 */
+      function reportText() {
+        if (!context) return ''
+        const lines = [
+          `${copy.appVersion}: ${context.app_version}`,
+          `${copy.platform}: ${context.platform} (${context.arch})`,
+          `${copy.runtimeChannel}: ${context.runtime_channel || copy.unknown}`,
+          `${copy.runtimeVersion}: ${context.runtime_version || copy.unknown}`,
+          `${copy.patches}: ${context.patch_summary}`
+        ]
+        if (context.manifest_readable === false) {
+          lines.push(`${zh ? '清单读取失败' : 'Manifest error'}: ${context.manifest_error || ''}`)
+        }
+        return lines.join('\n')
+      }
+
+      buttons.copy.addEventListener('click', () => {
+        const text = reportText()
+        if (!text) return
+        // `navigator.clipboard` 在非安全上下文 / 无焦点窗口下可能不可用，而
+        // `__TAURI__.clipboardManager` 需要额外插件与权限——两者都不在本地页的
+        // 能力集里。因此退路是**把文本选中**，用户 Ctrl+C 即可；不假装复制成功。
+        const clipboard = navigator.clipboard
+        if (clipboard && typeof clipboard.writeText === 'function') {
+          clipboard.writeText(text).then(
+            () => succeed(copy.copied),
+            (error) => fail(copy.copiedFailed, error)
+          )
+          return
+        }
+        succeed(copy.copyUnavailable)
+      })
+
+      buttons.export.addEventListener('click', () => {
+        run('diagnostics_export', copy.export, undefined, buttons.export, (data) => {
+          const where = data && data.path ? data.path : ''
+          const rules = Array.isArray(data && data.redactions) ? data.redactions.length : 0
+          succeed(copy.exported(where, rules))
+        })
+      })
+
+      buttons.back.addEventListener('click', () => {
+        run('harness_open', copy.back, undefined, buttons.back)
+      })
+
+      // 三个外链出口：经命令面打开（白名单在 Rust 侧，见 feedback.rs::Channel）。
+      // 用 `<a href>` 在这里行不通——`lib.rs` 的新窗口策略会直接拒绝 target=_blank。
+      for (const button of document.querySelectorAll('.channel')) {
+        button.addEventListener('click', () => {
+          const channel = button.dataset.channel
+          run('feedback_channel_open', button.textContent, { channel }, button, (url) => {
+            if (url) succeed(copy.opened(url))
+          })
+        })
+      }
+
+      if (invoke) {
+        run('feedback_context', copy.title, undefined, undefined, render)
+      }
+    </script>
+  </body>
+</html>

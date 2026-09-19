@@ -19,17 +19,33 @@
 //! 是 Harness 网页（preload 注入的侧栏浮动按钮），本仓无 preload 通道，
 //! 因此落点换成原生菜单。差别见 `mobile_bridge` 模块文档的「展示面」一节。
 //!
-//! 为什么不做成「重建整个菜单」或「把句柄存进托管状态」：
+//! # 托盘复用了这个模块的 id 与分发（2026-09-18 批次 0.2-B1）
 //!
-//! * `muda::MenuItem` 内部是 `Rc`，**既非 `Send` 也非 `Sync`**，无法放进
-//!   Tauri 托管状态（`manage` 要求 `Send + Sync + 'static`）；
-//! * 因此改为经 `AppHandle::menu()` 取回已设置的菜单，再按 id 逐层定位句柄。
-//!   注意 `Menu::get` / `Submenu::get` **只查直接子项、不递归**，所以必须先进
-//!   `Phone` 子菜单（[`PHONE_SUBMENU_ID`]）再取状态项。
+//! 系统托盘（[`crate::tray`]）有自己的菜单对象，但**菜单项 id 与事件处理是共用**的：
+//! id 提成了下文那批 `pub const MENU_ID_*`，两个菜单都引用它们，事件都汇进
+//! [`handle_menu_event`]。这样「托盘里的重启」与「菜单栏里的重启」不可能行为不同
+//! ——它们本来就是同一行代码。`npm run verify:ipc-surface` 的 E7 守着这条对应关系。
 //!
-//! 这些 API 内部都经 `run_on_main_thread` 派发并**阻塞等待**结果，所以只能在
-//! 工作线程调用；从主线程调用会自锁（我们的调用点都在
-//! `tauri::async_runtime::spawn` 出的任务里）。
+//! # 句柄定位：两条曾经写错的前提（勿再照抄）
+//!
+//! 本模块原先写着「`muda::MenuItem` 是 `Rc`，既非 `Send` 也非 `Sync`，无法放进 Tauri
+//! 托管状态；因此改为经 `AppHandle::menu()` 逐层定位句柄」。**前一句对 `muda` 成立的
+//! 说法并不能推出后一句**，托盘批次实测推翻了它：
+//!
+//! 1. **Tauri 的包装类型可以托管**：`tauri::menu::MenuItem<R>` 是 `Arc<MenuItemInner<R>>`，
+//!    而 `MenuItemInner` 由 `gen_wrappers!` 宏带着 `unsafe impl Send/Sync` 生成（每次访问
+//!    都经 `run_on_main_thread` 派发，句柄本身只是「远程控制句柄」）。
+//! 2. **托盘上「重新定位句柄」根本走不通**：`TrayIcon` 只有 `set_menu`，**没有
+//!    `menu()` 读取器**。托盘的 Harness 状态行与手机桥状态行因此托管为
+//!    [`crate::tray::TrayHandles`]。
+//!
+//! 另外 `Menu::get` / `Submenu::get` **只查直接子项、且不跨菜单**：应用菜单的 `Phone`
+//! 子菜单与托盘里的同名项是两份独立对象，所以 [`refresh_bridge_status`] 必须**同刷两处**
+//! （否则会出现「菜单说已连接、托盘说未启动」）。
+//!
+//! 这些 API 内部都经 `run_on_main_thread` 派发，工作线程调用时**阻塞等待**结果；
+//! 从主线程调用时 Tauri 侧会内联执行（`send_user_message` 的 `current_thread().id()`
+//! 短路），不会自锁。我们的调用点都在 `tauri::async_runtime::spawn` 出的任务里。
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Manager, Runtime};
@@ -46,24 +62,61 @@ pub const PHONE_SUBMENU_ID: &str = "phone";
 /// 手机桥状态信息项的 id（禁用项，只展示不可点击）。
 pub const MOBILE_STATUS_ID: &str = "mobile-status";
 
+// ---------------------------------------------------------------------------
+// 菜单项 id（**唯一产地**）
+// ---------------------------------------------------------------------------
+//
+// 这些 id 有两个消费面：应用菜单（本模块）与**系统托盘菜单**（`crate::tray`）。
+// 托盘刻意复用同一批 id，这样「重启 Harness」「导出诊断包」在菜单栏与托盘里
+// 走的是**同一段实现**（[`handle_menu_event`]），不会出现「托盘里的重启忘了
+// 走安全模式 profile 落盘」这类双实现漂移。
+//
+// 因此它们是常量而不是字面量：两处各写一遍字符串时，改一处忘另一处**不会**
+// 有任何编译错误或告警，只会让托盘上那个菜单项静默失效。
+
+/// 重启 Harness。
+pub const MENU_ID_HARNESS_RESTART: &str = "harness-restart";
+/// 以安全模式重启 Harness（隔离第三方插件）。
+pub const MENU_ID_HARNESS_SAFE_MODE: &str = "harness-safe-mode";
+/// 打开应用内日志页。
+pub const MENU_ID_HARNESS_VIEW_LOG: &str = "harness-view-log";
+/// 在文件管理器中打开日志目录（次入口）。
+pub const MENU_ID_HARNESS_REVEAL_LOGS: &str = "harness-reveal-logs";
+/// 导出脱敏诊断包。
+pub const MENU_ID_HARNESS_EXPORT_DIAGNOSTICS: &str = "harness-export-diagnostics";
+/// 启动 LAN 手机桥并打开配对页。
+pub const MENU_ID_MOBILE_PAIR: &str = "mobile-pair";
+/// 停止手机桥。
+pub const MENU_ID_MOBILE_STOP: &str = "mobile-stop";
+/// 打开更新页并立即检查更新。
+pub const MENU_ID_UPDATES_CHECK: &str = "updates-check";
+/// 打开应用内反馈页（问题反馈 / 功能建议入口，批次 0.2-D2）。
+pub const MENU_ID_FEEDBACK_OPEN: &str = "feedback-open";
+/// 退出应用。
+pub const MENU_ID_APP_QUIT: &str = "app-quit";
+
 /// 构建应用菜单。
 pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
-    let restart = MenuItemBuilder::with_id("harness-restart", "Restart Harness").build(app)?;
+    let restart =
+        MenuItemBuilder::with_id(MENU_ID_HARNESS_RESTART, "Restart Harness").build(app)?;
     let safe_mode =
-        MenuItemBuilder::with_id("harness-safe-mode", "Restart in Safe Mode").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_HARNESS_SAFE_MODE, "Restart in Safe Mode").build(app)?;
     // 「View Harness Log」打开**应用内日志页**（批次 D3/D10）。此前它只调
     // `opener` 打开系统文件管理器——在「应用起不来 / 界面卡住」时那条路径
     // 恰好最没用：用户要的是能看到日志，而不是被丢进一个文件夹自己找。
-    let view_log = MenuItemBuilder::with_id("harness-view-log", "View Logs…").build(app)?;
+    let view_log = MenuItemBuilder::with_id(MENU_ID_HARNESS_VIEW_LOG, "View Logs…").build(app)?;
     let export_diagnostics =
-        MenuItemBuilder::with_id("harness-export-diagnostics", "Export Diagnostics…").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_HARNESS_EXPORT_DIAGNOSTICS, "Export Diagnostics…")
+            .build(app)?;
     // 保留「在文件管理器中打开」为**次**入口（仍有用途：用户要把整个目录
     // 拷走，或日志页本身打不开时）。
     let reveal_logs =
-        MenuItemBuilder::with_id("harness-reveal-logs", "Reveal Log Folder").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_HARNESS_REVEAL_LOGS, "Reveal Log Folder").build(app)?;
     // LAN 手机桥是显式动作：菜单点击才监听，避免每次启动都在局域网暴露端口。
-    let mobile_pair = MenuItemBuilder::with_id("mobile-pair", "Phone Pairing (LAN)…").build(app)?;
-    let mobile_stop = MenuItemBuilder::with_id("mobile-stop", "Stop Phone Bridge").build(app)?;
+    let mobile_pair =
+        MenuItemBuilder::with_id(MENU_ID_MOBILE_PAIR, "Phone Pairing (LAN)…").build(app)?;
+    let mobile_stop =
+        MenuItemBuilder::with_id(MENU_ID_MOBILE_STOP, "Stop Phone Bridge").build(app)?;
     // 状态行：初始即「未启动」（桥从不自动监听，见 mobile_bridge 模块文档），
     // 无需异步查询，因此 setup 阶段可以同步建好。
     let mobile_status = MenuItemBuilder::with_id(
@@ -73,8 +126,13 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     .enabled(false)
     .build(app)?;
     let check_updates =
-        MenuItemBuilder::with_id("updates-check", "Check for Updates…").build(app)?;
-    let quit = MenuItemBuilder::with_id("app-quit", "Quit DSH Desktop").build(app)?;
+        MenuItemBuilder::with_id(MENU_ID_UPDATES_CHECK, "Check for Updates…").build(app)?;
+    // 反馈入口（批次 0.2-D2）：打开**应用内反馈页**而不是直接把用户丢到浏览器。
+    // 页面里先给出「报告要附的版本/通道信息」与一键导出诊断包，再给三个外链出口
+    // ——把本仓「脱敏诊断包 + 隐私姿态」的工作流前移一步，用户不需要先读完
+    // issue 模板才知道该带什么。
+    let feedback = MenuItemBuilder::with_id(MENU_ID_FEEDBACK_OPEN, "Send Feedback…").build(app)?;
+    let quit = MenuItemBuilder::with_id(MENU_ID_APP_QUIT, "Quit DSH Desktop").build(app)?;
 
     let harness_submenu = SubmenuBuilder::new(app, "Harness")
         .item(&restart)
@@ -94,6 +152,7 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
 
     let app_submenu = SubmenuBuilder::new(app, "DSH Desktop")
         .item(&check_updates)
+        .item(&feedback)
         .separator()
         .item(&quit)
         .build()?;
@@ -105,10 +164,17 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         .build()
 }
 
-/// 刷新 `Phone` 子菜单里的桥状态文案。
+/// 刷新**两处**手机桥状态文案：应用菜单的 `Phone` 子菜单，以及托盘菜单里的同名项。
 ///
-/// 幂等；任一环节查不到（菜单未设置、平台未支持）时静默返回——状态行是
-/// **辅助信息**，不该因为刷新失败而中断配对/停止流程。
+/// 幂等；任一环节查不到（菜单未设置、托盘未创建、平台未支持）时跳过那一处——
+/// 状态行是**辅助信息**，不该因为刷新失败而中断配对/停止流程。
+///
+/// # 为什么是两处
+///
+/// 自批次 0.2-B1 起托盘有自己的 `Phone` 子菜单（窗口藏起来时用户只能看那一份）。
+/// 两份菜单是**各自独立的 `Menu` 对象**，`Menu::get` 只查直接子项、更不会跨菜单，
+/// 因此刷一处不会顺带刷另一处。只刷应用菜单的话，会出现「菜单说已连接、托盘说
+/// 未启动」这种同一份状态的两种说法——而用户最可能看的正是托盘那一份。
 ///
 /// # 参数
 ///
@@ -124,7 +190,12 @@ pub fn refresh_bridge_status<R: Runtime>(
     snapshot: &MobileBridgeSnapshot,
 ) {
     let label = mobile_bridge::status_label(snapshot, mobile_bridge::lan_ipv4().as_deref());
+    refresh_mobile_status_in_app_menu(app, &label);
+    crate::tray::refresh_mobile_status(app, &label);
+}
 
+/// 刷新应用菜单 `Phone` 子菜单里的状态行。
+fn refresh_mobile_status_in_app_menu<R: Runtime>(app: &tauri::AppHandle<R>, label: &str) {
     let Some(menu) = app.menu() else {
         return;
     };
@@ -142,25 +213,40 @@ pub fn refresh_bridge_status<R: Runtime>(
     let Some(item) = item.as_menuitem() else {
         return;
     };
-    if let Err(error) = item.set_text(&label) {
+    if let Err(error) = item.set_text(label) {
         log::warn!("cannot update phone bridge menu label: {error}");
     }
 }
 
 /// 菜单事件分发。
+///
+/// # 两个来源，一段实现
+///
+/// 应用菜单与**系统托盘菜单**（[`crate::tray`]）的事件都汇到这里：托盘菜单项
+/// 刻意复用同一批 id（见上文 id 常量块）。因此「托盘里的导出诊断包」与「菜单栏
+/// 里的导出诊断包」不可能出现行为差异——它们本来就是同一行代码。
+///
+/// 唯一的托盘专属 id 是 [`crate::tray::TRAY_SHOW_ID`]（唤回主窗口），因为
+/// 「显示窗口」这件事只在窗口被藏起来时才有意义。
 pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
     let app = app.clone();
     let id = id.to_string();
     tauri::async_runtime::spawn(async move {
+        // `tray-show` 不依赖应用状态：窗口可能在任何相位被藏起来，用户点它就是
+        // 想看见窗口。放在 state 早退之前，避免「状态未就绪时托盘点击无反应」。
+        if id == crate::tray::TRAY_SHOW_ID {
+            crate::window::reveal_main_window(&app);
+            return;
+        }
         let Some(state) = app.try_state::<std::sync::Arc<AppState>>() else {
             return;
         };
         match id.as_str() {
-            "harness-restart" => {
+            MENU_ID_HARNESS_RESTART => {
                 crate::window::show_splash(&app);
                 state.supervisor.restart().await;
             }
-            "harness-safe-mode" => {
+            MENU_ID_HARNESS_SAFE_MODE => {
                 // 顺序不能反：profile 目录先落盘，再以该 profile 启动。
                 // `restart_in_safe_mode` 会传 `--profile desktop-safe-mode`
                 // 并把 `--patch` 换成 dsh-desktop-safe.patch.yml（C10）。
@@ -174,7 +260,7 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 state.supervisor.restart_in_safe_mode().await;
                 log::info!("harness restarting in safe mode");
             }
-            "harness-view-log" => {
+            MENU_ID_HARNESS_VIEW_LOG => {
                 // 应用内日志页：能选来源、刷新、导出诊断包，并且**在应用起不来
                 // 时也打不开**——那种情况下的入口是错误页的「查看日志」与
                 // 「导出诊断包」按钮。
@@ -182,7 +268,7 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
             }
             // 「在文件管理器中打开」：次入口，保留给「要把整个目录拷走」以及
             // 「日志页本身加载不出来」两种场景。
-            "harness-reveal-logs" => {
+            MENU_ID_HARNESS_REVEAL_LOGS => {
                 if let Some(dir) = state.layout.log_path.parent() {
                     let _ = app
                         .opener()
@@ -194,7 +280,7 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
             // 结果要**可见**：导出是显式用户动作，失败不能表现成「点了没反应」。
             // 这里用日志与错误页按钮之外的最轻回执——导出成功后打开 exports
             // 目录，用户立刻看到产物；失败则记 error 日志。
-            "harness-export-diagnostics" => {
+            MENU_ID_HARNESS_EXPORT_DIAGNOSTICS => {
                 match dsh_host::diagnostics_export::export(
                     &state.layout,
                     &state.supervisor.logs_tail(500),
@@ -217,7 +303,7 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
             }
             // 启动 LAN 桥并在系统浏览器打开配对页（桌面端显示二维码供手机扫描）。
             // 二维码由配对页渲染，见 mobile_bridge::pair_page。
-            "mobile-pair" => {
+            MENU_ID_MOBILE_PAIR => {
                 // 配对页本身不依赖 Harness；但目标未注入时 /api/rpc 必然失败，
                 // 提前告警，避免用户把「Harness 未就绪」误判成配对故障。
                 if !state.mobile.has_target().await {
@@ -256,7 +342,7 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                     }
                 }
             }
-            "mobile-stop" => {
+            MENU_ID_MOBILE_STOP => {
                 state.mobile.stop().await;
                 log::info!("mobile bridge stopped");
                 refresh_bridge_status(&app, &state.mobile.snapshot().await);
@@ -265,7 +351,7 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
             // Updates…」，用户的期望就是「点了就开始查」，而不是「点了给我
             // 一个还得再点一次的页面」。页面进入时自会拉取最新快照，
             // 因此这里不必关心检查是否已经跑完。
-            "updates-check" => {
+            MENU_ID_UPDATES_CHECK => {
                 crate::window::show_updates_page(&app);
                 let manager = state.updates.lock().await.clone();
                 if let Some(manager) = manager {
@@ -274,7 +360,19 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                     log::warn!("updater is not available; update page opened without a check");
                 }
             }
-            "app-quit" => app.exit(0),
+            // 反馈入口（批次 0.2-D2）：打开应用内反馈页，而不是把用户直接丢给
+            // 浏览器。理由见 `menu.rs` 建菜单处的注释与 `frontend/feedback.html`
+            // 的文件头：报告「该带什么」（版本 / 通道 / 诊断包）由壳自己答，
+            // 用户不该先读完 issue 模板才知道。
+            MENU_ID_FEEDBACK_OPEN => {
+                crate::window::show_feedback_page(&app);
+            }
+            MENU_ID_APP_QUIT => {
+                // 先优雅停机再退出：`app.exit(0)` 不经过 `CloseRequested`，
+                // 若直接调用，Harness 只能被 JobObject 强杀（见 `lib.rs::shutdown`）。
+                crate::shutdown(&app).await;
+                app.exit(0);
+            }
             // `mobile-status` 是 `enabled(false)` 的信息项，点击不会产生事件；
             // 其余未知 id 一并忽略。
             _ => {}

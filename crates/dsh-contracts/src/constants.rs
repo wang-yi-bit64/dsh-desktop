@@ -1,6 +1,6 @@
 //! # DSH 契约常量定义
 //!
-//! 包含全系统通用的常量契约 (CX-1 ~ CX-12)、默认配置与系统阈值。
+//! 包含全系统通用的常量契约 (CX-1 ~ CX-13)、默认配置与系统阈值。
 
 use std::time::Duration;
 
@@ -332,6 +332,38 @@ pub const WINDOWS_QUERY_PLATFORM: (&str, &str) = ("dsh-desktop-platform", "win32
 /// C5 — Cookie 清理前缀。
 pub const AUTH_COOKIE_PREFIX: &str = "dsh-auth-";
 
+// ---------------------------------------------------------------------------
+// CX-13 — 反馈渠道（应用内反馈入口的唯一产地）
+// ---------------------------------------------------------------------------
+
+/// CX-13 — 项目仓库主页。
+///
+/// 反馈路径（新建 issue / 浏览 issue / Discussions）全部由它推导，**不得**在
+/// 菜单、页面或文档里各写一份字面量：仓库一旦改名或迁移，散落的副本会静默
+/// 指向错误地址，而这类错误没有任何测试会报出来。
+pub const PROJECT_REPOSITORY_URL: &str = "https://github.com/wang-yi-bit64/dsh-desktop";
+
+/// CX-13 — Bug 报告模板的直达链接（`issues/new?template=…` 由 GitHub 渲染表单）。
+pub const FEEDBACK_BUG_REPORT_URL: &str =
+    "https://github.com/wang-yi-bit64/dsh-desktop/issues/new?template=bug_report.yml";
+
+/// CX-13 — 功能建议模板的直达链接。
+pub const FEEDBACK_FEATURE_REQUEST_URL: &str =
+    "https://github.com/wang-yi-bit64/dsh-desktop/issues/new?template=feature_request.yml";
+
+/// CX-13 — Discussions（开放讨论：用法提问、想法、展示配置）。
+///
+/// 与 issue 模板的分工写在 `.github/ISSUE_TEMPLATE/config.yml`：可执行的条目走
+/// issue，开放式交流走 Discussions。
+pub const FEEDBACK_DISCUSSIONS_URL: &str =
+    "https://github.com/wang-yi-bit64/dsh-desktop/discussions";
+
+/// CX-13 — 上游 Harness 仓库（用于「这条其实是上游功能」的分诊出口）。
+///
+/// 本仓是套壳，Harness 自身的能力由上游维护；反馈页必须给出这条路，
+/// 否则用户报错的地方从第一步就错了。
+pub const UPSTREAM_REPOSITORY_URL: &str = "https://github.com/deepseek-ai/dsh";
+
 /// C4 — 就绪超时：Windows 首次启动需要更久。
 pub const STARTUP_TIMEOUT_WINDOWS: Duration = Duration::from_secs(120);
 
@@ -403,5 +435,49 @@ pub fn shell_capture_timeout() -> Duration {
         SHELL_CAPTURE_TIMEOUT_WINDOWS
     } else {
         SHELL_CAPTURE_TIMEOUT_UNIX
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CX-13：四个反馈链接必须全部指向 [`PROJECT_REPOSITORY_URL`] 推导出的地址。
+    ///
+    /// 这条断言的存在理由是**它们会各自漂移**：仓库迁移时只改主 URL、漏改模板
+    /// 直达链接，结果是「反馈」按钮把用户送到 404——而这不是任何编译器或页面
+    /// 冒烟能发现的缺陷（链接本身是合法 URL，只是过期了）。
+    #[test]
+    fn feedback_links_derive_from_the_project_repository() {
+        for (name, url) in [
+            ("FEEDBACK_BUG_REPORT_URL", FEEDBACK_BUG_REPORT_URL),
+            ("FEEDBACK_FEATURE_REQUEST_URL", FEEDBACK_FEATURE_REQUEST_URL),
+            ("FEEDBACK_DISCUSSIONS_URL", FEEDBACK_DISCUSSIONS_URL),
+        ] {
+            assert!(
+                url.starts_with(PROJECT_REPOSITORY_URL),
+                "{name} must live under {PROJECT_REPOSITORY_URL}, got {url}"
+            );
+        }
+        assert!(
+            FEEDBACK_BUG_REPORT_URL.ends_with("template=bug_report.yml"),
+            "the bug-report link must open the issue form, not a blank issue: {FEEDBACK_BUG_REPORT_URL}"
+        );
+        assert!(
+            FEEDBACK_FEATURE_REQUEST_URL.ends_with("template=feature_request.yml"),
+            "the feature link must open the issue form: {FEEDBACK_FEATURE_REQUEST_URL}"
+        );
+    }
+
+    /// 上游仓库与项目仓库**必须不同**：本仓是套壳，把「Harness 的问题」指回
+    /// 本仓等于让用户的反馈从一开始就投错地方。若哪天两者变得相同，说明有人
+    /// 复制粘贴时没改 URL——那正是这条断言要拦的。
+    #[test]
+    fn upstream_repository_is_distinct_from_the_project_repository() {
+        assert_ne!(UPSTREAM_REPOSITORY_URL, PROJECT_REPOSITORY_URL);
+        assert!(
+            UPSTREAM_REPOSITORY_URL.contains("deepseek-ai/dsh"),
+            "the upstream link must point at the official Harness repository: {UPSTREAM_REPOSITORY_URL}"
+        );
     }
 }

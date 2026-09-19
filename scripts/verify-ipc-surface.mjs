@@ -27,6 +27,7 @@
  * | E4 | 每个 Rust 侧 `emit` 的事件都有 ≥1 个前端 `listen` | 错误 |
  * | E5 | 每个 `local_page("x.html")` 目标都真实存在于 `frontend/` | 错误 |
  * | E6 | 每处 `#[allow(dead_code)]` 都在登记表里写明理由与销账批次 | 错误 |
+ * | E7 | 每个 `MENU_ID_*` 常量都在 `handle_menu_event` 里有分支（菜单项 ↔ 处理器） | **错误** |
  * | W1 | 已注册但前端从未调用的命令（死 IPC 面） | 警告 |
  * | W2 | `frontend/` 下从未被任何 `local_page` 指向的页面（不可达页） | 警告 |
  *
@@ -37,6 +38,7 @@
  *   node scripts/verify-ipc-surface.mjs
  *   node scripts/verify-ipc-surface.mjs --strict
  *   node scripts/verify-ipc-surface.mjs --json
+ *   node scripts/verify-ipc-surface.mjs --self-test
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -376,6 +378,80 @@ function parseLocalPageTargets() {
   return [...targets].sort()
 }
 
+/**
+ * 解析菜单项 id 常量 → 其字面量值。
+ *
+ * 自批次 0.2-B1 起菜单 id 是常量（`pub const MENU_ID_…: &str = "…"`），因为
+ * **两个菜单**（应用菜单栏与系统托盘）引用同一批 id；两处各写一遍字符串时，
+ * 改一处忘另一处不会有任何编译错误。
+ * @returns {Map<string, string>} 常量名 → id 字面量
+ */
+function parseMenuIdConstants() {
+  const constants = new Map()
+  for (const file of rustSources()) {
+    const text = read(file)
+    for (const match of text.matchAll(
+      /pub const (MENU_ID_[A-Z0-9_]+|TRAY_SHOW_ID)\s*:\s*&str\s*=\s*"([^"]+)"/g
+    )) {
+      constants.set(match[1], match[2])
+    }
+  }
+  return constants
+}
+
+/**
+ * `handle_menu_event` 里被显式分支处理的 id 集合。
+ *
+ * 匹配面刻意放宽，因为该函数里**有两种**合法的「处理一个 id」写法：
+ *
+ * 1. `match` 的臂——常量名（`MENU_ID_HARNESS_RESTART =>`）或字面量（`"harness-restart" =>`）；
+ * 2. 守卫式早退——`if id == crate::tray::TRAY_SHOW_ID { …; return; }`。`tray-show`
+ *    正是这么写的：它不依赖应用状态，必须放在 state 早退之前。
+ *
+ * 只认第 1 种会让第 2 种变成假阳性（实测：`tray-show` 被误报为死菜单项）——
+ * 而守卫的假阳性会让人不再看它的输出，与假阴性一样有害。
+ *
+ * `mobile-status` 那样的信息项是 `enabled(false)`，点不出事件，因此允许列在
+ * `ALLOW_UNHANDLED_MENU_IDS` 里。
+ * @param {Map<string, string>} constants 常量名 → id 字面量
+ * @returns {Set<string>} 已被处理的 id 字面量
+ */
+function parseHandledMenuIds(constants) {
+  const text = read(join(srcDir, 'menu.rs'))
+  if (!text) return new Set()
+  const handled = new Set()
+  // 只扫 handle_menu_event 的函数体，避免把注释或别处的举例当成实现。
+  const body = text.match(/pub fn handle_menu_event[\s\S]*?\n\}/)
+  if (!body) return handled
+  const scope = body[0]
+
+  /** 记录一个标识符：是常量就取其字面量，否则按字面量本身记。 */
+  const record = (name) => {
+    if (constants.has(name)) handled.add(constants.get(name))
+    else if (name.includes('-')) handled.add(name)
+  }
+
+  // 1) match 臂：`CONST =>` 或 `"literal" =>`
+  for (const match of scope.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=>/g)) record(match[1])
+  for (const match of scope.matchAll(/"([a-z][a-z0-9-]*)"\s*=>/g)) handled.add(match[1])
+  // 2) 守卫式早退：`id == CONST` / `CONST == id`（含 `crate::tray::CONST` 形式）
+  for (const match of scope.matchAll(/(?:==|!=)\s*(?:crate::[a-z_]+::)*([A-Z_][A-Z0-9_]*)/g)) {
+    record(match[1])
+  }
+  return handled
+}
+
+/**
+ * 允许「有菜单项、无处理器」的 id。
+ *
+ * 留空即为不允许。信息项（`enabled(false)`）点击不产生事件，但它**仍然**必须
+ * 在这里登记——否则下一个人会以为它是死项而删掉一条真的状态行。
+ */
+const ALLOW_UNHANDLED_MENU_IDS = {
+  'mobile-status':
+    'enabled(false) 的信息项：点击不产生菜单事件（应用菜单与托盘各有一份，由 refresh_bridge_status 刷新）'
+}
+
 /** 列出 frontend 下的页面文件名。 */
 function parseFrontendPages() {
   if (!existsSync(frontendDir)) return []
@@ -503,30 +579,168 @@ function run() {
       )
     }
   }
+
+  // E7：菜单项 id ↔ 处理器分支。托盘（批次 0.2-B1）给这条检查加了必要性：
+  // 同一个 id 现在被两个菜单引用，而「加了菜单项但忘了在 handle_menu_event 里
+  // 分支」的后果是一个**点了完全没反应**的菜单项——没有编译错误、没有日志、
+  // 没有任何既有守卫能看见它。
+  const constants = parseMenuIdConstants()
+  const handled = parseHandledMenuIds(constants)
+  notes.push(`菜单 id 常量 ${constants.size} 个 · handle_menu_event 分支 ${handled.size} 个`)
+  if (constants.size === 0) {
+    error('E7', '没有解析到任何 MENU_ID_* 常量——正则或常量命名变了，本检查已失效')
+  }
+  for (const [name, id] of constants) {
+    if (handled.has(id)) continue
+    if (id in ALLOW_UNHANDLED_MENU_IDS) {
+      warn('E7', `菜单项 \`${id}\`（${name}）无处理器（已登记：${ALLOW_UNHANDLED_MENU_IDS[id]}）`)
+      continue
+    }
+    error(
+      'E7',
+      `\`${name}\`（"${id}"）没有出现在 handle_menu_event 的分支里——` +
+        `该菜单项点了不会有任何反应。要么补上分支，要么在 ALLOW_UNHANDLED_MENU_IDS 里写明理由`
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 自检（可证伪性）
+// ---------------------------------------------------------------------------
+
+/**
+ * E7 的可证伪性自检：把**修复前的形状**当夹具喂给判定函数，断言必须报错。
+ *
+ * 为什么必须写下来：E7 是本脚本里唯一一条「解析菜单 id 与处理器分支是否对应」的
+ * 检查，而它的实现依赖正则匹配 `handle_menu_event`。正则一旦写歪（例如只认
+ * `match` 臂、不认守卫式早退，或者反过来过度匹配注释），检查会**永远通过**——
+ * 那时它不是「没问题」，而是「不再回答问题」。
+ *
+ * 夹具覆盖三种形状，前两种是真实出现过的：
+ * 1. 缺分支 → 必须报错（托盘上线时 `tray-show` 差点被漏掉）；
+ * 2. 守卫式早退（`if id == CONST { …; return }`）→ 必须被认作已处理
+ *    （不认它会把一个**正确**的实现报成死菜单项，实测发生过）；
+ * 3. 注释里提到的 id → **不得**被当成实现。
+ * @returns {number} 失败项数
+ */
+function selfTest() {
+  let failed = 0
+  const check = (label, ok) => {
+    if (ok) {
+      console.log(`PASS ${label}`)
+    } else {
+      failed += 1
+      console.error(`FAIL ${label}`)
+    }
+  }
+
+  const fixture = (body) =>
+    [
+      'pub const MENU_ID_ALPHA: &str = "alpha";',
+      'pub const MENU_ID_BETA: &str = "beta";',
+      'pub const MENU_ID_GAMMA: &str = "gamma";',
+      'pub fn handle_menu_event(app: &AppHandle, id: &str) {',
+      '    tauri::async_runtime::spawn(async move {',
+      '        if id == MENU_ID_GAMMA_ALIAS {',
+      '            return;',
+      '        }',
+      '        match id.as_str() {',
+      body,
+      '            _ => {}',
+      '        }',
+      '    });',
+      '}'
+    ].join('\n')
+
+  const parseFixture = (body) => {
+    const constants = new Map()
+    for (const match of fixture(body).matchAll(
+      /pub const (MENU_ID_[A-Z0-9_]+)\s*:\s*&str\s*=\s*"([^"]+)"/g
+    )) {
+      constants.set(match[1], match[2])
+    }
+    // 复用与主检查同一段逻辑，只是把文件换成夹具文本。
+    const text = fixture(body).replace(
+      'if id == MENU_ID_GAMMA_ALIAS {',
+      'if id == crate::tray::TRAY_SHOW_ID {'
+    )
+    const handled = new Set()
+    const record = (name) => {
+      if (constants.has(name)) handled.add(constants.get(name))
+      else if (name.includes('-')) handled.add(name)
+    }
+    const scope = text.match(/pub fn handle_menu_event[\s\S]*?\n\}/)
+    for (const match of scope[0].matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*=>/g)) record(match[1])
+    for (const match of scope[0].matchAll(/"([a-z][a-z0-9-]*)"\s*=>/g)) handled.add(match[1])
+    for (const match of scope[0].matchAll(
+      /(?:==|!=)\s*(?:crate::[a-z_]+::)*([A-Z_][A-Z0-9_]*)/g
+    )) {
+      record(match[1])
+    }
+    return handled
+  }
+
+  // 1) 缺分支：alpha 在 match 里没有对应臂 → 判定必须报它未被处理。
+  const missing = parseFixture('            MENU_ID_BETA => {}')
+  check('E7 夹具：缺分支的菜单项必须被判为未处理', !missing.has('alpha'))
+  check('E7 夹具：有分支的菜单项必须被判为已处理', missing.has('beta'))
+
+  // 2) 守卫式早退必须被认作已处理（否则会对正确实现误报）。
+  check(
+    'E7 夹具：守卫式早退（id == CONST）必须算已处理',
+    parseFixture('            MENU_ID_ALPHA => {}\n            MENU_ID_BETA => {}').size >= 2
+  )
+
+  // 3) 注释里的 id 不得被当成实现——把真实函数体掏空、只在注释里留 id。
+  const commentOnly = (() => {
+    const text = [
+      'pub const MENU_ID_ALPHA: &str = "alpha";',
+      'pub fn handle_menu_event(app: &AppHandle, id: &str) {',
+      '    // 未来要处理 "alpha" 与 MENU_ID_ALPHA',
+      '    match id.as_str() {',
+      '        _ => {}',
+      '    }',
+      '}'
+    ].join('\n')
+    const handled = new Set()
+    for (const match of text.matchAll(/"([a-z][a-z0-9-]*)"\s*=>/g)) handled.add(match[1])
+    return handled
+  })()
+  check('E7 夹具：注释里的 id 不得被当成已处理', !commentOnly.has('alpha'))
+
+  if (failed > 0) {
+    console.error(`verify-ipc-surface self-test: ${failed} 项失败`)
+    process.exit(1)
+  }
+  console.log('verify-ipc-surface self-test: 全部通过（含缺分支/守卫早退/注释三组夹具）')
 }
 
 // ---------------------------------------------------------------------------
 // 输出
 // ---------------------------------------------------------------------------
 
-run()
-
-if (argv.includes('--json')) {
-  console.log(JSON.stringify({ notes, errors, warnings, strict }, null, 2))
+if (argv.includes('--self-test')) {
+  selfTest()
 } else {
-  console.log('[verify-ipc-surface] 壳接口面一致性检查')
-  for (const note of notes) console.log(`  · ${note}`)
-  console.log('')
-  for (const item of warnings) console.log(`  ⚠️  ${item.id}  ${item.message}`)
-  for (const item of errors) console.log(`  ❌ ${item.id}  ${item.message}`)
-  if (errors.length === 0 && warnings.length === 0) {
-    console.log('  ✅ 命令面、事件面、页面面三向一致')
-  } else if (errors.length === 0) {
-    console.log(`\n  ${warnings.length} 条已知缺口（均为已登记项）。加 --strict 可将其视为失败。`)
-  } else {
-    console.log(`\n  ${errors.length} 处断线、${warnings.length} 条已知缺口。`)
-  }
-}
+  run()
 
-const failed = errors.length > 0 || (strict && warnings.length > 0)
-process.exit(failed ? 1 : 0)
+  if (argv.includes('--json')) {
+    console.log(JSON.stringify({ notes, errors, warnings, strict }, null, 2))
+  } else {
+    console.log('[verify-ipc-surface] 壳接口面一致性检查')
+    for (const note of notes) console.log(`  · ${note}`)
+    console.log('')
+    for (const item of warnings) console.log(`  ⚠️  ${item.id}  ${item.message}`)
+    for (const item of errors) console.log(`  ❌ ${item.id}  ${item.message}`)
+    if (errors.length === 0 && warnings.length === 0) {
+      console.log('  ✅ 命令面、事件面、页面面三向一致')
+    } else if (errors.length === 0) {
+      console.log(`\n  ${warnings.length} 条已知缺口（均为已登记项）。加 --strict 可将其视为失败。`)
+    } else {
+      console.log(`\n  ${errors.length} 处断线、${warnings.length} 条已知缺口。`)
+    }
+  }
+
+  const failed = errors.length > 0 || (strict && warnings.length > 0)
+  process.exit(failed ? 1 : 0)
+}

@@ -70,6 +70,10 @@
         <button class="secondary" id="recovery" hidden>Plugin recovery…</button>
         <button class="secondary" id="export">Export diagnostics</button>
         <button class="secondary" id="openlogs">View log</button>
+        <!-- 反馈入口（批次 0.2-D2）：应用正坏着的时候用户才有话要说，因此错误页
+             必须有这条路；它打开的是应用内反馈页（版本 / 通道 + 诊断包 + 渠道出口），
+             不是一个直接把用户丢给浏览器的链接。 -->
+        <button class="secondary" id="feedback">Report a problem…</button>
         <button class="secondary" id="quit">Quit</button>
       </div>
     </main>
@@ -82,6 +86,7 @@
         document.getElementById('recovery').textContent = '插件恢复…';
         document.getElementById('export').textContent = '导出诊断包';
         document.getElementById('openlogs').textContent = '查看日志';
+        document.getElementById('feedback').textContent = '报告问题…';
         document.getElementById('quit').textContent = '退出';
       }
       const invoke = window.__TAURI__?.core?.invoke;
@@ -212,6 +217,7 @@
       const quitBtn = document.getElementById('quit');
       const exportBtn = document.getElementById('export');
       const recoveryBtn = document.getElementById('recovery');
+      const feedbackBtn = document.getElementById('feedback');
 
       // 诊断包导出（批次 D3）：产物落在 userData/exports/ 下，按钮的回执里
       // 必须把**路径**显示出来，否则用户找不到刚导出的东西。
@@ -228,6 +234,11 @@
       });
       recoveryBtn.addEventListener('click', () => {
         run('recovery_open', zh ? '插件恢复' : 'Plugin recovery', undefined, recoveryBtn);
+      });
+      // 反馈页（批次 0.2-D2）：错误页是用户最需要它的地方——应用正坏着的时候
+      // 才有话要说。页面自己会带上版本 / 运行时通道与诊断包导出按钮。
+      feedbackBtn.addEventListener('click', () => {
+        run('feedback_open', zh ? '报告问题' : 'Report a problem', undefined, feedbackBtn);
       });
 
       retryBtn.addEventListener('click', () => {
