@@ -7,6 +7,16 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.1] - 2026-09-19
+
+### ✨ 新功能
+
+- **shell**: 系统托盘与关窗驻留 + 应用内反馈入口（批次 0.2-B1 / 0.2-D2） ([2535823](https://github.com/wang-yi-bit64/dsh-desktop/commit/25358237f8142fce9cf1f46238b1823366f1a73f))
+
+### 📝 文档
+
+- 记录 alpha.2 安装包体积翻倍的原因与判据 ([ac89570](https://github.com/wang-yi-bit64/dsh-desktop/commit/ac89570cb3bdb98d3f5587853b79b48aff28cdff))
+
 ## [0.6.0-alpha.2] - 2026-09-18
 
 ### ✨ 新功能
