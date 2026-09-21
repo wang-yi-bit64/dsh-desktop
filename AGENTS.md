@@ -169,8 +169,10 @@ npm run check:patch-applicability -- --dsh-target=next --target=0.1.6-alpha.2
 #      只按内容搜索的预检会漏报这类失败，真实组装才炸——见 §8.6）
 node scripts/recount-patches.mjs --dsh-target=<next|alpha> --pristine=<未打补丁的包根>
 
-# 23. 壳入口 ↔ 上游 CLI 调用约定 + macOS 父死看门狗（含自测）
-#     守「上游改自执行方式」与「看门狗装错进程/unref」两类静默失效
+# 23. 壳入口 ↔ 上游 CLI 调用约定 + macOS 父死看门狗 + **打包资源清单推导**（含自测）
+#     守三类静默失效：上游改自执行方式、看门狗装错进程/unref、
+#     入口依赖的模块或 Rust 资源常量漏登记进 bundle.resources
+#     （漏登记的后果只有安装包坏：本地目录齐全、门禁全绿——见 §4）
 npm run verify:harness-entry
 npm run verify:harness-entry:self-test
 
@@ -414,6 +416,54 @@ if (typeof entry?.runCli === 'function') await entry.runCli()   // 新版显式�
 未 unref」「mock 也装了」，各有可证伪夹具。`DSH_PARENT_DEATH_WATCHDOG=1` 可在非 darwin
 平台强制启用——本机没有 macOS，这个开关让该行为能被**本地实测**（隔离验证：宿主被杀后
 mock 进程数 2 → 0），而不是每轮靠三平台 CI 试错。
+
+### 打包资源清单是四处手抄的：漏一处只有安装包坏（2026-09-21 v0.7.0-alpha.1 实测，已修复勿回归）
+
+看门狗模块（上一节）落地时，`build/parent-death-watchdog.mjs` **进了三份清单、漏了第四份**：
+
+| 清单 | 是否登记 | 漏写后的表现 |
+|------|---------|-------------|
+| `prepare-harness.mjs` → `copyBuildFiles()` | ✅ | 文件不在 `resources/` |
+| `prepare-harness.mjs` → `REQUIRED_FILES` | ✅ | 残缺资源树被当成完整复用 |
+| `stub-tauri-resources.mjs` → `assets` | ✅ | CI 编译桩 glob 失配 |
+| `tauri.conf.json` → `bundle.resources` | ❌ | **文件不进安装包** |
+
+于是 v0.7.0-alpha.1 的 Windows 安装包装完一启动就：
+
+```text
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+  'D:\Program Files\DSH Desktop\resources\parent-death-watchdog.mjs'
+  imported from D:\Program Files\DSH Desktop\resources\harness-node-entry.mjs
+```
+
+**为什么所有门禁都是绿的**（这是本节最该记住的部分）：
+
+1. **`tauri-build` 不会因缺条目而失败**。build.rs 只校验「每个 glob 至少匹配一个文件」——
+   glob 清单对它来说是「取什么」，不是「必须有什么」。少一条目它没有任何意见。
+2. **本地与 CI 走的都不是那份清单**。`npm run dev` / L1 / L2 读的是
+   `src-tauri/resources/` 目录本身（由 `copyBuildFiles()` 铺好、齐全），`bundle.resources`
+   只影响 `tauri build` 的出包内容。`git status` 也看不见——`resources/` 是 gitignore 的。
+   所以**静态门禁、三平台 CI、单测、真实资源树 L1 全绿，只有装出来的那个包坏**。
+
+**修法（勿改回）**：补上 `bundle.resources` 的条目，并**不要再靠手抄维持一致**——
+`verify:harness-entry` 新增两条**推导**判据（不维护第五份文件名单）：
+
+- **E5**：递归收集入口里所有相对 import（静态与动态同等对待），逐个要求在四份清单里
+  出现。判定不绑定各清单的具体写法，也认 `resources/*.mjs` 这类 glob 覆盖。
+- **E5d**：取 `crates/dsh-host/src/paths.rs` 的 `Layout::resolve` 里所有
+  `resource_dir.join(常量)`，到 `crates/dsh-contracts/src/constants.rs` 查字面值，逐个要求
+  被 `bundle.resources` 覆盖。硬编码文件名只能守住今天这几个；这条守的是**将来**新增的
+  `resource_dir.join(NEW_FILE)`——同样没有编译错误。
+
+两条都在**解析不到任何东西时报错而非通过**：一个静默放行的守卫会让下一次漏包看起来
+「验过了」。`--self-test` 里最关键的夹具是**发出时那份真实的 `bundle.resources`**——
+喂进去必须报 E5a，补上条目必须通过（否则它只是恒真的装饰）。判定理由与备选方案见
+[`docs/adr/049`](docs/adr/049-bundle-resources-derived-guard.md)。
+
+⚠️ 顺带记下**不要**做的两件事：(a) 别把 `bundle.resources` 改成 `resources/**/*` 一把梭
+——那会把中间产物一并打进安装包，而体积是本仓明确关心的指标（§4 的 LibreOffice 一节）；
+(b) 别为「清单和目录一致」把 `logo-light.png` / `logo-dark.png` 加进包——它们不由任何
+运行时读取（品牌 logo 走 `install-brand-assets.mjs` 进 harness 前端树），加进去只是白增体积。
 
 ### 补丁应用：`patch-package` 必须用「应用模式 + 相对 `--patch-dir`」（已修复，勿回归）
 

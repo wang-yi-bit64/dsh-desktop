@@ -31,12 +31,39 @@
  * | E2 | 入口含 `runCli` 兼容调用（`typeof … runCli === 'function'` + 调用） | 错误 |
  * | E3 | 入口仍以动态 `import(pathToFileURL(dshEntryPath))` 加载 CLI | 错误 |
  * | E4 | macOS 父死看门狗仍在（R-7 的 PDEATHSIG 等价物，见 build/harness-node-entry.mjs） | 错误 |
+ * | E5 | 入口（及其相对 import 的兄弟模块）都在四份打包清单里 | 错误 |
+ * | E5d | Rust 从资源目录读的每个路径都在 `bundle.resources` 里（从两端推导） | 错误 |
+ *
+ * ## 为什么有 E5（2026-09-21，v0.7.0-alpha.1 安装包实测）
+ *
+ * 入口改成静态 import 父死看门狗之后，`build/parent-death-watchdog.mjs` **进了三份清单、
+ * 漏了第四份**：`prepare-harness.mjs` 的 `copyBuildFiles()` 与 `REQUIRED_FILES` 有它、
+ * `stub-tauri-resources.mjs` 有它，`tauri.conf.json` → `bundle.resources` 没有。
+ * 后果是**只有安装包坏了**——本地 `resources/` 目录齐全，`npm run dev`、L1/L2 烟雾、
+ * 全部静态门禁都是绿的，而装出来的应用一启动就：
+ *
+ * ```text
+ * Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…\resources\parent-death-watchdog.mjs'
+ * imported from …\resources\harness-node-entry.mjs
+ * ```
+ *
+ * `tauri-build` 的 build.rs 只校验「每个 glob 至少匹配一个文件」，**缺条目不是错误**——
+ * 它只是那一个文件不进安装包。这与 `docs/adr/024` 的依赖树瘦身事故同一形态：
+ * **打包、签名、安装全部成功，只有真跑起来才发现**。
+ *
+ * E5 因此不看那份手抄的四次清单，而是**从入口源码自己推**：把入口的所有相对 import
+ * （含被 import 模块的 import，递归）收齐，逐个要求在四份清单里出现。多一个模块、
+ * 漏一处登记，这里就红——而这类漏登记**永远不会有编译错误**。
  *
  * ## 可证伪性
  *
  * `--self-test` 把**修复前**的入口片段（`await import(...)` 后直接结束）当夹具，
  * 断言 E2 必须报红；把修复后的片段当夹具，断言必须通过。若有人弱化判定，
  * 自检即失败。
+ *
+ * E5 同样带可证伪夹具：拿**真实发生过的那份 tauri.conf.json**（`bundle.resources`
+ * 缺 `parent-death-watchdog.mjs`）当输入，断言必须报 E5；补上该条目则必须通过。
+ * 少了这条，E5 就只是一段「总是为真」的装饰。
  *
  * ## 用法
  *
@@ -57,6 +84,11 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const entryPath = join(projectRoot, 'build', 'harness-node-entry.mjs')
 const watchdogModulePath = join(projectRoot, 'build', 'parent-death-watchdog.mjs')
 const mockHarnessPath = join(projectRoot, 'scripts', 'mock-harness.mjs')
+const tauriConfPath = join(projectRoot, 'src-tauri', 'tauri.conf.json')
+const prepareHarnessPath = join(projectRoot, 'scripts', 'prepare-harness.mjs')
+const stubResourcesPath = join(projectRoot, 'scripts', 'stub-tauri-resources.mjs')
+const pathsSourcePath = join(projectRoot, 'crates', 'dsh-host', 'src', 'paths.rs')
+const constantsSourcePath = join(projectRoot, 'crates', 'dsh-contracts', 'src', 'constants.rs')
 
 /** 读文件，缺失返回空串（用于「模块不存在也算 E4 失败」的判定）。 */
 function readFileSafe(path) {
@@ -68,12 +100,220 @@ function readFileSafe(path) {
 }
 
 /**
+ * 把 `bundle.resources` 里的一条 glob 转成正则（只支持 `*` 单段与 `**` 跨段，
+ * 这两种是本仓出现的全部形态）。
+ *
+ * 支持 glob 是**故意**的：清单将来若改成 `resources/*.mjs` 这类写法，E5 要跟着
+ * 继续成立，而不是因为「写法变了」就误报——一条会误报的守卫很快会被绕过。
+ * @param {string} pattern 清单里的条目（如 `resources/*.mjs`）
+ * @returns {RegExp} 用于匹配 `resources/<文件名>` 的正则
+ */
+function resourcesGlobToRegExp(pattern) {
+  const body = String(pattern)
+    .replace(/[.+^${}()|[\]\\]/gu, '\\$&')
+    .replace(/\*\*/gu, '\u0000')
+    .replace(/\*/gu, '[^/]*')
+    .replace(/\u0000/gu, '.*')
+  return new RegExp(`^${body}$`, 'u')
+}
+
+/**
+ * 收集入口源码里**相对本目录**的 import 说明符（`./x.mjs`）。
+ *
+ * 静态 `import … from './x.mjs'` 与动态 `await import('./x.mjs')` 都算：动态那条
+ * 一旦真的执行，缺文件同样抛 `ERR_MODULE_NOT_FOUND`，没有理由区别对待。
+ * 只认 `./` 开头且以 `.mjs` 结尾——`./harness/node_modules/…` 那类发布后由
+ * `resources/harness/**` 覆盖，不在本检查的范围。
+ * @param {string} source 模块源码
+ * @returns {string[]} 去重后的兄弟模块文件名
+ */
+function siblingModuleImports(source) {
+  const found = new Set()
+  const patterns = [
+    /\bfrom\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // 静态 import
+    /\bimport\s*\(\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // 动态 import
+  ]
+  for (const pattern of patterns) {
+    for (const match of String(source ?? '').matchAll(pattern)) {
+      if (!match[1].includes('/')) found.add(match[1])
+    }
+  }
+  return [...found]
+}
+
+/**
+ * E5d 的推导：**Rust 从资源目录读什么，安装包里就必须有什么**（纯函数）。
+ *
+ * 判据不另立清单，而是从两侧各自的唯一产地推：
+ *   1. `crates/dsh-host/src/paths.rs` 的 `Layout::resolve` 里所有
+ *      `resource_dir.join(常量)` —— 这就是「运行时要读的资源」；
+ *   2. `crates/dsh-contracts/src/constants.rs` 里这些常量的字面值；
+ *   3. `tauri.conf.json` → `bundle.resources` 是否覆盖得到的相对路径。
+ *
+ * 为什么不硬编码那五六个文件名：硬编码只能守住**今天**这几个。真正会出事的是
+ * 「有人加了一次 `resource_dir.join(NEW_FILE)`，却没加进打包清单」——那种改动
+ * 没有编译错误，只有装出来的应用起不来（或某个功能硬失败，如安全模式缺 patch 层，
+ * 而 C10 明确不做静默降级）。从两头推导才能覆盖将来新增的那一个。
+ *
+ * @param {object} input
+ * @param {string} input.pathsSource `crates/dsh-host/src/paths.rs` 源码
+ * @param {string} input.constantsSource `crates/dsh-contracts/src/constants.rs` 源码
+ * @param {string[]|null} input.tauriResources `bundle.resources`
+ * @returns {{needed:Array<{name:string, value:string}>, missing:string[], errors:string[]}}
+ */
+export function auditResourceConstants({ pathsSource, constantsSource, tauriResources }) {
+  const errors = []
+  if (typeof pathsSource !== 'string' || pathsSource.length === 0) {
+    errors.push('E5d 读不到 crates/dsh-host/src/paths.rs')
+  }
+  if (typeof constantsSource !== 'string' || constantsSource.length === 0) {
+    errors.push('E5d 读不到 crates/dsh-contracts/src/constants.rs')
+  }
+  if (!Array.isArray(tauriResources)) {
+    errors.push('E5d 读不到 tauri.conf.json → bundle.resources')
+  }
+  if (errors.length > 0) return { needed: [], missing: [], errors }
+
+  // ① paths.rs 里由 resource_dir 派生的常量名。
+  const names = new Set()
+  for (const match of pathsSource.matchAll(/resource_dir\s*\.\s*join\s*\(\s*([A-Z][A-Z0-9_]*)\s*\)/gu)) {
+    names.add(match[1])
+  }
+  if (names.size === 0) {
+    // 一条都没解析到 = 判据本身失效（改名、换成变量、正则不匹配）。
+    // 静默通过比没有守卫更糟：它会让下一次漏包看起来「验过了」。
+    return {
+      needed: [],
+      missing: [],
+      errors: [
+        'E5d 在 paths.rs 里没有找到任何 `resource_dir.join(常量)` —— 推导失效，' +
+          '请核对 Layout::resolve 是否改了写法（此时本检查必须跟着改，不能当通过）',
+      ],
+    }
+  }
+
+  // ② 常量的字面值。
+  const values = new Map()
+  for (const match of constantsSource.matchAll(
+    /pub\s+const\s+([A-Z][A-Z0-9_]*)\s*:\s*&(?:'static\s+)?str\s*=\s*"([^"]*)"\s*;/gu
+  )) {
+    values.set(match[1], match[2])
+  }
+
+  const needed = []
+  const missing = []
+  for (const name of [...names].sort()) {
+    const value = values.get(name)
+    if (value === undefined) {
+      // 常量名在 paths.rs 用了却在 constants.rs 找不到字面值——要么它由函数生成
+      // （如 node_binary_name()），要么常量搬了家。都不该静默跳过。
+      errors.push(`E5d 常量 ${name} 在 paths.rs 被用于 resource_dir，但在 constants.rs 找不到其字面值`)
+      continue
+    }
+    needed.push({ name, value })
+    // 两种覆盖方式都算：
+    //   · 文件常量 —— 清单里有一条命中 `resources/<value>` 本身；
+    //   · 目录常量（`node` / `bin` / `harness/node_modules`）—— 清单里有一条命中
+    //     它**底下**的路径（`resources/node/*`、`resources/harness/**/*`）。
+    //     不能只做 `startsWith('resources/<value>/')`：`resources/harness/**/*`
+    //     是以 `resources/harness/` 开头的，但覆盖的是更深一层（实测踩到过——
+    //     那条字面比对会把 `harness/node_modules` 误报成「没打包」）。
+    const asFile = tauriResources.some(
+      (entry) => entry === `resources/${value}` || resourcesGlobToRegExp(entry).test(`resources/${value}`)
+    )
+    const asDirectoryPrefix = tauriResources.some((entry) => entry.startsWith(`resources/${value}/`))
+    const asDirectoryGlob = tauriResources.some((entry) =>
+      resourcesGlobToRegExp(entry).test(`resources/${value}/placeholder`)
+    )
+    if (!asFile && !asDirectoryPrefix && !asDirectoryGlob) {
+      missing.push(
+        `E5d Rust 侧从资源目录读 \`${value}\`（constants.rs: ${name}），` +
+          '但 tauri.conf.json → bundle.resources 里没有任何条目覆盖它——' +
+          '运行时读不到：入口/补丁层缺失会让应用起不来，安全模式 patch 层缺失则让' +
+          '「进入安全模式」硬失败（C10：不做静默降级）'
+      )
+    }
+  }
+  return { needed, missing, errors }
+}
+
+/**
+ * E5：入口及其（递归的）相对 import 必须都出现在**四份**打包清单里（纯函数）。
+ *
+ * 这份清单是手工维护的、分布在四个文件里，因此**任何一处漏登记都不会有编译错误**：
+ * `tauri-build` 的 build.rs 只要求每个 glob 至少匹配到一个文件，少一条目它不管。
+ * 2026-09-21 的 v0.7.0-alpha.1 正是这样发出的——只有安装包缺文件，本地全绿。
+ *
+ * @param {object} input 审计输入（全部由调用方从磁盘读好，便于自检注入夹具）
+ * @param {string} input.entrySource 入口源码
+ * @param {(name:string)=>string} input.readModule 读 `build/<name>`（缺失返回空串）
+ * @param {string[]} input.tauriResources `tauri.conf.json` → `bundle.resources`
+ * @param {string} input.prepareSource `scripts/prepare-harness.mjs` 源码
+ * @param {string} input.stubSource `scripts/stub-tauri-resources.mjs` 源码
+ * @returns {{modules:string[], missing:string[]}}
+ */
+export function auditPackaging({ entrySource, readModule, tauriResources, prepareSource, stubSource }) {
+  const modules = []
+  const seen = new Set()
+  const queue = ['harness-node-entry.mjs', ...siblingModuleImports(entrySource)]
+  while (queue.length > 0) {
+    const name = queue.shift()
+    if (seen.has(name)) continue
+    seen.add(name)
+    modules.push(name)
+    // 递归之前先确认模块真的存在：缺失由 E4/打包构建发现，不在这里重复报。
+    const source = readModule(name)
+    if (source) queue.push(...siblingModuleImports(source))
+  }
+
+  const missing = []
+  // 四份清单的判定方式：tauri.conf.json 是 JSON（精确比对条目或 glob 命中），
+  // 另三份是 JavaScript，只要求文件名作为带引号的字符串出现——它们在各自文件里
+  // 的写法（copyBuildFiles 的数组、REQUIRED_FILES、assets）会随重构变动，
+  // 绑定具体写法等于给将来埋一个假警报。
+  if (!Array.isArray(tauriResources)) {
+    // 清单读不出来是「配置被改坏」，不是「文件没登记」——分开报，免得下一个人
+    // 按「补一条目」的思路去修一个 JSON 语法错误。
+    missing.push('E5a 读不到 tauri.conf.json → bundle.resources（缺字段或 JSON 非法）')
+    return { modules, missing }
+  }
+  for (const name of modules) {
+    const relative = `resources/${name}`
+    const covered = tauriResources.some(
+      (entry) => entry === relative || resourcesGlobToRegExp(entry).test(relative)
+    )
+    if (!covered) {
+      missing.push(
+        `E5a ${relative} 不在 tauri.conf.json → bundle.resources 里——` +
+          'tauri-build 只校验「glob 至少匹配一个文件」，缺条目不是错误，' +
+          '它只是**不进安装包**：本地 resources/ 齐全、门禁全绿，装出来一启动就 ' +
+          `ERR_MODULE_NOT_FOUND（v0.7.0-alpha.1 的真实事故）`
+      )
+    }
+    if (prepareSource && !prepareSource.includes(`'${name}'`) && !prepareSource.includes(`"${name}"`)) {
+      missing.push(
+        `E5b ${name} 未登记在 scripts/prepare-harness.mjs（copyBuildFiles / REQUIRED_FILES）——` +
+          '它不会被拷进 resources/，打包因此拿不到这个文件'
+      )
+    }
+    if (stubSource && !stubSource.includes(`'${name}'`) && !stubSource.includes(`"${name}"`)) {
+      missing.push(
+        `E5c ${name} 未登记在 scripts/stub-tauri-resources.mjs 的 assets 里——` +
+          'CI 的编译桩会少这一份，build.rs 的 glob 随之失配'
+      )
+    }
+  }
+  return { modules, missing }
+}
+
+/**
  * 判定入口源码是否做了 `runCli` 兼容调用（纯函数，便于自检）。
  *
  * @param {string} text 入口源码
- * @param {{moduleSource?:string, mockSource?:string}} [sources] 覆盖磁盘读取
- *   （自检用；省略时读真实文件）
- * @returns {{e1:boolean, e2:boolean, e3:boolean, e4:boolean, missing:string[]}}
+ * @param {{moduleSource?:string, mockSource?:string, tauriResources?:string[],
+ *   prepareSource?:string, stubSource?:string, readModule?:(name:string)=>string}} [sources]
+ *   覆盖磁盘读取（自检用；省略时读真实文件）
+ * @returns {{e1:boolean, e2:boolean, e3:boolean, e4:boolean, e5:boolean, missing:string[]}}
  */
 export function auditEntry(text, sources = {}) {
   const src = String(text ?? '')
@@ -134,7 +374,55 @@ export function auditEntry(text, sources = {}) {
   }
 
   const e4 = entryInstallsWatchdog && moduleGate && modulePpid && moduleInterval && moduleNoUnref && mockInstallsWatchdog
-  return { e1: capturesImport, e2: checksRunCli && callsRunCli, e3: dynamicLoad, e4, missing }
+
+  // E5：入口自己的相对 import 是否都在四份打包清单里。默认读真实清单与真实
+  // build/ 目录；自检通过 `tauriResources` / `prepareSource` / `stubSource` /
+  // `readModule` 注入夹具。
+  const tauriResources = sources.tauriResources ?? readTauriResources()
+  const packaging = auditPackaging({
+    entrySource: src,
+    readModule: sources.readModule ?? ((name) => readFileSafe(join(projectRoot, 'build', name))),
+    tauriResources,
+    prepareSource: sources.prepareSource ?? readFileSafe(prepareHarnessPath),
+    stubSource: sources.stubSource ?? readFileSafe(stubResourcesPath),
+  })
+  missing.push(...packaging.missing)
+
+  // E5d：Rust 侧从资源目录读的每个路径也必须在打包清单里（推导，非硬编码清单）。
+  const resourceConstants = auditResourceConstants({
+    pathsSource: sources.pathsSource ?? readFileSafe(pathsSourcePath),
+    constantsSource: sources.constantsSource ?? readFileSafe(constantsSourcePath),
+    tauriResources,
+  })
+  missing.push(...resourceConstants.missing, ...resourceConstants.errors)
+
+  return {
+    e1: capturesImport,
+    e2: checksRunCli && callsRunCli,
+    e3: dynamicLoad,
+    e4,
+    e5: packaging.missing.length === 0,
+    e5d: resourceConstants.errors.length === 0 && resourceConstants.missing.length === 0,
+    modules: packaging.modules,
+    missing,
+  }
+}
+
+/**
+ * 读 `tauri.conf.json` → `bundle.resources`。
+ *
+ * 读不到时返回 `null`（而不是空数组）：E5a 的判定要区分「清单里没有这一条」与
+ * 「清单本身读不出来」——后者是配置被改坏，不该伪装成「文件没登记」。
+ * @returns {string[]|null} glob 列表，或 null
+ */
+function readTauriResources() {
+  try {
+    const conf = JSON.parse(readFileSync(tauriConfPath, 'utf8'))
+    const resources = conf?.bundle?.resources
+    return Array.isArray(resources) ? resources : null
+  } catch {
+    return null
+  }
 }
 
 /** 自检：可证伪性——修复前的入口片段必须报 E2。 */
@@ -163,6 +451,7 @@ if (!dshEntryPath) { process.exitCode = 1 } else {
 
   // 好夹具：入口装看门狗 + 模块与 mock 都齐备
   const goodEntry = `
+import { installParentDeathWatchdog } from './parent-death-watchdog.mjs'
 if (!dshEntryPath) { process.exitCode = 1 } else {
   process.argv = [process.execPath, dshEntryPath, ...dshArguments]
   try {
@@ -178,9 +467,170 @@ export function installParentDeathWatchdog(){
   setInterval(() => { process.kill(parentPid, 0) }, 250)
 }`
   const goodMock = `installParentDeathWatchdog({ label: 'mock-harness' })`
-  const fixedResult = auditEntry(goodEntry, { moduleSource: goodModule, mockSource: goodMock })
+  // E5 的四份清单夹具。`preparedFileNames` 故意写成「整份文件里出现这个名字」，
+  // 与判定的实际口径一致（不绑定 copyBuildFiles / REQUIRED_FILES 的具体写法）。
+  const readModule = (name) => (name === 'parent-death-watchdog.mjs' ? goodModule : '')
+  const goodPrepare = `const files = ['harness-node-entry.mjs', 'parent-death-watchdog.mjs']`
+  const goodStub = `const assets = ['harness-node-entry.mjs', 'parent-death-watchdog.mjs']`
+  const goodResources = ['resources/harness-node-entry.mjs', 'resources/parent-death-watchdog.mjs']
+  // E5d 也给了夹具：真实的 paths.rs / constants.rs 描述的是**真实**资源清单，
+  // 与上面这份两文件夹具对不上，因此这里换成「一个常量、一个被覆盖的文件」。
+  const goodPaths = 'let entry = resource_dir.join(FIXTURE_RESOURCE_FILE);'
+  const goodConstants = 'pub const FIXTURE_RESOURCE_FILE: &str = "parent-death-watchdog.mjs";'
+  // 事故现场：这是 v0.7.0-alpha.1 真实发出的那份 bundle.resources——
+  // 除 parent-death-watchdog.mjs 外全都在。
+  const shippedResources = [
+    'resources/bin/*',
+    'resources/node/*',
+    'resources/harness/**/*',
+    'resources/MANIFEST.json',
+    'resources/harness-node-entry.mjs',
+    'resources/windows-child-process-hide.mjs',
+    'resources/plugin-safety-guard.mjs',
+    'resources/dsh-desktop.patch.yml',
+    'resources/dsh-desktop-safe.patch.yml',
+  ]
+  const goodSources = {
+    moduleSource: goodModule,
+    mockSource: goodMock,
+    tauriResources: goodResources,
+    prepareSource: goodPrepare,
+    stubSource: goodStub,
+    readModule,
+    pathsSource: goodPaths,
+    constantsSource: goodConstants,
+  }
+  const fixedResult = auditEntry(goodEntry, goodSources)
   check('好夹具 → 无缺失', fixedResult.missing.length === 0)
   check('好夹具 → e4=true', fixedResult.e4 === true)
+  check('好夹具 → e5=true', fixedResult.e5 === true)
+  check('好夹具 → 模块清单含看门狗', fixedResult.modules.includes('parent-death-watchdog.mjs'))
+
+  // 可证伪性（E5a）：真实事故的那份 bundle.resources → 必须报 E5a。
+  // 这是本组断言存在的全部理由：漏登记在本地、冒烟、全部静态门禁里都是绿的，
+  // 只有「把清单当输入算一遍」才看得见。
+  check(
+    'bundle.resources 缺看门狗（v0.7.0-alpha.1 真实清单）→ E5a',
+    auditEntry(goodEntry, { ...goodSources, tauriResources: shippedResources })
+      .missing.some((m) => m.startsWith('E5a') && m.includes('parent-death-watchdog.mjs'))
+  )
+  // glob 写法必须被认作覆盖：清单改成 `resources/*.mjs` 时不该误报。
+  check(
+    'bundle.resources 用 glob 覆盖 → 不报 E5a',
+    !auditEntry(goodEntry, { ...goodSources, tauriResources: ['resources/*.mjs'] })
+      .missing.some((m) => m.startsWith('E5a'))
+  )
+  // 可证伪性（E5b）：prepare-harness 未登记 → 文件不会进 resources/。
+  check(
+    'prepare-harness 未登记 → E5b',
+    auditEntry(goodEntry, { ...goodSources, prepareSource: "const files = ['harness-node-entry.mjs']" })
+      .missing.some((m) => m.startsWith('E5b') && m.includes('parent-death-watchdog.mjs'))
+  )
+  // 可证伪性（E5c）：CI 编译桩未登记 → build.rs 的 glob 失配。
+  check(
+    'stub-tauri-resources 未登记 → E5c',
+    auditEntry(goodEntry, { ...goodSources, stubSource: "const assets = ['harness-node-entry.mjs']" })
+      .missing.some((m) => m.startsWith('E5c') && m.includes('parent-death-watchdog.mjs'))
+  )
+  // 递归：被 import 的模块自己再 import 第三个文件时，也要进清单。
+  check(
+    '二级依赖（模块 import 模块）也进清单',
+    auditEntry(goodEntry, {
+      ...goodSources,
+      readModule: (name) =>
+        name === 'parent-death-watchdog.mjs'
+          ? `${goodModule}\nimport { noop } from './nested-helper.mjs'`
+          : `export function noop() {}`,
+    }).missing.some((m) => m.startsWith('E5a') && m.includes('nested-helper.mjs'))
+  )
+
+  // ---- E5d：Rust 资源常量 ↔ 打包清单 -------------------------------------
+  // 这一组用的是**真实文件**（paths.rs / constants.rs / tauri.conf.json），
+  // 不是手抄的夹具：判据的价值恰恰在于它读的是那两个唯一产地。
+  const realPaths = readFileSafe(pathsSourcePath)
+  const realConstants = readFileSafe(constantsSourcePath)
+  const realResources = readTauriResources()
+  const e5dReal = auditResourceConstants({
+    pathsSource: realPaths,
+    constantsSource: realConstants,
+    tauriResources: realResources,
+  })
+  check('E5d 真实源码 → 无缺失', e5dReal.missing.length === 0 && e5dReal.errors.length === 0)
+  check(
+    'E5d 真实源码 → 推导出了资源文件（不是空集）',
+    e5dReal.needed.some((n) => n.value === 'harness-node-entry.mjs') &&
+      e5dReal.needed.some((n) => n.value === 'dsh-desktop-safe.patch.yml')
+  )
+  // 可证伪性：把真实 constants.rs 里 NODE_ENTRY_FILE 的值改掉，清单必然覆盖不到。
+  const mutatedConstants = realConstants.replace(
+    'pub const NODE_ENTRY_FILE: &str = "harness-node-entry.mjs";',
+    'pub const NODE_ENTRY_FILE: &str = "brand-new-entry.mjs";'
+  )
+  check(
+    'E5d 常量指向清单外的新文件 → 报缺失',
+    auditResourceConstants({
+      pathsSource: realPaths,
+      constantsSource: mutatedConstants,
+      tauriResources: realResources,
+    }).missing.some((m) => m.includes('brand-new-entry.mjs'))
+  )
+  // 可证伪性：paths.rs 里新增一次 resource_dir.join(新常量) 且清单没跟上 → 报缺失。
+  // 这正是「将来新增资源文件」的形态，也是本检查唯一想提前拦住的东西。
+  const mutatedPaths = realPaths.replace(
+    'let modules = resource_dir.join(HARNESS_MODULES_DIR);',
+    'let modules = resource_dir.join(HARNESS_MODULES_DIR);\n        let extra = resource_dir.join(BRAND_NEW_ASSET_FILE);'
+  )
+  const constantsWithNewFile = realConstants.replace(
+    'pub const MANIFEST_FILE: &str = "MANIFEST.json";',
+    'pub const MANIFEST_FILE: &str = "MANIFEST.json";\npub const BRAND_NEW_ASSET_FILE: &str = "brand-new-asset.bin";'
+  )
+  check(
+    'E5d paths.rs 新增资源常量 → 报缺失',
+    auditResourceConstants({
+      pathsSource: mutatedPaths,
+      constantsSource: constantsWithNewFile,
+      tauriResources: realResources,
+    }).missing.some((m) => m.includes('brand-new-asset.bin'))
+  )
+  // 反证：清单补上那一条之后必须通过（否则判定是「见到新常量就报错」，不是「没覆盖才报错」）。
+  check(
+    'E5d 清单补上该条目 → 通过',
+    auditResourceConstants({
+      pathsSource: mutatedPaths,
+      constantsSource: constantsWithNewFile,
+      tauriResources: [...realResources, 'resources/brand-new-asset.bin'],
+    }).missing.length === 0
+  )
+  // 判据失效必须自曝：paths.rs 改成别的写法时不能静默通过。
+  check(
+    'E5d 推导失效（paths.rs 无 resource_dir.join）→ 报错而非静默通过',
+    auditResourceConstants({
+      pathsSource: '// 改写了',
+      constantsSource: realConstants,
+      tauriResources: realResources,
+    }).errors.length > 0
+  )
+  // EOL 无关（ADR-031）：CRLF 检出下必须与 LF 表现一致。仓库在 Windows 上
+  // 常以 CRLF 落盘，而这两条判据全是正则匹配源码——正则一旦被 `\r` 破坏，
+  // 结果不是「报错」而是**静默通过**（匹配不到任何东西），最危险的一种失效。
+  const toCrlf = (text) => text.replace(/\r?\n/gu, '\r\n')
+  const crlfResult = auditResourceConstants({
+    pathsSource: toCrlf(realPaths),
+    constantsSource: toCrlf(realConstants),
+    tauriResources: realResources,
+  })
+  check(
+    'E5d CRLF 检出 → 与 LF 结论一致',
+    crlfResult.missing.length === 0 && crlfResult.errors.length === 0 && crlfResult.needed.length === e5dReal.needed.length
+  )
+  check(
+    'E5 CRLF 入口 → 兄弟模块仍被识别',
+    auditEntry(toCrlf(readFileSafe(entryPath)), {
+      pathsSource: toCrlf(realPaths),
+      constantsSource: toCrlf(realConstants),
+      tauriResources: realResources,
+    }).modules.includes('parent-death-watchdog.mjs')
+  )
 
   // 可证伪性（E4a）：入口不装看门狗 → 报 E4a
   const noInstall = goodEntry.replace(/installParentDeathWatchdog[\s\S]*$/, '')
@@ -230,9 +680,12 @@ function run() {
   console.log(`  · E2 runCli 兼容调用    : ${result.e2 ? 'ok' : '✗'}`)
   console.log(`  · E3 动态加载上游 CLI   : ${result.e3 ? 'ok' : '✗'}`)
   console.log(`  · E4 macOS 父死看门狗   : ${result.e4 ? 'ok' : '✗'}`)
+  console.log(`  · E5 兄弟模块已登记入包 : ${result.e5 ? 'ok' : '✗'}`)
+  console.log(`      受检模块：${result.modules.join('、')}`)
+  console.log(`  · E5d Rust 资源常量入包 : ${result.e5d ? 'ok' : '✗'}`)
   console.log('')
   if (result.missing.length === 0) {
-    console.log('  ✅ 入口与上游 CLI 的调用约定兼容')
+    console.log('  ✅ 入口与上游 CLI 的调用约定兼容，且入口依赖的模块都在打包清单里')
     return
   }
   for (const m of result.missing) console.error(`  ❌ ${m}`)

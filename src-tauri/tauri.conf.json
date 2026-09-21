@@ -44,6 +44,7 @@
       "resources/harness-node-entry.mjs",
       "resources/windows-child-process-hide.mjs",
       "resources/plugin-safety-guard.mjs",
+      "resources/parent-death-watchdog.mjs",
       "resources/dsh-desktop.patch.yml",
       "resources/dsh-desktop-safe.patch.yml",
       "resources/splash.html",
