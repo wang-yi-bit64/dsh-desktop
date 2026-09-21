@@ -37,13 +37,36 @@
  * import { installParentDeathWatchdog } from './parent-death-watchdog.mjs'
  * installParentDeathWatchdog()   // darwin 自动启用；DSH_PARENT_DEATH_WATCHDOG=1 可强制
  * ```
+ *
+ * ## 预算：最坏 `POLL_INTERVAL_MS + FORCE_EXIT_MS`，必须落在两个门禁的窗口内
+ *
+ * 本模块的清理是**异步**的（轮询 → SIGTERM → 兜底强退），因此它的最坏耗时是一个
+ * 必须与门禁对账的常数，而不是随手取的「宽限」。两个窗口：
+ *
+ * | 门禁 | 杀宿主后多久查孤儿 |
+ * |---|---|
+ * | `scripts/fault-inject.mjs` 的 B（强杀宿主） | 1500ms |
+ * | `scripts/smoke-launch.mjs` 的 L2.2（GUI 关闭） | 关窗后轮询至 5000ms |
+ *
+ * 2026-09-21 实测：真实 Harness（非 mock）收到 SIGTERM 后**不是**立刻退出，
+ * 于是由兜底计时器决定退出时刻——当时 `250 + 1500 = 1750ms` 已超出 fault-inject
+ * 的 1500ms 窗口，macOS 的 L2.2 因此变红（该断言在安装包缺看门狗文件时是**空洞
+ * 通过**的：Harness 根本没起来，没有进程可成孤儿）。现值 `250 + 750 = 1000ms`，
+ * 两个窗口都留有余量。**改这两个常数前先回看这张表。**
  */
 
-/** 轮询间隔（ms）。故障注入杀宿主后 ~1.2s 就查孤儿，需留出探测 + 退出余量。 */
+/** 轮询间隔（ms）。父进程消失后最多这么久被发现。 */
 const POLL_INTERVAL_MS = 250
 
-/** SIGTERM 之后强制退出的宽限（ms）。 */
-const FORCE_EXIT_MS = 1500
+/**
+ * SIGTERM 之后强制退出的宽限（ms）。
+ *
+ * 750 而不是「差不多就行」：最坏总耗时 `POLL_INTERVAL_MS + FORCE_EXIT_MS` 必须落在
+ * fault-inject 的 1500ms 窗口内（见文件头「预算」表）。真实 Harness 收到 SIGTERM 后
+ * 未必立刻退出，此时这个计时器就是实际退出时刻——留太大就晚于门禁，留太小则不给
+ * 业务收尾机会。宿主已被杀，没有人等这份收尾，750ms 足够。
+ */
+const FORCE_EXIT_MS = 750
 
 /**
  * 安装父死看门狗。

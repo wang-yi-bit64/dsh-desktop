@@ -33,6 +33,7 @@
  * | E4 | macOS 父死看门狗仍在（R-7 的 PDEATHSIG 等价物，见 build/harness-node-entry.mjs） | 错误 |
  * | E5 | 入口（及其相对 import 的兄弟模块）都在四份打包清单里 | 错误 |
  * | E5d | Rust 从资源目录读的每个路径都在 `bundle.resources` 里（从两端推导） | 错误 |
+ * | E6 | 看门狗清理预算（轮询+兜底）小于门禁的孤儿检查窗口 | 错误 |
  *
  * ## 为什么有 E5（2026-09-21，v0.7.0-alpha.1 安装包实测）
  *
@@ -65,6 +66,18 @@
  * 缺 `parent-death-watchdog.mjs`）当输入，断言必须报 E5；补上该条目则必须通过。
  * 少了这条，E5 就只是一段「总是为真」的装饰。
  *
+ * ## 为什么还有 E6：看门狗的清理预算必须小于门禁的等待窗口
+ *
+ * 修好安装包缺文件之后，macOS 的 `L2.2 关闭后无新增孤儿 node` 反而转红——因为那条
+ * 断言在缺文件时是**空洞通过**的（Harness 在 macOS 上根本没起来，没有进程可成孤儿）。
+ * 真跑起来之后暴露的是另一件事：看门狗的清理是异步的（轮询 → SIGTERM → 兜底强退），
+ * 它的最坏耗时 `POLL_INTERVAL_MS + FORCE_EXIT_MS` 当时是 1750ms，而 `fault-inject`
+ * 的 B 场景杀宿主后 1500ms 就查孤儿——**常数之间对不上账，且没有任何东西会因此报错**：
+ * 看门狗"有测试"、门禁"有断言"，只有真跑到 macOS 上才可能偶发一条红色。
+ *
+ * E6 把三处常数拉进同一次比对：看门狗模块里的两个常量、门禁脚本里的等待窗口。
+ * 这条检查是纯静态的——正因为这类错配在本地任何一次运行里都不一定显形。
+ *
  * ## 用法
  *
  * ```bash
@@ -89,6 +102,8 @@ const prepareHarnessPath = join(projectRoot, 'scripts', 'prepare-harness.mjs')
 const stubResourcesPath = join(projectRoot, 'scripts', 'stub-tauri-resources.mjs')
 const pathsSourcePath = join(projectRoot, 'crates', 'dsh-host', 'src', 'paths.rs')
 const constantsSourcePath = join(projectRoot, 'crates', 'dsh-contracts', 'src', 'constants.rs')
+const faultInjectPath = join(projectRoot, 'scripts', 'fault-inject.mjs')
+const smokePath = join(projectRoot, 'scripts', 'smoke-launch.mjs')
 
 /** 读文件，缺失返回空串（用于「模块不存在也算 E4 失败」的判定）。 */
 function readFileSafe(path) {
@@ -235,6 +250,78 @@ export function auditResourceConstants({ pathsSource, constantsSource, tauriReso
     }
   }
   return { needed, missing, errors }
+}
+
+/**
+ * E6：看门狗的清理预算必须落在各个门禁的孤儿检查窗口内（纯函数）。
+ *
+ * 「孤儿清理是异步的」这件事在两处代码里各有一套数字：看门狗模块的
+ * `POLL_INTERVAL_MS` / `FORCE_EXIT_MS`（决定多晚才真正退出），与门禁脚本里
+ * 「杀完宿主等多久再查孤儿」（`fault-inject` 的 1200/1500ms、`smoke` 的轮询上限）。
+ * 两套数字分处两个文件、各自看都合理，**对不上账时没有任何东西会报错**：
+ * 看门狗有单测、门禁有断言，只有当真实 Harness 恰好慢于窗口时才偶发一条红色，
+ * 而那条红看起来像是平台问题（2026-09-21 macOS L2.2 的实况）。
+ *
+ * @param {object} input
+ * @param {string} input.watchdogSource `build/parent-death-watchdog.mjs` 源码
+ * @param {string} input.faultInjectSource `scripts/fault-inject.mjs` 源码
+ * @param {string} input.smokeSource `scripts/smoke-launch.mjs` 源码
+ * @returns {{budgetMs:number|null, windows:Array<{name:string, ms:number}>, errors:string[]}}
+ */
+export function auditWatchdogBudget({ watchdogSource, faultInjectSource, smokeSource }) {
+  const errors = []
+  const readConst = (source, name) => {
+    // 行尾分号可选：本仓的 .mjs 一律不写分号，而 Rust 侧/其它风格可能写。
+    const match = new RegExp(`const\\s+${name}\\s*=\\s*(\\d+)\\s*;?\\s*(?://[^\\n]*)?$`, 'mu').exec(
+      String(source ?? '')
+    )
+    return match ? Number(match[1]) : null
+  }
+  const poll = readConst(watchdogSource, 'POLL_INTERVAL_MS')
+  const force = readConst(watchdogSource, 'FORCE_EXIT_MS')
+  if (poll === null || force === null) {
+    errors.push(
+      'E6 读不到看门狗的 POLL_INTERVAL_MS / FORCE_EXIT_MS —— 常数改名或不再是纯数字字面量时，' +
+        '本检查必须跟着改，不能当通过（否则预算永远算不出来却看起来验过了）'
+    )
+    return { budgetMs: null, windows: [], errors }
+  }
+  const budgetMs = poll + force
+
+  // 门禁侧的窗口：fault-inject 的两处 `await new Promise(… setTimeout(…, N))` 紧跟
+  // `const orphans = findOrphans()`；smoke 的 L2.2 用 `cleanupMs >= N` 作为轮询上限。
+  // 都按「杀完宿主等多久」取，不比固定写法更严（`))` 与 `)` 两种闭合都接受）。
+  const windows = []
+  const faultWaits = [
+    ...String(faultInjectSource ?? '').matchAll(
+      /setTimeout\([^,]+,\s*(\d+)\s*\)\s*\)?\s*\n\s*const orphans = findOrphans\(\)/gu
+    ),
+  ]
+  for (const [index, m] of faultWaits.entries()) {
+    windows.push({ name: `fault-inject 第 ${index + 1} 处孤儿检查`, ms: Number(m[1]) })
+  }
+  const smokeWait = /cleanupMs\s*>=\s*(\d+)/u.exec(String(smokeSource ?? ''))
+  if (smokeWait) windows.push({ name: 'smoke L2.2 轮询上限', ms: Number(smokeWait[1]) })
+
+  if (windows.length === 0) {
+    errors.push(
+      'E6 没能在门禁脚本里定位到任何孤儿检查窗口 —— 判定失效（写法变了），' +
+        '请同步更新本检查而不是让它静默通过'
+    )
+    return { budgetMs, windows: [], errors }
+  }
+
+  for (const w of windows) {
+    if (budgetMs >= w.ms) {
+      errors.push(
+        `E6 看门狗最坏清理预算 ${budgetMs}ms（POLL ${poll} + FORCE ${force}）≥ ${w.name} 的等待窗口 ` +
+          `${w.ms}ms —— 真实 Harness 收到 SIGTERM 后不一定立刻退出，此时由兜底计时器决定退出时刻，` +
+          '门禁会在清理尚未完成时判定「有孤儿」。要么调小看门狗常数，要么放宽窗口（两者都要' +
+          '同步 build/parent-death-watchdog.mjs 文件头的「预算」表）'
+      )
+    }
+  }
+  return { budgetMs, windows, errors }
 }
 
 /**
@@ -396,6 +483,14 @@ export function auditEntry(text, sources = {}) {
   })
   missing.push(...resourceConstants.missing, ...resourceConstants.errors)
 
+  // E6：看门狗的清理预算 vs 各门禁的孤儿检查窗口。
+  const budget = auditWatchdogBudget({
+    watchdogSource: moduleSource,
+    faultInjectSource: sources.faultInjectSource ?? readFileSafe(faultInjectPath),
+    smokeSource: sources.smokeSource ?? readFileSafe(smokePath),
+  })
+  missing.push(...budget.errors)
+
   return {
     e1: capturesImport,
     e2: checksRunCli && callsRunCli,
@@ -403,6 +498,7 @@ export function auditEntry(text, sources = {}) {
     e4,
     e5: packaging.missing.length === 0,
     e5d: resourceConstants.errors.length === 0 && resourceConstants.missing.length === 0,
+    e6: budget.errors.length === 0,
     modules: packaging.modules,
     missing,
   }
@@ -461,12 +557,22 @@ if (!dshEntryPath) { process.exitCode = 1 } else {
 }
 installParentDeathWatchdog({ label: 'harness-node' })`
   const goodModule = `
+const POLL_INTERVAL_MS = 250
+const FORCE_EXIT_MS = 250
 export function installParentDeathWatchdog(){
   if (process.platform !== 'darwin' && process.env.DSH_PARENT_DEATH_WATCHDOG !== '1') return false
   const parentPid = process.ppid
-  setInterval(() => { process.kill(parentPid, 0) }, 250)
+  setInterval(() => { process.kill(parentPid, 0) }, POLL_INTERVAL_MS)
 }`
   const goodMock = `installParentDeathWatchdog({ label: 'mock-harness' })`
+  // E6 夹具：预算 250+250=500ms，小于窗口。窗口夹具写成与真实脚本同形（bug 就是
+  // 「两套数字分处两个文件、各自看都合理」），因此这里两处都要给。
+  const goodFaultInject = `
+async function scenario() {
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 1500))
+  const orphans = findOrphans()
+}`
+  const goodSmoke = `if (after.length === 0 || cleanupMs >= 5000) break`
   // E5 的四份清单夹具。`preparedFileNames` 故意写成「整份文件里出现这个名字」，
   // 与判定的实际口径一致（不绑定 copyBuildFiles / REQUIRED_FILES 的具体写法）。
   const readModule = (name) => (name === 'parent-death-watchdog.mjs' ? goodModule : '')
@@ -499,6 +605,8 @@ export function installParentDeathWatchdog(){
     readModule,
     pathsSource: goodPaths,
     constantsSource: goodConstants,
+    faultInjectSource: goodFaultInject,
+    smokeSource: goodSmoke,
   }
   const fixedResult = auditEntry(goodEntry, goodSources)
   check('好夹具 → 无缺失', fixedResult.missing.length === 0)
@@ -632,6 +740,58 @@ export function installParentDeathWatchdog(){
     }).modules.includes('parent-death-watchdog.mjs')
   )
 
+  // ---- E6：看门狗预算 vs 门禁窗口 ----------------------------------------
+  const realWatchdog = readFileSafe(watchdogModulePath)
+  const realFaultInject = readFileSafe(faultInjectPath)
+  const realSmoke = readFileSafe(smokePath)
+  const e6Real = auditWatchdogBudget({
+    watchdogSource: realWatchdog,
+    faultInjectSource: realFaultInject,
+    smokeSource: realSmoke,
+  })
+  check('E6 真实常数 → 无错且预算算得出', e6Real.errors.length === 0 && e6Real.budgetMs !== null)
+  check(
+    'E6 真实常数 → 定位到了门禁窗口',
+    e6Real.windows.length >= 2 && e6Real.windows.some((w) => w.name.includes('fault-inject'))
+  )
+  // 可证伪性：把看门狗打回修复前的 250 + 1500 = 1750ms —— 必须报 E6（对着
+  // fault-inject 的 1500ms 窗口）。这是 2026-09-21 macOS L2.2 转红的真实常数。
+  const preFixWatchdog = realWatchdog.replace(
+    'const FORCE_EXIT_MS = 750',
+    'const FORCE_EXIT_MS = 1500'
+  )
+  const e6PreFix = auditWatchdogBudget({
+    watchdogSource: preFixWatchdog,
+    faultInjectSource: realFaultInject,
+    smokeSource: realSmoke,
+  })
+  check(
+    'E6 修复前的 250+1500 → 报超窗',
+    e6PreFix.errors.some((e) => e.startsWith('E6') && e.includes('1750'))
+  )
+  // 反证：常数小到一定在窗口内时不得报错（否则判定是「见常数就报」，不是「超窗才报」）。
+  const tightWatchdog = realWatchdog
+    .replace('const POLL_INTERVAL_MS = 250', 'const POLL_INTERVAL_MS = 100')
+    .replace('const FORCE_EXIT_MS = 750', 'const FORCE_EXIT_MS = 300')
+  check(
+    'E6 400ms 预算 → 通过',
+    auditWatchdogBudget({
+      watchdogSource: tightWatchdog,
+      faultInjectSource: realFaultInject,
+      smokeSource: realSmoke,
+    }).errors.length === 0
+  )
+  // 判据失效必须自曝：常数改名（读不到）时不能静默通过。
+  // 用正则替换**第一个**出现的 `POLL_INTERVAL_MS`（注释里也可能提到）。
+  check(
+    'E6 常数改名 → 报错而非静默通过',
+    auditWatchdogBudget({
+      watchdogSource: realWatchdog.replace(/POLL_INTERVAL_MS/u, 'POLL_MS_RENAMED').replace(/POLL_INTERVAL_MS/u, 'POLL_MS_RENAMED'),
+      faultInjectSource: realFaultInject,
+      smokeSource: realSmoke,
+    }).errors.length > 0
+  )
+
   // 可证伪性（E4a）：入口不装看门狗 → 报 E4a
   const noInstall = goodEntry.replace(/installParentDeathWatchdog[\s\S]*$/, '')
   check(
@@ -641,8 +801,8 @@ export function installParentDeathWatchdog(){
 
   // 可证伪性（E4b）：模块给定时器加 unref（真机失效的确切原因）→ 报 E4b
   const unrefModule = goodModule.replace(
-    'setInterval(() => { process.kill(parentPid, 0) }, 250)',
-    'const wdRef = setInterval(() => { process.kill(parentPid, 0) }, 250); wdRef.unref()'
+    'setInterval(() => { process.kill(parentPid, 0) }, POLL_INTERVAL_MS)',
+    'const wdRef = setInterval(() => { process.kill(parentPid, 0) }, POLL_INTERVAL_MS); wdRef.unref()'
   )
   check(
     '看门狗被 unref → E4b',
@@ -683,6 +843,7 @@ function run() {
   console.log(`  · E5 兄弟模块已登记入包 : ${result.e5 ? 'ok' : '✗'}`)
   console.log(`      受检模块：${result.modules.join('、')}`)
   console.log(`  · E5d Rust 资源常量入包 : ${result.e5d ? 'ok' : '✗'}`)
+  console.log(`  · E6 看门狗清理预算     : ${result.e6 ? 'ok' : '✗'}`)
   console.log('')
   if (result.missing.length === 0) {
     console.log('  ✅ 入口与上游 CLI 的调用约定兼容，且入口依赖的模块都在打包清单里')

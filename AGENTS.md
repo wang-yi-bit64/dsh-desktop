@@ -417,6 +417,14 @@ if (typeof entry?.runCli === 'function') await entry.runCli()   // 新版显式�
 平台强制启用——本机没有 macOS，这个开关让该行为能被**本地实测**（隔离验证：宿主被杀后
 mock 进程数 2 → 0），而不是每轮靠三平台 CI 试错。
 
+**预算（2026-09-21 补，勿改错方向）**：看门狗的清理是异步的，最坏耗时
+=`POLL_INTERVAL_MS + FORCE_EXIT_MS`。这个数字曾与门禁的等待窗口对不上账：当时是
+`250 + 1500 = 1750ms`，而 `fault-inject` 的 B 场景与 `smoke-launch.mjs` 的 L2.2 都只等
+**1500ms**——真实 Harness 收到 SIGTERM 后不立刻退出，由兜底计时器决定退出时刻，采样点
+于是落在清理完成之前。现在常数是 `250 + 750 = 1000ms`，且 `verify:harness-entry` 的 **E6**
+会把两个常数与各门禁窗口逐个对账。理由、备选方案与实测数字见
+[`docs/adr/050`](docs/adr/050-guard-windows-vs-cleanup-budget.md)。
+
 ### 打包资源清单是四处手抄的：漏一处只有安装包坏（2026-09-21 v0.7.0-alpha.1 实测，已修复勿回归）
 
 看门狗模块（上一节）落地时，`build/parent-death-watchdog.mjs` **进了三份清单、漏了第四份**：

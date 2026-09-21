@@ -564,10 +564,32 @@ async function runLevel2() {
   } finally {
     killProcess(app.child.pid, true)
     await waitProcessGone(app.child.pid, 8000)
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1500))
 
-    const after = findNodeProcesses('harness-node-entry.mjs').filter((pid) => !before.has(pid))
-    record('L2.2 关闭后无新增孤儿 node', after.length === 0, after.join(','))
+    // 孤儿清理是**异步**的（macOS 走 Node 侧父死看门狗：轮询 → SIGTERM → 兜底强退），
+    // 因此这里断言的是「在预算内清理干净」，而不是「某个固定时刻恰好已经干净」。
+    //
+    // 2026-09-21 的真实教训：原先写「固定等 1500ms 再采样一次」，而看门狗当时的最坏
+    // 预算是 250ms 轮询 + 1500ms 兜底 = 1750ms，且真实 Harness 收到 SIGTERM 后不一定
+    // 立刻退出（实测由兜底计时器决定退出时刻）——采样点压在预算之外，macOS 因此转红。
+    // 单次采样把「异步清理」测成了「定时竞态」，即使实现完全正确也可能随机失败。
+    //
+    // 预算与 `build/parent-death-watchdog.mjs` 文件头的「预算」表对账：放宽到 5000ms
+    // 只影响「多久算失败」，不放宽任何真实清理路径；耗时如实写进 detail，于是
+    // 「清理变慢了」仍然看得见。
+    const cleanupStartedAt = Date.now()
+    let after = []
+    let cleanupMs = 0
+    for (;;) {
+      after = findNodeProcesses('harness-node-entry.mjs').filter((pid) => !before.has(pid))
+      cleanupMs = Date.now() - cleanupStartedAt
+      if (after.length === 0 || cleanupMs >= 5000) break
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200))
+    }
+    record(
+      'L2.2 关闭后无新增孤儿 node',
+      after.length === 0,
+      after.length === 0 ? `清理耗时 ≈${cleanupMs}ms` : `5s 内未回收：${after.join(',')}`
+    )
   }
 }
 
