@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-tauri",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0-alpha.2",
   "description": "A Rust + Tauri 2.0 desktop shell for DeepSeek Harness.",
   "private": true,
   "type": "module",

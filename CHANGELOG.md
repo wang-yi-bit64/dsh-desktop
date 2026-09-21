@@ -7,6 +7,17 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.2] - 2026-09-21
+
+### 🐛 修复
+
+- **smoke**: 看门狗清理预算与门禁窗口对账，断言改为「预算内干净」 ([4e909bb](https://github.com/wang-yi-bit64/dsh-desktop/commit/4e909bb11982364d3d2f500e34989e13ab9140d9))
+- **packaging**: 安装包补上 parent-death-watchdog.mjs，并把资源清单改成推导校验 ([9cd6690](https://github.com/wang-yi-bit64/dsh-desktop/commit/9cd669031a45395f529c6808b79e6de4d6ab104e))
+
+### 📝 文档
+
+- 既有决策 ADR 化（docs/adr/ 34 篇 + 索引） ([6aad22d](https://github.com/wang-yi-bit64/dsh-desktop/commit/6aad22dba54909fcb16f93f3536e632e51d7ecb6))
+
 ## [0.7.0-alpha.1] - 2026-09-19
 
 ### ✨ 新功能
