@@ -238,6 +238,24 @@ api-ms-win-core-winrt-error-l1-1-0.dll: cannot open shared object file
   3. `src-tauri` 单测的实际执行者是 CI——GitHub runner 用 **MSVC** 工具链，该导入可正常解析，故 CI 的 `cargo test --workspace` 有意义。
   4. 若本机需要跑这些单测，唯一可靠路径是切到 MSVC 工具链（`rustup default stable-x86_64-pc-windows-msvc`），这不是代码问题。
 
+#### ⚠️ 已知环境限制：GNU 工具链下本地 `tauri build` 出的安装包缺 `WebView2Loader.dll`
+
+本机（`x86_64-pc-windows-gnu`）执行 `npm run tauri build` **能**产出安装包，但装完启动即：
+
+```text
+dsh-desktop.exe: error while loading shared libraries:
+WebView2Loader.dll: cannot open shared object file
+```
+
+- **根因**：GNU 构建下 `webview2-com-sys` 在运行时从 exe 同目录加载 `WebView2Loader.dll`；
+  tauri-bundler 把该 DLL 放进 `target/release/`（所以**裸 exe 能跑**），却**没有**把它列进
+  NSIS 安装包的文件清单——安装目录里没有它。
+- **本地自测的绕法**：`cp target/release/WebView2Loader.dll "<安装目录>/"` 后再启动。
+  2026-09-21 验证「装机缺 `parent-death-watchdog.mjs`」修复时实测有效（拷贝后安装版
+  从安装目录的 resources 正常起到 Harness）。
+- **结论**：本地 GNU 安装包**不是可发布形态**；正式产物一律走 CI 的 MSVC 三平台构建
+  （`release.yml`）。本地 build 的定位是「验证打包清单与产物内容」，不是「出可发布的包」。
+
 
 ---
 
