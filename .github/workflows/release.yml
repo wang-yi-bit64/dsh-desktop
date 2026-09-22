@@ -343,12 +343,14 @@ jobs:
   #     便携 zip」，输入与判据都与 build matrix 的「按平台出安装包」不同；
   #   · 便携版是 Windows 独占需求，其他平台不需要它。
   #
-  # ⚠️ 它走的是**默认配置**（`--bundles nsis`），不是 `tauri.portable.conf.json`：
+  # ⚠️ 它走的是**默认配置**（`--bundles nsis`），没有独立的便携版配置：
   #   `package-portable.mjs` 的必需输入 `WebView2Loader.dll` 由 tauri-bundler
   #   **打包后**才落到 `target/release/` 根目录（缺它便携包启动即 0xC0000135 静默
   #   崩溃），因此这一步必须真的 bundle 一次，不能换成 `--no-bundle`。
-  #   `src-tauri/tauri.portable.conf.json` 目前**没有任何工作流或脚本引用**
-  #   （2026-09-22 核实），是孤置配置——别以为它在生效。
+  #   历史上存在过一个孤置的 `src-tauri/tauri.portable.conf.json`：它的
+  #   `bundle.resources` 与 `tauri.conf.json` **逐条相同**，只多出 `targets:["zip"]`
+  #   与 `createUpdaterArtifacts:false`，且**从未被任何工作流或脚本引用**——
+  #   已于 2026-09-22 删除。它当初想省掉的签名私钥，现由下面「显式传密钥」承担。
   #
   # ⚠️ 默认配置里 `bundle.createUpdaterArtifacts: true` 因此同样作用于本 job：
   #   缺签名私钥会在**打包末尾**报 `A public key has been found, but no private key`，

@@ -80,9 +80,11 @@ export function portableBaseName(version) {
 // `prepare-harness.mjs` 加 export 会**在它被直接执行时触发副作用**（它是带顶层
 // `await` 的 CLI 脚本，`import` 会真的跑一遍组装）。
 //
-// 因此这里改用**结构判据**，并与 `tauri.conf.json` / `tauri.portable.conf.json`
-// 的 `bundle.resources` 清单逐条对齐（含 `resources/node/*`、`resources/bin/*`、
-// `resources/harness/**\/*` 三条 glob —— 它们正是运行时主体）。
+// 因此这里改用**结构判据**，并与 `tauri.conf.json` 的 `bundle.resources` 清单
+// 逐条对齐（含 `resources/node/*`、`resources/bin/*`、`resources/harness/**\/*`
+// 三条 glob —— 它们正是运行时主体）。
+// （历史上这里并列引用过一个 `tauri.portable.conf.json`：其 `bundle.resources`
+//  与 `tauri.conf.json` 逐条相同，已于 2026-09-22 作为孤置配置删除，判据不受影响。）
 // 判据只描述「打包前输入必须自洽」，因此对两条通道都成立，不重复声明资源清单。
 // ---------------------------------------------------------------------------
 
