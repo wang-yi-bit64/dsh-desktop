@@ -23,6 +23,21 @@
 > **若将来要重启这项工作**：接线点应是**官方接口**（Harness 提供的插件停用 / 隔离
 > 能力），而不是重建一套与官方并行的进程外体系。
 >
+> ### ⚠️ 已知缺口（2026-09-22 登记）
+>
+> 归档的代价必须写出来，否则读者只会看到「已归档」然后以为无事发生。本节按
+> **ADR-051** 的四字段口径登记，与 `AGENTS.md` §7.2 归档行的 `↳` 子行同源。
+>
+> | 字段 | 内容 |
+> |------|------|
+> | **缺口** | **进入安全模式也不会隔离任何第三方插件。** 安全模式换的是 profile 与 patch 层（`--profile desktop-safe-mode` + `dsh-desktop-safe.patch.yml`，C10），只影响壳自己注入的东西；插件挂载由 Harness 进程内的官方 Cordis 体系按 `profiles/.generations/desired.json` 投影决定，**投影不读 profile**，因此坏插件在安全模式下照常被加载。损坏的插件仍可带走 Harness（ADR-040 后果段已声明的那条）。 |
+> | **判据** | 见 ADR-040「备选方案与取舍」：真实挂载点在 Harness 进程内的官方 loader 上，本仓够不着；硬接就是再造一个「返回伪造成功」的假设施（ADR-007 立纪的直接动因）。 |
+> | **恢复前提** | 官方 loader 暴露可挂载的隔离点（ADR-040「后果」段）。**在此之前不要在 `projectGenerations()` 里加特例分支绕过**——那是在 `desired.json` 之外另立第二权威。 |
+> | **现场级证据** | 启动日志里 `[harness-node] generation projection: … bundles=[…]` 会列出**当前 profile 实际挂载的全部插件**（含第三方）；`web boot: N entries did not activate` 与 `<pkg>: failed` / `<pkg>: pending (waiting for service: X)` 是坏插件的点名行。要点：这些行出现在安全模式下**同样会出现**——这正是本缺口的可观测判据。归因成 `[dsh-plugin-fault]` 需要那些行出现在未捕获异常路径上，见 `build/plugin-safety-guard.mjs` 文件头第 4 节。 |
+>
+> 相关：进度与修复状态见 `docs/dev-plan-disconnected-points.md`；「进安全模式 → 重启
+> → 问题依旧」这条用户路径的现场记录见 2026-09-22 的排查结论。
+>
 > 下文为归档时的原始设计文本，保留以便追溯设计意图。
 
 > RFC 编号: RFC-20260907-PLUGIN-ISOLATION  

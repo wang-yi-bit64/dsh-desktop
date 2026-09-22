@@ -781,6 +781,7 @@ E7 只认两种合法写法：`match` 臂**与守卫式早退**（`if id == CONS
 | 插件故障归因（进程内） | ✅ 已接线 | `build/plugin-safety-guard.mjs:formatFaultDetails`（:25，export :154） | `build/harness-node-entry.mjs:15,37,44` |
 | **插件分级隔离 Tier 0/1/2** | 🗄️ **已归档（2026-09-10 批次 F：冻结并归档）** | 代码已删除（`plugin_worker.rs`、`plugin-worker-host.mjs`、`PluginWorkerClient`）；设计文档在 `docs/archive/plugin_isolation_architecture.md`。它此前**从未接线**，且不在真实插件挂载路径上 | **无**（且永远不会走这条路：真实挂载在 Harness 进程内的官方 Cordis 体系） |
 | ↳ 插件安全（**当前实际生效的那一条**） | ✅ 已接线，**但只在进程内** | `build/plugin-safety-guard.mjs:formatFaultDetails` | `build/harness-node-entry.mjs` 的未捕获异常/拒绝处理器。**同进程的插件崩溃仍可能带走 Harness**——不得表述为「插件崩溃不拖垮主程序」 |
+| ↳ **已知缺口：安全模式不隔离插件**（2026-09-22 登记，口径见 [ADR-051](docs/adr/051-archived-capability-known-gap.md)） | 🗄️ **归档能力的已知缺口**（**已裁定接受**：不是欠债、不是计划中——四字段见右侧；登记在归档行下是因为它**只能由恢复 ADR-040 的能力才能修**） | **缺口**：进安全模式**不会**隔离任何第三方插件。安全模式只换 profile 与 patch 层（C10），而插件挂载由 Harness 进程内官方 Cordis 体系按 `profiles/.generations/desired.json` 投影决定，**投影不读 profile**——坏插件在安全模式下照常加载，仍可带走 Harness。**判据**：真实挂载点在官方 loader 上，本仓够不着，硬接即再造假设施（ADR-040）。**恢复前提**：官方 loader 暴露可挂载隔离点（前置条件同 ADR-040 后果段）。**现场级证据**：`[harness-node] generation projection: … bundles=[…]` 列出的挂载清单在安全模式下**不变**（含第三方），`web boot: N entries did not activate` 同理照旧出现 | **无**（**并禁止用特例分支绕开**：在 `projectGenerations()` 里加「安全模式就跳过插件」= 在 `desired.json` 之外另立第二权威，ADR-007 所禁）。完整登记在 `docs/archive/plugin_isolation_architecture.md`「已知缺口」段 |
 | **多模型工具网关** | 🗄️ **已归档（2026-09-10 批次 F）** | crate 已从 workspace 删除；设计文档在 `docs/archive/model_gateway_design.md`（文首有归档说明与恢复判据） | **无** |
 | **一键脱敏诊断包 `diagnostics.zip`** | ✅ **已接线（2026-09-10 批次 D）** | `crates/dsh-host/src/diagnostics_export.rs`（5 类脱敏规则：launch token / `dsh-auth-*` cookie / 路径用户名段 / API key / 代理口令；每条有正反用例 + 端到端「产物内无原文」断言）；产物落 `app_data_dir/exports/` | 命令 `diagnostics_export` ← 错误页「导出诊断包」按钮、`logs.html` 同功能按钮、菜单「Harness → Export Diagnostics…」（三者都显示产物路径） |
 | LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
@@ -823,11 +824,13 @@ E7 只认两种合法写法：`match` 臂**与守卫式早退**（`if id == CONS
   「已归档」与「未接线」的区别是**代码还在不在**：归档是欠债已销账（删了，并给出不做的理由），未接线是债还挂着。**归档不是「计划中」**——不要用「以后可能做」来软化一个已经裁定不做的决定。
 - 修改未接线模块时：必须同步删除其 `⚠️ 未接线` 横幅、更新本表状态。
 - **归档一个模块时**：代码删除、文档移入 `docs/archive/` 并在文首写归档说明（判据 + 恢复前提），本表状态改 🗄️，`README` 对应表述同步收敛。**删除的文件名要写进本表**——否则下一个人只会看到「某个能力不见了」。
+- **归档还要登记残留缺口**（ADR-051）：归档判据说明的是「为什么不做」，读者从中**推不出**「不做之后现在会缺什么」。若该能力有用户可感知的残留影响，必须在本表**归档行的 `↳` 子行**（不另起一行冒充新能力）按四字段登记——**缺口**（具体不会发生什么）/**判据**（为什么不修）/**恢复前提**（什么条件重开）/**现场级证据**（用户能看到的日志行或界面现象）。四项缺一不可。**缺口不得用代码补**：在单一权威之外加特例分支绕开缺口，属于 ADR-007 禁止的做法。
 - 评审 / 发布前自查：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/` 应只命中**确实未接线/未实现**的条目（归档项不在其中，它们改用 🗄️）。除真实欠债外，以下三类命中是**预期内**的，不要为消除它们而改写文本：
   1. **词表与纪律条文本身**（§7.3 的状态词表、README 的状态标记约定、本条的规则文字）；
   2. **历史盘点记录**——`docs/dev-plan-disconnected-points.md` §1 的 D1~D11 标题记录的是「盘点当时」的状态（该节开头有显式声明）。把它们改成「已修复」会让后来者看不出当初断在哪；
   3. 引用这些术语的规范文档（如 `dsh-upgrade-checklist.md` 的操作说明）。
 - **跨语言断言必须可证伪**：新增「X 一定会发生」这类关于页面 / 脚本行为的断言时，按 `scripts/verify-harness-inject.mjs` 的模式配一段**变体回退检查**——把被守护的行为打回旧写法，断言必须变红，否则断言是装饰。同时守卫**不得依赖检出配置**（行尾、路径分隔符）：CRLF 检出下必须与 LF 表现一致。
+- **「扫出来再校验」的门禁必须断言数量不为零**（2026-09-22，`E5-空` / ADR-051 附带发现）：凡是先从源码里扫出一组 X、再逐个校验 X 的守卫，必须同时断言**扫出的数量 > 0**。只断言「扫到的都合规」会容忍「一个都没扫到」——那等于门禁替一段**不存在的检查**背书，比漏报更危险（输出还是一行绿色）。触发条件是**写法变更**：入口加了一种新的 import 形态、表格换了一种列结构，扫描器不认了就静默归零。本仓已踩两次——`verify-claims` C3 的表格解析，与 `verify-harness-entry` E5 漏认 `specifier: './x.mjs'` 形态（后者修前在**零个受检模块**下全绿，而它守的正是「三份打包清单漏登记」这条 v0.7.0-alpha.1 真实事故）。**扫出数为 0 时，先怀疑扫描器，再怀疑源码。**
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
 - **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
   - 其中 **E7（菜单项 id ↔ `handle_menu_event` 分支）** 是批次 0.2-B1 新增的：托盘与应用菜单**共用同一批 id**，而「加了菜单项忘了接处理器」的后果是一个点了完全没反应的项——没有编译错误、没有日志、没有既有守卫能看见。`--self-test` 用三组夹具（缺分支 / 守卫式早退 / 注释里的 id）钉住该判定本身，已进 CI 与 release preflight。
