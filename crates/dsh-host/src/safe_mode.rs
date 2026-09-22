@@ -282,15 +282,13 @@ mod tests {
             "标记必须落在 dsh_home 下（INV-1：资源目录只读）"
         );
 
-        assert_eq!(
+        assert!(
             clear_safe_mode_request(&temp).expect("清除应成功"),
-            true,
             "首次清除应报告确实删掉了"
         );
         assert!(!safe_mode_requested(&temp));
-        assert_eq!(
-            clear_safe_mode_request(&temp).expect("重复清除不算失败"),
-            false,
+        assert!(
+            !clear_safe_mode_request(&temp).expect("重复清除不算失败"),
             "幂等：本来就没有时返回 false 而不是 Err"
         );
 

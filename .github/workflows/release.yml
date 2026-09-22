@@ -198,6 +198,22 @@ jobs:
       - name: Verify packaging target
         run: npm run verify:target
 
+      # 预检签名密钥：默认配置的 `createUpdaterArtifacts: true` 要求签名密钥，缺了会在
+      # **打包末尾**才失败。⚠️ 必须放在组装之前——它原先紧挨着 build 步骤，于是
+      # 「缺密钥」这个几秒就能查明的前提，要等 300MB 组装 + 一整轮 Rust 编译跑完
+      # 才暴露（2026-09-22 portable job 就是这样白跑 13m58s）。
+      # 用 env 传值而不是把 `${{ secrets.* }}` 插进 run 字符串——后者一旦被回显
+      # 就会把私钥写进构建日志。
+      - name: Verify signing key is available
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set - updater artifacts cannot be signed. See README (Auto-update)."
+            exit 1
+          fi
+
       # 内置哪条上游运行时通道由 tag 决定（见 preflight）：`0.5.0-next.1` 组装
       # next 线（DSH rc）、`0.6.0-alpha.1` 组装 alpha 线。版本号与运行时因此
       # 天然一致，不需要在 tag 之外再声明一次通道。
@@ -220,19 +236,6 @@ jobs:
             ./src-tauri/resources/node/node.exe --version
           else
             ./src-tauri/resources/node/node --version
-          fi
-
-      # 预检签名密钥：`createUpdaterArtifacts: true` 要求签名密钥，缺了会在打包
-      # 末尾才失败（白跑一轮 300MB 组装）。用 env 传值而不是把 `${{ secrets.* }}`
-      # 插进 run 字符串——后者一旦被回显就会把私钥写进构建日志。
-      - name: Verify signing key is available
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set — updater artifacts cannot be signed. See README (Auto-update)."
-            exit 1
           fi
 
       # 生成变更说明。三个平台各自生成（内容由 tag 区间唯一决定，必然一致），
@@ -312,9 +315,14 @@ jobs:
           # `npm run tauri build -- --bundles …`。
           tauriScript: npm run tauri
           args: --bundles ${{ matrix.bundles }} -v
-          # 同时传工作流工件：即使 Release 创建环节出问题，安装包也能从
-          # Actions 页面取回，不至于「构建成功但拿不到产物」。
-          uploadWorkflowArtifacts: true
+          # ⚠️ 这里**不要**写 `uploadWorkflowArtifacts`：tauri-action（`@v0`）没有这个
+          # 输入，GitHub 只会打一条 "Unexpected input(s)" 警告并**静默忽略**它
+          # （2026-09-22 核对其 action.yml：与工件相关的输入只有 `uploadPlainBinary`，
+          # 而那是「把裸二进制传到 Release」，不是工作流工件）。原注释据此声称
+          # 「安装包也能从 Actions 页面取回」，是**不成立的宣称**，故一并删除。
+          # 真正的取回通道：安装包由本 action 直接挂到 Release assets；Release 环节
+          # 出问题时用 workflow_dispatch 指定同一 tag 重跑——这正是本工作流保留
+          # dispatch 触发的原因。
           retryAttempts: 2
 
       - name: Report bundle size
@@ -328,12 +336,24 @@ jobs:
         run: npm run report:patches -- --markdown
 
   # ---------------------------------------------------------------------------
-  # 便携版（Windows zip）：独立配置 + 独立构建，与 NSIS 安装版互不干扰。
+  # 便携版（Windows zip）：与 NSIS 安装版并行构建，互不干扰。
   # ---------------------------------------------------------------------------
   # 为什么单独成 job 而不是复用 build matrix：
-  #   · 它用 `tauri.portable.conf.json`（`targets: ["zip"]`，无 updater 插件），
-  #     产物形态与 NSIS 完全不同；
+  #   · 它做的是「先真 build 一次默认配置的 app，再把原始 app 目录重新打成一个
+  #     便携 zip」，输入与判据都与 build matrix 的「按平台出安装包」不同；
   #   · 便携版是 Windows 独占需求，其他平台不需要它。
+  #
+  # ⚠️ 它走的是**默认配置**（`--bundles nsis`），不是 `tauri.portable.conf.json`：
+  #   `package-portable.mjs` 的必需输入 `WebView2Loader.dll` 由 tauri-bundler
+  #   **打包后**才落到 `target/release/` 根目录（缺它便携包启动即 0xC0000135 静默
+  #   崩溃），因此这一步必须真的 bundle 一次，不能换成 `--no-bundle`。
+  #   `src-tauri/tauri.portable.conf.json` 目前**没有任何工作流或脚本引用**
+  #   （2026-09-22 核实），是孤置配置——别以为它在生效。
+  #
+  # ⚠️ 默认配置里 `bundle.createUpdaterArtifacts: true` 因此同样作用于本 job：
+  #   缺签名私钥会在**打包末尾**报 `A public key has been found, but no private key`，
+  #   白跑一整轮编译——2026-09-22 v0.7.0-alpha.3 的真实事故（13m58s 后才失败）。
+  #   与 build job 一样传密钥，并把校验**前置到组装之前**，让缺密钥在秒级失败。
   portable:
     name: windows / portable zip
     needs: preflight
@@ -362,6 +382,20 @@ jobs:
       - name: Install build tooling
         run: npm ci
 
+      # 预检签名密钥：默认配置的 `createUpdaterArtifacts: true` 要求签名密钥，缺了会在
+      # **打包末尾**才失败（见 job 头注释）。放在组装 300MB 之前，秒级暴露——别等
+      # 一整轮编译跑完才发现前提不成立。用 env 传值而不是把 `${{ secrets.* }}`
+      # 插进 run 字符串——后者一旦被回显就会把私钥写进构建日志。
+      - name: Verify signing key is available
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set - the default config sets bundle.createUpdaterArtifacts, so tauri build cannot bundle. See README (Auto-update)."
+            exit 1
+          fi
+
       - name: Prepare harness resources
         run: npm run prepare:harness
 
@@ -369,9 +403,14 @@ jobs:
         run: npm run verify:harness-tree
 
       - name: Build portable app bundle
-        # 用默认配置构建（产出可运行的原始 app 目录 + NSIS installer）。
-        # 便携版从 `target/release/` 的原始 app 目录打包，不需要 Tauri 的
-        # `zip` bundle target（该目标在当前 CLI 版本上不受 Windows 支持）。
+        # 用默认配置构建（产出可运行的原始 app 目录 + NSIS installer）。便携版只取
+        # `target/release/` 的原始 app 目录，但**必须**真的 bundle 一次才能拿到
+        # tauri-bundler 落下的 `WebView2Loader.dll`（见 job 头注释）。
+        # 不用 Tauri 的 `zip` bundle target：该目标在当前 CLI 版本上不受 Windows 支持。
+        # 密钥是默认配置的硬要求——便携包自身不带 updater，但默认配置会签名，缺了就报错。
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --bundles nsis -v
 
       - name: Package portable artifact

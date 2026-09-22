@@ -245,7 +245,8 @@ pub fn run() {
                 if dsh_host::safe_mode::safe_mode_requested(&start_layout.dsh_home) {
                     log::info!(
                         "safe-mode marker present at {} — starting Harness with profile '{}'",
-                        dsh_host::safe_mode::safe_mode_marker_path(&start_layout.dsh_home).display(),
+                        dsh_host::safe_mode::safe_mode_marker_path(&start_layout.dsh_home)
+                            .display(),
                         dsh_host::safe_mode::SAFE_MODE_PROFILE
                     );
                     start_supervisor.start_in_safe_mode().await;

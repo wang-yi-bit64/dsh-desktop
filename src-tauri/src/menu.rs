@@ -274,9 +274,9 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 // （`lib.rs` 的启动分支）读不到任何「用户要安全模式」的证据，
                 // 又回默认 profile——表现就是「点了安全模式，重启后还是坏的」。
                 // 标记的判据与读写实现见 `dsh_host::safe_mode`。
-                if let Err(error) = dsh_host::safe_mode::persist_safe_mode_request(
-                    &state.layout.dsh_home,
-                ) {
+                if let Err(error) =
+                    dsh_host::safe_mode::persist_safe_mode_request(&state.layout.dsh_home)
+                {
                     // 落盘失败**不中断**：本次安全模式启动仍然有效（子进程已经
                     // 带上了 `--profile desktop-safe-mode`），只是不跨重启。
                     // 恢复路径宁可多给一次机会，也不该因为写标注文件失败就把
@@ -287,7 +287,9 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 }
                 crate::window::show_splash(&app);
                 state.supervisor.restart_in_safe_mode().await;
-                log::info!("harness restarting in safe mode (request persisted for next cold start)");
+                log::info!(
+                    "harness restarting in safe mode (request persisted for next cold start)"
+                );
             }
             MENU_ID_HARNESS_NORMAL_MODE => {
                 // 安全模式标记的**唯一出口**。少了它，进安全模式就是单向的：
@@ -298,7 +300,9 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 match dsh_host::safe_mode::clear_safe_mode_request(&state.layout.dsh_home) {
                     Ok(removed) => {
                         if removed {
-                            log::info!("safe-mode request cleared; next start uses the default profile");
+                            log::info!(
+                                "safe-mode request cleared; next start uses the default profile"
+                            );
                         } else {
                             log::info!("no safe-mode request to clear; already in normal mode");
                         }
