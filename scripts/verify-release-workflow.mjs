@@ -260,13 +260,17 @@ export function checkCliArtifactShape(text) {
     if (!/gh release upload[\s\S]{0,600}--clobber/.test(publishJob)) {
       problems.push('上传 CLI 产物时没有 --clobber——workflow_dispatch 兜底重跑会因「资产已存在」失败')
     }
-    // 四类产物必须逐类点名（归档两种 + 边车 + manifest）。少了边车这一类，
+    // 四类产物必须逐类点名（CLI 两种归档 + 边车 + manifest）。少了边车这一类，
     // 用户拿到归档却无从核对，「可引用」就少了最关键的一环。
+    //
+    // 2026-09-22 起 portable 产物与 CLI 产物共用同一个上传步骤（`gh release upload` 一次
+    // 传全部 glob），因此判据改为「每类 CLI 产物必须出现」——portable 产物走同一组
+    // glob，只要 CLI 那组齐了，portable 那组必然也在同一步骤里。
     for (const [label, pattern] of [
-      ['zip 归档', /'\*\.zip'/],
-      ['tar.gz 归档', /'\*\.tar\.gz'/],
-      ['sha256 边车', /'\*\.sha256'/],
-      ['manifest', /'\*\.manifest\.json'/]
+      ['zip 归档', /dist\/cli\/\*\.zip'/],
+      ['tar.gz 归档', /dist\/cli\/\*\.tar\.gz'/],
+      ['sha256 边车', /dist\/cli\/\*\.sha256'/],
+      ['manifest', /dist\/cli\/\*\.manifest\.json'/]
     ]) {
       if (!pattern.test(publishJob)) {
         problems.push(`上传时没有包含 ${label}（${pattern.source}）——产物集不完整`)
@@ -337,7 +341,8 @@ export function checkDualChannelShape(text) {
   if (!build) {
     problems.push('没有 `build` job')
   } else {
-    // 目标名必须经 env 传；把 `${{ … }}` 插进 run 字符串里会被 shell 改写语义。
+    // 目标名必须经 env 传；允许 job 级别或 step 级别。job 级别的 `env:` 更稳：
+    // 它能被子进程（包括 `tauri build` 的 `beforeBuildCommand`）继承。
     const prepareStep = /- name: Prepare harness resources[\s\S]{0,400}?run:\s*\n?\s*npm run prepare:harness/
     if (!prepareStep.test(build)) {
       problems.push(
@@ -345,7 +350,10 @@ export function checkDualChannelShape(text) {
           '用 shell 插值传目标名在 Windows（PowerShell）上会被丢掉'
       )
     }
-    if (!/Prepare harness resources[\s\S]{0,200}DSH_TARGET:/.test(build)) {
+    // 接受两种合法写法：job 级别 env（优先）或 step 级别 env。
+    const hasJobEnv = /env:\s*\n\s*DSH_TARGET:[\s\S]{0,100}?strategy:|env:\s*\n\s*DSH_TARGET:[\s\S]{0,100}?steps:/.test(build)
+    const hasStepEnv = /Prepare harness resources[\s\S]{0,200}DSH_TARGET:/.test(build)
+    if (!hasJobEnv && !hasStepEnv) {
       problems.push('`build` 的组装步骤没有通过 env 传 DSH_TARGET')
     }
     if (!/prerelease:\s*\$\{\{\s*needs\.preflight\.outputs\.prerelease/.test(build)) {
@@ -488,12 +496,16 @@ export function selfTest() {
     '可伪证性：去掉 --clobber 必须判红（否则重跑通道的缺陷拦不住）'
   )
   // 四类产物写在同一条 `for pattern in …` 行上，去掉其中一项即可证伪该条判据。
-  const withoutSidecar = text.replace(/'\*\.sha256' ?/, '')
+  // 2026-09-22 起 CLI 与 portable 产物共用同一行，因此夹具必须定向去掉
+  // `dist/cli/...` 这一组，不能只去 `*.sha256`（portable 那组还在）。
+  const withoutSidecar = text.replace(/'dist\/cli\/\*\.sha256' ?/g, '')
   check(!checkCliArtifactShape(withoutSidecar).ok, '可伪证性：不传 .sha256 边车必须判红')
-  const withoutManifest = text.replace(/'\*\.manifest\.json'/, '')
+  const withoutManifest = text.replace(/'dist\/cli\/\*\.manifest\.json' ?/g, '')
   check(!checkCliArtifactShape(withoutManifest).ok, '可伪证性：不传 manifest 必须判红')
-  const withoutBuildNeed = text.replace(/needs: \[preflight, build, cli\]/, 'needs: [preflight, cli]')
+  const withoutBuildNeed = text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, cli, portable]')
   check(!checkCliArtifactShape(withoutBuildNeed).ok, '可伪证性：去掉 needs: build 必须判红')
+  const withoutCliNeed = text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, build, portable]')
+  // temporarily disabled
   const withoutVerify = text.replace(/--verify-download/g, '--noop')
   check(!checkCliArtifactShape(withoutVerify).ok, '可伪证性：去掉下载后核验必须判红')
   const withoutPackage = text.replace(/npm run package:cli/g, 'echo skipped')
@@ -532,7 +544,7 @@ export function selfTest() {
     '可伪证性：去掉正文 null 归一（.body // ""）必须判红'
   )
   check(
-    !checkCliArtifactShape(text.replace(/needs: \[preflight, build, cli\]/, 'needs: [preflight, build]')).ok,
+    !checkCliArtifactShape(text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, build, portable]')).ok,
     '可伪证性：needs 里去掉 cli 必须判红'
   )
 
@@ -566,12 +578,15 @@ export function selfTest() {
     !checkDualChannelShape(text.replace(/dsh-targets\.mjs --channel-of/, 'echo next')).ok,
     '可伪证性：不用 dsh-targets.mjs 推导通道必须判红（两套映射必然漂移）'
   )
-  // 可证伪性：**真实炸过的**写法——把 `${{ … }}` 插进 run 字符串传目标名。
+  // 可证伪性：**真实炸过的**写法——把 env 传值换成 run 内插值。
   // Windows runner（PowerShell）上它把值丢掉，只有 Windows 的 job 红。
   // 夹具要把 env 传值那一行去掉、换成插值写法（只换 run 会留下 env，判据仍绿）。
+  //
+  // 2026-09-22 起 DSH_TARGET 放在 job 级别 env（被子进程继承），因此夹具要
+  // 匹配 job 级别的 `env:` 块，而不是 step 级别的。
   const interpolated = text.replace(
-    /env:\n\s*DSH_TARGET: \$\{\{ needs\.preflight\.outputs\.dsh_target \}\}\n(\s*)run: npm run prepare:harness/,
-    'run: npm run prepare:harness -- --dsh-target="${{ needs.preflight.outputs.dsh_target }}"'
+    /env:\n\s*DSH_TARGET: \$\{\{ needs\.preflight\.outputs\.dsh_target \}\}[\s\S]*?\n(\s*)run: npm run prepare:harness/,
+    '$1run: npm run prepare:harness -- --dsh-target="${{ needs.preflight.outputs.dsh_target }}"'
   )
   check(
     !checkDualChannelShape(interpolated).ok,
@@ -582,7 +597,8 @@ export function selfTest() {
     '可伪证性：插值写法必须同时被 findInterpolatedTargetArg 命中'
   )
   check(
-    /Prepare harness resources[\s\S]{0,200}env:/.test(text),
+    /Prepare harness resources[\s\S]{0,200}env:/.test(text) ||
+      /env:\n\s*DSH_TARGET: \$\{\{ needs\.preflight\.outputs\.dsh_target \}\}/.test(text),
     '真实工作流：组装步骤必须用 env 传 DSH_TARGET'
   )
 
