@@ -335,6 +335,68 @@ jobs:
         run: npm run report:patches -- --markdown
 
   # ---------------------------------------------------------------------------
+  # 便携版（Windows zip）：独立配置 + 独立构建，与 NSIS 安装版互不干扰。
+  # ---------------------------------------------------------------------------
+  # 为什么单独成 job 而不是复用 build matrix：
+  #   · 它用 `tauri.portable.conf.json`（`targets: ["zip"]`，无 updater 插件），
+  #     产物形态与 NSIS 完全不同；
+  #   · 便携版是 Windows 独占需求，其他平台不需要它。
+  portable:
+    name: windows / portable zip
+    needs: preflight
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preflight.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            src-tauri
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install build tooling
+        run: npm ci
+
+      - name: Prepare harness resources
+        env:
+          DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
+        run: npm run prepare:harness
+
+      - name: Verify assembled harness tree
+        run: npm run verify:harness-tree
+
+      - name: Build portable app bundle
+        # 用默认配置构建（产出可运行的原始 app 目录 + NSIS installer）。
+        # 便携版从 `target/release/` 的原始 app 目录打包，不需要 Tauri 的
+        # `zip` bundle target（该目标在当前 CLI 版本上不受 Windows 支持）。
+        run: npm run tauri build -- --bundles nsis -v
+
+      - name: Package portable artifact
+        env:
+          DSH_VERSION: ${{ needs.preflight.outputs.dsh_version }}
+        run: |
+          node scripts/package-portable.mjs \
+            --bundle-dir target/release \
+            --out dist/portable \
+            --version "${{ needs.preflight.outputs.version }}"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: portable-windows
+          path: dist/portable/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
   # CLI 产物：把 dsh-host-cli 作为可引用产物发布（见 docs/dev-plan-cli-distribution.md）
   # ---------------------------------------------------------------------------
   # 为什么单独成 job 而不是塞进 build：
@@ -386,11 +448,12 @@ jobs:
           if-no-files-found: error
 
   cli-publish:
-    name: publish CLI artifacts
+    name: publish CLI + portable artifacts
     # needs: build 是硬性的：Release 对象由 build job 的 tauri-action 创建，
     # 先于它上传会失败。needs: cli 同样是硬性的——少一个平台就是在发布一个
     # 覆盖不全的产物集，而用户从资产列表上看不出少了哪个平台。
-    needs: [preflight, build, cli]
+    # needs: portable 同样硬性：便携版是独立产物，缺了它 Release 不完整。
+    needs: [preflight, build, cli, portable]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -403,6 +466,13 @@ jobs:
           merge-multiple: true
           path: dist/cli
 
+      # 下载便携版产物并核验 manifest / 边车 / 归档三者一致。
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: portable-windows
+          merge-multiple: true
+          path: dist/portable
+
       # 这里是**下载回来**的产物（走了一遍 artifact 存储），不是构建目录里的原件：
       # 上传链路改坏文件这件事，本地怎么验都验不出来。逐平台核验归档 / 边车与
       # manifest 三者是否一致。
@@ -411,16 +481,28 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          manifests=(dist/cli/*.manifest.json)
-          if [ ${#manifests[@]} -eq 0 ]; then
+
+          # CLI manifest 核验（原有逻辑，不变）。
+          cli_manifests=(dist/cli/*.manifest.json)
+          if [ ${#cli_manifests[@]} -eq 0 ]; then
             echo "::error::没有找到任何 CLI manifest——打包或 artifact 传递链路断了"
             exit 1
           fi
-          if [ ${#manifests[@]} -ne 3 ]; then
-            echo "::warning::期望 3 个平台的 CLI manifest，实际 ${#manifests[@]} 个"
+          if [ ${#cli_manifests[@]} -ne 3 ]; then
+            echo "::warning::期望 3 个平台的 CLI manifest，实际 ${#cli_manifests[@]} 个"
           fi
-          for manifest in "${manifests[@]}"; do
+          for manifest in "${cli_manifests[@]}"; do
             node scripts/package-cli.mjs --verify-download dist/cli --manifest "${manifest}"
+          done
+
+          # 便携版 manifest 核验。
+          portable_manifests=(dist/portable/*.manifest.json)
+          if [ ${#portable_manifests[@]} -eq 0 ]; then
+            echo "::error::没有找到任何 portable manifest——打包或 artifact 传递链路断了"
+            exit 1
+          fi
+          for manifest in "${portable_manifests[@]}"; do
+            node scripts/package-portable.mjs --verify-download dist/portable --manifest "${manifest}"
           done
 
       - name: Upload artifacts to the release
@@ -430,23 +512,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # nullglob + 逐类断言：某个 glob 没命中时，裸 glob 会把字面量
-          # `dist/cli/*.tar.gz` 当文件名传给 gh，报「找不到该文件」——错误信息指向
-          # 一个不存在的路径，而不是「这类产物没产出来」。这里逐类点名。
           shopt -s nullglob
           files=()
-          for pattern in '*.zip' '*.tar.gz' '*.sha256' '*.manifest.json'; do
-            matched=(dist/cli/${pattern})
+          for pattern in 'dist/cli/*.zip' 'dist/cli/*.tar.gz' 'dist/cli/*.sha256' 'dist/cli/*.manifest.json' \
+                         'dist/portable/*.zip' 'dist/portable/*.tar.gz' 'dist/portable/*.sha256' 'dist/portable/*.manifest.json'; do
+            matched=(${pattern})
             if [ ${#matched[@]} -eq 0 ]; then
-              echo "::error::dist/cli 下没有任何 ${pattern}——该类产物缺失，不应发布一个不完整的产物集"
+              echo "::error::${pattern} 下没有任何产物——该类产物缺失，不应发布一个不完整的产物集"
               exit 1
             fi
             files+=("${matched[@]}")
           done
           echo "将上传 ${#files[@]} 个文件："
           printf '  %s\n' "${files[@]}"
-          # --clobber：workflow_dispatch 兜底重跑时会命中已存在的同名资产，
-          # 不带它就会因「asset already exists」失败（而不是覆盖成新构建）。
           gh release upload "${TAG}" "${files[@]}" --clobber
 
       # 把 CLI 产物写进 Release 正文，否则用户得自己去翻 Assets 列表才知道有它——

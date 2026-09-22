@@ -64,6 +64,7 @@
         <button class="secondary" id="skip" hidden>Skip this version</button>
         <button class="secondary" id="back">Back to Harness</button>
       </div>
+      <p class="notice portable-only" id="portable-notice" hidden></p>
     </main>
     <script>
       const zh = navigator.language.toLowerCase().startsWith('zh');
@@ -221,8 +222,22 @@
       }
 
       // 进入页面立即拉取快照，不等第一次推送（周期检查间隔 6 小时）。
-      if (invoke) {
-        // `updates_status` 返回封套，快照在 `data` 里；事件那条路径给的是裸快照。
+      //
+      // 便携版没有安装器落点，updater 不可用；先探测模式，再决定是否走更新流程。
+      async function initUpdatesPage() {
+        if (!invoke) return;
+        const isPortable = await invoke('portable_mode');
+        if (isPortable) {
+          Object.values(buttons).forEach((btn) => {
+            if (btn.id !== 'back') btn.hidden = true;
+          });
+          const notice = el('portable-notice');
+          notice.textContent = zh
+            ? '便携版不检查更新。请手动替换程序文件以完成升级。'
+            : 'Portable mode does not check for updates. Please replace the application files manually to upgrade.';
+          notice.hidden = false;
+          return;
+        }
         invoke('updates_status')
           .then((envelope) => {
             if (envelope && envelope.success === false) {
@@ -240,6 +255,10 @@
             versionEl.hidden = false;
           })
           .catch(() => {});
+      }
+
+      if (invoke) {
+        initUpdatesPage();
       }
 
       buttons.check.addEventListener('click', () => {

@@ -596,6 +596,15 @@ pub async fn updates_skip(
     ok(())
 }
 
+/// 当前是否为便携版（exe 不在 `Program Files` 下）。
+///
+/// 便携版没有安装器落点，updater 的 NSIS passive 路径不可用；前端据此
+/// 隐藏更新按钮并显示手动替换提示。
+#[tauri::command]
+pub fn portable_mode(app: tauri::AppHandle) -> bool {
+    crate::update::UpdateManager::is_portable_mode(&app)
+}
+
 /// 更新器不可用：`E1003`（环境类，不是网络类）。
 fn updater_unavailable() -> IpcEnvelope<()> {
     environment(

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use dsh_host::contracts::{codes, ErrorCategory, IpcEnvelope};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use tokio::sync::Mutex;
 
@@ -69,6 +69,11 @@ impl UpdateManager {
 
     /// Start the periodic check loop.
     pub fn start(self: &Arc<Self>) {
+        // 便携版不经过安装器，没有 NSIS passive-update 的落点；与其让 updater
+        // 报「环境不可用」，不如在启动时就静默跳过轮询。
+        if Self::is_portable_mode(&self.app) {
+            return;
+        }
         let manager = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             // Initial check shortly after startup.
@@ -274,6 +279,23 @@ impl UpdateManager {
             ErrorCategory::Environment,
             error.to_string(),
         )
+    }
+
+    /// 当前可执行文件是否落在「便携版」形态下。
+    ///
+    /// 判据：exe 的父目录路径若包含 `Program Files`（含 `Program Files (x86)`），
+    /// 则是安装器放好的位置，按安装版处理；否则认为是用户手动解压的便携目录，
+    /// 不启动 updater 轮询。
+    ///
+    /// 取不到 exe 路径时按便携处理（保守策略：宁可跳过更新，也不让 updater
+    /// 在无 installer 落点的环境里反复报错）。
+    pub(crate) fn is_portable_mode(app: &AppHandle) -> bool {
+        app.path()
+            .executable_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_owned()))
+            .map(|dir| !dir.contains("Program Files"))
+            .unwrap_or(true)
     }
 
     /// Skip a specific version for automatic checks.
