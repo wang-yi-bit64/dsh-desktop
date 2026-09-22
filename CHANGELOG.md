@@ -7,6 +7,18 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.3] - 2026-09-22
+
+### ✨ 新功能
+
+- **portable**: add Windows portable zip packaging and portable mode detection ([7b9e6d1](https://github.com/wang-yi-bit64/dsh-desktop/commit/7b9e6d193e8d87db545c0717276cc1f8f613b873))
+
+### 📝 文档
+
+- ADR 篇数补到 36 篇（ADR-049/050 已入库） ([334ff4f](https://github.com/wang-yi-bit64/dsh-desktop/commit/334ff4f8c50fbc0c41ea950e6fe3cc204776f79c))
+- 记录 GNU 工具链本地安装包缺 WebView2Loader.dll 的限制 ([596e91e](https://github.com/wang-yi-bit64/dsh-desktop/commit/596e91eedc3a2ea834b5a0c6b9afdc210bf117f9))
+
+
 ## [0.7.0-alpha.2] - 2026-09-21
 
 ### 🐛 修复
