@@ -287,6 +287,24 @@ pub const DESKTOP_LOG_ROTATIONS: usize = 2;
 /// 契约 C10 — Profile 子目录名。
 pub const PROFILES_DIR_NAME: &str = "profiles";
 
+/// 契约 C10 — 「下次启动请用安全模式」的持久化标记文件名。
+///
+/// # 为什么需要它（2026-09-22，重启失效的根因）
+///
+/// 在此之前，安全模式的选择只活在 `Launcher` 的 builder 参数里：菜单点击 →
+/// `restart_in_safe_mode()` → **本次进程内**以 `desktop-safe-mode` 起 Harness。
+/// 而应用启动路径（`lib.rs` 的 setup）恒调 `start()`，即 `start_with_profile(None)`
+/// → 默认 `web` profile + 普通 patch。于是「关掉应用再打开」必然退回普通模式，
+/// 全量加载第三方插件——用户点了 4 次安全模式，每次重启都被静默撤销。
+///
+/// 标记落在 `dsh_home` 下（与 `profiles/` 同层），因为它是**这台机器的 DSH 状态**，
+/// 不是资源（INV-1：资源目录只读）。存在即「下次启动走安全模式」；缺失即普通模式。
+///
+/// 判据刻意做成「文件是否存在」而不是读文件内容：文件损坏、内容为空、写了一半
+/// 被杀，都仍然表达「上次进了安全模式」这一个意图。安全模式是**恢复路径**，
+/// 这里宁可多恢复一次也不能因为文件读不动就让应用起不来。
+pub const SAFE_MODE_MARKER_FILE: &str = ".safe-mode";
+
 /// 契约 C10 — 会话子目录名。
 pub const SESSIONS_DIR_NAME: &str = "sessions";
 

@@ -85,6 +85,7 @@
 |---|------|------|
 | [049](049-bundle-resources-derived-guard.md) | 打包资源清单由推导校验（E5/E5d），不靠四处手抄保持一致 | 已接受 |
 | [050](050-guard-windows-vs-cleanup-budget.md) | 门禁的等待窗口必须与异步清理的预算对账（E6）；断言「预算内干净」而非单次采样 | 已接受 |
+| [051](051-archived-capability-known-gap.md) | 已归档能力的已知缺口登记口径：写进 §7.2 归档行，四字段齐全，不得用特例分支绕开 | 已接受 |
 
 ## 新增一条 ADR 的规则
 

@@ -39,6 +39,7 @@
     "verify:harness-inject": "node scripts/verify-harness-inject.mjs",
     "verify:harness-entry": "node scripts/verify-harness-entry.mjs",
     "verify:harness-entry:self-test": "node scripts/verify-harness-entry.mjs --self-test",
+    "verify:fault-patterns": "node scripts/verify-plugin-fault-patterns.mjs",
     "verify:version": "node scripts/version.mjs check",
     "verify:commits": "node scripts/conventional-commits.mjs --self-test",
     "verify:changelog": "node scripts/changelog.mjs --self-test",
