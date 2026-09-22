@@ -7,6 +7,27 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.4] - 2026-09-22
+
+### 🐛 修复
+
+- **release**: stop the publish guards depending on wording and unreachable classes ([aac22ca](https://github.com/wang-yi-bit64/dsh-desktop/commit/aac22cab52abf4115053d780b424d15362859183))
+- **ci**: unblock the fmt/clippy gates and the portable job's signing key ([a53419b](https://github.com/wang-yi-bit64/dsh-desktop/commit/a53419bdf1299d1f1e73804de4718e9fafa9813b))
+- **portable**: stop incomplete bundles from passing the release gate ([f5d1d28](https://github.com/wang-yi-bit64/dsh-desktop/commit/f5d1d288ea57c092a93a420152aaca2bb87c7ecb))
+- **plugin-safety-guard**: attribute boot-summary and entry-state faults ([883da3d](https://github.com/wang-yi-bit64/dsh-desktop/commit/883da3d120d11bc8cb46b5812ac7f0468a3bf3aa))
+- **verify**: stop E5 from passing while scanning zero modules ([28cdc86](https://github.com/wang-yi-bit64/dsh-desktop/commit/28cdc8659f4cd7b2fd0a4bf6e9a9156846fadcfc))
+- **harness-entry**: keep the entry alive when a sibling module is missing ([d015ed1](https://github.com/wang-yi-bit64/dsh-desktop/commit/d015ed1ec0966ad1e3ccf511294cbeff535e2314))
+- **safe-mode**: persist the choice so it survives a cold start ([00c7d81](https://github.com/wang-yi-bit64/dsh-desktop/commit/00c7d81751c121938c47e5b06954cd22f716a04d))
+
+### 📝 文档
+
+- **adr**: register the archived plugin isolation gap as ADR-051 ([b6015a7](https://github.com/wang-yi-bit64/dsh-desktop/commit/b6015a76bcb49ae9e34dfdca75e919946ac4a573))
+
+### 🧹 其他
+
+- **portable**: drop the orphaned tauri.portable.conf.json ([14f0ae4](https://github.com/wang-yi-bit64/dsh-desktop/commit/14f0ae435379a4f029ecc62d8248f706fc55b12a))
+- fix safe mode persistence, plugin fault attribution, and register the plugin isolation gap ([89d12f8](https://github.com/wang-yi-bit64/dsh-desktop/commit/89d12f8472ec7b0b187cf21f06051fbd8bcc2b3e))
+
 ## [0.7.0-alpha.3] - 2026-09-22
 
 ### ✨ 新功能

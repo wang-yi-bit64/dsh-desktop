@@ -25,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.0-alpha.3"
+version = "0.7.0-alpha.4"
 authors = ["DataElement"]
 edition = "2021"
 license = "MIT"
