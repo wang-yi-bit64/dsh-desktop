@@ -740,7 +740,7 @@ E7 只认两种合法写法：`match` 臂**与守卫式早退**（`if id == CONS
 - `docs/dev-plan-0.2-hardening.md`：**产品与分发侧增补计划（批次 0.2-A~D）**——与 H0 互补：签名/公证、发布通道、桌面体验底线、上游 PR 候选、反馈闭环；它相对 H0 的独有覆盖与三处优先级冲突写在该文首「关系」一节，**是否并入 H0 及冲突如何裁决归用户**。
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点清单（D1~D11）与裁决记录，留作追溯；「插件禁用语义」的证据链在这里（批次 C），0.2-B4 项要重走它。
 - `docs/dev-plan-cli-distribution.md`：**CLI / runtime 可引用产物的分期计划**（roadmap H1-c/H1-d）——Phase 1（CLI 归档 + sha256 + 回读校验，2026-09-13 已执行）与 Phase 2（runtime 独立发布，未开工，带触发条件与前置改造清单）。**动 CLI 发布形态前先读它**，尤其是「产物不含 runtime」这条边界。
-- `docs/adr/`：**架构决策记录库**——`AGENTS.md` §4「已修复，勿回归」与各 dev-plan 决策点的 ADR 化汇总（34 篇，分组编号 001–048）。代码说明「现在是什么样」，ADR 说明「为什么不是别的样」；新增能力先写代码、后按 `docs/adr/README.md` 的规则登记决策。
+- `docs/adr/`：**架构决策记录库**——`AGENTS.md` §4「已修复，勿回归」与各 dev-plan 决策点的 ADR 化汇总（36 篇，分组编号 001–050）。代码说明「现在是什么样」，ADR 说明「为什么不是别的样」；新增能力先写代码、后按 `docs/adr/README.md` 的规则登记决策。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md`：系统重构设计与开发全流程计划。
 - `docs/system_design.md`：核心系统架构设计、缺陷清单与契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**（裁定不做，代码已删）的两份设计文档；只在需要追溯设计意图或评估「要不要恢复」时读。
