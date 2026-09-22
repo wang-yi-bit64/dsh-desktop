@@ -33,6 +33,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  truncateSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -263,12 +264,53 @@ export function archiveExtension(triple) {
 }
 
 /**
+ * 解包 zip 归档所用的命令。
+ *
+ * ## 🔴 为什么必须是纯函数、且必须跨平台（2026-09-22 修正）
+ *
+ * 调用它的 `--verify-download` 跑在 **`cli-publish` job（`ubuntu-latest`）** 上，
+ * 而要核验的便携包是 Windows 产出的 `.zip`（`portable` job 是 windows-only，
+ * 产物经 artifact 存储汇到发布 job 的 `dist/portable/`）。
+ *
+ * 原实现无条件 spawn `powershell … Expand-Archive`：ubuntu runner 上没有
+ * `powershell`，`spawnSync` 返回 `ENOENT`（`status` 为 `null`），于是核验必然
+ * 报「无法解包」→ 整个发布在**下载完产物之后**判红。它一直没被暴露，是因为
+ * 之前每一次 Release 都更早地死在 portable job（签名密钥缺失）上，
+ * `cli-publish` 根本没执行过——典型的「被上游失败掩盖的下游缺陷」。
+ *
+ * 选择：Windows 用系统自带的 PowerShell（不依赖 PATH 里有 `unzip`）；
+ * 其余平台用 `unzip`（ubuntu / macOS 基础镜像都自带）。
+ * **不能**用 `tar`：GNU tar 读不了 zip，而 `cli-publish` 的 runner 正是 GNU tar。
+ *
+ * 判据做成**纯函数**（平台是入参）是为了能被自测钉住：两个分支都必须逐字对得上，
+ * 否则下一次「换个平台跑就红」还是只能等真发布才发现。
+ *
+ * @param {{archive: string, destDir: string, platform?: string}} opts
+ * @returns {{command: string, args: string[], env?: Record<string, string>}}
+ */
+export function zipExtractCommand({ archive, destDir, platform = process.platform }) {
+  if (platform === 'win32') {
+    return {
+      command: 'powershell',
+      args: [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Expand-Archive -Path $env:DSH_PORTABLE_ARCHIVE -DestinationPath $env:DSH_PORTABLE_DEST -Force'
+      ],
+      // 值走 env 而不是拼进命令行：路径里出现引号/空格时拼串会静默改语义。
+      env: { DSH_PORTABLE_ARCHIVE: archive, DSH_PORTABLE_DEST: destDir }
+    }
+  }
+  return { command: 'unzip', args: ['-o', '-q', archive, '-d', destDir] }
+}
+
+/**
  * `.sha256` 边车内容：`<hex>  <文件名>`（两个空格）。
  */
 export function sidecarText(hash, fileName) {
   return `${hash}  ${fileName}\n`
 }
-
 /**
  * 解析 `.sha256` 边车。形状不认识时返回 `null`。
  */
@@ -443,26 +485,22 @@ export function verifyDownloaded({ dir, manifestPath }) {
     const probeDir = mkdtempSync(join(tmpdir(), 'dsh-portable-probe-'))
     try {
       const isZip = manifest.archive.endsWith('.zip')
-      const extract = isZip
-        ? spawnSync(
-            'powershell',
-            [
-              '-NoProfile',
-              '-NonInteractive',
-              '-Command',
-              'Expand-Archive -Path $env:DSH_PORTABLE_ARCHIVE -DestinationPath $env:DSH_PORTABLE_DEST -Force'
-            ],
-            {
-              env: { ...process.env, DSH_PORTABLE_ARCHIVE: archive, DSH_PORTABLE_DEST: probeDir },
-              stdio: 'ignore'
-            }
-          )
-        : spawnSync('tar', ['-xzf', basename(archive), '-C', probeDir], {
-            cwd: dirname(archive),
-            stdio: 'ignore'
-          })
+      // 解包命令按平台选（见 `zipExtractCommand` 的说明）：这一步跑在
+      // `cli-publish`（ubuntu）上，无条件 spawn `powershell` 会让核验必然失败。
+      const spec = isZip
+        ? zipExtractCommand({ archive, destDir: probeDir })
+        : { command: 'tar', args: ['-xzf', basename(archive), '-C', probeDir] }
+      const extract = spawnSync(spec.command, spec.args, {
+        ...(spec.env ? { env: { ...process.env, ...spec.env } } : {}),
+        ...(isZip ? {} : { cwd: dirname(archive) }),
+        stdio: 'ignore'
+      })
       if (extract.error || extract.status !== 0) {
-        problems.push(`${manifest.archive} 无法解包（退出码 ${extract.status ?? 'n/a'}）`)
+        problems.push(
+          `${manifest.archive} 无法解包（命令 ${spec.command}，退出码 ${extract.status ?? 'n/a'}${
+            extract.error ? `，${extract.error.code ?? extract.error.message}` : ''
+          }）`
+        )
       } else {
         const exeName = manifest.source ?? findAppExe(probeDir)?.name
         if (!exeName) {
@@ -509,6 +547,18 @@ export function verifyDownloaded({ dir, manifestPath }) {
  * @returns {{base: string, archive: string, sidecar: string, manifestPath: string, manifest: object, verify: string[], runtime: object}}
  */
 export function packagePortable({ bundleDir, outDir, triple, version }) {
+  // 便携版是 **Windows 独占**产物：stage 运行时树走 PowerShell `Copy-Item`，
+  // 出归档走 PowerShell `Compress-Archive`，而且包里必须带 `.exe` 与
+  // `WebView2Loader.dll`。这里显式拦住，把「换平台跑会得到一句语焉不详的
+  // Compress-Archive 失败（退出码 n/a）」变成一句读得懂的前置条件；
+  // 发布演练也据此声明「本机造不出便携版」这一类产物（见
+  // `scripts/dry-run-cli-publish.mjs` 的产物类契约）。
+  if (process.platform !== 'win32') {
+    throw new Error(
+      `便携版打包依赖 PowerShell，是 Windows 独占产物；当前平台 ${process.platform} 无法打包：${bundleDir}`
+    )
+  }
+
   const appDir = resolve(bundleDir)
   if (!existsSync(appDir)) {
     throw new Error(`输入目录不存在：${bundleDir}`)
@@ -712,6 +762,82 @@ export function packagePortable({ bundleDir, outDir, triple, version }) {
 }
 
 // ---------------------------------------------------------------------------
+// 夹具构造
+// ---------------------------------------------------------------------------
+
+/**
+ * 造一个「够格」的 bundleDir 夹具：应用 exe + 根目录旁挂依赖 + 一棵体积过
+ * `MIN_RUNTIME_BYTES` 护栏的 `resources/` 运行时树。
+ *
+ * ## 为什么导出（2026-09-22）
+ *
+ * `packagePortable` 的前置硬校验（`inspectBundleDir`）对输入有 5 条要求
+ * （exe / 三棵运行时子树 / 内置 Node / 体积护栏 / 旁挂依赖），夹具必须逐条满足。
+ * 发布演练 `scripts/dry-run-cli-publish.mjs` 也要造一份同样的输入去调**真的**
+ * `packagePortable`（而不是手抄一份打包逻辑）。两处各写一份夹具必然漂移——
+ * 于是把夹具构造收在这里，自测与演练共用同一个实现；判据（`inspectBundleDir`）
+ * 仍是唯一真源，夹具一旦漏项，两条调用方都会当场报错。
+ *
+ * ## 体积为什么用 `truncateSync`
+ *
+ * `dirStats` 只对 `statSync().size` 求和，因此「逻辑大小」就够——不必真写 100 MB。
+ * 原自测走 Windows `fsutil file createnew`，那要额外依赖一个系统命令；`truncateSync`
+ * 是纯 Node、无需权限、各平台语义一致。
+ *
+ * @param {{dir: string, triple: string, runtimeBytes?: number, fillerBlocks?: number,
+ *   fillerBytes?: number, withSidecar?: boolean}} opts
+ *   `fillerBlocks` 是给「归档体积」那类断言备的**不可压缩**数据（Deflate 压不动）；
+ *   只需要「过前置校验」的调用方传 0 即可，不必付这份时间与磁盘代价。
+ * @returns {{exeName: string, resourcesDir: string, runtime: {files: number, bytes: number}}}
+ */
+export function makeBundleFixture({
+  dir,
+  triple,
+  runtimeBytes = MIN_RUNTIME_BYTES + 8 * 1024 * 1024,
+  fillerBlocks = 0,
+  fillerBytes = 32 * 1024 * 1024,
+  withSidecar = true
+}) {
+  const isWindows = /windows|win32/.test(triple)
+  mkdirSync(dir, { recursive: true })
+
+  // ⚠️ exe 名带空格是**刻意的**：真实产物就叫 `DSH Desktop.exe`，而归档 / 解包两步
+  //    都要把路径穿过 PowerShell 命令行。用一个不含空格的假名会把这条风险盖掉。
+  const exeName = 'DSH Desktop.exe'
+  writeFileSync(join(dir, exeName), Buffer.alloc(32 * 1024, 9))
+  if (withSidecar && isWindows) writeFileSync(join(dir, 'WebView2Loader.dll'), Buffer.alloc(1024, 7))
+
+  const resourcesDir = join(dir, 'resources')
+  for (const sub of REQUIRED_RUNTIME_DIRS) mkdirSync(join(resourcesDir, sub), { recursive: true })
+
+  // 不可压缩填充：**每块独立分配 + 独立填充**。
+  // `Buffer.alloc` 会拿 Node 的共享零填充池（未改写过的小 Buffer 常返回同一个
+  // ArrayBuffer），复用同一个对象会让「多块」实际只有一块的体积与熵。
+  for (let i = 0; i < fillerBlocks; i += 1) {
+    const buf = Buffer.alloc(fillerBytes)
+    let x = (i + 1) * 0x9e3779b1
+    for (let j = 0; j < buf.length; j += 1) {
+      x = (Math.imul(x, 1103515245) + 12345) | 0
+      buf[j] = (x >>> 24) & 0xff
+    }
+    writeFileSync(join(resourcesDir, 'harness', 'node_modules', `filler-${i}.bin`), buf)
+  }
+
+  // 体积护栏：只置「逻辑大小」，不真写（见上）。零内容还能让 Deflate 秒过。
+  const bulk = join(resourcesDir, 'harness', 'node_modules', 'bulk.bin')
+  writeFileSync(bulk, '')
+  truncateSync(bulk, runtimeBytes)
+
+  writeFileSync(
+    join(resourcesDir, 'node', isWindows ? 'node.exe' : 'node'),
+    Buffer.alloc(64 * 1024, 3)
+  )
+  writeFileSync(join(resourcesDir, 'MANIFEST.json'), '{}')
+
+  return { exeName, resourcesDir, runtime: dirStats(resourcesDir) }
+}
+
+// ---------------------------------------------------------------------------
 // 自测
 // ---------------------------------------------------------------------------
 
@@ -736,6 +862,32 @@ export function selfTest() {
   check(parseSidecar(`${hash} x.zip`) === null, '可伪证性：单空格分隔的边车必须被判为无效')
   check(parseSidecar('') === null, '可伪证性：空边车必须被判为无效')
 
+  // 2b) 解包命令必须**按平台**选：`--verify-download` 跑在 ubuntu 的发布 job 上，
+  //     无条件 spawn `powershell` 会让核验必然失败（见 zipExtractCommand 说明）。
+  //     判据是纯函数，因此这里能钉住两个分支，而不必等真发布换平台才暴露。
+  const zipOnWindows = zipExtractCommand({ archive: 'a.zip', destDir: 'd', platform: 'win32' })
+  check(zipOnWindows.command === 'powershell', 'Windows 上解 zip 必须用系统自带 PowerShell')
+  check(
+    zipOnWindows.args.some((a) => a.includes('Expand-Archive')),
+    'Windows 上的解包动作必须是 Expand-Archive'
+  )
+  check(
+    zipOnWindows.env?.DSH_PORTABLE_ARCHIVE === 'a.zip' && zipOnWindows.env?.DSH_PORTABLE_DEST === 'd',
+    'Windows 分支必须用 env 传路径（拼进命令行会在路径含引号时静默改语义）'
+  )
+  for (const platform of ['linux', 'darwin']) {
+    const spec = zipExtractCommand({ archive: 'a.zip', destDir: 'd', platform })
+    check(spec.command === 'unzip', `${platform} 上解 zip 必须用 unzip（那里没有 powershell）`)
+    check(
+      spec.args.includes('-o') && spec.args.includes('a.zip') && spec.args.includes('d'),
+      `${platform} 的 unzip 参数必须包含 -o 与归档 / 目标目录`
+    )
+    check(
+      !`${spec.command} ${spec.args.join(' ')}`.includes('powershell'),
+      `可伪证性：${platform} 分支不得再依赖 powershell`
+    )
+  }
+
   // 3) 真打包回读（当前平台）。
   const hostTripleValue = (() => {
     const out = spawnSync('rustc', ['-vV'], { encoding: 'utf8' })
@@ -750,91 +902,22 @@ export function selfTest() {
     // 合成一个「假 target/release/」目录：内含一个 exe、根目录旁挂依赖（Windows
     // 上是 WebView2Loader.dll），以及一棵体积达标的 resources/ 运行时树。
     //
-    // ⚠️ resources/ 的体量必须过 MIN_RUNTIME_BYTES 护栏，否则前置校验会（正确地）
-    //    拒绝打包，自测就测不到「正常路径」了。这里写稀疏内容凑体积，不真拷 100 MB。
+    // 夹具构造收在 `makeBundleFixture` 里（发布演练 `dry-run-cli-publish.mjs`
+    // 共用同一份实现，避免两处各写一份而漂移）。这里额外要 2 块**不可压缩**
+    // filler：「归档体积」那条断言靠它，而不是靠 `resources/` 的逻辑大小——
+    // 零内容 Deflate 之后只剩几十 KiB，用它会把「空壳」那条断言测成假绿。
+    //
+    // ⚠️ 打包本体是 Windows 独占（`packagePortable` 有前置条件硬拦），因此本脚本的
+    //    **打包类**判据只在本机为 Windows 时有意义；命名 / 边车 / 解包命令那几条是
+    //    纯逻辑（平台是入参），在任何宿主上都照样跑、照样有效。
+    //
+    // （原先这段是内联的：4 块 32 MiB 全零块 + `fsutil` 稀疏文件 + 两个局部
+    //   辅助函数；块数从 4 降到 2 只是省自测时间，断言强度不变——1 MiB 的门槛
+    //   远在 2×32 MiB 之下，而「丢掉 99% 内容」照样会掉到门槛以下。）
     const fakeReleaseDir = join(tmp, 'tauri-release')
-    mkdirSync(fakeReleaseDir, { recursive: true })
-    const fakeExeName = 'DSH Desktop.exe'
-    writeFileSync(join(fakeReleaseDir, fakeExeName), Buffer.alloc(32 * 1024, 9))
-    if (isWindows) writeFileSync(join(fakeReleaseDir, 'WebView2Loader.dll'), Buffer.alloc(1024, 7))
-
-    const fakeResources = join(fakeReleaseDir, 'resources')
-    for (const sub of ['node', 'bin', join('harness', 'node_modules')]) {
-      mkdirSync(join(fakeResources, sub), { recursive: true })
-    }
-
-    /* =======================================================================
-     * 2026-09-22 修正：夹具「够大」与守卫门槛「100 MiB」是**两件不同的事**
-     * =======================================================================
-     *
-     * 原先这里写 4 个 32 MiB 的全零块（合计 128 MiB），断言「归档 > 1 MiB 且
-     * runtime.bytes >= 100 MiB」。实测这组夹具会让自测**红**，而且原因是夹具
-     * 设计错了、不是代码错了。三条事实叠在一起：
-     *
-     *   1. `Compress-Archive`（Deflate）对**可压缩**数据压缩率极高——实测
-     *      全零块 128 MiB 压完只剩几十 KiB，稳稳低于 `> 1 MiB` 的断言。
-     *   2. `Buffer.alloc` 会拿 Node 的**共享零填充池**（该池对**未改写过的小**
-     *      Buffer 常返回同一个 ArrayBuffer），因此夹具里那些块极易互为同一块内存
-     *      ——即便换成「假随机填充」，只要写法上把它们写成同一个对象，填充也只
-     *      改写一次、体积与「单块」无异。
-     *   3. 断言 `runtime.bytes >= MIN_RUNTIME_BYTES` 测的是 `dirStats` 的**求和
-     *      能力**，与归档大小无关；它是唯一真正需要 100 MiB 的那条。
-     *
-     * 于是夹具必须把「体积凑够 100 MiB」与「归档够大」**分开**满足：
-     *
-     *   - 100 MiB 走 **Windows `fsutil` 稀疏文件**：`dirStats` 只求和不过滤，
-     *     稀疏写入的 `size` 照样计入，128 MiB 的 `runtime.bytes` 无需真写 128 MiB。
-     *     非 Windows 上退回实写 32 MiB（自测的归档体积断言在那边不跑）。
-     *   - 归档体积走 **不可压缩的伪随机数据**，且**每块独立分配 + 独立填充**，
-     *     从写法上堵住上面第 2 条陷阱。
-     *
-     * 顺带：这组夹具与只读它的 `noDllDir` 共用同一块 `filler` 会踩 #2 的坑，
-     * 因此下面两个目录的 filler 各自独立生成。
-     * ======================================================================= */
-
-    /** 生成 `count` 块**互不相同、不可压缩**的伪随机填充数据。 */
-    const makeFiller = (count, bytes = 32 * 1024 * 1024) => {
-      const buffers = []
-      for (let i = 0; i < count; i += 1) {
-        const buf = Buffer.alloc(bytes)
-        let x = (i + 1) * 0x9e3779b1
-        for (let j = 0; j < buf.length; j += 1) {
-          x = (Math.imul(x, 1103515245) + 12345) | 0
-          buf[j] = (x >>> 24) & 0xff
-        }
-        buffers.push(buf)
-      }
-      return buffers
-    }
-
-    /**
-     * 造一个「体积达标但不真占盘」的文件。
-     *
-     * Windows 上用 `fsutil file createnew` 落在 NTFS 稀疏/未置零区间上：文件
-     * `size` 立刻变成目标值，而 `dirStats`（求和 `statSync().size`）照样把它
-     * 计入——这正是自测需要的语义。非 Windows 上退回实写一块小的。
-     *
-     * @returns {'sparse'|'real'} 实际采用的策略，失败时降级为 `'real'` 而不是抛错
-     */
-    const makeBigFile = (path, bytes) => {
-      if (isWindows) {
-        const r = spawnSync('fsutil', ['file', 'createnew', path, String(bytes)], {
-          stdio: 'ignore'
-        })
-        if (!r.error && r.status === 0) return 'sparse'
-      }
-      writeFileSync(path, Buffer.alloc(Math.min(bytes, 32 * 1024 * 1024)))
-      return 'real'
-    }
-
-    // 主夹具：4 块不可压缩 filler（撑归档体积）+ 1 个 128 MiB 稀疏文件（撑 runtime.bytes）。
-    const filler = makeFiller(4)
-    for (let i = 0; i < filler.length; i += 1) {
-      writeFileSync(join(fakeResources, 'harness', 'node_modules', `filler-${i}.bin`), filler[i])
-    }
-    makeBigFile(join(fakeResources, 'harness', 'node_modules', 'bulk-128m.bin'), 128 * 1024 * 1024)
-    writeFileSync(join(fakeResources, 'node', isWindows ? 'node.exe' : 'node'), Buffer.alloc(64 * 1024, 3))
-    writeFileSync(join(fakeResources, 'MANIFEST.json'), '{}')
+    const fixture = makeBundleFixture({ dir: fakeReleaseDir, triple, fillerBlocks: 2 })
+    const fakeExeName = fixture.exeName
+    const fakeResources = fixture.resourcesDir
 
     const result = packagePortable({
       bundleDir: fakeReleaseDir,
@@ -852,8 +935,8 @@ export function selfTest() {
     // 3a) 归档体积必须与输入量级相符——这是本次「4.36 MiB 空壳」缺陷的正面守卫。
     //
     //     ⚠️ 这条断言的**有效下限**取决于夹具里有多少不可压缩数据，而不是
-    //     `resources/` 有多大。上面的 filler 实测压完约 128 MB（Deflate 无
-    //     可利用结构），因此 1 MiB 是个既宽松又真正有效的门槛：空壳回归
+    //     `resources/` 有多大。上面的 filler 是伪随机字节（Deflate 无可用结构），
+    //     压完仍是同量级，因此 1 MiB 是个既宽松又真正有效的门槛：空壳回归
     //     （丢 99% 内容 → 几百 KiB）会立刻变红。
     const archiveBytes = statSync(result.archive).size
     check(
@@ -905,24 +988,13 @@ export function selfTest() {
     // 3c) 可伪证性：输入缺 WebView2Loader.dll 时必须**拒绝打包**，而不是静默出包。
     if (isWindows) {
       const noDllDir = join(tmp, 'release-no-dll')
-      mkdirSync(noDllDir, { recursive: true })
       // 顶层放**真 exe**（与真实产物形状一致），缺的只是根目录旁的 DLL。
-      writeFileSync(join(noDllDir, fakeExeName), Buffer.alloc(32 * 1024, 9))
-      const noDllResources = join(noDllDir, 'resources')
-      for (const sub of ['node', 'bin', join('harness', 'node_modules')]) {
-        mkdirSync(join(noDllResources, sub), { recursive: true })
-      }
-      // 与主夹具**各自独立**生成 filler：共享同一块 Buffer 会因 Node 的
-      // 共享零填充池而互相污染填充结果（见上方夹具说明第 2 条）。
-      const noDllFiller = makeFiller(4)
-      for (let i = 0; i < noDllFiller.length; i += 1) {
-        writeFileSync(join(noDllResources, 'harness', 'node_modules', `filler-${i}.bin`), noDllFiller[i])
-      }
-      // ⚠️ 体积必须过 `MIN_RUNTIME_BYTES` 护栏，否则守卫会先因「运行时树不完整」
-      //    判红，这条夹具就**测不到**它真正要测的那一支（旁挂依赖缺失）——
-      //    断言虽仍绿，但证伪的是错误的理由。
-      makeBigFile(join(noDllResources, 'harness', 'node_modules', 'bulk-128m.bin'), 128 * 1024 * 1024)
-      writeFileSync(join(noDllResources, 'node', 'node.exe'), Buffer.alloc(64 * 1024, 3))
+      // 走共享夹具构造：`withSidecar: false` 就是「除 DLL 之外一切都合规」，
+      // 这样断言才**只**证伪「旁挂依赖缺失」这一支——若连体积/子树都不达标，
+      // 守卫会先因别的原因判红，断言虽绿但证伪的是错误的理由。
+      // 不要 filler：这个夹具注定在**打包之前**被拒，归档根本不会产出，
+      // 塞不可压缩数据只是白烧时间。
+      makeBundleFixture({ dir: noDllDir, triple, withSidecar: false, fillerBlocks: 0 })
       let threw = false
       let message = ''
       try {

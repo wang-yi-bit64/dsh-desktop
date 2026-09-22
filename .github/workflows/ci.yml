@@ -133,6 +133,16 @@ jobs:
       - name: Verify CLI artifact packaging guard
         run: npm run verify:cli-package
 
+      # 便携版打包器的自测。**刻意只在 Windows 上跑**：`packagePortable` 的
+      # stage 与归档两步都走 PowerShell，`portable` job 本身也是 windows-only，
+      # 换个平台跑只会得到一句「无法打包」——那不是缺陷，是平台前提。
+      # 它里面的**纯逻辑**判据（命名 / 边车 / 「解 zip 按平台选命令」）与宿主
+      # 无关，因此跑一次等于两个分支都验到了；其中那条正是 2026-09-22 修掉的
+      # 「核验步骤在 ubuntu 上 spawn powershell」缺陷的守卫。
+      - name: Verify portable packaging guard
+        if: runner.os == 'Windows'
+        run: npm run verify:portable-package
+
       # 官方 profile 保留名守卫（纯静态，不联网）。官方桌面版独占 `desktop` 这个
       # profile 名及其**全部大小写变体**（已实现、未发布）。本仓当前未使用保留名
       # （安全模式是 `desktop-safe-mode`，默认是裸子命令 `web`），因此这是一道

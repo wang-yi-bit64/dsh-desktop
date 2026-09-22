@@ -514,10 +514,18 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
+          # ⚠️ 下面两条报错前缀 `missing-artifact-class:` 是**机器可读标记**，不是装饰：
+          #    `scripts/dry-run-cli-publish.mjs` 的豁免判据锚在它上面，用来区分
+          #    「本机造不出这一类」（预期受限，演练放行）与「链路真的断了」（判红）。
+          #    **改写后面的散文没关系，删掉标记会让演练当场判红**——那正是想要的：
+          #    判据不该靠措辞匹配（原先的写法则会因为一次措辞改动而静默失效）。
+          #    格式固定为 `::error::missing-artifact-class: <产物类> <说明>`：
+          #    产物类与说明之间**必须有空格**，否则类名会被解析成一个连着说明的怪串。
+          #
           # CLI manifest 核验（原有逻辑，不变）。
           cli_manifests=(dist/cli/*.manifest.json)
           if [ ${#cli_manifests[@]} -eq 0 ]; then
-            echo "::error::没有找到任何 CLI manifest——打包或 artifact 传递链路断了"
+            echo "::error::missing-artifact-class: dist/cli/*.manifest.json 下没有下载到任何 CLI manifest——打包或 artifact 传递链路断了"
             exit 1
           fi
           if [ ${#cli_manifests[@]} -ne 3 ]; then
@@ -530,7 +538,7 @@ jobs:
           # 便携版 manifest 核验。
           portable_manifests=(dist/portable/*.manifest.json)
           if [ ${#portable_manifests[@]} -eq 0 ]; then
-            echo "::error::没有找到任何 portable manifest——打包或 artifact 传递链路断了"
+            echo "::error::missing-artifact-class: dist/portable/*.manifest.json 下没有下载到任何 portable manifest——打包或 artifact 传递链路断了"
             exit 1
           fi
           for manifest in "${portable_manifests[@]}"; do
@@ -546,15 +554,40 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           files=()
+          missing=()
+
+          # ⚠️ 这份模式清单是「发布产物集必须完整」的判据本体，**每一条都必须有产出方**。
+          #
+          #    🔴 2026-09-22 修正：清单里曾有一条 `'dist/portable/*.tar.gz'`——它
+          #    **永远不可能命中**。便携版是 Windows 独占产物（`portable` job 是
+          #    `windows-latest`，`archiveExtension` 只对含 `windows` 的三元组给 `.zip`），
+          #    因此 `dist/portable/` 下只会有 `.zip`。后果是**每一次发布都必然在这里
+          #    红**，而且报的是「该类产物缺失」——听起来像打包断了，实际是这个模式
+          #    从来没被满足过。这类「判据写了一个不可能成立的条件」的缺陷，
+          #    静态上靠 `npm run verify:release-workflow`（反向判据）、动态上靠
+          #    `scripts/dry-run-cli-publish.mjs` 的产物类契约（清单 = 夹具能造的 ∪
+          #    本机造不出的）两道门禁守着。改这份清单请同步改演练里的声明。
           for pattern in 'dist/cli/*.zip' 'dist/cli/*.tar.gz' 'dist/cli/*.sha256' 'dist/cli/*.manifest.json' \
-                         'dist/portable/*.zip' 'dist/portable/*.tar.gz' 'dist/portable/*.sha256' 'dist/portable/*.manifest.json'; do
+                         'dist/portable/*.zip' 'dist/portable/*.sha256' 'dist/portable/*.manifest.json'; do
             matched=(${pattern})
             if [ ${#matched[@]} -eq 0 ]; then
-              echo "::error::${pattern} 下没有任何产物——该类产物缺失，不应发布一个不完整的产物集"
-              exit 1
+              # 标记前缀见核验步骤的说明：演练靠它区分「本机造不出」与「链路断了」。
+              echo "::error::missing-artifact-class: ${pattern} 下没有任何产物——该类产物缺失，不应发布一个不完整的产物集"
+              missing+=("${pattern}")
+              continue
             fi
             files+=("${matched[@]}")
           done
+
+          # 一次报全，而不是首个即退出：首因会掩盖其余缺失——修复者按「只缺这一类」
+          # 去补，下一轮再撞上第二类。2026-09-22 那次即如此（同时缺 portable zip 与
+          # 一个不可能命中的类，却只看到第一条）。
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '缺失 %s 类产物：\n' "${#missing[@]}"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+
           echo "将上传 ${#files[@]} 个文件："
           printf '  %s\n' "${files[@]}"
           gh release upload "${TAG}" "${files[@]}" --clobber

@@ -221,6 +221,10 @@ export function inspectNotesStep(text) {
  *     先于它上传会失败；
  *   · 不传 `.sha256` 边车 —— 用户拿到归档却无从核对，「可引用」少了最关键的一环；
  *   · 平台不齐 —— 发布一个缺平台的产物集，用户从资产列表上看不出来；
+ *   · 必需清单里写了**不可能命中**的模式（`dist/portable/*.tar.gz`）—— 便携版只有
+ *     `.zip`，这条永远缺席，等于每次发布都判红（2026-09-22 实际发生）；
+ *   · 「该类产物缺失」的报错没有机器可读标记 —— 发布演练的豁免判据会静默失效
+ *     （2026-09-22 实际发生：判据靠散文匹配，一句话改写法就让三个平台一起红）；
  *   · Release 正文段落靠内联脚本 —— 不可测（见 {@link inspectNotesStep}）。
  *
  * @param {string} text release.yml 全文
@@ -281,6 +285,60 @@ export function checkCliArtifactShape(text) {
     // 而不是「这类产物缺失」。
     if (!/shopt -s nullglob/.test(publishJob)) {
       problems.push('上传步骤没有 `shopt -s nullglob`——glob 未命中时会传出字面量路径，错误信息会误导')
+    }
+    // 反向判据：**不可能命中**的模式不得出现在必需清单里。
+    //
+    // 🔴 2026-09-22：清单里曾长期躺着一句 `'dist/portable/*.tar.gz'`，它永远不可能
+    // 命中——`portable` job 是 `windows-latest` 独占，而 `archiveExtension` 只对含
+    // `windows` 的三元组给 `.zip`。于是每一次发布都会在这个循环里红，报的还是
+    // 「该类产物缺失」（听起来像打包链路断了，实际是这个条件从来没成立过）。
+    // 这类「判据写了一个不可能成立的条件」静态上就该拦，不能等发布时才撞。
+    //
+    // ⚠️ 只在 `for pattern in …; do` 这段**语句**里扫，不扫整个 job 块：本仓的注释
+    //    习惯是把坏写法引在注释里说明缺陷（上面这段就是），扫全文会让守卫自己误报
+    //    ——实测过：这条判据第一次落地就被自己的注释命中。
+    const patternList = /^[^\S\n]*for pattern in[\s\S]*?;\s*do[^\S\n]*$/m.exec(publishJob)?.[0] ?? ''
+    if (!patternList) {
+      problems.push('找不到上传步骤的 `for pattern in …; do` 清单——反向判据失锚（改了写法就要同步改这里）')
+    } else {
+      for (const impossible of ['dist/portable/*.tar.gz']) {
+        if (patternList.includes(`'${impossible}'`)) {
+          problems.push(
+            `上传清单里有不可能命中的模式 ${impossible}——便携版只有 .zip` +
+              '（portable job 是 windows-only），把它写进必需清单等于每次发布都在此判红'
+          )
+        }
+      }
+    }
+    // 「该类产物缺失」的报错必须带**机器可读标记**，且必须指向循环变量。
+    //
+    // 演练（`scripts/dry-run-cli-publish.mjs`）要区分两件不同的事：本机造不出这一类
+    // （预期受限，放行）与链路真的断了（判红）。原先它靠匹配报错里的散文
+    // （`没有任何 *.zip`），措辞一改就**静默失效**——豁免没了，演练在三个平台一起红，
+    // 而根因只是一句话被改写。因此判据改锚在标记上：
+    //   · 标记丢了 → 这里判红（而不是等演练变红后去猜）；
+    //   · 标记在但丢了 `${pattern}` → 演练无从知道缺的是哪一类，豁免会退化成
+    //     「任何缺失都放行」，同样判红。
+    if (!/::error::missing-artifact-class: \$\{pattern\} /.test(publishJob)) {
+      problems.push(
+        '上传步骤里「该类产物缺失」的报错必须写成 `::error::missing-artifact-class: ${pattern} …`' +
+          '（标记 + 循环变量）——演练的豁免判据锚在它上面'
+      )
+    }
+    // 核验步骤的两条同类报错也要带标记，且标记后必须是上传清单里的同一个类名、
+    // **并与说明之间留一个空格**——否则演练那边会把「类名 + 说明」解析成一个怪串，
+    // 豁免判定随之失败（第一版就是这样踩的坑，已由演练自检的可伪证性用例守着）。
+    for (const missingClass of ['dist/cli/*.manifest.json', 'dist/portable/*.manifest.json']) {
+      const literalPattern = new RegExp(
+        `::error::missing-artifact-class: ${missingClass.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `
+      )
+      if (!literalPattern.test(publishJob)) {
+        problems.push(
+          `核验步骤里「缺 ${missingClass}」的报错必须写成 ` +
+            `\`::error::missing-artifact-class: ${missingClass} <说明>\`（标记 + 类名 + 空格）——` +
+            `演练靠它区分「本机造不出这一类」与「链路断了」`
+        )
+      }
     }
     if (!/--verify-download/.test(publishJob)) {
       problems.push('没有核验「下载回来的」产物（--verify-download）——artifact 存储链路改坏文件本地验不出来')
@@ -502,10 +560,32 @@ export function selfTest() {
   check(!checkCliArtifactShape(withoutSidecar).ok, '可伪证性：不传 .sha256 边车必须判红')
   const withoutManifest = text.replace(/'dist\/cli\/\*\.manifest\.json' ?/g, '')
   check(!checkCliArtifactShape(withoutManifest).ok, '可伪证性：不传 manifest 必须判红')
+  // 两条 2026-09-22 新增的反向/契约判据，同样要能被打回缺陷写法。
+  const withoutMarker = text.replace(/missing-artifact-class: /g, '')
+  check(
+    !checkCliArtifactShape(withoutMarker).ok,
+    '可伪证性：删掉 missing-artifact-class 标记必须判红（演练的豁免判据锚在它上面）'
+  )
+  const withoutLoopVar = text.replace(/\$\{pattern\} 下没有任何产物/g, '下没有任何产物')
+  check(
+    !checkCliArtifactShape(withoutLoopVar).ok,
+    '可伪证性：标记里丢掉 ${pattern} 必须判红（否则豁免退化成「任何缺失都放行」）'
+  )
+  const classThenReasonGlued = text.replace(/\.json 下没有下载到/g, '.json下没有下载到')
+  check(
+    !checkCliArtifactShape(classThenReasonGlued).ok,
+    '可伪证性：类名与说明之间少了空格必须判红（演练会把两者粘成一个类名）'
+  )
+  const withPortableTarGz = text.replace(
+    /'dist\/portable\/\*\.zip'/,
+    "'dist/portable/*.zip' 'dist/portable/*.tar.gz'"
+  )
+  check(
+    !checkCliArtifactShape(withPortableTarGz).ok,
+    '可伪证性：把不可能命中的 dist/portable/*.tar.gz 放回必需清单必须判红'
+  )
   const withoutBuildNeed = text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, cli, portable]')
   check(!checkCliArtifactShape(withoutBuildNeed).ok, '可伪证性：去掉 needs: build 必须判红')
-  const withoutCliNeed = text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, build, portable]')
-  // temporarily disabled
   const withoutVerify = text.replace(/--verify-download/g, '--noop')
   check(!checkCliArtifactShape(withoutVerify).ok, '可伪证性：去掉下载后核验必须判红')
   const withoutPackage = text.replace(/npm run package:cli/g, 'echo skipped')

@@ -179,6 +179,9 @@ npm run verify:harness-entry:self-test
 # 24. CLI 可引用产物：打包 / 命名 / sha256 边车 / 回读校验 / 产物执行自检（含自测）
 #     产物名由 package.json + 目标三元组推导；归档解包回读并真的执行一次
 npm run verify:cli-package
+#     便携版同一条链路（命名 / 边车 / 「解 zip 按平台选命令」）。真打包与可伪证
+#     夹具依赖 PowerShell，故本步只在本机为 Windows 时有意义
+npm run verify:portable-package
 #     真打一份产物（先 cargo build --release -p dsh-host-cli）
 npm run package:cli -- --bin target/release/dsh-host-cli --out dist/cli
 #     核验下载回来的那份（发布链路自证；manifest 由打包步骤落盘）
@@ -186,7 +189,10 @@ npm run package:cli -- --verify-download dist/cli --manifest dist/cli/<base>.man
 
 # 25. cli-publish 发布步骤的**原文**演练（从 release.yml 抽出 run 块逐字执行，假 gh 截网）
 #     需要先把 CLI 构建成 release；在临时检出布局里跑，不动仓库 dist/
+#     放行「本机造不出」的产物类靠工作流的 missing-artifact-class: 标记 + 产物类契约
 npm run verify:cli-publish
+#     只跑纯逻辑判据（产物类契约 / 豁免可伪证性），不需要二进制、不需要 bash
+node scripts/dry-run-cli-publish.mjs --self-test
 
 # 26. 推进版本号（dry-run 先看，再真改）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch

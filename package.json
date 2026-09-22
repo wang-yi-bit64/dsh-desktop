@@ -51,6 +51,7 @@
     "fault-inject": "node scripts/fault-inject.mjs",
     "package:cli": "node scripts/package-cli.mjs",
     "verify:cli-package": "node scripts/package-cli.mjs --self-test",
+    "verify:portable-package": "node scripts/package-portable.mjs --self-test",
     "verify:cli-publish": "node scripts/dry-run-cli-publish.mjs",
     "smoke": "node scripts/smoke-launch.mjs",
     "smoke:headless": "node scripts/smoke-launch.mjs --level=1",
