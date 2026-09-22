@@ -145,6 +145,81 @@ pub fn generate_isolated_profile_config(options: &SafeModeOptions) -> serde_json
     })
 }
 
+// ---------------------------------------------------------------------------
+// 安全模式选择的持久化（2026-09-22）
+// ---------------------------------------------------------------------------
+//
+// 缺陷背景见 `dsh-contracts::constants::SAFE_MODE_MARKER_FILE` 的文档。这里只
+// 强调一个设计取舍：**判据是「文件是否存在」，不读内容**。
+//
+// 为什么不用 JSON 记 `{"profile":"desktop-safe-mode"}` 这类结构化内容——那会引入
+// 「文件在但解析失败」的第三种状态，而唯一需要表达的意图只有「上次进了安全模式」
+// 这一位信息。多一个字段就多一条解析失败路径，而这条路径上「宁可多恢复一次」
+// 的取向是明确的。内容写诊断信息只为排障时能看出是谁写的，不参与判定。
+
+/// 安全模式标记文件的完整路径（`<dsh_home>/.safe-mode`）。
+pub fn safe_mode_marker_path(dsh_home: &Path) -> PathBuf {
+    dsh_home.join(crate::contracts::SAFE_MODE_MARKER_FILE)
+}
+
+/// 持久化「下次启动走安全模式」。
+///
+/// 由进入安全模式的各个入口（菜单项 / 恢复页按钮 / 错误页按钮）在启动前调用。
+/// 与 `ensure_safe_mode_profile` 一样只写 `dsh_home` 下的路径（INV-1）。
+///
+/// 写入内容仅用于排障（谁在什么时候请求的），判定只看文件是否存在。
+pub fn persist_safe_mode_request(dsh_home: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dsh_home)?;
+    let body = format!(
+        "# Written by DSH Desktop when Safe Mode was requested.\n\
+         # Presence of this file makes the next app start use the '{SAFE_MODE_PROFILE}' profile.\n\
+         # Remove it (or use \"Restart in Normal Mode\") to go back to the default profile.\n"
+    );
+    std::fs::write(safe_mode_marker_path(dsh_home), body)
+}
+
+/// 清除安全模式请求（回到普通模式）。
+///
+/// 幂等：标记不存在时返回 `Ok(false)`，不算失败——「已经不在了」与「刚删掉」
+/// 对调用方是同一个结果。
+///
+/// # 返回
+/// `Ok(true)` 表示确实删掉了一个标记；`Ok(false)` 表示本来就没有。
+pub fn clear_safe_mode_request(dsh_home: &Path) -> std::io::Result<bool> {
+    let marker = safe_mode_marker_path(dsh_home);
+    if !marker.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_file(marker)?;
+    Ok(true)
+}
+
+/// 上次是否请求过安全模式（启动路径据此决定用哪个 profile）。
+///
+/// **不读文件内容、不区分损坏**：只要标记存在就返回 `true`。理由见常量文档。
+///
+/// # 示例
+///
+/// ```
+/// use std::path::Path;
+/// use dsh_host::safe_mode::{safe_mode_requested, persist_safe_mode_request, clear_safe_mode_request};
+///
+/// let dir = std::env::temp_dir().join("dsh-safe-marker-doc");
+/// let _ = std::fs::remove_dir_all(&dir);
+/// std::fs::create_dir_all(&dir).unwrap();
+///
+/// assert!(!safe_mode_requested(&dir));
+/// persist_safe_mode_request(&dir).unwrap();
+/// assert!(safe_mode_requested(&dir));
+/// clear_safe_mode_request(&dir).unwrap();
+/// assert!(!safe_mode_requested(&dir));
+///
+/// let _ = std::fs::remove_dir_all(&dir);
+/// ```
+pub fn safe_mode_requested(dsh_home: &Path) -> bool {
+    safe_mode_marker_path(dsh_home).exists()
+}
+
 /// 仅当内容变更时才写入文件（避免刷新 mtime）。
 fn write_if_changed(path: &Path, content: &str) -> std::io::Result<()> {
     if let Ok(existing) = std::fs::read_to_string(path) {
@@ -187,6 +262,60 @@ mod tests {
 
         let cfg = generate_isolated_profile_config(&SafeModeOptions::default());
         assert!(cfg.get("dsh").is_some());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// 标记的唯一语义：存在 = 下次走安全模式。写 → 读 → 清 → 再读。
+    #[test]
+    fn safe_mode_marker_round_trips() {
+        let temp = std::env::temp_dir().join(format!("dsh-safe-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        // 目录都不存在时「没有请求」——不能因为读不到就 panic（启动路径必经此处）。
+        assert!(!safe_mode_requested(&temp), "目录不存在时应视为未请求");
+
+        persist_safe_mode_request(&temp).expect("标记应可写入（含建目录）");
+        assert!(safe_mode_requested(&temp));
+        assert!(
+            safe_mode_marker_path(&temp).starts_with(&temp),
+            "标记必须落在 dsh_home 下（INV-1：资源目录只读）"
+        );
+
+        assert_eq!(
+            clear_safe_mode_request(&temp).expect("清除应成功"),
+            true,
+            "首次清除应报告确实删掉了"
+        );
+        assert!(!safe_mode_requested(&temp));
+        assert_eq!(
+            clear_safe_mode_request(&temp).expect("重复清除不算失败"),
+            false,
+            "幂等：本来就没有时返回 false 而不是 Err"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// 判据是「文件是否存在」，因此**内容损坏不影响判定**。
+    ///
+    /// 这条是刻意的：安全模式是恢复路径，写了一半被杀、内容为空、内容不是文本，
+    /// 都仍然表达「上次进了安全模式」这一个意图。若改为解析内容，这些情况会让
+    /// 应用退回普通模式——即「坏插件照旧加载」，正是本次要修的症状。
+    #[test]
+    fn safe_mode_marker_ignores_corrupt_content() {
+        let temp = std::env::temp_dir().join(format!("dsh-safe-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+
+        std::fs::write(safe_mode_marker_path(&temp), b"\x00\xff not json at all").unwrap();
+        assert!(
+            safe_mode_requested(&temp),
+            "内容非法时仍须判定为「请求过安全模式」"
+        );
+
+        std::fs::write(safe_mode_marker_path(&temp), b"").unwrap();
+        assert!(safe_mode_requested(&temp), "空文件同样算请求过");
 
         let _ = std::fs::remove_dir_all(&temp);
     }

@@ -366,6 +366,17 @@ pub async fn recovery_action(
         }
         "safe-mode" => match crate::safe_mode::ensure_safe_mode_profile(&state.layout.dsh_home) {
             Ok(_) => {
+                // 与 `menu.rs` 的同名分支同理：`restart_in_safe_mode()` 只作用于
+                // 本次派生，跨重启的意图必须落成标记，否则下次冷启动又回默认
+                // profile（`lib.rs` 的启动分支读的就是这个标记）。
+                // 落盘失败不中断——本次安全模式已经生效。
+                if let Err(error) =
+                    dsh_host::safe_mode::persist_safe_mode_request(&state.layout.dsh_home)
+                {
+                    log::error!(
+                        "cannot persist safe-mode request; this restart is safe-mode but the next cold start will not be: {error}"
+                    );
+                }
                 window::show_splash(&app);
                 state.supervisor.restart_in_safe_mode().await;
                 ok(())
@@ -411,6 +422,15 @@ pub async fn safe_mode_action(
             // 生效，而用户以为进去了。
             match crate::safe_mode::ensure_safe_mode_profile(&state.layout.dsh_home) {
                 Ok(_) => {
+                    // 同 `recovery_action` 的 `"safe-mode"` 分支：标记不落盘
+                    // 就只有「本次生效」。失败不中断，只记日志。
+                    if let Err(error) =
+                        dsh_host::safe_mode::persist_safe_mode_request(&state.layout.dsh_home)
+                    {
+                        log::error!(
+                            "cannot persist safe-mode request; this restart is safe-mode but the next cold start will not be: {error}"
+                        );
+                    }
                     window::show_splash(&app);
                     state.supervisor.restart_in_safe_mode().await;
                     ok(())

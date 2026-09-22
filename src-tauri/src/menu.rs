@@ -78,6 +78,8 @@ pub const MOBILE_STATUS_ID: &str = "mobile-status";
 pub const MENU_ID_HARNESS_RESTART: &str = "harness-restart";
 /// 以安全模式重启 Harness（隔离第三方插件）。
 pub const MENU_ID_HARNESS_SAFE_MODE: &str = "harness-safe-mode";
+/// 以**普通模式**重启 Harness，并清除安全模式标记。
+pub const MENU_ID_HARNESS_NORMAL_MODE: &str = "harness-normal-mode";
 /// 打开应用内日志页。
 pub const MENU_ID_HARNESS_VIEW_LOG: &str = "harness-view-log";
 /// 在文件管理器中打开日志目录（次入口）。
@@ -101,6 +103,16 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         MenuItemBuilder::with_id(MENU_ID_HARNESS_RESTART, "Restart Harness").build(app)?;
     let safe_mode =
         MenuItemBuilder::with_id(MENU_ID_HARNESS_SAFE_MODE, "Restart in Safe Mode").build(app)?;
+    // 安全模式现在是**持久化**的（`<dsh_home>/.safe-mode`），因此必须有一个
+    // 对称的出口。否则用户进了安全模式就出不来了——下一次启动还会读见标记、
+    // 再进一次，看起来像「卡在恢复模式」。
+    //
+    // 与「Restart Harness」的区别只在**语义与附带动作**：那条是无条件普通启动，
+    // 但**不清标记**，因此重启后仍会回到安全模式；这条清标记后再普通启动。
+    // 两条都留着是有意的：前者用于「想让 Harness 重来一次、但仍在安全模式下」。
+    let normal_mode =
+        MenuItemBuilder::with_id(MENU_ID_HARNESS_NORMAL_MODE, "Restart in Normal Mode")
+            .build(app)?;
     // 「View Harness Log」打开**应用内日志页**（批次 D3/D10）。此前它只调
     // `opener` 打开系统文件管理器——在「应用起不来 / 界面卡住」时那条路径
     // 恰好最没用：用户要的是能看到日志，而不是被丢进一个文件夹自己找。
@@ -137,6 +149,7 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     let harness_submenu = SubmenuBuilder::new(app, "Harness")
         .item(&restart)
         .item(&safe_mode)
+        .item(&normal_mode)
         .separator()
         .item(&view_log)
         .item(&reveal_logs)
@@ -256,9 +269,52 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                     log::error!("cannot materialise the safe-mode profile: {error}");
                     return;
                 }
+                // 持久化选择：`restart_in_safe_mode()` 只影响**本次**派生的子进程，
+                // 它不写任何跨进程状态。因此不落这个标记的话，下次冷启动
+                // （`lib.rs` 的启动分支）读不到任何「用户要安全模式」的证据，
+                // 又回默认 profile——表现就是「点了安全模式，重启后还是坏的」。
+                // 标记的判据与读写实现见 `dsh_host::safe_mode`。
+                if let Err(error) = dsh_host::safe_mode::persist_safe_mode_request(
+                    &state.layout.dsh_home,
+                ) {
+                    // 落盘失败**不中断**：本次安全模式启动仍然有效（子进程已经
+                    // 带上了 `--profile desktop-safe-mode`），只是不跨重启。
+                    // 恢复路径宁可多给一次机会，也不该因为写标注文件失败就把
+                    // 用户挡在恢复流程之外。
+                    log::error!(
+                        "cannot persist safe-mode request; this restart is safe-mode but the next cold start will not be: {error}"
+                    );
+                }
                 crate::window::show_splash(&app);
                 state.supervisor.restart_in_safe_mode().await;
-                log::info!("harness restarting in safe mode");
+                log::info!("harness restarting in safe mode (request persisted for next cold start)");
+            }
+            MENU_ID_HARNESS_NORMAL_MODE => {
+                // 安全模式标记的**唯一出口**。少了它，进安全模式就是单向的：
+                // 标记留着 → 每次冷启动都再进一次 → 看起来像「卡在恢复模式」。
+                //
+                // 清除是**幂等**的（本来就没有标记时返回 `Ok(false)`），因为
+                // 「已经在普通模式、再点一次普通模式」是完全正常的用法。
+                match dsh_host::safe_mode::clear_safe_mode_request(&state.layout.dsh_home) {
+                    Ok(removed) => {
+                        if removed {
+                            log::info!("safe-mode request cleared; next start uses the default profile");
+                        } else {
+                            log::info!("no safe-mode request to clear; already in normal mode");
+                        }
+                    }
+                    // 清不掉就**停手**，不要把用户导向「以为出来了、其实没有」：
+                    // 标记仍在，下一次冷启动还会进安全模式。这条必须让用户看见。
+                    Err(error) => {
+                        log::error!(
+                            "cannot clear the safe-mode request; the next cold start will still use safe mode: {error}"
+                        );
+                        return;
+                    }
+                }
+                crate::window::show_splash(&app);
+                state.supervisor.restart().await;
+                log::info!("harness restarting in normal mode");
             }
             MENU_ID_HARNESS_VIEW_LOG => {
                 // 应用内日志页：能选来源、刷新、导出诊断包，并且**在应用起不来

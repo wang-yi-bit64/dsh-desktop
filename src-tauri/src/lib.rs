@@ -222,9 +222,36 @@ pub fn run() {
             }
 
             // 窗口就绪后启动 Harness（splash → … → harness UI）。
+            //
+            // # 为什么这里要读一个标记文件（2026-09-22）
+            //
+            // 此前这一行恒为 `start()`=`start_with_profile(None)`，即默认 `web`
+            // profile + 普通 patch。安全模式的选择只活在 `Launcher` 的 builder
+            // 参数里，随进程一起消失——于是「关掉应用再打开」必然退回普通模式、
+            // 全量加载第三方插件。用户点了 4 次安全模式，每次整机重启都被静默
+            // 撤销（证据：`desktop.log` 里 `restarting in safe mode` 与
+            // `desktop shell starting` 交替出现）。
+            //
+            // 现在按 `<dsh_home>/.safe-mode` 是否存在决定走哪条路径。这个标记由
+            // 进入安全模式的各个入口写入（菜单项 / 恢复页 / 错误页），由
+            // 「Restart in Normal Mode」清除。
+            //
+            // **标记缺失或不可读 → 普通模式**：安全模式是恢复路径，不能因为
+            // 一个标记文件读不动就让应用起不来。这个取向与 `safe_mode_requested`
+            // 的「只看存在性」是同一件事的两面。
             let start_supervisor = Arc::clone(&supervisor);
+            let start_layout = layout.clone();
             tauri::async_runtime::spawn(async move {
-                start_supervisor.start().await;
+                if dsh_host::safe_mode::safe_mode_requested(&start_layout.dsh_home) {
+                    log::info!(
+                        "safe-mode marker present at {} — starting Harness with profile '{}'",
+                        dsh_host::safe_mode::safe_mode_marker_path(&start_layout.dsh_home).display(),
+                        dsh_host::safe_mode::SAFE_MODE_PROFILE
+                    );
+                    start_supervisor.start_in_safe_mode().await;
+                } else {
+                    start_supervisor.start().await;
+                }
             });
 
             Ok(())
