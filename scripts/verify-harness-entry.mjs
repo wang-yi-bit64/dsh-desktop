@@ -139,17 +139,36 @@ function resourcesGlobToRegExp(pattern) {
  * 一旦真的执行，缺文件同样抛 `ERR_MODULE_NOT_FOUND`，没有理由区别对待。
  * 只认 `./` 开头且以 `.mjs` 结尾——`./harness/node_modules/…` 那类发布后由
  * `resources/harness/**` 覆盖，不在本检查的范围。
+ *
+ * # 第三种形态：路径经变量传入（2026-09-22 补）
+ *
+ * 入口把三条兄弟模块的加载改成了「`await import()` + 独立 `try/catch`」的降级
+ * 形态，说明符不再写在 `import(…)` 的调用点上，而是作为 `specifier:` 属性传进
+ * `loadSiblingModule({ specifier: './x.mjs', label: … })`。
+ *
+ * 前两种正则**都匹配不到这种写法**——于是 E5 会「零个受检模块」地变绿：漏登记
+ * 兄弟模块再也测不出来，而门禁的输出看起来一切正常。这正是本仓反复吃过的那类
+ * **空洞通过**（同 `verify-claims` C3 的教训）。所以这里补第三条：认
+ * `specifier: './x.mjs'` 这一属性形态。
+ *
+ * 为什么不改成「先解析 JS 再找 import」：本脚本刻意不引入解析器依赖（`scripts/`
+ * 里的工具都只用 Node 内置模块）。判据留在**文本层**、但要把已知的三种写法都收齐，
+ * 并且**在数量上留证据**（见 `auditEntry` 里对「收齐了几个」的断言）——只靠正则
+ * 而不核对数量的守卫，下一次改写法还会静默失效。
+ *
  * @param {string} source 模块源码
  * @returns {string[]} 去重后的兄弟模块文件名
  */
 function siblingModuleImports(source) {
   const found = new Set()
+  const text = String(source ?? '')
   const patterns = [
-    /\bfrom\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // 静态 import
-    /\bimport\s*\(\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // 动态 import
+    /\bfrom\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // ① 静态 import … from
+    /\bimport\s*\(\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // ② 动态 import('./x.mjs')
+    /\bspecifier\s*:\s*['"]\.\/([^'"]+\.mjs)['"]/gu, // ③ 路径经属性传入（loadSiblingModule）
   ]
   for (const pattern of patterns) {
-    for (const match of String(source ?? '').matchAll(pattern)) {
+    for (const match of text.matchAll(pattern)) {
       if (!match[1].includes('/')) found.add(match[1])
     }
   }
@@ -342,7 +361,8 @@ export function auditWatchdogBudget({ watchdogSource, faultInjectSource, smokeSo
 export function auditPackaging({ entrySource, readModule, tauriResources, prepareSource, stubSource }) {
   const modules = []
   const seen = new Set()
-  const queue = ['harness-node-entry.mjs', ...siblingModuleImports(entrySource)]
+  const directSiblings = siblingModuleImports(entrySource)
+  const queue = ['harness-node-entry.mjs', ...directSiblings]
   while (queue.length > 0) {
     const name = queue.shift()
     if (seen.has(name)) continue
@@ -354,6 +374,23 @@ export function auditPackaging({ entrySource, readModule, tauriResources, prepar
   }
 
   const missing = []
+  // E5-空：**入口的兄弟模块集合不得为空**（2026-09-22 加）。
+  //
+  // 这条是「守卫本身别变成空洞」的守卫。入口必然至少有一个兄弟模块
+  // （windowsHide 补丁 / 插件归因 / 看门狗），所以「收齐 0 个」只可能是
+  // **扫描器不再认得入口的写法**——而不是「入口恰好不需要兄弟模块」。
+  //
+  // 真实事故：入口把三条 `import` 改成 `loadSiblingModule({ specifier: … })` 之后，
+  // 扫描器只认 `from './x'` 与 `import('./x')` 两种写法，于是 E5 在「零个受检模块」
+  // 的情况下**输出全绿**。这类空洞通过比漏登记更危险：它让门禁替一段不存在的检查
+  // 背书。加这条断言后，将来再改写法会**先红**，而不是静默失去覆盖。
+  if (directSiblings.length === 0) {
+    missing.push(
+      'E5-空 扫描器在入口里没找到任何兄弟模块（`./*.mjs`）。入口必然有依赖，' +
+        '所以这只能意味着**扫描器不认得当前写法**——去 siblingModuleImports() ' +
+        '补上新的形态，否则本检查是空洞的（2026-09-22 的真实事故）'
+    )
+  }
   // 四份清单的判定方式：tauri.conf.json 是 JSON（精确比对条目或 glob 命中），
   // 另三份是 JavaScript，只要求文件名作为带引号的字符串出现——它们在各自文件里
   // 的写法（copyBuildFiles 的数组、REQUIRED_FILES、assets）会随重构变动，
@@ -650,6 +687,47 @@ async function scenario() {
           ? `${goodModule}\nimport { noop } from './nested-helper.mjs'`
           : `export function noop() {}`,
     }).missing.some((m) => m.startsWith('E5a') && m.includes('nested-helper.mjs'))
+  )
+
+  // -------------------------------------------------------------------------
+  // 扫描器自身的可证伪性（2026-09-22 补：本条来自一次真实的空洞通过）
+  // -------------------------------------------------------------------------
+
+  // 三种写法都必须被收齐。第三条是 2026-09-22 新增的形态——此前扫描器不认它，
+  // 于是「入口改成降级加载」之后 E5 在零个受检模块的情况下输出全绿。
+  const styleStatic = `import { a } from './style-static.mjs'`
+  const styleDynamic = `const m = await import('./style-dynamic.mjs')`
+  const styleSpecifier = `const m = await loadSiblingModule({ specifier: './style-specifier.mjs', label: 'x' })`
+  check('① 静态 import 被收齐', siblingModuleImports(styleStatic).includes('style-static.mjs'))
+  check('② 动态 import() 被收齐', siblingModuleImports(styleDynamic).includes('style-dynamic.mjs'))
+  check(
+    '③ 路径经 specifier 属性传入被收齐（2026-09-22 新增形态）',
+    siblingModuleImports(styleSpecifier).includes('style-specifier.mjs')
+  )
+  check(
+    '三种写法同时出现 → 三个都收齐（不互相遮蔽）',
+    siblingModuleImports([styleStatic, styleDynamic, styleSpecifier].join('\n')).length === 3
+  )
+  // 负样本：`./harness/node_modules/…` 那类不进本检查（由 resources/harness/** 覆盖）。
+  check(
+    '子目录路径（./harness/…）不算兄弟模块',
+    siblingModuleImports(`const m = await import('./harness/node_modules/x/projection.mjs')`).length === 0
+  )
+
+  // E5-空：入口里一个兄弟模块都扫不到 → 必须报，而不是「零受检模块地变绿」。
+  // 这是守卫的守卫：它保证「扫描器失效」与「入口真的没有依赖」两种情形可区分。
+  const noSiblingEntry = `
+if (!dshEntryPath) { process.exitCode = 1 } else {
+  const entry = await import(pathToFileURL(dshEntryPath).href)
+  if (typeof entry?.runCli === 'function') { await entry.runCli() }
+}`
+  check(
+    '入口零兄弟模块（扫描器失效的形态）→ E5-空 报缺失',
+    auditEntry(noSiblingEntry, goodSources).missing.some((m) => m.startsWith('E5-空'))
+  )
+  check(
+    '好夹具（有一个兄弟模块）→ 不报 E5-空',
+    !fixedResult.missing.some((m) => m.startsWith('E5-空'))
   )
 
   // ---- E5d：Rust 资源常量 ↔ 打包清单 -------------------------------------
