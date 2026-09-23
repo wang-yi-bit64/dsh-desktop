@@ -1342,6 +1342,14 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
   gh release delete <tag> --yes          # 用 tag 名仍能定位到那份草稿
   ```
 
+  ⚠️ **这一步与前一步的性质完全不同**：删 tag 只动 ref，可逆；删草稿会**连它的全部资产一起
+  永久删除**（`gh release delete` 没有「保留资产」的选项），且**不可恢复**。所以是否要走到
+  这一步是**独立的一次判断**，别把它当成「清理」的默认收尾。判据建议：这份产物是否还有人
+  可能装到——`alpha.1` 的 Windows 安装包缺 `parent-death-watchdog.mjs`（装完即崩），
+  那它留着反而是风险；而一份资产齐全、只是被取代的旧版，留着草稿没有坏处。
+  实测：`alpha.4` 的草稿经确认后用 `gh release delete v0.7.0-alpha.4 --yes` 删除，
+  10 个资产随之丢失；`alpha.1` 的草稿**保留至今**。
+
 - **2026-09-23 清理掉的 tag**：`v0.7.0-alpha.3`（组装期被 picker 位置断言卡死）、
   `v0.7.0-alpha.5`（`finally` 里的 `rmSync` 否决了通过的核验）、
   `v0.7.0-alpha.6`（Linux 侧 `unzip` 反斜杠条目名，`cli-publish` 红，Release 从未产出）、
@@ -1450,8 +1458,23 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > **残留状态（快照：2026-09-23 收尾后；操作口径见 §8.5「发布失败后的 tag 清理」）**：
 > `alpha.3` 连 Release 都没建成；`alpha.4` / `alpha.5` / `alpha.6` 各只发出 10 个资产
 > （缺 9 CLI + 3 便携版）。五个版本均已由 `alpha.7` 取代。**清理的最终形态**：远端与本机都只剩
-> 9 个 tag；`alpha.1` 与 `alpha.4` 的 tag 删除后各自留下一份**未标记草稿**（资产仍在，
-> `releases/download/<tag>/…` 已断），`alpha.3` / `alpha.5` / `alpha.6` 无 Release 残留。
+> 9 个 tag；`alpha.3` / `alpha.4` / `alpha.5` / `alpha.6` **无 Release 残留**
+> （`alpha.4` 那份因删 tag 而降级成的未标记草稿已被 `gh release delete v0.7.0-alpha.4 --yes`
+> 一并删除，10 个资产随之永久丢失——**这是批准的处置**）；**唯一残留是 `alpha.1`**：
+> 它降级成的未标记草稿仍在（`draft: true`、19 个资产仍在、`releases/download/v0.7.0-alpha.1/…`
+> 已断），要不要一并删**待定**。
+>
+> ```bash
+> $ gh api "repos/wang-yi-bit64/dsh-desktop/releases?per_page=100" \
+>     --jq '.[]|"\(.tag_name) draft=\(.draft) assets=\(.assets|length)"'
+> v0.7.0-alpha.1 draft=true  assets=19      ← 无 tag 的孤儿草稿，唯一残留
+> v0.7.0-alpha.7 draft=false assets=22      ← 唯一完整发布
+> v0.7.0-alpha.2 draft=false assets=19
+> …
+> ```
+>
+> ⚠️ **`gh release list` 与 Releases 页都不显示草稿**，所以从页面上看像「已经清干净了」——
+> 判断有没有残留**必须**用上面那条 API（带 `draft` 字段），不能看页面，也不能数「页面上有几个 Release」。
 >
 > ⚠️ **清理只能逐项手动核对，不能用事件流反推**：远端 tag 集合曾在几分钟内由 12 个变成 9 个，
 > 而公开的仓库事件流只记到其中**两条**（`alpha.3`、`alpha.6` 的 `DeleteEvent`），
