@@ -1412,25 +1412,41 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 > 每一处的成因都是同一句话：**改动的代码在上一处红灯修好之前从未被执行过**。
 > 因此修完一个红灯**不要**假定下一个也绿。
 >
-> **残留状态**：`alpha.4` / `alpha.5` / `alpha.6` 各只发出 10 个资产（缺 9 CLI + 3 便携版），
-> 均已由 `alpha.7` 取代。`alpha.4` 的 Release 页已加前置标注（**资产原样保留，不删**）；
-> `alpha.5` / `alpha.6` 的 Release 已不在远端存在（`alpha.5` 的 tag 亦已不在远端，
-> `alpha.6` 的 tag 仍在）。
+> **残留状态（快照：2026-09-23T15:11Z，此后远端 tag 集合仍在变动）**：`alpha.3` 连 Release
+> 都没建成；`alpha.4` / `alpha.5` / `alpha.6` 各只有 10 个资产（缺 9 CLI + 3 便携版）。
+> 这几个版本均已由 `alpha.7` 取代。远端 tag 已被手动清理掉 `alpha.1` / `alpha.3` / `alpha.4`
+> / `alpha.5` / `alpha.6`，Release 侧只剩 `alpha.4`（10 个资产，已加「产物不完整」前置标注）。
 >
-> ⚠️ **本机 `git tag` 里被删的 tag 都还在**（`v0.7.0-alpha.3`、`v0.7.0-alpha.5`），
-> 而它们是**注释标签**且指向 main 可达的提交——于是 §8.5 第 5 步那条
+> ⚠️ **清理只能逐项手动核对，不能用事件流反推**：远端 tag 集合曾在几分钟内由 12 个变成 9 个，
+> 而公开的仓库事件流只记到其中**两条**（`alpha.3`、`alpha.6` 的 `DeleteEvent`），
+> `alpha.1` / `alpha.4` / `alpha.5` 的删除**一条事件都没有**。所以「事件流里没有」
+> **不等于**「没发生过」——它甚至证明不了「这个 tag 曾经存在过」。
+>
+> ⚠️ **本机 `git tag` 里被删的 tag 全都还在**（本机 14 个 vs 远端 9 个），而它们是
+> **注释标签**且指向 main 可达的提交——于是 §8.5 第 5 步那条
 > `git push origin main --follow-tags` 会把它们当**新 tag 推回远端**，而推 `v*` tag
-> 又会**再次触发 `release.yml`**，凭空再造两个残缺 Release。已实测：
+> 会**再次触发 `release.yml`**，把刚清掉的残缺 Release 又造回来。已实测（列表随远端删除
+> 进度增长，故现在是 5 个而不是当初的 2 个）：
 >
 > ```bash
 > $ git push --dry-run --follow-tags origin main
+>  * [new tag]         v0.7.0-alpha.1 -> v0.7.0-alpha.1
 >  * [new tag]         v0.7.0-alpha.3 -> v0.7.0-alpha.3
+>  * [new tag]         v0.7.0-alpha.4 -> v0.7.0-alpha.4
 >  * [new tag]         v0.7.0-alpha.5 -> v0.7.0-alpha.5
+>  * [new tag]         v0.7.0-alpha.6 -> v0.7.0-alpha.6
 > ```
 >
-> 对策：删了远端 tag 之后，**本机同名 tag 要一并删掉**（`git tag -d <tag>`），
-> 否则「本地干净、远端干净」这个假象会在下一次发布时被 `--follow-tags` 打破。
-> 只想推 main 时用 `git push origin main`（不带 `--follow-tags`）也能避开，
-> 但那只是绕开症状——本机留着一个远端已删的 tag，本身就是不一致状态。
+> 对策：删了远端 tag 之后，**本机同名 tag 要一并删掉**（`git tag -d <tag>`），否则
+> 「本地干净」只是假象，会在下一次发布时被 `--follow-tags` 打破。已实测不带 `--follow-tags`
+> 的 `git push origin main` 不会上推任何 tag——但那只是绕开症状，本机留着一个远端已删的
+> tag，本身就是不一致状态。
+>
+> 📌 **判断远端 tag 现状**用 `gh api repos/wang-yi-bit64/dsh-desktop/tags --jq '.[].name'`
+> （读的是 ref，权威）；**不要**用本机 `git tag`，也**不要**信事件流。
+> 要看 `--follow-tags` 到底会推哪些，用 `git push --dry-run --follow-tags origin main`——
+> 本机 `git push` 会挂在凭据提示上，要加
+> `-c credential.helper= -c credential.helper='!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f'`
+> （`GH_TOKEN=$(gh auth token)`）。
 
 
