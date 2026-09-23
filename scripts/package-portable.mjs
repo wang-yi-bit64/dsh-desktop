@@ -89,12 +89,50 @@ export function portableBaseName(version) {
 // ---------------------------------------------------------------------------
 
 /**
- * 便携版必须在 `target/release/` 根目录随行分发的运行期依赖。
+ * 便携版在 `target/release/` 根目录**可能**随行分发的运行期依赖。
  *
  * 这些文件**不在 `resources/` 里**，因此不会被 `resources/*` 的拷贝覆盖——
- * 必须显式 stage，否则打包静默产出一个启动即崩的空壳。
+ * 若目标工具链需要它，就必须显式 stage，否则打包静默产出一个启动即崩的空壳。
+ *
+ * ⚠️ 注意这里只是「**候选**清单」（staging 时按存在性拷贝、manifest 按存在性记录），
+ * **不是「必需」清单**——是否**必需**由 `needsWebView2LoaderDll()` 依目标工具链判定。
+ * 2026-09-23 之前这里被当作通用必需项用，导致 CI 的 MSVC 构建被误判为「产物不完整」。
  */
 export const REQUIRED_SIDECAR_FILES = ['WebView2Loader.dll']
+
+/**
+ * 便携包是否**必须**随行 `WebView2Loader.dll`。
+ *
+ * 判据来自上游 `webview2-com-sys` 的**链接方式**（读的是它的源码，不是猜的）：
+ *
+ * ```rust
+ * #[cfg_attr(target_env = "msvc",     link(name = "WebView2LoaderStatic", kind = "static"))]
+ * #[cfg_attr(not(target_env = "msvc"), link(name = "WebView2Loader.dll"))]
+ * ```
+ *
+ * - `-msvc`（GitHub `windows-latest` 的默认工具链）→ **静态**链接：loader 已在 exe 内部，
+ *   因此**既不需要、也不会产出**这个 DLL。缺它是**正常**的。
+ * - 非 msvc（如本机的 `x86_64-pc-windows-gnu`）→ **动态**链接：DLL 缺失即
+ *   `0xC0000135 STATUS_DLL_NOT_FOUND`，启动即崩且不产生任何日志。
+ *
+ * ## 为什么必须按 `target_env` 判，不能只看「是不是 Windows」
+ *
+ * 原判据是 `if (isWindows) { 要求 DLL }`，即把「**GNU 才有的事实**」当成了通用前提。
+ * 后果：2026-09-23 `v0.7.0-alpha.4` 发布时，CI（MSVC）上 `tauri build` 产出的
+ * 是完全正确的产物，却被打包前置校验以「输入产物不完整」拒绝——
+ * **一个只在本机（GNU）成立的判据，把 CI 的整条发布链路卡死了。**
+ *
+ * 判据必须与「谁需要它」同源，而不是与「哪个平台」同源。
+ *
+ * @param {string} triple 目标三元组，如 `x86_64-pc-windows-msvc`
+ * @returns {boolean} 是否需要随行该 DLL
+ */
+export function needsWebView2LoaderDll(triple) {
+  // 非 Windows 目标不涉及这个 DLL（loader 只在 Windows 上存在）。
+  if (!/windows|win32/.test(String(triple))) return false
+  // Windows 上：只有非 msvc（gnu / gnullvm）才是动态链接。
+  return !/msvc/.test(String(triple))
+}
 
 /**
  * `resources/` 下必须存在的运行时子树（对应 `bundle.resources` 的三条 glob）。
@@ -189,13 +227,15 @@ export function inspectBundleDir({ appDir, exeName, triple }) {
     )
   }
 
-  // 4) 根目录旁挂运行期依赖（Windows 上即 WebView2Loader.dll）。
-  if (isWindows) {
+  // 4) 根目录旁挂运行期依赖。**是否必需取决于目标工具链**，而不是「是 Windows 就必须有」：
+  //    msvc 静态链接 loader（既不需要、也不会产出这个 DLL）；gnu / gnullvm 动态链接，缺了即崩。
+  //    详见 needsWebView2LoaderDll() 的注释与 2026-09-23 的发布事故。
+  if (needsWebView2LoaderDll(triple)) {
     for (const file of REQUIRED_SIDECAR_FILES) {
       if (!existsSync(join(appDir, file))) {
         problems.push(
-          `${file} 不在 ${appDir} 根目录下——它是 exe 的载入期静态导入，` +
-            `缺失会导致启动即崩（0xC0000135 STATUS_DLL_NOT_FOUND）且不产生任何日志`
+          `${file} 不在 ${appDir} 根目录下——该目标（${triple}）动态链接 WebView2Loader，` +
+            `它在载入期被导入，缺失会导致启动即崩（0xC0000135 STATUS_DLL_NOT_FOUND）且不产生任何日志`
         )
       }
     }
@@ -241,10 +281,11 @@ export function inspectExtractedContents({ destDir, exeName, triple }) {
     }
   }
 
-  if (isWindows) {
+  // 判据同 inspectBundleDir：只有动态链接 loader 的目标才要求这个 DLL。
+  if (needsWebView2LoaderDll(triple)) {
     for (const file of REQUIRED_SIDECAR_FILES) {
       if (!existsSync(join(destDir, file))) {
-        problems.push(`解包后缺少 ${file}（载入期静态导入，缺失则启动即崩）`)
+        problems.push(`解包后缺少 ${file}（该目标动态链接 WebView2Loader，缺失则启动即崩）`)
       }
     }
   }
@@ -538,12 +579,15 @@ export function verifyDownloaded({ dir, manifestPath }) {
  * 打包便携版 zip。
  *
  * 输入是 Tauri build 产出的原始 app 目录（通常是 `target/release/`），内含
- * `<app>.exe`、`resources/` 目录，以及 tauri-bundler 落在**根目录**的运行期
- * 依赖（Windows 上即 `WebView2Loader.dll`）。
+ * `<app>.exe`、`resources/` 目录，以及 tauri-bundler 可能落在**根目录**的运行期
+ * 依赖（Windows 上即 `WebView2Loader.dll`——但**只有非 msvc 目标才必需**，
+ * 见 `needsWebView2LoaderDll()`）。
  *
- * 三者都进包。任缺其一，产物在用户机器上要么启动即崩，要么 Harness 起不来，
- * 且都不会产生可归因的日志——因此本函数对输入做**前置硬校验**（`inspectBundleDir`）
- * 并在打包后做**内容级回读校验**（`inspectExtractedContents`）。
+ * 三者都进包。缺 exe 或 `resources/` 时产物在用户机器上要么启动即崩，要么
+ * Harness 起不来，且都不会产生可归因的日志；而 DLL 是否可缺取决于目标 ABI，
+ * **不能一概而论**。因此本函数对输入做**前置硬校验**（`inspectBundleDir`）
+ * 并在打包后做**内容级回读校验**（`inspectExtractedContents`），两者的判据
+ * 都必须与 `needsWebView2LoaderDll()` 同源。
  *
  * @param {{bundleDir: string, outDir: string, triple: string, version: string}} opts
  * @returns {{base: string, archive: string, sidecar: string, manifestPath: string, manifest: object, verify: string[], runtime: object}}
@@ -950,7 +994,13 @@ export function selfTest() {
       '自测：runtime.bytes 必须反映真实运行时体量'
     )
 
-    // 3b) 旁挂依赖必须真的进包（Windows）。这是 0xC0000135 缺陷的正面守卫。
+    // 3b) 旁挂依赖**存在时**必须真的进包（Windows）。这是 0xC0000135 缺陷的正面守卫。
+    //
+    //   ⚠️ 本断言用 `isWindows` 是对的，与 3c 的 `needsWebView2LoaderDll` 不冲突：
+    //     它守的是「**输入里有**这个文件 ⇒ 必须被 stage 进包并记进 manifest」，
+    //     这一条与「目标是否**要求**它」无关（staging 一律按存在性拷贝）。
+    //     夹具由 `makeBundleFixture` 的默认 `withSidecar: true` 写入 DLL，
+    //     因此在 msvc 上照样有东西可验。
     if (isWindows) {
       const entries = new Set(readdirSync(fakeReleaseDir))
       check(entries.has('WebView2Loader.dll'), '自测夹具：旁挂依赖应存在于输入目录')
@@ -987,84 +1037,160 @@ export function selfTest() {
       }
     }
 
-    // 3c) 可伪证性：输入缺 WebView2Loader.dll 时必须**拒绝打包**，而不是静默出包。
-    if (isWindows) {
-      const noDllDir = join(tmp, 'release-no-dll')
-      // 顶层放**真 exe**（与真实产物形状一致），缺的只是根目录旁的 DLL。
-      // 走共享夹具构造：`withSidecar: false` 就是「除 DLL 之外一切都合规」，
-      // 这样断言才**只**证伪「旁挂依赖缺失」这一支——若连体积/子树都不达标，
+    // 3c) 🔴 双 ABI 交叉覆盖：`WebView2Loader.dll` 的**必需性由目标工具链决定**，
+    //     两个分支必须在**同一台机器上都被执行到**。
+    //
+    //   🔴 根因（2026-09-23，发布 `v0.7.0-alpha.4` / run 35811365755 失败）：
+    //     `webview2-com-sys` 在编译期决定链接方式——
+    //       `#[cfg_attr(target_env = "msvc", link(name = "WebView2LoaderStatic", kind = "static"))]`
+    //       `#[cfg_attr(not(target_env = "msvc"), link(name = "WebView2Loader.dll"))]`
+    //     MSVC（GitHub `windows-latest` 默认，`x86_64-pc-windows-msvc`）**静态**链接，
+    //     产物根目录里**合法地没有**这个 DLL；GNU（本机 `x86_64-pc-windows-gnu`）
+    //     **动态**链接，DLL 是硬需求。旧判据是 `if (isWindows) { 要求 DLL }`，把
+    //     「GNU 才有的事实」当成了通用前提：它在 CI 上把一份完全正确的 MSVC 产物
+    //     判成「输入产物不完整」，发布链被自家守卫卡死。
+    //
+    //   🔴 更关键的教训——**为什么这段必须用矩阵，而不是按宿主 triple 分支**：
+    //     宿主 triple 是**环境属性**，而 CI（msvc）与本机（gnu）恰好处在两侧。
+    //     若只按宿主 triple 分支，则**每个环境只验到一半**：本机永远走「要求 DLL」
+    //     那一支、CI 永远走另一支，两边各自全绿——缺陷正是这样躲过了全部自测。
+    //     **一条只在半数环境里被执行的断言，等于没有断言。**
+    //
+    //   `packagePortable` 的平台前提只看**宿主**（`process.platform !== 'win32'`），
+    //     `triple` 是纯入参，因此在任意 Windows 宿主上都可以显式喂两个 triple、
+    //     把两个分支都跑一遍。这样 runner 是 msvc 还是 gnu，覆盖都一样完整。
+    //
+    //   ⚠️ 表里的 `requiresDll` 是**硬编码的独立事实**，禁止由
+    //     `needsWebView2LoaderDll()` 现算：那样判据一旦被改错，期望值会跟着一起错，
+    //     两边同时变绿——又变回「测试与实现同错」的对称失效。
+    const abiMatrix = [
+      { label: 'msvc', triple: 'x86_64-pc-windows-msvc', requiresDll: false },
+      { label: 'gnu', triple: 'x86_64-pc-windows-gnu', requiresDll: true }
+    ]
+    for (const { label, triple: abiTriple, requiresDll } of abiMatrix) {
+      check(
+        needsWebView2LoaderDll(abiTriple) === requiresDll,
+        `交叉 ABI：${abiTriple} 的 DLL 必需性应为 ${requiresDll}` +
+          `（上游 webview2-com-sys 按 target_env 选静态/动态链接）`
+      )
+
+      // 夹具统一是「**除 DLL 之外一切都合规**」：`withSidecar: false`。
+      // 这样断言才**只**证伪「旁挂依赖该有却没有」这一支——若连体积/子树都不达标，
       // 守卫会先因别的原因判红，断言虽绿但证伪的是错误的理由。
-      // 不要 filler：这个夹具注定在**打包之前**被拒，归档根本不会产出，
-      // 塞不可压缩数据只是白烧时间。
-      makeBundleFixture({ dir: noDllDir, triple, withSidecar: false, fillerBlocks: 0 })
-      let threw = false
-      let message = ''
+      // 不要 filler：这条断言压根不关心归档体积，塞不可压缩数据只是白烧时间。
+      const noDllDir = join(tmp, `xabi-nodll-${label}`)
+      makeBundleFixture({ dir: noDllDir, triple: abiTriple, withSidecar: false, fillerBlocks: 0 })
+      let accepted = null
+      let rejection = ''
       try {
-        packagePortable({ bundleDir: noDllDir, outDir: join(tmp, 'out-nodll'), triple, version: '0.3.0' })
+        accepted = packagePortable({
+          bundleDir: noDllDir,
+          outDir: join(tmp, `xabi-out-${label}`),
+          triple: abiTriple,
+          version: '0.3.0'
+        })
       } catch (error) {
-        threw = true
-        message = error.message
+        rejection = error.message
       }
-      check(threw, '可伪证性：输入缺 WebView2Loader.dll 时必须拒绝打包')
-      check(message.includes('WebView2Loader.dll'), '可伪证性：拒绝理由必须点名缺失的 WebView2Loader.dll')
 
-      // 3c-1) 🔴 回归守卫：缺 DLL 的输入必须**真的**抛错，而不是只留下一条警告。
-      //
-      //   这段夹具直接复刻 2026-09-22 的事故：前置守卫写了 `x.length > 0` 而
-      //   `inspectBundleDir` 返回封装对象，导致抛错分支永远走不到。上面那条
-      //   `check(threw, …)` 正是当场抓到这个缺陷的断言——它现在会守住这条路径。
-      //   额外加一条：报错必须**来自前置校验**（点名"拒绝打包"），而不是来自
-      //   别的环节碰巧抛了错。否则「抛错」这个观测可能由无关原因满足。
-      check(
-        message.includes('拒绝打包'),
-        `回归守卫：缺 DLL 必须由**前置校验**拒绝（实际报错：${message.split('\n')[0]}）`
-      )
-
-      // 3c-2) 回归守卫：`findAppExe` 不得把 `resources/node/node.exe` 当应用主程序。
-      //
-      //   事故形态：真实产物顶层若没扫到 exe，递归分支会静默选中内置 Node，
-      //   于是包里 stage 的是 `node.exe` 而不是 `dsh-desktop.exe`，且回读校验
-      //   （原先只查「有非空 exe」）照样报通过。
-      //
-      //   ⚠️ 夹具必须**从外层目录**调用：`SKIP` 只作用于递归过程中遇到的目录名，
-      //   把 `resources/` 本身当 root 传进来时它不算「被跳过的子目录」，自然仍会
-      //   扫到里面的 `node.exe`（这正是本断言第一版判红的原因——断言写错了位置，
-      //   不是代码错了）。因此这里造一个**只有 resources/、没有顶层 exe** 的目录，
-      //   断言 findAppExe 返回 null。
-      const resourcesOnlyDir = join(tmp, 'release-resources-only')
-      mkdirSync(join(resourcesOnlyDir, 'resources', 'node'), { recursive: true })
-      writeFileSync(join(resourcesOnlyDir, 'resources', 'node', 'node.exe'), Buffer.alloc(4096, 3))
-      const resourcesOnlyExe = findAppExe(resourcesOnlyDir)
-      check(
-        resourcesOnlyExe === null,
-        `回归守卫：findAppExe 不得把 resources/node/node.exe 当应用主程序（实际选中了 ${resourcesOnlyExe?.name ?? 'null'}）`
-      )
-
-      // 3d) 可伪证性：resources/ 体量不达标时必须拒绝打包（空壳回归守卫）。
-      const thinDir = join(tmp, 'release-thin')
-      mkdirSync(join(thinDir, 'resources', 'node'), { recursive: true })
-      // 顶层放真 exe：这个夹具要证伪的是「体积护栏」这一支，
-      // 前提是「能找到应用 exe」成立（否则会先撞上「找不到 .exe」）。
-      writeFileSync(join(thinDir, fakeExeName), Buffer.alloc(32 * 1024, 9))
-      writeFileSync(join(thinDir, 'WebView2Loader.dll'), Buffer.alloc(1024, 7))
-      writeFileSync(join(thinDir, 'resources', 'node', 'node.exe'), Buffer.alloc(64 * 1024, 3))
-      let thinThrew = false
-      let thinMessage = ''
-      try {
-        packagePortable({ bundleDir: thinDir, outDir: join(tmp, 'out-thin'), triple, version: '0.3.0' })
-      } catch (error) {
-        thinThrew = true
-        thinMessage = error.message
+      if (requiresDll) {
+        // ── 正向：动态链接的目标缺 DLL ⇒ 必须**拒绝打包**（而不是静默出崩包）。
+        // 3c-1) 回归守卫：必须**真的**抛错，而不是只留下一条警告。
+        //   这段夹具直接复刻 2026-09-22 的事故：前置守卫写了 `x.length > 0` 而
+        //   `inspectBundleDir` 返回封装对象，导致抛错分支永远走不到。
+        //   `rejection.includes('拒绝打包')` 进一步要求报错**来自前置校验**，
+        //   否则「抛错」这个观测可能由无关环节碰巧满足。
+        check(
+          accepted === null,
+          `${abiTriple} 动态链接 WebView2Loader，缺 DLL 时必须拒绝打包（实际未拒绝）`
+        )
+        check(
+          rejection.includes('WebView2Loader.dll'),
+          `可伪证性：拒绝理由必须点名缺失的 WebView2Loader.dll（实际：${rejection.split('\n')[0]}）`
+        )
+        check(
+          rejection.includes('拒绝打包'),
+          `回归守卫：缺 DLL 必须由**前置校验**拒绝，而非下游偶发报错（实际：${rejection.split('\n')[0]}）`
+        )
+      } else {
+        // ── 反向：静态链接的目标**不要求** DLL ⇒ 缺 DLL 的输入必须被**接受**。
+        // 3c-2) 这条断言的存在理由就是上面那次失败：判据过宽时，「拒绝」这个观测
+        //   照样会被满足，光靠正向分支证明不了判据不过宽。只有把反向也钉住，
+        //   判据才是**双向可证伪**的。
+        //   ⚠️ 必须**真跑一次完整打包**来验证「接受」，而不是只调 `inspectBundleDir`
+        //   看 problems 是否为空——唯有走完全程才能证明后续的 staging / manifest /
+        //   回读校验也不会因为缺 DLL 而失败。
+        check(
+          accepted !== null,
+          `${abiTriple} 静态链接 WebView2Loader，缺 DLL 的输入必须被接受，` +
+            `不得判为「产物不完整」（实际报错：${rejection.split('\n')[0]}）`
+        )
+        if (accepted) {
+          // 反向对照：DLL 压根不存在，就不该被记进 manifest——
+          // 否则 manifest 会声称一个包里没有的文件，下游校验会自相矛盾。
+          check(
+            !accepted.manifest.sidecarFiles.includes('WebView2Loader.dll'),
+            '反向守卫：DLL 不存在时不得写进 manifest.sidecarFiles（不得凭清单断言存在性）'
+          )
+          check(
+            accepted.verify.length === 0,
+            `反向守卫：缺 DLL 的 MSVC 包回读校验必须通过（实际：${accepted.verify.join('；')}）`
+          )
+        }
       }
-      check(thinThrew, '可伪证性：只有 64 KiB resources/ 时必须拒绝打包')
-      // 这个夹具**故意**只建 `resources/node`，不建 `bin` 与 `harness/node_modules`，
-      // 因此 `inspectBundleDir` 会命中「缺少运行时子树」这一支（体积护栏是同批
-      // problems 里的另一条）。断言必须接受它实际命中的那一支，否则会假红。
-      check(
-        /resources[\\/](node|bin|harness)/.test(thinMessage) || thinMessage.includes('护栏'),
-        `可伪证性：拒绝理由必须指向运行时树不完整（实际：${thinMessage.split('\n')[1] ?? thinMessage.split('\n')[0]}）`
-      )
     }
+
+    // 3c-2) 回归守卫：`findAppExe` 不得把 `resources/node/node.exe` 当应用主程序。
+    //
+    //   事故形态：真实产物顶层若没扫到 exe，递归分支会静默选中内置 Node，
+    //   于是包里 stage 的是 `node.exe` 而不是 `dsh-desktop.exe`，且回读校验
+    //   （原先只查「有非空 exe」）照样报通过。
+    //
+    //   ⚠️ 夹具必须**从外层目录**调用：`SKIP` 只作用于递归过程中遇到的目录名，
+    //   把 `resources/` 本身当 root 传进来时它不算「被跳过的子目录」，自然仍会
+    //   扫到里面的 `node.exe`（这正是本断言第一版判红的原因——断言写错了位置，
+    //   不是代码错了）。因此这里造一个**只有 resources/、没有顶层 exe** 的目录，
+    //   断言 findAppExe 返回 null。
+    //
+    //   ⚠️ 本断言与 WebView2 无关，**不得**放在任何平台判据内部：它原先被嵌在
+    //   `if (isWindows)` 里，纯属历史偶然（它从不依赖 Windows 语义）。
+    //   平台判据包住与平台无关的断言，会让「这条断言到底在守什么」变得不可推断。
+    const resourcesOnlyDir = join(tmp, 'release-resources-only')
+    mkdirSync(join(resourcesOnlyDir, 'resources', 'node'), { recursive: true })
+    writeFileSync(join(resourcesOnlyDir, 'resources', 'node', 'node.exe'), Buffer.alloc(4096, 3))
+    const resourcesOnlyExe = findAppExe(resourcesOnlyDir)
+    check(
+      resourcesOnlyExe === null,
+      `回归守卫：findAppExe 不得把 resources/node/node.exe 当应用主程序（实际选中了 ${resourcesOnlyExe?.name ?? 'null'}）`
+    )
+
+    // 3d) 可伪证性：resources/ 体量不达标时必须拒绝打包（空壳回归守卫）。
+    const thinDir = join(tmp, 'release-thin')
+    mkdirSync(join(thinDir, 'resources', 'node'), { recursive: true })
+    // 顶层放真 exe：这个夹具要证伪的是「体积护栏」这一支，
+    // 前提是「能找到应用 exe」成立（否则会先撞上「找不到 .exe」）。
+    writeFileSync(join(thinDir, fakeExeName), Buffer.alloc(32 * 1024, 9))
+    // DLL 是**无条件**写进去的（不受目标 ABI 影响）：本夹具要证伪的是「运行时树
+    // 不完整」，因此必须先把「旁挂依赖」这一支中和掉，否则在 gnu 目标上守卫会
+    // 先因缺 DLL 判红，断言虽绿但证伪的是错误的理由。
+    writeFileSync(join(thinDir, 'WebView2Loader.dll'), Buffer.alloc(1024, 7))
+    writeFileSync(join(thinDir, 'resources', 'node', 'node.exe'), Buffer.alloc(64 * 1024, 3))
+    let thinThrew = false
+    let thinMessage = ''
+    try {
+      packagePortable({ bundleDir: thinDir, outDir: join(tmp, 'out-thin'), triple, version: '0.3.0' })
+    } catch (error) {
+      thinThrew = true
+      thinMessage = error.message
+    }
+    check(thinThrew, '可伪证性：只有 64 KiB resources/ 时必须拒绝打包')
+    // 这个夹具**故意**只建 `resources/node`，不建 `bin` 与 `harness/node_modules`，
+    // 因此 `inspectBundleDir` 会命中「缺少运行时子树」这一支（体积护栏是同批
+    // problems 里的另一条）。断言必须接受它实际命中的那一支，否则会假红。
+    check(
+      /resources[\\/](node|bin|harness)/.test(thinMessage) || thinMessage.includes('护栏'),
+      `可伪证性：拒绝理由必须指向运行时树不完整（实际：${thinMessage.split('\n')[1] ?? thinMessage.split('\n')[0]}）`
+    )
 
     // 3e) inspectExtractedContents 必须能抓出「解包后缺运行时」这类残缺。
     const brokenExtract = join(tmp, 'broken-extract')
@@ -1076,10 +1202,23 @@ export function selfTest() {
       brokenProblems.some((p) => p.includes('resources/')),
       '可伪证性：判红理由必须点名 resources/'
     )
-    if (isWindows) {
+    // ⚠️ 同理（见 3c 的根因说明）：这里也必须**两个 ABI 都跑**，不能按宿主
+    //    triple 只走一支——宿主 triple 是环境属性，按它分支等于「每个环境只验一半」。
+    //    `inspectExtractedContents` 是纯函数（`triple` 纯入参、不碰宿主），
+    //    因此两个 ABI 都跑一遍的代价几乎为零，没有理由省。
+    for (const { triple: abiTriple, requiresDll } of abiMatrix) {
+      const namesDll = inspectExtractedContents({
+        destDir: brokenExtract,
+        exeName: fakeExeName,
+        triple: abiTriple
+      }).some((p) => p.includes('WebView2Loader.dll'))
       check(
-        brokenProblems.some((p) => p.includes('WebView2Loader.dll')),
-        '可伪证性：解包结果缺 WebView2Loader.dll 时必须判红'
+        namesDll === requiresDll,
+        requiresDll
+          ? `可伪证性：解包结果缺 WebView2Loader.dll 时必须判红（${abiTriple} 动态链接）`
+          : // 反向对照：不需要 DLL 的目标，缺 DLL **不得**成为判红理由，
+            // 否则 MSVC 发布链会被自家守卫拦死（正是 35811365755 的失败形态）。
+            `反向守卫：${abiTriple} 不要求 WebView2Loader.dll，解包结果缺它不得判红`
       )
     }
 

@@ -262,6 +262,32 @@ WebView2Loader.dll: cannot open shared object file
 - **结论**：本地 GNU 安装包**不是可发布形态**；正式产物一律走 CI 的 MSVC 三平台构建
   （`release.yml`）。本地 build 的定位是「验证打包清单与产物内容」，不是「出可发布的包」。
 
+#### ⚠️ 该 DLL 的必需性**依目标工具链而定**，不可一概而论
+
+同一件事在 MSVC 侧的表现完全相反，必须分清，否则会写出「只在一半环境成立」的判据：
+
+| 目标三元组 | `webview2-com-sys` 链接方式 | 根目录是否需要 `WebView2Loader.dll` |
+| --- | --- | --- |
+| `x86_64-pc-windows-msvc`（CI / `windows-latest`） | **静态**（`WebView2LoaderStatic`） | **不需要**，也**不会**产出——缺它是正常形态 |
+| `x86_64-pc-windows-gnu`（本机） | **动态**（`WebView2Loader.dll`） | **必需**，缺失即启动 `0xC0000135` |
+
+判据来自上游源码的 `cfg_attr`，不是经验推测：
+
+```rust
+#[cfg_attr(target_env = "msvc",     link(name = "WebView2LoaderStatic", kind = "static"))]
+#[cfg_attr(not(target_env = "msvc"), link(name = "WebView2Loader.dll"))]
+```
+
+- 代码侧的统一出口是 `package-portable.mjs` 的 `needsWebView2LoaderDll(triple)`；
+  `REQUIRED_SIDECAR_FILES` 只是**候选**清单（staging 与 manifest 一律按**存在性**处理）。
+- 🔴 **2026-09-23 事故**：便携打包的前置校验曾写成 `if (isWindows) { 要求 DLL }`，把
+  GNU 才成立的事实当成通用前提，于是在 CI（MSVC）上把一份完全正确的产物判成「输入产物
+  不完整」，`v0.7.0-alpha.4` 发布链被自家守卫卡死。**平台 ≠ 工具链**——判据要与「谁需要它」
+  同源，而不是与「哪个平台」同源。
+- 自测里对应的是**双 ABI 交叉覆盖**（`x86_64-pc-windows-msvc` 与 `-gnu` 两个 triple 都在
+  同一台机器上跑一遍）。**不许**按宿主 triple 分支：宿主工具链是环境属性，按它分支会导致
+  本机与 CI 各验一半、双双变绿——缺陷正是这样躲过全部自测的。
+
 
 ---
 
