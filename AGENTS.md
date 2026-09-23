@@ -33,7 +33,9 @@
   - `plugin-safety-guard.mjs`：`formatFaultDetails` **已接线**（被 `harness-node-entry.mjs` 的未捕获异常/拒绝处理器消费）。**这是当前唯一生效的插件防护，且只在进程内**——同进程的插件崩溃仍可能带走 Harness。
   - `plugin-worker-host.mjs` 已于 2026-09-10 随批次 F 删除（连同 `PluginWorkerClient`）：它实现完整但从未接线，且不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系）。理由见该文件删除时的提交与 §7.2 归档行。
 - **`scripts/`**：
-  - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；**按 `--dsh-target=<name>` 选组装哪条上游通道**（版本、补丁目录、vendored 目录、staging 目录全由 [`dsh-targets.mjs`](scripts/dsh-targets.mjs) 推导）；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性，并要求 MANIFEST 的 `target` 与本次目标一致（`resources/` 两通道共用，否则会交付另一条线的树）；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
+  - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；**按 `--dsh-target=<name>` 选组装哪条上游通道**（版本、补丁目录、vendored 目录、staging 目录全由 [`dsh-targets.mjs`](scripts/dsh-targets.mjs) 推导）；**依赖安装优先用提交式 lockfile + `npm ci`**（`harness-locks/<target>/`，零解析、可复现；CI 上缺失/失配直接失败），仅本地无 lockfile 时才回退在线解析；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性，并要求 MANIFEST 的 `target` 与本次目标一致（`resources/` 两通道共用，否则会交付另一条线的树）；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
+  - `harness-lockfile.mjs`：提交式 lockfile 的**纯逻辑层**（路径推导 / `inputs.json` 一致性三规则 / 家族钉死推导），含 `--self-test`（18 项）；I/O 与 npm 调用留在 `prepare-harness.mjs`。
+  - `../harness-locks/<target>/`：与该目标绑定、**必须成对提交**的 `package-lock.json` + `inputs.json`（输入快照——lockfile 本身不记录 overrides）。生成/再生成：`npm run harness:lockfile -- --dsh-target=<t>`（next 解析约 40 分钟、alpha 数分钟；版本锚点/补丁集/vendored 变更后必跑，见升级清单 Step 1 与「依赖解析的堆爆炸」一节）。
   - `dsh-targets.mjs`：**双上游通道的唯一事实源**——目标名 ↔ npm dist-tag ↔ DSH 版本，以及「版本号 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
@@ -156,6 +158,14 @@ npm run verify:drift:self-test
 
 # 20b. 双上游通道：目标表自检（目标名 ↔ 通道 ↔ 版本；未知通道必须失败不得回退）
 npm run verify:targets
+
+# 20c. 提交式 lockfile 纯逻辑自检（inputs 一致性三规则 + 家族钉死推导）
+npm run verify:harness-lockfile
+
+# 20d. 重新生成某目标的提交式 lockfile（版本锚点/补丁集/vendored 变更后必跑；
+#      需联网，next 解析约 40 分钟、alpha 数分钟；产出 harness-locks/<target>/ 下
+#      package-lock.json + inputs.json，两者必须成对提交）
+npm run harness:lockfile -- --dsh-target=<next|alpha>
 
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
 #     默认按 MANIFEST 里记录的 target 取补丁表，也可 --dsh-target=<name> 指定
@@ -590,6 +600,37 @@ LibreOffice** 装进了运行时：
 **本仓的取舍（已裁定，2026-09-18）**：**接受**这个体积。理由是文档预览是上游新增的
 用户可见能力，剪掉它等于本仓单方面删功能，与「不删上游能力」的一贯口径冲突；
 真要减重应走上游（让 LibreOffice 变成真正的可选组件，由用户按需下载）。
+
+### 依赖解析的堆爆炸：浮动范围 + 上游发新版 = CI 三平台全灭（2026-09-23 实测，已根治勿回归）
+
+`prepare:harness` 的 `npm install` 靠 arborist **在线解析** 600+ 包的依赖树。上游子包用
+`^0.1.5-rc.2` 这类**浮动范围**互相引用——上游 2026-09-22 发布 `0.1.5-rc.3` 后，62 个未钉的
+子包漂到 rc.3 而 14 个补丁包留在 rc.2，混血树让解析堆占用涨到 **>4GB 且 30 分钟不收敛**。
+Node 默认老生代上限随宿主内存缩放（7GB runner ≈ 2GB），于是 smoke `35814756095` /
+`35824813835` **三平台全灭**于 `Ineffective mark-compacts near heap limit`（SIGABRT 134），
+且都在 `Prepare harness resources` 步骤跑 16 分钟才死。给子进程抬堆（`ecde5e0`，4096MB）
+只是续命——实测堆爬到 4089MB 依旧死。**probe 实验还证伪了「把家族钉死搬进组装」的方案**：
+钉死 dependencies 家族后解析仍要 41 分钟，且 peer/传递通道照样渗入 rc.3（189 个）。
+
+**根治（已落地）**：提交式 lockfile + `npm ci`，跳过解析：
+
+- `harness-locks/<target>/` 下成对提交 `package-lock.json` + `inputs.json`（输入快照；
+  lockfile **不记录** overrides，没有快照就无法判断「这份 lockfile 是不是当前输入生成的」）。
+- 组装时 `lockInputsMatch` 校验（dependencies 逐键一致 / 当前 overrides 逐条在快照中 /
+  快照多余条目不得撞当前补丁名），命中则复制 lockfile 进 staging 后 `npm ci`——
+  **零解析、零漂移、可复现**。
+- **CI 上 lockfile 是硬要求**：`CI`/`GITHUB_ACTIONS` 环境下缺失或失配直接 `process.exit(1)`，
+  绝不静默回退在线解析；本地回退时打 ⚠️ 并提示再生成命令。
+- 生成走 `npm run harness:lockfile -- --dsh-target=<t>`：先 `npm view` 拉主包依赖名单，
+  把全部 `@deepseek-ai/*` 子包钉到主包版本（**不钉解析不收敛**），再
+  `npm install --package-lock-only`（8GB 堆、不跑 postinstall）只解析不安装。
+- **版本锚点 / 补丁集 / vendored 包任何一项变更后必须重新生成**（升级清单 Step 1）；
+  纯逻辑判据在 `scripts/harness-lockfile.mjs`（`verify:harness-lockfile` 自测 18 项）。
+
+**lockfile 语义的注意事项**：提交式 lockfile 冻结的是「生成那一刻的完整解析结果」，
+包括上游浮动范围当时解析到的版本（如 rc.3 混血）——这与任何用户当天 fresh install 得到的
+树**一致**，只是从此**可复现**。上游升级（换 `dshVersion`）必须重生成，否则 inputs 失配
+门禁会拦下。
 
 ### linuxdeploy 撞上外来平台原生变体：AppImage 打包的静默杀手（已修复，勿回归）
 

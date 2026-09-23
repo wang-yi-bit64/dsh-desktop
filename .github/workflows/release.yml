@@ -115,6 +115,7 @@ jobs:
           npm run verify:patches
           npm run verify:prune
           npm run verify:variants
+          npm run verify:harness-lockfile
           npm run verify:release-workflow
           npm run verify:cli-package
           npm run verify:profile-names

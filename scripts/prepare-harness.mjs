@@ -38,7 +38,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -66,6 +66,15 @@ import { pruneForeignPlatformVariants } from './prune-platform-variants.mjs'
 
 // 组装树的健全性检查（规则1 链接逃逸 / 规则2 插件裸导入）。同理必须能独立跑断言。
 import { verifyNoEscapingLinks, verifyPluginBareImports } from './verify-harness-tree.mjs'
+
+// 提交式 lockfile（npm ci）的纯逻辑层：路径推导 / inputs 一致性校验 / 家族钉死推导。
+// 背景与设计见模块文档——2026-09-23 next 通道解析爆炸（>4GB 堆、30 分钟不收敛）的根治。
+import {
+  deriveFamilyPins,
+  harnessLockInputsPathFor,
+  harnessLockPathFor,
+  lockInputsMatch
+} from './harness-lockfile.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const buildDir = join(projectRoot, 'build')
@@ -232,8 +241,15 @@ const dependencies = {
   pnpm: PNPM_VERSION
 }
 for (const name of vendorPackages) {
-  dependencies[name] = `file:${join(vendorDir, name).replace(/\\/g, '/')}`
+  // file: 必须写**相对 staging 的路径**（staging 位于 harness-deps/<target>/）。
+  // 提交式 lockfile（harness-locks/<target>/，见下方「lockfile 安装模式」）会把这些
+  // spec 原样记进 lockfile——绝对路径会让 lockfile 只在本机可用，CI 上 npm ci 直接失败。
+  dependencies[name] = `file:${relative(staging, join(vendorDir, name)).replace(/\\/g, '/')}`
 }
+
+// 收集「补丁 + vendored」能解释的全部包名：lockfile inputs 校验用
+// （规则 3：家族钉死条目不得撞上这些名字，否则说明输入被删后 lockfile 未重新生成）。
+const pinnedPackageNames = new Set()
 
 // Pin every patched package to the exact version its patch was made for.
 // Without overrides, npm resolves the dsh sub-dependency ranges (e.g.
@@ -246,6 +262,7 @@ for (const file of readdirSafe(patchesDir)) {
   if (!match) continue
   const packageName = match[1].replace(/\+/g, '/')
   overrides[packageName] = match[2]
+  pinnedPackageNames.add(packageName)
 }
 
 // A few registry tarballs were republished with content that no longer
@@ -256,9 +273,146 @@ for (const file of readdirSafe(vendoredDir)) {
   const match = file.match(/^(.*)-(\d+\.\d+\.\d+.*)\.tgz$/)
   if (!match) continue
   const packageName = match[1].replace(/^(deepseek-ai|deepseek)-/, '@deepseek-ai/')
-  overrides[packageName] = `file:${join(vendoredDir, file).replace(/\\/g, '/')}`
+  overrides[packageName] = `file:${relative(staging, join(vendoredDir, file)).replace(/\\/g, '/')}`
+  pinnedPackageNames.add(packageName)
 }
 log(`pinning ${Object.keys(overrides).length} patched packages via overrides`)
+
+// ---------------------------------------------------------------------------
+// lockfile 安装模式（2026-09-23 引入，根治 next 通道解析爆炸）。
+//
+// `npm install` 靠 arborist 在线解析 600+ 包的依赖树；上游子包用 `^0.1.5-rc.2` 这类
+// 浮动范围互相引用，上游一发布新预发布版本未钉死的子包就整体漂走，解析堆占用会涨到
+// >4GB 且 30 分钟不收敛（smoke 35814756095 / 35824813835 三平台全灭）。根治：把解析
+// 结果按目标提交进 `harness-locks/<target>/`（package-lock.json + inputs.json 输入
+// 快照），组装时用 `npm ci` 照单安装——零解析、零漂移、可复现。
+//
+// 三种模式：
+//   · `ci`（默认，lockfile 已提交且与输入一致）→ 复制 lockfile 进 staging 后 `npm ci`；
+//   · `install`（lockfile 缺失/失配，且非 CI）→ 回退在线解析（next 目标可能极慢）；
+//     CI 上锁文件是必须品，缺失/失配直接硬失败，绝不静默装出一棵不可复现的树；
+//   · `update`（`--update-lockfile`）→ 家族钉死（registry 名单）后
+//     `npm install --package-lock-only` 只解析不安装，产出提交式 lockfile。
+//     家族钉死在这一步是**必须**的：不钉时解析不收敛（实测 >1h 无解）。
+// ---------------------------------------------------------------------------
+const updateLockfile = process.argv.includes('--update-lockfile')
+const harnessLockPath = harnessLockPathFor(projectRoot, dshTarget)
+const harnessLockInputsPath = harnessLockInputsPathFor(projectRoot, dshTarget)
+const isCIEnvironment = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true'
+
+/**
+ * 从 registry 读取上游主包的依赖名单，生成「家族钉死」overrides。
+ *
+ * `@deepseek-ai/dsh@X` 的 dependencies 里是几十个与主包**同版本发布**的
+ * `@deepseek-ai/dsh-*` 子包（lockstep 发布）。把它们全部钉到 X，解析才会在可接受的
+ * 时间/内存内收敛；补丁与 vendored 已钉的包跳过（它们的钉死优先级更高）。
+ *
+ * @param {string} dshVersion 主包精确版本（家族钉死的目标版本）。
+ * @param {Record<string, string>} baseOverrides 补丁 + vendored 已有的 overrides。
+ * @returns {Record<string, string>} 家族钉死条目。
+ */
+function fetchFamilyOverridesFromRegistry(dshVersion, baseOverrides) {
+  const result = runCaptured(
+    'npm',
+    ['view', `@deepseek-ai/dsh@${dshVersion}`, 'dependencies', '--json'],
+    projectRoot
+  )
+  if (!result.ok) {
+    throw new Error(
+      `无法从 registry 读取 @deepseek-ai/dsh@${dshVersion} 的依赖名单` +
+        `（--update-lockfile 需要联网）：\n${result.output}`
+    )
+  }
+  let registryDependencies
+  try {
+    registryDependencies = JSON.parse(result.output)
+  } catch (error) {
+    throw new Error(`npm view 返回的不是 JSON：${error.message}\n${result.output}`)
+  }
+  const pins = {}
+  for (const name of Object.keys(registryDependencies ?? {})) {
+    // 只钉 **lockstep 家族** `@deepseek-ai/dsh-*`：上游 scope 里还有独立版本线的包
+    // （cordis 4.x / schemastery 3.x / cordis-plugin-* 1.x），它们随主包的 dependencies
+    // 一起出现在名单里但版本完全不同——2026-09-23 alpha 生成实测：把它们也钉到主包
+    // 版本会直接 ETARGET（`No matching version found for @deepseek-ai/cordis@0.1.6-alpha.2`）。
+    if (!/^@deepseek-ai\/dsh-/.test(name)) continue
+    if (name in baseOverrides) continue
+    pins[name] = dshVersion
+  }
+  if (Object.keys(pins).length === 0) {
+    throw new Error(
+      `@deepseek-ai/dsh@${dshVersion} 的依赖名单里没有 @deepseek-ai/dsh-* 家族子包——` +
+        '上游发布结构可能变了，请人工核对后再生成 lockfile'
+    )
+  }
+  return pins
+}
+
+/** 读 JSON 文件，不存在/损坏一律返回 null（损坏按缺失处理，由调用方决定后续）。 */
+function readJsonIfExists(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+let installMode
+if (updateLockfile) {
+  installMode = 'update'
+  const familyPins = fetchFamilyOverridesFromRegistry(DSH_VERSION, overrides)
+  log(`registry 家族钉死：${Object.keys(familyPins).length} 个 @deepseek-ai/dsh-* 家族子包 → ${DSH_VERSION}`)
+  Object.assign(overrides, familyPins)
+} else {
+  const storedInputs = readJsonIfExists(harnessLockInputsPath)
+  const lockPresent = existsSync(harnessLockPath)
+  if (storedInputs !== null && lockPresent) {
+    const verdict = lockInputsMatch(storedInputs, {
+      dependencies,
+      overrides,
+      pinnedPackageNames: [...pinnedPackageNames]
+    })
+    if (verdict.ok) {
+      // 家族钉死从 inputs 快照回填：staging 的 package.json 必须与生成 lockfile 时
+      // 的输入逐字节一致（npm ci 本不解析、不需要钉，但 inputs 校验需要）。
+      const familyPins = deriveFamilyPins(storedInputs.overrides, overrides)
+      Object.assign(overrides, familyPins)
+      installMode = 'ci'
+      log(`提交式 lockfile 命中（家族钉死 ${Object.keys(familyPins).length} 个），将用 npm ci 安装`)
+    } else if (isCIEnvironment) {
+      console.error(
+        `[prepare-harness] 提交式 lockfile（${harnessLockPath}）与当前输入不一致，CI 上拒绝组装：\n` +
+          verdict.reasons.map((reason) => `  - ${reason}`).join('\n') +
+          `\n  重新生成并提交：npm run harness:lockfile -- --dsh-target=${dshTarget}`
+      )
+      process.exit(1)
+    } else {
+      log(
+        `⚠️ 提交式 lockfile 与当前输入不一致，回退 npm install（在线解析，${dshTarget} 目标可能极慢）：\n` +
+          verdict.reasons.map((reason) => `  - ${reason}`).join('\n')
+      )
+      log(`   重新生成并提交：npm run harness:lockfile -- --dsh-target=${dshTarget}`)
+      installMode = 'install'
+    }
+  } else {
+    if (lockPresent || storedInputs !== null) {
+      log('⚠️ harness-locks/ 下 lockfile 与 inputs.json 只有一个存在，按未提交处理')
+    }
+    if (isCIEnvironment) {
+      console.error(
+        `[prepare-harness] CI 上必须使用提交式 lockfile 安装（根治依赖解析的堆爆炸与浮漂），` +
+          `但 harness-locks/${dshTarget}/ 不完整。\n` +
+          `  生成：npm run harness:lockfile -- --dsh-target=${dshTarget}（需联网；` +
+          `next 目标解析约 40 分钟，alpha 数分钟），生成后把 harness-locks/${dshTarget}/ ` +
+          `下的 package-lock.json 与 inputs.json 一并提交。`
+      )
+      process.exit(1)
+    }
+    log('⚠️ 未找到提交式 lockfile，回退 npm install（在线解析）')
+    log(`   生成并提交：npm run harness:lockfile -- --dsh-target=${dshTarget}`)
+    installMode = 'install'
+  }
+}
 
 // staging 的 package.json 与当前输入完全一致 ⇒ 其 lockfile 由同一输入安装
 // 产生，可用于快速路径与 lockfileHash 校验。
@@ -485,7 +639,8 @@ if (checkOnly) {
   process.exit(1)
 }
 
-if (!forceRebuild) {
+// `--update-lockfile` 是生成动作，必须跳过幂等快速路径（它要新鲜解析一把）。
+if (!forceRebuild && !updateLockfile) {
   let manifestMatches = false
   if (resourcesComplete() && existsSync(manifestPath)) {
     try {
@@ -573,15 +728,46 @@ log('installing Harness dependency tree (this can take a while)')
 //    各跑 16 分钟才死。上游任意一个**传递依赖**发布了新版本（解析结果变大）就足以
 //    把它推过线——本仓的 dependencies / overrides 只钉死了补丁包，其余范围会漂。
 //
-//    因此给这个子进程**显式抬高堆上限**（4 GB：显著高于悬崖，又低于 7 GB
-//    runner 的物理内存）。只加在这一步，不污染 `run()` 的其他调用方
-//    （patch-package、品牌资产脚本都不需要，也不该隐式改变它们的行为）。
-//    若用户已设置 NODE_OPTIONS，追加而不是覆盖。
+//    根治是上面的 lockfile 安装模式（npm ci 跳过解析）；这个堆上限只保护仍在使用
+//    在线解析的回退路径（本地无 lockfile / lockfile 失配）与生成路径。4 GB：显著
+//    高于 7 GB runner 的默认悬崖。若用户已设置 NODE_OPTIONS，追加而不是覆盖。
 const npmInstallEnv = {
   ...process.env,
   NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=4096'].filter(Boolean).join(' ')
 }
-run('npm', ['install', '--no-audit', '--no-fund'], staging, npmInstallEnv)
+
+if (installMode === 'update') {
+  // 生成模式：**只解析不安装**（--package-lock-only 不物化 node_modules、不跑任何
+  // postinstall——本机缺 CMake 之类的原生构建环境也能生成；树本身由正常组装时的
+  // npm ci 物化）。解析堆按 8 GB 抬：next 目标即便全家钉死也要爬到 ~4 GB 以上。
+  log('generating committed lockfile (--package-lock-only, no node_modules)')
+  const updateEnv = {
+    ...process.env,
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=8192'].filter(Boolean).join(' ')
+  }
+  run('npm', ['install', '--package-lock-only', '--no-audit', '--no-fund'], staging, updateEnv)
+  const generated = join(staging, 'package-lock.json')
+  if (!existsSync(generated)) {
+    throw new Error('npm install --package-lock-only 结束却没有产出 package-lock.json')
+  }
+  mkdirSync(dirname(harnessLockPath), { recursive: true })
+  copyFileSync(generated, harnessLockPath)
+  // inputs 快照与 lockfile 成对提交：lockfile 不记录 overrides，没有快照就无法
+  // 判断「这份 lockfile 是不是当前输入生成的」（见 harness-lockfile.mjs 模块文档）。
+  writeFileSync(harnessLockInputsPath, `${JSON.stringify({ dependencies, overrides }, null, 2)}\n`)
+  log(`lockfile → ${harnessLockPath}`)
+  log(`inputs  → ${harnessLockInputsPath}`)
+  log('请把 harness-locks/ 下这两个文件一并提交；之后 CI 与本地的组装都会用 npm ci 复现同一棵树')
+  process.exit(0)
+}
+
+if (installMode === 'ci') {
+  copyFileSync(harnessLockPath, join(staging, 'package-lock.json'))
+  log('npm ci：按提交的 lockfile 照单安装（跳过解析，杜绝浮动范围漂移）')
+  run('npm', ['ci', '--no-audit', '--no-fund'], staging, npmInstallEnv)
+} else {
+  run('npm', ['install', '--no-audit', '--no-fund'], staging, npmInstallEnv)
+}
 
 // ---------------------------------------------------------------------------
 // 3. Reapply the tracked desktop patches (tiered failure policy).

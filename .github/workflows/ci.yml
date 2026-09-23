@@ -119,6 +119,12 @@ jobs:
       - name: Verify platform variant prune rules
         run: npm run verify:variants
 
+      # 提交式 lockfile（harness-locks/<target>/）纯逻辑层的自检：inputs 一致性校验的
+      # 三条规则与家族钉死推导。这套校验守住「lockfile 与组装输入脱节后 CI 照样用旧树
+      # 装包」的事故——判据本身写错时任何静态检查都不会红，只有这里能钉住。
+      - name: Verify harness lockfile rules
+        run: npm run verify:harness-lockfile
+
       # 发布工作流自身的静态判据（自测）。它守的是两类「只有真跑发布才炸」的缺陷：
       # tauri-action 的 tauriScript/args 拼装（重复 build → `unexpected argument`），
       # 以及 shell 变量紧邻非 ASCII 字符（macOS bash 3.2 会并入变量名）。

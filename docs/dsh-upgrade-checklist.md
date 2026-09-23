@@ -114,6 +114,12 @@ boot / config-dump / 插件管理。
 - [ ] `scripts/dsh-targets.mjs`：更新 `DSH_TARGETS[<target>].dshVersion`——**唯一产地**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取（补丁目录 / vendored 目录 / staging 目录也一并由它推导）。只改你正在升的那条线
 - [ ] **`overrides` 已无手工维护段**：它由该目标的 `patches/<target>/*.patch` 文件名与 `packages/<target>/*.tgz` 自动推导（`prepare-harness.mjs`），所以没有「要改的 overrides 段」。要检查的是**钉住是否仍然必要**——上游若已修复相关问题，按 Step 5 退役对应补丁，override 会随文件名一起消失
 - [ ] `packages/<target>/*.tgz` 与 `vendor/*` 中声明依赖 DSH 版本的地方
+- [ ] **重新生成提交式 lockfile（2026-09-23 起，必做）**：版本锚点、补丁集、vendored 包任何一个变了，`harness-locks/<target>/` 的 lockfile 就与输入失配，CI 的组装会**硬失败**（`lockInputsMatch` 三条规则）。重新生成：
+  ```bash
+  npm run harness:lockfile -- --dsh-target=<target>   # 需联网；next 解析约 40 分钟，alpha 数分钟
+  git add harness-locks/<target>/package-lock.json harness-locks/<target>/inputs.json
+  ```
+  生成模式会先从 registry 拉主包依赖名单，把全部 `@deepseek-ai/*` 子包钉到新版本（**不钉解析不收敛**——实测 >1h 无解，堆 >4GB），然后 `npm install --package-lock-only` 只解析不安装。详见 `scripts/harness-lockfile.mjs` 模块文档。
 
 ### Step 2 — 先跑适用性预检，再重生成补丁
 
