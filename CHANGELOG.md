@@ -11,8 +11,13 @@
 
 ### 🐛 修复
 
+- **ci**: derive the dry-run mirror from the import closure ([4ab3e2b](https://github.com/wang-yi-bit64/dsh-desktop/commit/4ab3e2bce52b57648b2bacfb24e4d55aa6a9dbd7))
 - **changelog**: keep one blank line between version sections ([bd776fd](https://github.com/wang-yi-bit64/dsh-desktop/commit/bd776fde10771817a5bb6db03716b0f3e3cbb47d))
 - **release**: never let temp-dir cleanup veto a passing verification ([12e7e49](https://github.com/wang-yi-bit64/dsh-desktop/commit/12e7e49b492ddc81041dfec02f1411cb918cc644))
+
+### 🧹 其他
+
+- **release**: 0.7.0-alpha.6 ([9e112e2](https://github.com/wang-yi-bit64/dsh-desktop/commit/9e112e275b562027a4546233ea606f87854d8943))
 
 ## [0.7.0-alpha.5] - 2026-09-23
 
