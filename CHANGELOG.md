@@ -7,12 +7,28 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.6] - 2026-09-23
+
+### 🐛 修复
+
+- **changelog**: keep one blank line between version sections ([bd776fd](https://github.com/wang-yi-bit64/dsh-desktop/commit/bd776fde10771817a5bb6db03716b0f3e3cbb47d))
+- **release**: never let temp-dir cleanup veto a passing verification ([12e7e49](https://github.com/wang-yi-bit64/dsh-desktop/commit/12e7e49b492ddc81041dfec02f1411cb918cc644))
+
 ## [0.7.0-alpha.5] - 2026-09-23
 
 ### 🐛 修复
 
+- **harness**: prune package-name libc variants (sharp) so linuxdeploy stops dying ([992aa75](https://github.com/wang-yi-bit64/dsh-desktop/commit/992aa754e85695aebb2d31d69adbce78d4b1f1c1))
+- **harness**: pin the full @deepseek-ai/dsh family closure, including peer edges ([8ed0a9e](https://github.com/wang-yi-bit64/dsh-desktop/commit/8ed0a9e34697b84fbcaa74154d2c5205803d9ddb))
+- **harness**: resolve picker package location from lockfile, not a fixed path ([eca0612](https://github.com/wang-yi-bit64/dsh-desktop/commit/eca0612ee8110623b8497922a79ac492e1060903))
+- **harness**: install Harness deps from committed lockfiles via npm ci ([3f3c46c](https://github.com/wang-yi-bit64/dsh-desktop/commit/3f3c46ccf871a23897275ca8ad23800803734e84))
+- **harness**: raise npm install heap ceiling in prepare-harness ([ecde5e0](https://github.com/wang-yi-bit64/dsh-desktop/commit/ecde5e04b9417ba2aa05d5cfd5387298093a274e))
 - **portable**: require WebView2Loader.dll only for non-msvc targets ([6c70c6d](https://github.com/wang-yi-bit64/dsh-desktop/commit/6c70c6d73f071923f2e50bfb5cb29c819655b7db))
 - **release**: declare shell: bash on the portable packaging step ([b71e83e](https://github.com/wang-yi-bit64/dsh-desktop/commit/b71e83e588efdd29498401286644efc50a515f48))
+
+### 🧹 其他
+
+- **release**: 0.7.0-alpha.5 ([6f3742e](https://github.com/wang-yi-bit64/dsh-desktop/commit/6f3742e44863c98fb088334baae65730e72dd98f))
 
 ## [0.7.0-alpha.4] - 2026-09-22
 
@@ -53,6 +69,7 @@
 ### 🧹 其他
 
 - **release**: 0.7.0-alpha.3 ([48320c7](https://github.com/wang-yi-bit64/dsh-desktop/commit/48320c7eb8f0b119d1952ffe20de5bf1a425ff1e))
+
 ## [0.7.0-alpha.2] - 2026-09-21
 
 ### 🐛 修复
@@ -64,6 +81,7 @@
 
 - 既有决策 ADR 化（docs/adr/ 34 篇 + 索引） ([6aad22d](https://github.com/wang-yi-bit64/dsh-desktop/commit/6aad22dba54909fcb16f93f3536e632e51d7ecb6))
 
+
 ## [0.7.0-alpha.1] - 2026-09-19
 
 ### ✨ 新功能
@@ -73,6 +91,7 @@
 ### 📝 文档
 
 - 记录 alpha.2 安装包体积翻倍的原因与判据 ([ac89570](https://github.com/wang-yi-bit64/dsh-desktop/commit/ac89570cb3bdb98d3f5587853b79b48aff28cdff))
+
 
 ## [0.6.0-alpha.2] - 2026-09-18
 
@@ -90,6 +109,7 @@
 - 固定 Node 版本并启用 npm 缓存 ([4f4bdc3](https://github.com/wang-yi-bit64/dsh-desktop/commit/4f4bdc3d7e22c207a3457d4a94e177aef5b01ed3))
 - 使用 .nvmrc 统一 Node 版本 ([baa8cd5](https://github.com/wang-yi-bit64/dsh-desktop/commit/baa8cd55a3be719fb5a838f12b8402f74e0e12d0))
 - 升级 GitHub Actions 依赖与 Node 版本 ([13c9003](https://github.com/wang-yi-bit64/dsh-desktop/commit/13c90035adb593538e7022a4d115bf0a71194305))
+
 
 ## [0.5.0-next.1] - 2026-09-15
 
@@ -112,6 +132,7 @@
 
 - Add `pullfrog.yml` workflow ([574f61e](https://github.com/wang-yi-bit64/dsh-desktop/commit/574f61ee7a71b9e2e5a6c44d777dd4d6a20c4d90))
 
+
 ## [0.4.0] - 2026-09-13
 
 ### ✨ 新功能
@@ -132,6 +153,7 @@
 
 - 接入 CLI 打包与发布步骤原文演练门禁 ([920d211](https://github.com/wang-yi-bit64/dsh-desktop/commit/920d211466fac64336ff536c84b120b4f8229340))
 
+
 ## [0.3.0] - 2026-09-13
 
 ### ✨ 新功能
@@ -148,6 +170,7 @@
 ### 🧹 其他
 
 - **github**: 新增 Issue 模板与 Discussions 入口（0.2-D1） ([f9c8513](https://github.com/wang-yi-bit64/dsh-desktop/commit/f9c8513ff030c3959e50b9a7719896e89c343840))
+
 
 ## [0.2.0] - 2026-09-12
 
@@ -171,6 +194,7 @@
 ### 🧹 其他
 
 - **skills**: 安装项目级 agent skills（10 项）并入库技能实体 ([d7e12ed](https://github.com/wang-yi-bit64/dsh-desktop/commit/d7e12ed7d9890500c63e12382b3bc66eacc545b2))
+
 ## [0.1.0] - 2026-09-11
 
 ### ✨ 新功能
