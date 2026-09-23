@@ -1166,6 +1166,12 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
   所以症状是「Release 页准确、`CHANGELOG.md` 缺条目」——这个方向本身就说明两条链路**读取方式不同源**
   （同源的是解析器与渲染器，不是区间来源）。
 
+**流程推论：候选提交要攒齐再推（2026-09-23 的代价）**。既然「写日志之后不得再提交」，那么候选提交
+每变动一次，就要连带重生成一次 CHANGELOG **并**重跑一轮 CI + 两条 Smoke（§8.5 第 2 步）。
+alpha.6 的准备期正是这样跑掉了三轮：推 `9e112e2`（CI 三平台同一 step 红）→ 修镜像闭包推 `4ab3e2b`
+→ 重生成日志推 `a7b1b2b`。其中第三轮**纯属自己造出来的**——`4ab3e2b` 之后本就还要改变更日志。
+**正确顺序：本地把候选提交与 CHANGELOG 都定稿 → 一次性推 → 只跑一轮门禁 → 打 tag。**
+
 **段间空行不变量**：每个 `## [x.y.z]` 标题前恰好一个空行。`insertSection` 的覆盖（`--force`）路径
 一度会吃掉它——覆盖区间的结束边界取在「下一段标题字符」处，而分隔两段的空行**原属被覆盖的那一段**，
 替换之后新段落与下一段被直接拼在一起（`…)\n## [0.1.0]`）。这种产出在编辑器与 GitHub 上**照样正常
@@ -1238,13 +1244,14 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 # 1. 确认待发布提交在 main 上
 git checkout main && git pull
 
-# 2. 手动 dispatch CI 与 Smoke 两个工作流并确认全绿（★ 2026-09-11 起为必需步骤）
+# 2. 手动 dispatch CI 与 Smoke 并确认全绿（★ 2026-09-11 起为必需步骤）
 #    日常提交已不触发 CI，冒烟也不再自动跑，Release 的 preflight 只跑静态门禁、
 #    看不见运行时行为，因此「静态 + 单测」与「冒烟」这两轮只能在发布前手动补齐。
 #    gh CLI 示例（在 Actions 页点 Run workflow 等价）：
-gh workflow run ci.yml --ref main                  # 三平台静态门禁 + clippy + 单测
-gh workflow run smoke.yml --ref main -f scope=full # 组装真实资源 + 打包 + L2 冒烟
-gh run watch   # 等到两个都全绿再继续
+gh workflow run ci.yml --ref main                                      # 三平台静态门禁 + clippy + 单测
+gh workflow run smoke.yml --ref main -f scope=full -f dsh_target=next  # 组装真实资源 + 打包 + L2 冒烟
+gh workflow run smoke.yml --ref main -f scope=full -f dsh_target=alpha # ★ 另一条通道也要跑，不能只跑默认
+gh run watch   # 等到三个都全绿再继续，且都必须跑在「将要打 tag 的那个提交」上
 
 # 3. 看将要升到哪个版本（不写任何文件）
 npm run version:bump -- auto --dry-run
@@ -1254,6 +1261,9 @@ npm run version:bump -- auto --commit --tag
 
 # 5. 推送（tag 推送即触发 Release 工作流）
 git push origin main --follow-tags
+#    ⚠️ --follow-tags 会把「本机有、远端没有」的注释标签一并推上去，而推 v* tag 会再次
+#    触发 release.yml。若历史上删过某个远端 tag，先在本机也删掉（git tag -d <tag>），
+#    否则下一次发布会凭空再造一个旧版本的 Release。见下文 2026-09-23 记录。
 ```
 
 > 第 4 步的 `--tag` 只创建**本地** tag，推送与否由人决定——这是刻意的：打 tag 就是发布意图，
@@ -1267,8 +1277,34 @@ git push origin main --follow-tags
 > dispatch 是你的提交在打 tag 前**唯一**几次会跑 `cargo test` / clippy / 真实进程冒烟的机会。
 > 跳过它们，Release 不会替你拦。只想要快速一档时，`smoke.yml` 用默认的 `scope=l1` 即可
 > （几十秒、不起窗口）；要复现发布形态就用 `scope=full`。
+>
+> ⚠️ **`smoke.yml` 的 `dsh_target` 默认是 `next`**——只按默认跑一次 = 只验了一条线，日志全绿
+> 也说明不了 `alpha` 线。2026-09-23 就踩过：一次全绿的 `scope=full` 实际组装的正是
+> `harness-deps/next`，而待发布的 alpha 线**从未被冒烟过**。核验某次运行验了哪条线，
+> 看日志里的 `harness-deps/(next|alpha)`。规则见 §8.6「发布前两条线各自都要有证据」。
 
-**发布后核对（CLI 产物）**：`release.yml` 的 `cli-publish` 会自己核验一遍下载副本，但「产物在
+**发布后按资产清单核对（★ 唯一可信的完整性判据）**：`build` job 里的 tauri-action 会在
+**半途**就把 Release 建出来并公开（`releaseDraft: false`），所以「Release 页存在」完全
+不等于「发布成功」；而 `cli-publish` 的 `needs` 含 `portable`，任一上游 job 失败它会直接
+**skipped**——Release 上就会**永久缺** 9 个 CLI + 3 个便携版资产，且**无声**。
+
+```bash
+TAG=v0.7.0-alpha.7
+gh release view "$TAG" --json assets --jq '.assets|length'          # 期望 22
+gh api "repos/wang-yi-bit64/dsh-desktop/releases?per_page=100" \
+  --jq ".[]|select(.tag_name==\"$TAG\")|\"\(.assets|length)\""
+```
+
+期望值 **22** = 9 平台安装包 + 1 `latest.json` + 9 CLI（3 triple × {归档, `.sha256`,
+`.manifest.json`}）+ 3 便携版（`.zip` / `.zip.sha256` / `.manifest.json`）。
+（`alpha.1` / `alpha.2` 是 19——当时还没有便携版；`alpha.3` 没有 Release。）
+再抽一遍最小资产体积，确认**没有 0 字节**——`.sha256` 约 100 B 量级是正常的：
+
+```bash
+gh release view "$TAG" --json assets --jq '.assets[]|"\(.size)\t\(.name)"' | sort -n | head -5
+```
+
+**发布后核对（CLI 产物，人工下载）**：`release.yml` 的 `cli-publish` 会自己核验一遍下载副本，但「产物在
 Release 页面上真的可下载」这件事只有人点一次才知道（`cli-publish` 读的是 workflow artifact，
 不是公开资产 URL）：
 
@@ -1340,3 +1376,61 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 > **alpha.2 是「上游追上我们」的第一次**：平台化侧栏宽度被上游原生实现（我们那条退役）、
 > 键盘导航修复被上游反向采纳。这说明补丁面在收缩——维持这些补丁的成本在下降，
 > 而不是无限增长。
+
+> ✅ **发布链路首次全绿（2026-09-23，`v0.7.0-alpha.7`）**：**22 / 22 个资产**、
+> `0 个 0 字节`、`prerelease: true`，`release.yml` **9/9 job success**——包含
+> `publish CLI + portable artifacts`，而它自 `v0.7.0-alpha.3` 起**一直是 failure 或被 skipped**
+> （alpha.3 压根没有 Release，alpha.4/5/6 各只发出 10 个资产）。
+>
+> | 项 | 结果 |
+> |---|---|
+> | tag | `v0.7.0-alpha.7` → `55146e1`（注释标签） |
+> | CI（`55146e1`） | run `35872317716` ✅ |
+> | Smoke `next`（`55146e1`） | run `35872333129` ✅ ——日志里 `DSH_TARGET: next` |
+> | Smoke `alpha`（`55146e1`） | run `35872325927` ✅ ——日志里 `DSH_TARGET: alpha` |
+> | `release.yml` | run `35874269170`，9/9 job success |
+> | 资产 | 9 平台 + `latest.json` + 9 CLI + 3 便携版 = **22** |
+> | 体积抽样 | 便携版 zip 207,563,171 B、AppImage 219 MB、deb 150 MB、exe 132 MB |
+> | 内置运行时 | DSH `0.1.6-alpha.2`（`alpha` 通道） |
+>
+> **两条通道各跑一次是这里唯一能证明「两条线都验过」的办法**：两个运行的 job 名与结论
+> 完全一样，只有日志里的 `DSH_TARGET` 能区分——差异是**无声**的。
+
+>
+> **这一版之前，链路是「修一个红灯 → 暴露下一个从未跑过的红灯」**，共 **六处**
+> 被前置失败掩盖的潜伏缺陷（按暴露顺序）：
+>
+> | # | 缺陷 | 修在 |
+> |---|---|---|
+> | 1 | `cargo fmt` / clippy 门禁 | `v0.7.0-alpha.4` 准备期 |
+> | 2 | 签名私钥缺失（`createUpdaterArtifacts` 让它成为**所有** job 的硬要求） | 同上 |
+> | 3 | portable job 的 YAML 用了 `\` 续行却无 `shell: bash`（Windows 默认 PowerShell） | 同上 |
+> | 4 | 临时目录清理失败否决主结论（`finally` 里 `rmSync` 的 EACCES 把**通过**判成失败） | `12e7e49` |
+> | 5 | 镜像目录的脚本清单**写死**（`ERR_MODULE_NOT_FOUND: remove-tree.mjs`） | `4ab3e2b` |
+> | 6 | `Compress-Archive` 在 Windows PowerShell 5.1 下写**反斜杠**条目名，Linux `unzip` 退 1 | `59bd75c` |
+>
+> 每一处的成因都是同一句话：**改动的代码在上一处红灯修好之前从未被执行过**。
+> 因此修完一个红灯**不要**假定下一个也绿。
+>
+> **残留状态**：`alpha.4` / `alpha.5` / `alpha.6` 各只发出 10 个资产（缺 9 CLI + 3 便携版），
+> 均已由 `alpha.7` 取代。`alpha.4` 的 Release 页已加前置标注（**资产原样保留，不删**）；
+> `alpha.5` / `alpha.6` 的 Release 已不在远端存在（`alpha.5` 的 tag 亦已不在远端，
+> `alpha.6` 的 tag 仍在）。
+>
+> ⚠️ **本机 `git tag` 里被删的 tag 都还在**（`v0.7.0-alpha.3`、`v0.7.0-alpha.5`），
+> 而它们是**注释标签**且指向 main 可达的提交——于是 §8.5 第 5 步那条
+> `git push origin main --follow-tags` 会把它们当**新 tag 推回远端**，而推 `v*` tag
+> 又会**再次触发 `release.yml`**，凭空再造两个残缺 Release。已实测：
+>
+> ```bash
+> $ git push --dry-run --follow-tags origin main
+>  * [new tag]         v0.7.0-alpha.3 -> v0.7.0-alpha.3
+>  * [new tag]         v0.7.0-alpha.5 -> v0.7.0-alpha.5
+> ```
+>
+> 对策：删了远端 tag 之后，**本机同名 tag 要一并删掉**（`git tag -d <tag>`），
+> 否则「本地干净、远端干净」这个假象会在下一次发布时被 `--follow-tags` 打破。
+> 只想推 main 时用 `git push origin main`（不带 `--follow-tags`）也能避开，
+> 但那只是绕开症状——本机留着一个远端已删的 tag，本身就是不一致状态。
+
+
