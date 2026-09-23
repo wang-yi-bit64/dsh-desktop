@@ -7,6 +7,13 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.5] - 2026-09-23
+
+### 🐛 修复
+
+- **portable**: require WebView2Loader.dll only for non-msvc targets ([6c70c6d](https://github.com/wang-yi-bit64/dsh-desktop/commit/6c70c6d73f071923f2e50bfb5cb29c819655b7db))
+- **release**: declare shell: bash on the portable packaging step ([b71e83e](https://github.com/wang-yi-bit64/dsh-desktop/commit/b71e83e588efdd29498401286644efc50a515f48))
+
 ## [0.7.0-alpha.4] - 2026-09-22
 
 ### 🐛 修复
