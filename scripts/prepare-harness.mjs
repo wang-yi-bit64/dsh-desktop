@@ -73,7 +73,8 @@ import {
   deriveFamilyPins,
   harnessLockInputsPathFor,
   harnessLockPathFor,
-  lockInputsMatch
+  lockInputsMatch,
+  packageInstallDirs
 } from './harness-lockfile.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -994,33 +995,49 @@ function runCaptured(command, args, cwd) {
  * (`ctx.uiWorkspace.pickDirectory()`), which reaches the Win32 chooser without
  * any renderer IPC. Fail the build rather than ship that regression again.
  *
+ * **包的安装位置必须从 lockfile 读，不能写死 `node_modules/<pkg>`
+ * （2026-09-23 的真实事故）**：npm 在无法共享同一份拷贝时会把它嵌到消费方下面
+ * （冻结树里该包位于
+ * `node_modules/@deepseek-ai/dsh-web-app/node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native`），
+ * 写死顶层路径会把「包明明在树里」报成 missing。树里若有多份拷贝就**逐份检查**
+ * ——它们都会被打进安装包。
+ *
  * @returns {void}
  */
 function assertPickerSurfaceIsHostBacked() {
-  const clientPath = join(
-    staging,
-    'node_modules',
-    '@deepseek-ai',
-    'dsh-client-ui-directory-picker-native',
-    'lib',
-    'client.js'
-  )
-  if (!existsSync(clientPath)) {
-    throw new Error(`directory-picker client surface missing at ${clientPath}`)
-  }
-  const source = readFileSync(clientPath, 'utf8')
-  const bridge = source.match(/window\.(dshDesktop[A-Za-z]*)/)
-  if (bridge !== null) {
+  const pickerPackage = '@deepseek-ai/dsh-client-ui-directory-picker-native'
+  const stagingLock = JSON.parse(readFileSync(join(staging, 'package-lock.json'), 'utf8'))
+  const installDirs = packageInstallDirs(stagingLock, pickerPackage)
+    .map((key) => join(staging, key))
+    .filter((dir) => existsSync(dir))
+
+  if (installDirs.length === 0) {
     throw new Error(
-      `directory-picker client surface references window.${bridge[1]}, which no preload defines; ` +
-        'route picks through ctx.uiWorkspace.pickDirectory() instead'
+      `${pickerPackage} 不在依赖树里（位置取自 ${join(staging, 'package-lock.json')} 的键）。\n` +
+        '这通常意味着 lockfile 与上游发布结构漂移，请先核对再用 harness:lockfile 重新生成。'
     )
   }
-  if (!source.includes('ctx.uiWorkspace.pickDirectory()')) {
-    throw new Error(
-      `directory-picker client surface no longer calls ctx.uiWorkspace.pickDirectory() at ${clientPath}`
-    )
+
+  for (const packageDir of installDirs) {
+    const clientPath = join(packageDir, 'lib', 'client.js')
+    if (!existsSync(clientPath)) {
+      throw new Error(`directory-picker client surface missing at ${clientPath}`)
+    }
+    const source = readFileSync(clientPath, 'utf8')
+    const bridge = source.match(/window\.(dshDesktop[A-Za-z]*)/)
+    if (bridge !== null) {
+      throw new Error(
+        `directory-picker client surface references window.${bridge[1]} (${clientPath}), which no ` +
+          'preload defines; route picks through ctx.uiWorkspace.pickDirectory() instead'
+      )
+    }
+    if (!source.includes('ctx.uiWorkspace.pickDirectory()')) {
+      throw new Error(
+        `directory-picker client surface no longer calls ctx.uiWorkspace.pickDirectory() at ${clientPath}`
+      )
+    }
   }
+  log(`directory-picker 客户端面检查通过（${installDirs.length} 份拷贝）`)
 }
 
 // ---------------------------------------------------------------------------

@@ -632,6 +632,16 @@ Node 默认老生代上限随宿主内存缩放（7GB runner ≈ 2GB），于是
 树**一致**，只是从此**可复现**。上游升级（换 `dshVersion`）必须重生成，否则 inputs 失配
 门禁会拦下。
 
+**修好安装后暴露的下一处潜伏缺陷（同一轮，2026-09-23）**：`npm ci` 一通过，
+`assertPickerSurfaceIsHostBacked()` 立刻红了——它写死 `node_modules/<pkg>`，而冻结树把
+`@deepseek-ai/dsh-client-ui-directory-picker-native` **嵌在消费方之下**
+（`node_modules/@deepseek-ai/dsh-web-app/node_modules/…`，且版本是 rc.3：它不在主包
+dependencies 名单里，故未进家族钉死）。判据本身没错（该副本同样满足「无 `window.dshDesktop*`
+全局桥 + 走 `ctx.uiWorkspace.pickDirectory()`」），错的是**位置假设**。修法是
+`packageInstallDirs()`（从 lockfile 键取全部安装位置，顶层与嵌套一视同仁），并对**每一份
+拷贝**做检查。**教训**：hoisting 是解析结果的一部分，会随依赖图变化——凡断言「某个包里的
+某个文件」时，位置必须从 lockfile 推导，不能写死。
+
 ### linuxdeploy 撞上外来平台原生变体：AppImage 打包的静默杀手（已修复，勿回归）
 
 Linux 的 `build` job 曾**连续多轮**以 `failed to run linuxdeploy` 收场，而 tauri-bundler 在默认日志级别下**吞掉 linuxdeploy 的 stderr**，CI 上只留下一句无信息量的错误（deb 正常，因为 deb 不解析 ELF 依赖；Windows/macOS 不经过 linuxdeploy，全绿——所以红灯只出现在一个平台）。用 `-v` 拿到真实报错才定位：

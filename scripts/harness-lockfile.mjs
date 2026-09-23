@@ -166,6 +166,32 @@ export function lockInputsMatch(stored, { dependencies, overrides, pinnedPackage
   return { ok: reasons.length === 0, reasons }
 }
 
+/**
+ * 从 lockfile 里取某个包**在树中的全部安装位置**（相对仓库根的键）。
+ *
+ * ## 为什么不能用 `node_modules/<pkg>` 写死位置（2026-09-23 的真实事故）
+ *
+ * npm 在无法共享同一份拷贝时会把包**嵌到消费方下面**
+ * （`node_modules/<consumer>/node_modules/<pkg>`）。`prepare-harness` 的
+ * directory-picker 断言曾写死顶层路径，于是冻结树把它嵌套到
+ * `@deepseek-ai/dsh-web-app/node_modules/…` 之下时，断言报「client surface missing」
+ * ——包明明在树里，只是不在预期的位置。lockfile 的键就是这个事实的权威来源。
+ *
+ * 返回**全部**匹配项：树里若存在多份拷贝（版本冲突时的合法形态），调用方应对每一份
+ * 都做检查——它们都会被打进安装包。
+ *
+ * @param {object} lockfile package-lock.json 的解析结果。
+ * @param {string} packageName 包名（如 `@deepseek-ai/dsh-client-ui-directory-picker-native`）。
+ * @returns {string[]} 安装位置键（如 `node_modules/x`、`node_modules/a/node_modules/x`）。
+ */
+export function packageInstallDirs(lockfile, packageName) {
+  const packages = lockfile?.packages ?? {}
+  const suffix = `/node_modules/${packageName}`
+  return Object.keys(packages).filter(
+    (key) => key === `node_modules/${packageName}` || key.endsWith(suffix)
+  )
+}
+
 // ---------------------------------------------------------------------------
 // 自检
 // ---------------------------------------------------------------------------
@@ -237,6 +263,49 @@ export function selfTest() {
   // 可证伪性：规则 3 的包名名单**不含**家族钉死名时必须放行——
   // 否则任何一次正常命中都会被误判（对称失效的教训见 AGENTS.md WebView2 一节）。
   eq('规则3：名单不含钉死名 → 放行', lockInputsMatch(storedInputs, current).ok, true)
+
+  // --- packageInstallDirs：安装位置必须从 lockfile 读，不能写死顶层路径 ---
+  const PICKER = '@deepseek-ai/dsh-client-ui-directory-picker-native'
+  const lockTop = {
+    packages: {
+      '': {},
+      [`node_modules/${PICKER}`]: { version: '0.1.6-alpha.2' },
+      [`node_modules/${PICKER}-browse`]: { version: '0.1.6-alpha.2' }
+    }
+  }
+  eq('安装位置：顶层', packageInstallDirs(lockTop, PICKER), [`node_modules/${PICKER}`])
+
+  const lockNested = {
+    packages: {
+      '': {},
+      [`node_modules/@deepseek-ai/dsh-web-app/node_modules/${PICKER}`]: { version: '0.1.5-rc.3' }
+    }
+  }
+  eq(
+    '安装位置：嵌套在消费方之下（事故形态）',
+    packageInstallDirs(lockNested, PICKER),
+    [`node_modules/@deepseek-ai/dsh-web-app/node_modules/${PICKER}`]
+  )
+
+  const lockBoth = {
+    packages: {
+      '': {},
+      [`node_modules/${PICKER}`]: { version: '0.1.6-alpha.2' },
+      [`node_modules/a/node_modules/${PICKER}`]: { version: '0.1.6-alpha.2' },
+      [`node_modules/b/node_modules/c/node_modules/${PICKER}`]: { version: '0.1.6-alpha.2' }
+    }
+  }
+  eq('安装位置：多份拷贝全都要返回', packageInstallDirs(lockBoth, PICKER).length, 3)
+
+  eq('安装位置：树里没有 → 空数组', packageInstallDirs(lockTop, '@deepseek-ai/dsh-not-here'), [])
+  eq('安装位置：空/缺 packages 不抛错', packageInstallDirs({}, PICKER), [])
+  eq('安装位置：null lockfile 不抛错', packageInstallDirs(null, PICKER), [])
+  // 可证伪性：前缀相同的兄弟包**不得**混入（`-browse` 是另一个包）。
+  eq(
+    '安装位置：同前缀兄弟包不得混淆',
+    packageInstallDirs(lockTop, PICKER).every((key) => !key.endsWith('-browse')),
+    true
+  )
 
   if (failures.length > 0) {
     throw new Error(`harness-lockfile 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
