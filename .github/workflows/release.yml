@@ -162,6 +162,9 @@ jobs:
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
+        # 用了反斜杠续行就必须显式声明 bash——判据见 verify-release-workflow.mjs
+        # 的 shell 可移植性守卫（PowerShell 的续行符是反引号，`\` 会被当成自减运算符）。
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -276,6 +279,8 @@ jobs:
       # 不重新下载，预置官方新版 pin 住（详见 ci.yml 同名步骤注释）。
       - name: Pin recent linuxdeploy (Linux AppImage)
         if: runner.os == 'Linux'
+        # 用了反斜杠续行就必须显式声明 bash（同上）。
+        shell: bash
         run: |
           mkdir -p ~/.cache/tauri
           curl -fL --retry 3 -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \
@@ -416,8 +421,20 @@ jobs:
         run: npm run tauri build -- --bundles nsis -v
 
       - name: Package portable artifact
+        # ⚠️ `shell: bash` 是**必须的**，不是风格偏好。
+        #   本步的命令用 POSIX 反斜杠续行（`\`），而 windows-latest 的默认 shell 是
+        #   PowerShell——PowerShell 的续行符是反引号，`\` 不是续行符，于是第 2 行开头的
+        #   `--bundle-dir` 被当成**自减运算符**，整段脚本在解析阶段就死：
+        #     ParserError: ... Missing expression after unary operator '--'.
+        #   2026-09-22 v0.7.0-alpha.4 的真实事故：portable job 编译了 13m40s，
+        #   最后死在打包这一步的第 1 秒，且 cli-publish 因 needs 被跳过——
+        #   所有 CLI 产物白构建（三个平台的成功产物一个都没上传）。
+        #   之前一直没暴露，是因为更早的失败（缺签名私钥）总在编译前/中就拦住了，
+        #   这一步**从未被执行过**。本仓其余多行 bash 步骤都写了 `shell: bash`，
+        #   只有此处漏了；`npm run verify:release-workflow` 已加静态守卫防止复发。
         env:
           DSH_VERSION: ${{ needs.preflight.outputs.dsh_version }}
+        shell: bash
         run: |
           node scripts/package-portable.mjs \
             --bundle-dir target/release \

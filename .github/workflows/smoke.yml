@@ -102,6 +102,9 @@ jobs:
       # loaders，缺包或缓存未刷新时以 `failed to run linuxdeploy` 收场。
       - name: Install Linux build dependencies
         if: runner.os == 'Linux' && inputs.scope == 'full'
+        # 用了反斜杠续行就必须显式声明 bash——判据见 verify-release-workflow.mjs
+        # 的 shell 可移植性守卫（PowerShell 的续行符是反引号，`\` 会被当成自减运算符）。
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -230,6 +233,8 @@ jobs:
       # 工具不重新下载，故预置官方新版 pin 住版本。
       - name: Pin recent linuxdeploy (Linux AppImage)
         if: inputs.scope == 'full' && runner.os == 'Linux'
+        # 用了反斜杠续行就必须显式声明 bash（同上）。
+        shell: bash
         run: |
           mkdir -p ~/.cache/tauri
           curl -fL --retry 3 -o ~/.cache/tauri/linuxdeploy-x86_64.AppImage \

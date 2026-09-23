@@ -37,8 +37,19 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const RELEASE_YML = join(projectRoot, '.github', 'workflows', 'release.yml')
+const WORKFLOW_DIR = join(projectRoot, '.github', 'workflows')
+const RELEASE_YML = join(WORKFLOW_DIR, 'release.yml')
 const TAURI_CONF = join(projectRoot, 'src-tauri', 'tauri.conf.json')
+
+/**
+ * 需要跑「shell 可移植性」检查的工作流。
+ *
+ * **三个都要查**，不能只查 release.yml：这个坑与「是哪个工作流」无关，只与
+ * 「步骤用了 bash 语法、却可能跑在 Windows 的默认 PowerShell 下」有关。
+ * release.yml 已经出过一次；ci.yml / smoke.yml 里那几步只是**暂时**安全
+ * （它们恰好都带 `if: runner.os == 'Linux'`），谁把门禁一改就会变成同一类故障。
+ */
+const WORKFLOW_FILES = ['ci.yml', 'release.yml', 'smoke.yml']
 
 /**
  * 读入工作流并**归一化行尾**。
@@ -51,6 +62,16 @@ const TAURI_CONF = join(projectRoot, 'src-tauri', 'tauri.conf.json')
  */
 function readWorkflow() {
   return readFileSync(RELEASE_YML, 'utf8').replace(/\r\n/g, '\n')
+}
+
+/**
+ * 读入任意工作流并归一化行尾（理由同 `readWorkflow`）。
+ *
+ * @param {string} name 工作流文件名，如 `ci.yml`
+ * @returns {string} 归一化后的文本
+ */
+function readWorkflowFile(name) {
+  return readFileSync(join(WORKFLOW_DIR, name), 'utf8').replace(/\r\n/g, '\n')
 }
 
 /**
@@ -495,6 +516,96 @@ export function checkTauriHooksAreCheckOnly(text) {
 }
 
 /**
+ * 找出「用了 POSIX 反斜杠续行、却没声明 `shell: bash`」的步骤。
+ *
+ * ## 为什么这是必查项，而不是风格偏好
+ *
+ * `windows-latest` 的默认 shell 是 **PowerShell**，而 `\` **不是** PowerShell 的续行符
+ * （它用反引号）。于是 `run: |` 里这种在 bash 下完全正常的写法：
+ *
+ * ```yaml
+ * node scripts/package-portable.mjs \
+ *   --bundle-dir target/release \
+ * ```
+ *
+ * 在 PowerShell 下会把第二行开头的 `--bundle-dir` 解析成**自减运算符**，整段脚本在
+ * **解析阶段**就死（`ParserError: Missing expression after unary operator '--'`），
+ * 一秒都没真正跑起来。而同一段文本在 ubuntu/macos 上因为默认就是 bash 而完全正常——
+ * 于是缺陷**只在 Windows 上现形**。
+ *
+ * 2026-09-22 `v0.7.0-alpha.4` 的真实事故：portable job 编译了 13m40s，最后死在打包步骤的
+ * 第 1 秒，且 `cli-publish` 因 `needs: portable` 被跳过——三个平台**已经成功构建**的
+ * CLI 产物因此一个都没上传。此前一直没暴露，是因为更早的失败（缺签名私钥）总在编译
+ * 前/中就把它拦住了：**这一步在事故前从未被执行过**。
+ *
+ * ## 为什么判据可以要求「一律显式声明」
+ *
+ * 本仓其余多行 bash 步骤（apt-get / curl / printf 等）**都**写了 `shell: bash`，
+ * 只有出事那处漏了。要求一律显式声明，是把「依赖 runner 默认 shell」这个**隐性假设**
+ * 变成看得见的事实——将来谁把某个 job 挪到 Windows、或给矩阵加一行 Windows，
+ * 都不会再因为「默认 shell 恰好是 bash」而埋雷。
+ *
+ * 对现有步骤是**无副作用**的：剩下那几处全是 Linux 门禁下的**无管道**命令，
+ * 显式 `shell: bash` 与默认 bash 的唯一差别是多带 `-o pipefail`，而无管道时该差异
+ * 不产生任何行为变化。
+ *
+ * ## 实现
+ *
+ * 纯文本 + 缩进切块（本仓不依赖 YAML 解析器）：`steps:` 的缩进决定步骤项缩进
+ * （+2），每个 `- ` 项到下一个同级项之间算一个步骤块；块内出现反斜杠续行、
+ * 且块内没有 `shell: bash`，即判红。
+ *
+ * ⚠️ 判据**不看 `runs-on`、也不看 `if:`**：故意如此。靠 `if: runner.os == 'Linux'`
+ * 推理「所以安全」正是这个缺陷能潜伏至今的原因——判据一旦要跟着门禁走，
+ * 门禁一改就悄悄失效。
+ *
+ * @param {string} text 工作流 YAML 全文（应已把 CRLF 规范成 LF）
+ * @param {string} [label] 报错定位用的文件名
+ * @returns {string[]} 问题清单（空数组表示通过）
+ */
+export function shellContinuationProblems(text, label = 'workflow.yml') {
+  const lines = text.split('\n')
+  const problems = []
+  const CONTINUATION = /\\[ \t]*$/
+
+  // 1) 按 `steps:` 的缩进，切出每个步骤块 [start, end)。
+  const blocks = []
+  for (let i = 0; i < lines.length; i++) {
+    const header = /^(\s*)steps:\s*$/.exec(lines[i])
+    if (!header) continue
+    const stepsIndent = header[1].length
+    const itemRe = new RegExp(`^ {${stepsIndent + 2}}-\\s`)
+    let start = null
+    let j = i + 1
+    for (; j < lines.length; j++) {
+      const line = lines[j]
+      if (line.trim() === '') continue
+      if (/^\s*/.exec(line)[0].length <= stepsIndent) break
+      if (!itemRe.test(line)) continue
+      if (start !== null) blocks.push([start, j])
+      start = j
+    }
+    if (start !== null) blocks.push([start, j])
+    i = j - 1
+  }
+
+  // 2) 逐块判定：有续行、且没有显式 `shell: bash` → 判红。
+  for (const [start, end] of blocks) {
+    const chunk = lines.slice(start, end)
+    const first = chunk.findIndex((line) => CONTINUATION.test(line))
+    if (first === -1) continue
+    if (chunk.some((line) => /^\s*shell:\s*bash\s*$/.test(line))) continue
+    const name = chunk[0].replace(/^\s*-\s*/, '').replace(/^name:\s*/, '').trim() || '(未命名步骤)'
+    problems.push(
+      `${label} L${start + first + 1}：步骤「${name}」用了 POSIX 反斜杠续行，却没声明 \`shell: bash\`——` +
+        '在 windows-latest 的默认 PowerShell 下会被解析成自减运算符，脚本在解析阶段即失败'
+    )
+  }
+
+  return problems
+}
+
+/**
  * 自测：对真实文件跑一遍判据，并用两份**已知缺陷夹具**做可伪证性检查。
  *
  * @returns {{passed: number}} 通过项数
@@ -525,6 +636,31 @@ export function selfTest() {
   // 2) 真实工作流：不得有「未加花括号的变量紧邻非 ASCII 字符」的写法。
   const hits = findUnbracedVarBeforeNonAscii(text)
   check(hits.length === 0, `release.yml：存在变量紧邻非 ASCII 字符的写法（macOS bash 3.2 会并入变量名）→ ${hits.map((h) => `L${h.line}: $${h.snippet}`).join('；')}`)
+
+  // 2b) 三个真实工作流：用了 bash 反斜杠续行的步骤必须显式声明 `shell: bash`。
+  for (const file of WORKFLOW_FILES) {
+    const shellProblems = shellContinuationProblems(readWorkflowFile(file), file)
+    check(shellProblems.length === 0, `shell 可移植性：${shellProblems.join('；')}`)
+  }
+
+  // 2c) 可伪证性：两条必须**同时**成立——只验「判红」的话，一条永远返回问题的
+  //     判据也能通过，那等于没有判据。
+  const continuationFixture = (withShell) =>
+    [
+      'jobs:',
+      '  demo:',
+      '    runs-on: windows-latest',
+      '    steps:',
+      '      - name: 夹具',
+      ...(withShell ? ['        shell: bash'] : []),
+      '        run: |',
+      '          node a.mjs \\',
+      '            --flag x'
+    ].join('\n')
+  const badFixture = shellContinuationProblems(continuationFixture(false), 'fixture.yml')
+  const goodFixture = shellContinuationProblems(continuationFixture(true), 'fixture.yml')
+  check(badFixture.length === 1, `可伪证性：续行且缺 shell: bash 的步骤必须判红（实得 ${badFixture.length} 条）`)
+  check(goodFixture.length === 0, `可伪证性：同一夹具补上 shell: bash 后必须转绿（实得 ${goodFixture.length} 条）`)
 
   // 3) 可伪证性：缺陷夹具必须被同一批判据判红，否则判据是装饰。
   const buggyScript = 'npm run tauri --'
@@ -737,7 +873,16 @@ function run() {
   } else {
     console.log('✅ release.yml 无「变量紧邻非 ASCII 字符」写法')
   }
-  if (!ok || hits.length > 0) process.exit(1)
+
+  // 3) 全部工作流：bash 语法步骤必须显式声明 shell，否则在 Windows 上会被 PowerShell 解析失败。
+  const shellProblems = WORKFLOW_FILES.flatMap((file) => shellContinuationProblems(readWorkflowFile(file), file))
+  if (shellProblems.length > 0) {
+    for (const p of shellProblems) console.error(`  ✗ ${p}`)
+  } else {
+    console.log(`✅ 三个工作流的 bash 续行步骤都显式声明了 shell: bash（${WORKFLOW_FILES.join(' / ')}）`)
+  }
+
+  if (!ok || hits.length > 0 || shellProblems.length > 0) process.exit(1)
 }
 
 const isDirectRun = (() => {

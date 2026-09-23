@@ -62,6 +62,9 @@ jobs:
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
+        # 用了反斜杠续行就必须显式声明 bash——判据见 verify-release-workflow.mjs
+        # 的 shell 可移植性守卫（PowerShell 的续行符是反引号，`\` 会被当成自减运算符）。
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y \
