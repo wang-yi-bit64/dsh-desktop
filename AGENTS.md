@@ -1348,7 +1348,15 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
   可能装到——`alpha.1` 的 Windows 安装包缺 `parent-death-watchdog.mjs`（装完即崩），
   那它留着反而是风险；而一份资产齐全、只是被取代的旧版，留着草稿没有坏处。
   实测：`alpha.4` 的草稿经确认后用 `gh release delete v0.7.0-alpha.4 --yes` 删除，
-  10 个资产随之丢失；`alpha.1` 的草稿**保留至今**。
+  10 个资产随之丢失；`alpha.1` 的草稿同样经确认删除（19 个资产丢失）。
+  **两次都在删前把资产清单（名字 + 字节数）导成 JSON 存档**——资产本身不可恢复，
+  至少留下「删掉了什么」的记录：
+
+  ```bash
+  gh release view <tag> --json tagName,isDraft,createdAt,assets \
+    --jq '{tag:.tagName,draft:.isDraft,created:.createdAt,assets:[.assets[]|{n:.name,s:.size}]}' \
+    > /tmp/<tag>-draft-backup.json     # 先存证，再 gh release delete
+  ```
 
 - **2026-09-23 清理掉的 tag**：`v0.7.0-alpha.3`（组装期被 picker 位置断言卡死）、
   `v0.7.0-alpha.5`（`finally` 里的 `rmSync` 否决了通过的核验）、
@@ -1455,22 +1463,20 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > 每一处的成因都是同一句话：**改动的代码在上一处红灯修好之前从未被执行过**。
 > 因此修完一个红灯**不要**假定下一个也绿。
 >
-> **残留状态（快照：2026-09-23 收尾后；操作口径见 §8.5「发布失败后的 tag 清理」）**：
+> **残留状态（快照：2026-09-23 清理**收尾完成**；操作口径见 §8.5「发布失败后的 tag 清理」）**：
 > `alpha.3` 连 Release 都没建成；`alpha.4` / `alpha.5` / `alpha.6` 各只发出 10 个资产
 > （缺 9 CLI + 3 便携版）。五个版本均已由 `alpha.7` 取代。**清理的最终形态**：远端与本机都只剩
-> 9 个 tag；`alpha.3` / `alpha.4` / `alpha.5` / `alpha.6` **无 Release 残留**
-> （`alpha.4` 那份因删 tag 而降级成的未标记草稿已被 `gh release delete v0.7.0-alpha.4 --yes`
-> 一并删除，10 个资产随之永久丢失——**这是批准的处置**）；**唯一残留是 `alpha.1`**：
-> 它降级成的未标记草稿仍在（`draft: true`、19 个资产仍在、`releases/download/v0.7.0-alpha.1/…`
-> 已断），要不要一并删**待定**。
+> 9 个 tag，**Release 侧 `draft` 数为 0**——`alpha.3` / `alpha.5` / `alpha.6` 无 Release 残留，
+> `alpha.1` / `alpha.4` 那份因删 tag 而降级成的未标记草稿也已用 `gh release delete --yes`
+> 一并删除（**各自 19 / 10 个资产随之永久丢失，均为批准过的处置**）。
 >
 > ```bash
 > $ gh api "repos/wang-yi-bit64/dsh-desktop/releases?per_page=100" \
 >     --jq '.[]|"\(.tag_name) draft=\(.draft) assets=\(.assets|length)"'
-> v0.7.0-alpha.1 draft=true  assets=19      ← 无 tag 的孤儿草稿，唯一残留
 > v0.7.0-alpha.7 draft=false assets=22      ← 唯一完整发布
 > v0.7.0-alpha.2 draft=false assets=19
 > …
+> $ gh api ... --jq '[.[]|select(.draft==true)]|length'   # → 0
 > ```
 >
 > ⚠️ **`gh release list` 与 Releases 页都不显示草稿**，所以从页面上看像「已经清干净了」——
