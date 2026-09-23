@@ -1320,6 +1320,30 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 
 正文里的 CLI 表格由 `--release-notes` 渲染（幂等，重跑不会出现两遍）。
 
+#### 发布失败后的 tag 清理
+
+失败的 tag 不留：它会被 `git describe` / `changelog.mjs` 的 `latestTag()` 当成基线，一个
+没有产物的 tag 留在盘上，下一次 `version:bump -- auto` 与 CHANGELOG 区间都可能对着它算。
+判据按**资产清单**数，不按「Release 页面存不存在」——`build` job 的 tauri-action 会先把
+Release 建出来（`releaseDraft: false`），所以 Release 在、tag 在，都不等于发布成功。
+
+```bash
+git push origin --delete <tag>   # 连带删掉该 Release 与其全部已公开资产，不可逆
+git fetch --prune --prune-tags   # 让本地跟随远端清掉
+```
+
+- **2026-09-23 清理掉**：`v0.7.0-alpha.3`（组装期被 picker 位置断言卡死）、
+  `v0.7.0-alpha.5`（`finally` 里的 `rmSync` 否决了通过的核验）、
+  `v0.7.0-alpha.6`（Linux 侧 `unzip` 反斜杠条目名，`cli-publish` 红，Release 从未产出）、
+  `v0.7.0-alpha.4`（`portable` job 失败 → `cli-publish` 被跳过，10/22 资产）、
+  `v0.7.0-alpha.1`（链路跑通、资产齐全，但 Windows 安装包缺 `parent-death-watchdog.mjs`，
+  装完即崩——按「用户能装到一个坏包」即视为失败清理，由 `alpha.2` 取代）。
+- **CHANGELOG.md 的对应段落原样保留**：它是生成物、按提交历史推导，删 tag 不会重写出这些段，
+  于是留下「有段落、无 tag」的历史版本。这是**预期结果**，不要手工删段落去「对齐」。
+- **取代关系写进后继版本的 Release 正文**，不写进被取代那一版（它会被删掉）。
+- 发同一版本号时**换新号而不是复用 tag**：删 tag 后重推同一版本号，updater 的 `latest.json`
+  与用户本地已装版本都会把它当成「已经是最新」，等于永久漏更。
+
 ### 8.6 双上游运行时通道（next / alpha）
 
 自 2026-09-15 起，本仓**同时维护两条上游运行时通道**，各自钉一个 DSH 版本、持有一套
