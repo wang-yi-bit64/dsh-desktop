@@ -1328,19 +1328,30 @@ sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
 Release 建出来（`releaseDraft: false`），所以 Release 在、tag 在，都不等于发布成功。
 
 ```bash
-git push origin --delete <tag>   # 连带删掉该 Release 与其全部已公开资产，不可逆
+git push origin --delete <tag>   # ⚠️ 只删 ref，不删 Release——见下条
 git fetch --prune --prune-tags   # 让本地跟随远端清掉
 ```
 
-- **2026-09-23 清理掉**：`v0.7.0-alpha.3`（组装期被 picker 位置断言卡死）、
+- 🔴 **删 tag ≠ 删 Release**（2026-09-23 实测）：tag 一消失，GitHub 把该 Release 降级成
+  **未标记的草稿**（`draft: true`、`html_url` 变成 `releases/tag/untagged-<hash>`），对象与
+  资产**原样留着**。`gh release list` 与 Releases 页都不显示它，所以从页面上看像「已经清干净了」，
+  而 `releases/download/<tag>/…` 的公开链接确实断掉了（updater 因此不会再取到）。要真正删掉：
+
+  ```bash
+  gh release view <tag> --json isDraft,assets --jq '{draft:.isDraft,n:(.assets|length)}'
+  gh release delete <tag> --yes          # 用 tag 名仍能定位到那份草稿
+  ```
+
+- **2026-09-23 清理掉的 tag**：`v0.7.0-alpha.3`（组装期被 picker 位置断言卡死）、
   `v0.7.0-alpha.5`（`finally` 里的 `rmSync` 否决了通过的核验）、
   `v0.7.0-alpha.6`（Linux 侧 `unzip` 反斜杠条目名，`cli-publish` 红，Release 从未产出）、
   `v0.7.0-alpha.4`（`portable` job 失败 → `cli-publish` 被跳过，10/22 资产）、
   `v0.7.0-alpha.1`（链路跑通、资产齐全，但 Windows 安装包缺 `parent-death-watchdog.mjs`，
   装完即崩——按「用户能装到一个坏包」即视为失败清理，由 `alpha.2` 取代）。
+  清理后远端只剩 9 个 tag，本机同名 tag 已同步删除（否则 `--follow-tags` 会推回去，见 §8.6 记录）。
 - **CHANGELOG.md 的对应段落原样保留**：它是生成物、按提交历史推导，删 tag 不会重写出这些段，
   于是留下「有段落、无 tag」的历史版本。这是**预期结果**，不要手工删段落去「对齐」。
-- **取代关系写进后继版本的 Release 正文**，不写进被取代那一版（它会被删掉）。
+- **取代关系写进后继版本的 Release 正文**，不写进被取代那一版（它的 tag 会被删掉）。
 - 发同一版本号时**换新号而不是复用 tag**：删 tag 后重推同一版本号，updater 的 `latest.json`
   与用户本地已装版本都会把它当成「已经是最新」，等于永久漏更。
 
@@ -1436,21 +1447,22 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > 每一处的成因都是同一句话：**改动的代码在上一处红灯修好之前从未被执行过**。
 > 因此修完一个红灯**不要**假定下一个也绿。
 >
-> **残留状态（快照：2026-09-23T15:11Z，此后远端 tag 集合仍在变动）**：`alpha.3` 连 Release
-> 都没建成；`alpha.4` / `alpha.5` / `alpha.6` 各只有 10 个资产（缺 9 CLI + 3 便携版）。
-> 这几个版本均已由 `alpha.7` 取代。远端 tag 已被手动清理掉 `alpha.1` / `alpha.3` / `alpha.4`
-> / `alpha.5` / `alpha.6`，Release 侧只剩 `alpha.4`（10 个资产，已加「产物不完整」前置标注）。
+> **残留状态（快照：2026-09-23 收尾后；操作口径见 §8.5「发布失败后的 tag 清理」）**：
+> `alpha.3` 连 Release 都没建成；`alpha.4` / `alpha.5` / `alpha.6` 各只发出 10 个资产
+> （缺 9 CLI + 3 便携版）。五个版本均已由 `alpha.7` 取代。**清理的最终形态**：远端与本机都只剩
+> 9 个 tag；`alpha.1` 与 `alpha.4` 的 tag 删除后各自留下一份**未标记草稿**（资产仍在，
+> `releases/download/<tag>/…` 已断），`alpha.3` / `alpha.5` / `alpha.6` 无 Release 残留。
 >
 > ⚠️ **清理只能逐项手动核对，不能用事件流反推**：远端 tag 集合曾在几分钟内由 12 个变成 9 个，
 > 而公开的仓库事件流只记到其中**两条**（`alpha.3`、`alpha.6` 的 `DeleteEvent`），
 > `alpha.1` / `alpha.4` / `alpha.5` 的删除**一条事件都没有**。所以「事件流里没有」
 > **不等于**「没发生过」——它甚至证明不了「这个 tag 曾经存在过」。
 >
-> ⚠️ **本机 `git tag` 里被删的 tag 全都还在**（本机 14 个 vs 远端 9 个），而它们是
+> ⚠️ **本机 `git tag` 里被删的 tag 全都还在**（**修复前**：本机 14 个 vs 远端 9 个），而它们是
 > **注释标签**且指向 main 可达的提交——于是 §8.5 第 5 步那条
 > `git push origin main --follow-tags` 会把它们当**新 tag 推回远端**，而推 `v*` tag
-> 会**再次触发 `release.yml`**，把刚清掉的残缺 Release 又造回来。已实测（列表随远端删除
-> 进度增长，故现在是 5 个而不是当初的 2 个）：
+> 会**再次触发 `release.yml`**，把刚清掉的残缺 Release 又造回来。当时实测（列表随远端删除
+> 进度增长，故那次是 5 个而不是当初的 2 个）：
 >
 > ```bash
 > $ git push --dry-run --follow-tags origin main
@@ -1465,6 +1477,10 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > 「本地干净」只是假象，会在下一次发布时被 `--follow-tags` 打破。已实测不带 `--follow-tags`
 > 的 `git push origin main` 不会上推任何 tag——但那只是绕开症状，本机留着一个远端已删的
 > tag，本身就是不一致状态。
+>
+> ✅ **该对策已于 2026-09-23 执行完毕**：本机与远端 tag 集合一致（9 个），
+> `git fetch --prune --prune-tags` + 逐个 `git tag -d` 后，
+> `git push --dry-run --follow-tags origin main` 不再列出任何 `[new tag]`。
 >
 > 📌 **判断远端 tag 现状**用 `gh api repos/wang-yi-bit64/dsh-desktop/tags --jq '.[].name'`
 > （读的是 ref，权威）；**不要**用本机 `git tag`，也**不要**信事件流。
