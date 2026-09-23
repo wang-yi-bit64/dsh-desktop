@@ -74,7 +74,8 @@ import {
   harnessLockInputsPathFor,
   harnessLockPathFor,
   lockInputsMatch,
-  packageInstallDirs
+  packageInstallDirs,
+  referencedPackageNames
 } from './harness-lockfile.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -302,51 +303,157 @@ const harnessLockInputsPath = harnessLockInputsPathFor(projectRoot, dshTarget)
 const isCIEnvironment = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true'
 
 /**
- * 从 registry 读取上游主包的依赖名单，生成「家族钉死」overrides。
+ * 从 registry 解析 **`@deepseek-ai/dsh-*` 家族的传递闭包**，生成「家族钉死」overrides。
  *
- * `@deepseek-ai/dsh@X` 的 dependencies 里是几十个与主包**同版本发布**的
- * `@deepseek-ai/dsh-*` 子包（lockstep 发布）。把它们全部钉到 X，解析才会在可接受的
- * 时间/内存内收敛；补丁与 vendored 已钉的包跳过（它们的钉死优先级更高）。
+ * ## 为什么不能只钉「主包 dependencies 里出现的那几十个」（2026-09-23 的真实事故）
+ *
+ * 子包之间**也互相依赖**。只钉第一层时，第二层及更深的子包照样按各自的
+ * `^0.1.5-rc.2` 漂到新发布的 rc.3——于是同一个包在树里同时存在 rc.2（被钉）与 rc.3
+ * （浮动）两个版本，npm 无法共享拷贝、只能**嵌套多份**。对 koffi 这类 FFI 单例包，
+ * 两份拷贝会让同名类型注册两次，Harness 启动即
+ * `Error: Duplicate type name 'DSH_STARTUPINFOW'`（smoke 35850241442 三平台实测，
+ * 失败点在 `…/dsh-sandbox-local/node_modules/…/dsh-win32-process/lib/index.js`）。
+ *
+ * ## 做法：在该版本上把家族展开成全集
+ *
+ * 从主包出发，逐层读取 `<dshVersion>` 这一版的 `@deepseek-ai/dsh-*` 依赖，得到
+ * 「这个版本家族的全集」并全部钉死。结果等价于 rc.3 发布之前那棵**同版本、可去重、
+ * 能正常启动**的树（也正是本仓补丁所针对的基线）。
+ *
+ * 在 `<dshVersion>` 上**没有发布**的名字（例如 rc.3 才引入的新包）查询会失败，直接
+ * 跳过——它们不属于这个版本的家族，钉死它们反而会 ETARGET。
  *
  * @param {string} dshVersion 主包精确版本（家族钉死的目标版本）。
- * @param {Record<string, string>} baseOverrides 补丁 + vendored 已有的 overrides。
- * @returns {Record<string, string>} 家族钉死条目。
+ * @param {Record<string, string>} baseOverrides 补丁 + vendored 已有的 overrides（优先级更高）。
+ * @returns {Promise<Record<string, string>>} 家族钉死条目。
  */
-function fetchFamilyOverridesFromRegistry(dshVersion, baseOverrides) {
-  const result = runCaptured(
-    'npm',
-    ['view', `@deepseek-ai/dsh@${dshVersion}`, 'dependencies', '--json'],
-    projectRoot
-  )
-  if (!result.ok) {
-    throw new Error(
-      `无法从 registry 读取 @deepseek-ai/dsh@${dshVersion} 的依赖名单` +
-        `（--update-lockfile 需要联网）：\n${result.output}`
-    )
-  }
-  let registryDependencies
-  try {
-    registryDependencies = JSON.parse(result.output)
-  } catch (error) {
-    throw new Error(`npm view 返回的不是 JSON：${error.message}\n${result.output}`)
-  }
+async function fetchFamilyOverridesFromRegistry(dshVersion, baseOverrides) {
+  const registryBase = await resolveRegistryBase()
   const pins = {}
-  for (const name of Object.keys(registryDependencies ?? {})) {
-    // 只钉 **lockstep 家族** `@deepseek-ai/dsh-*`：上游 scope 里还有独立版本线的包
-    // （cordis 4.x / schemastery 3.x / cordis-plugin-* 1.x），它们随主包的 dependencies
-    // 一起出现在名单里但版本完全不同——2026-09-23 alpha 生成实测：把它们也钉到主包
-    // 版本会直接 ETARGET（`No matching version found for @deepseek-ai/cordis@0.1.6-alpha.2`）。
-    if (!/^@deepseek-ai\/dsh-/.test(name)) continue
-    if (name in baseOverrides) continue
-    pins[name] = dshVersion
+  const seen = new Set()
+  const unpublished = []
+  let queue = ['@deepseek-ai/dsh']
+  let fellBack = 0
+
+  while (queue.length > 0) {
+    const batch = queue.splice(0, CLOSURE_CONCURRENCY).filter((name) => {
+      if (seen.has(name)) return false
+      seen.add(name)
+      return true
+    })
+    const results = await Promise.all(
+      batch.map(async (name) => {
+        const manifest = await fetchVersionManifest(registryBase, name, dshVersion)
+        if (manifest !== undefined) return { name, manifest }
+        fellBack += 1
+        // 直连不可用（代理/镜像/私有 registry）时回退 npm view —— 三个字段都要读：
+        // 只读 dependencies 会漏掉 **peer 依赖**这条边，而 peer 恰恰把
+        // dsh-settings / dsh-fs / dsh-session-* 等 23 个包拖到 rc.3（2026-09-23 实测）。
+        const result = runCaptured(
+          'npm',
+          [
+            'view',
+            `${name}@${dshVersion}`,
+            'dependencies',
+            'peerDependencies',
+            'optionalDependencies',
+            '--json'
+          ],
+          projectRoot
+        )
+        if (!result.ok) return { name, manifest: null }
+        let parsed = {}
+        try {
+          parsed = JSON.parse(result.output) ?? {}
+        } catch {
+          parsed = {}
+        }
+        return { name, manifest: parsed }
+      })
+    )
+
+    for (const { name, manifest } of results) {
+      if (manifest === null) {
+        // 该名字在这个版本上没有发布（或无此包）——不属于本版本家族，跳过。
+        unpublished.push(name)
+        continue
+      }
+      // 只钉 lockstep 家族 `@deepseek-ai/dsh-*`：上游 scope 里还有独立版本线的包
+      // （cordis 4.x / schemastery 3.x / cordis-plugin-* 1.x），它们不在这个闭包里。
+      if (name.startsWith('@deepseek-ai/dsh-') && !(name in baseOverrides)) {
+        pins[name] = dshVersion
+      }
+      for (const dependency of referencedPackageNames(manifest)) {
+        if (dependency.startsWith('@deepseek-ai/dsh-') && !seen.has(dependency)) {
+          queue.push(dependency)
+        }
+      }
+    }
+    log(`  闭包进度：已展开 ${seen.size} 个名字，待展开 ${queue.length} 个，已钉死 ${Object.keys(pins).length} 个`)
+  }
+
+  log(
+    `家族闭包：遍历 ${seen.size} 个名字 → 钉死 ${Object.keys(pins).length} 个 @deepseek-ai/dsh-*` +
+      (unpublished.length > 0 ? `；${unpublished.length} 个在 ${dshVersion} 上未发布（已跳过）` : '') +
+      (fellBack > 0 ? `；${fellBack} 个走 npm view 回退` : '')
+  )
+  if (unpublished.length > 0) {
+    log(`  未发布（不属于本版本家族）：${unpublished.slice(0, 6).join(', ')}${unpublished.length > 6 ? ' …' : ''}`)
   }
   if (Object.keys(pins).length === 0) {
     throw new Error(
-      `@deepseek-ai/dsh@${dshVersion} 的依赖名单里没有 @deepseek-ai/dsh-* 家族子包——` +
+      `@deepseek-ai/dsh@${dshVersion} 的家族闭包里没有任何 @deepseek-ai/dsh-* 子包——` +
         '上游发布结构可能变了，请人工核对后再生成 lockfile'
     )
   }
   return pins
+}
+
+/** 闭包查询的并发度（registry 直连很轻；兜底的 npm view 也一并受此限制）。 */
+const CLOSURE_CONCURRENCY = 8
+
+/**
+ * 取 npm registry 地址（`npm config get registry`），用于闭包的直连查询。
+ *
+ * 直连而不是每次都起 `npm view`：闭包要查询 ~230 个包，`npm view` 每个都要启动一个
+ * npm 进程（实测合计 ~12 分钟），直连 + 并发只要几十秒。
+ *
+ * @returns {Promise<string>} registry 基址（无尾斜杠）。
+ */
+async function resolveRegistryBase() {
+  const result = runCaptured('npm', ['config', 'get', 'registry'], projectRoot)
+  const value = result.ok ? result.output.trim() : ''
+  return (value.length > 0 ? value : 'https://registry.npmjs.org').replace(/\/+$/, '')
+}
+
+/**
+ * 直连 registry 取某个包某个版本的 manifest。
+ *
+ * @param {string} registryBase registry 基址。
+ * @param {string} name 包名（可含 scope）。
+ * @param {string} version 精确版本。
+ * @returns {Promise<object|undefined|null>} manifest；`null` = 该版本不存在（404）；
+ *   `undefined` = 无法判定（网络/代理问题），调用方应回退 `npm view`。
+ */
+async function fetchVersionManifest(registryBase, name, version) {
+  const candidates = [
+    `${registryBase}/${name.replace('/', '%2F')}/${version}`,
+    `${registryBase}/${name}/${version}`
+  ]
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(20000)
+      })
+      if (response.status === 404) return null
+      if (!response.ok) continue
+      return await response.json()
+    } catch {
+      // 换下一种 URL 形态；两种都不可达时交给 npm view 兜底。
+    }
+  }
+  return undefined
 }
 
 /** 读 JSON 文件，不存在/损坏一律返回 null（损坏按缺失处理，由调用方决定后续）。 */
@@ -361,7 +468,7 @@ function readJsonIfExists(path) {
 let installMode
 if (updateLockfile) {
   installMode = 'update'
-  const familyPins = fetchFamilyOverridesFromRegistry(DSH_VERSION, overrides)
+  const familyPins = await fetchFamilyOverridesFromRegistry(DSH_VERSION, overrides)
   log(`registry 家族钉死：${Object.keys(familyPins).length} 个 @deepseek-ai/dsh-* 家族子包 → ${DSH_VERSION}`)
   Object.assign(overrides, familyPins)
 } else {

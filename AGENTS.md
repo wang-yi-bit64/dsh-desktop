@@ -34,7 +34,7 @@
   - `plugin-worker-host.mjs` 已于 2026-09-10 随批次 F 删除（连同 `PluginWorkerClient`）：它实现完整但从未接线，且不在真实插件挂载路径上（真实挂载走 Harness 进程内的官方 Cordis 体系）。理由见该文件删除时的提交与 §7.2 归档行。
 - **`scripts/`**：
   - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；**按 `--dsh-target=<name>` 选组装哪条上游通道**（版本、补丁目录、vendored 目录、staging 目录全由 [`dsh-targets.mjs`](scripts/dsh-targets.mjs) 推导）；**依赖安装优先用提交式 lockfile + `npm ci`**（`harness-locks/<target>/`，零解析、可复现；CI 上缺失/失配直接失败），仅本地无 lockfile 时才回退在线解析；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性，并要求 MANIFEST 的 `target` 与本次目标一致（`resources/` 两通道共用，否则会交付另一条线的树）；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
-  - `harness-lockfile.mjs`：提交式 lockfile 的**纯逻辑层**（路径推导 / `inputs.json` 一致性三规则 / 家族钉死推导），含 `--self-test`（18 项）；I/O 与 npm 调用留在 `prepare-harness.mjs`。
+  - `harness-lockfile.mjs`：提交式 lockfile 的**纯逻辑层**（路径推导 / `inputs.json` 一致性三规则 / 家族钉死推导 / 闭包字段抽取 / 安装位置推导），含 `--self-test`（34 项）；I/O、registry 查询与 npm 调用留在 `prepare-harness.mjs`。
   - `../harness-locks/<target>/`：与该目标绑定、**必须成对提交**的 `package-lock.json` + `inputs.json`（输入快照——lockfile 本身不记录 overrides）。生成/再生成：`npm run harness:lockfile -- --dsh-target=<t>`（next 解析约 40 分钟、alpha 数分钟；版本锚点/补丁集/vendored 变更后必跑，见升级清单 Step 1 与「依赖解析的堆爆炸」一节）。
   - `dsh-targets.mjs`：**双上游通道的唯一事实源**——目标名 ↔ npm dist-tag ↔ DSH 版本，以及「版本号 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
@@ -159,12 +159,13 @@ npm run verify:drift:self-test
 # 20b. 双上游通道：目标表自检（目标名 ↔ 通道 ↔ 版本；未知通道必须失败不得回退）
 npm run verify:targets
 
-# 20c. 提交式 lockfile 纯逻辑自检（inputs 一致性三规则 + 家族钉死推导）
+# 20c. 提交式 lockfile 纯逻辑自检（inputs 一致性三规则 + 家族钉死推导 +
+#      闭包字段抽取 + 安装位置推导）
 npm run verify:harness-lockfile
 
 # 20d. 重新生成某目标的提交式 lockfile（版本锚点/补丁集/vendored 变更后必跑；
-#      需联网，next 解析约 40 分钟、alpha 数分钟；产出 harness-locks/<target>/ 下
-#      package-lock.json + inputs.json，两者必须成对提交）
+#      需联网——先直连 registry 并发算家族传递闭包，再 npm install --package-lock-only；
+#      产出 harness-locks/<target>/ 下 package-lock.json + inputs.json，两者必须成对提交）
 npm run harness:lockfile -- --dsh-target=<next|alpha>
 
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
@@ -621,11 +622,14 @@ Node 默认老生代上限随宿主内存缩放（7GB runner ≈ 2GB），于是
   **零解析、零漂移、可复现**。
 - **CI 上 lockfile 是硬要求**：`CI`/`GITHUB_ACTIONS` 环境下缺失或失配直接 `process.exit(1)`，
   绝不静默回退在线解析；本地回退时打 ⚠️ 并提示再生成命令。
-- 生成走 `npm run harness:lockfile -- --dsh-target=<t>`：先 `npm view` 拉主包依赖名单，
-  把全部 `@deepseek-ai/*` 子包钉到主包版本（**不钉解析不收敛**），再
-  `npm install --package-lock-only`（8GB 堆、不跑 postinstall）只解析不安装。
+- 生成走 `npm run harness:lockfile -- --dsh-target=<t>`：先算出**家族传递闭包**（从
+  `@deepseek-ai/dsh` 出发，沿 `dependencies` + `optionalDependencies` + `peerDependencies`
+  三字段 BFS，只收集 `@deepseek-ai/dsh-*` 前缀），把闭包内每个在**该版本上已发布**的包
+  钉死到主包版本（**不钉解析不收敛**），再 `npm install --package-lock-only`（8GB 堆、
+  不跑 postinstall）只解析不安装。查 registry 用**直连 + 并发 8**（`npm view` 每个都要起
+  一个进程，230 个名字要 ~12 分钟；直连只要几十秒），直连不可用时逐个回退 `npm view`。
 - **版本锚点 / 补丁集 / vendored 包任何一项变更后必须重新生成**（升级清单 Step 1）；
-  纯逻辑判据在 `scripts/harness-lockfile.mjs`（`verify:harness-lockfile` 自测 18 项）。
+  纯逻辑判据在 `scripts/harness-lockfile.mjs`（`verify:harness-lockfile` 自测 34 项）。
 
 **lockfile 语义的注意事项**：提交式 lockfile 冻结的是「生成那一刻的完整解析结果」，
 包括上游浮动范围当时解析到的版本（如 rc.3 混血）——这与任何用户当天 fresh install 得到的
@@ -641,6 +645,29 @@ dependencies 名单里，故未进家族钉死）。判据本身没错（该副�
 `packageInstallDirs()`（从 lockfile 键取全部安装位置，顶层与嵌套一视同仁），并对**每一份
 拷贝**做检查。**教训**：hoisting 是解析结果的一部分，会随依赖图变化——凡断言「某个包里的
 某个文件」时，位置必须从 lockfile 推导，不能写死。
+
+**再下一处：家族钉死漏了 peer 边 → FFI 单例出现两份拷贝 → 启动即崩（同一轮，2026-09-23）**。
+位置断言修好、tree-precheck 全绿、`npm ci` 14/14 补丁全绿之后，smoke `35850241442` 三平台倒在
+`Smoke L1 (assembled resource tree)`：
+
+```
+Error: Duplicate type name 'DSH_STARTUPINFOW'
+    at …/dsh-sandbox-local/node_modules/@deepseek-ai/dsh-win32-process/lib/index.js
+```
+
+`@deepseek-ai/dsh-win32-process` 用 koffi 注册**进程级全局** FFI 类型名，树里出现两份拷贝就会
+把 `DSH_STARTUPINFOW` 注册两次 → Harness 一启动就抛错。根因是第一版闭包**只沿
+`dependencies` 走**：上游若干 rc.2 包以 `peer … ^0.1.5-rc.2` 引用 `dsh-settings` / `dsh-fs` /
+`dsh-session-*` 等 23 个包，这些名字**不在任何包的 `dependencies` 里**，于是没被钉死，解析时
+漂到 rc.3 → 与 rc.2 冲突 → npm 无法共享同一份拷贝，把包**嵌套**进消费方之下（lockfile 里
+`嵌套条目 33 条`）。这正是「钉死 dependencies 家族后 peer/传递通道照样渗入」那句话的落地形态。
+
+修法：闭包改为沿**三字段** BFS（`referencedPackageNames`，npm 7+ 会实际安装 peer），
+实测遍历 250 个名字 → 钉死 238 个（dependencies-only 版是 208 / 195）。**教训**：
+「传递闭包」不能只取 runtime 依赖边；**peer 也是会被物化的边**，漏掉它不会报错，
+只会在运行期以「单例包出现两份」的形式爆出来——**解析期的绿色不代表树是自洽的**。
+自测把这条判据钉住：`referencedPackageNames({ peerDependencies: {…} })` 必须抽出该名字
+（只读 `dependencies` 的实现返回 `[]`，即第二处事故的形态）。
 
 ### linuxdeploy 撞上外来平台原生变体：AppImage 打包的静默杀手（已修复，勿回归）
 

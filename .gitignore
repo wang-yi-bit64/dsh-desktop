@@ -28,6 +28,8 @@ Thumbs.db
 /.workbuddy/
 .mimosa/
 .zcode/
+# Qoder 画布/额度缓存的本地落盘（含机器本地路径与中文文件名，不入库）
+.qoder-credits/
 # skills CLI 生成的机器本地符号链接（指向本机绝对路径，随检出重建；
 # 技能实体在 .agents/skills/ 入库，可用 npx skills experimental_install 恢复）
 .claude/

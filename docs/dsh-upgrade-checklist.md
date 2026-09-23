@@ -116,10 +116,15 @@ boot / config-dump / 插件管理。
 - [ ] `packages/<target>/*.tgz` 与 `vendor/*` 中声明依赖 DSH 版本的地方
 - [ ] **重新生成提交式 lockfile（2026-09-23 起，必做）**：版本锚点、补丁集、vendored 包任何一个变了，`harness-locks/<target>/` 的 lockfile 就与输入失配，CI 的组装会**硬失败**（`lockInputsMatch` 三条规则）。重新生成：
   ```bash
-  npm run harness:lockfile -- --dsh-target=<target>   # 需联网；next 解析约 40 分钟，alpha 数分钟
+  npm run harness:lockfile -- --dsh-target=<target>   # 需联网；next 解析约 15-40 分钟，alpha 数分钟
   git add harness-locks/<target>/package-lock.json harness-locks/<target>/inputs.json
   ```
-  生成模式会先从 registry 拉主包依赖名单，把全部 `@deepseek-ai/*` 子包钉到新版本（**不钉解析不收敛**——实测 >1h 无解，堆 >4GB），然后 `npm install --package-lock-only` 只解析不安装。详见 `scripts/harness-lockfile.mjs` 模块文档。
+  生成模式先算出**家族传递闭包**：从 `@deepseek-ai/dsh` 出发，沿 `dependencies` +
+  `optionalDependencies` + `peerDependencies` 三字段 BFS，只收集 `@deepseek-ai/dsh-*`
+  前缀，把闭包内**在该版本上已发布**的包全钉到该版本（**不钉解析不收敛**——实测 >1h 无解，
+  堆 >4GB；漏掉 peer 边则会在运行期以「单例包多份拷贝 → FFI 重复类型注册」爆出来），
+  然后 `npm install --package-lock-only` 只解析不安装。详见 `scripts/harness-lockfile.mjs`
+  模块文档与 `AGENTS.md`「依赖解析的堆爆炸」一节。
 
 ### Step 2 — 先跑适用性预检，再重生成补丁
 

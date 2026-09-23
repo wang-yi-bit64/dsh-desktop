@@ -1,0 +1,21 @@
+# Dependabot 配置（2026-09-23 加入）
+#
+# 为什么现在必须有这个文件：**不配置目录列表时，Dependabot 会扫描仓库内所有目录**。
+# 我们把组装用的提交式 lockfile 放在 `harness-locks/<target>/package-lock.json`
+# （见 AGENTS.md「依赖解析的堆爆炸」一节），它旁边**没有** package.json——那不是 npm
+# 项目，只是「输入快照 + 解析结果」。Dependabot 却把它当成一个独立的 npm 清单，
+# 2026-09-23 就为它跑了一次安全更新（`/harness-locks/alpha` for fflate）——那个 PR
+# 既装不上也验证不了。
+#
+# 官方口径：安全更新要使用本配置，`directory` 必须指向清单所在目录
+# （https://docs.github.com/en/code-security/dependabot/dependabot-security-updates/configuring-dependabot-security-updates）。
+# 因此这里**显式只列根目录**，等价于把 harness-locks/ 排除在安全更新之外。
+#
+# `open-pull-requests-limit: 0`：只保留安全更新、不开版本更新 PR（该选项不影响安全更新）。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

@@ -167,6 +167,39 @@ export function lockInputsMatch(stored, { dependencies, overrides, pinnedPackage
 }
 
 /**
+ * manifest 里会**在安装时被物化**的依赖名（dependencies + optionalDependencies +
+ * peerDependencies）。
+ *
+ * ## 三者缺一不可（2026-09-23 第二处事故的根因）
+ *
+ * 家族钉死必须取**传递闭包**，否则子包引用的子依赖会漂到上游新版本、npm 无法去重、
+ * 于是同一包装进多份拷贝。第一版闭包只读 `dependencies`，于是漏掉了 **peer 这条边**：
+ * 上游若干 rc.2 包以 `peer … ^0.1.5-rc.2` 引用 `dsh-settings` / `dsh-fs` /
+ * `dsh-session-*` 等，结果 23 个名字仍漂到 rc.3。
+ *
+ * 漂移的直接后果不是「体积变大」而是**启动即崩**：
+ * `@deepseek-ai/dsh-win32-process`（koffi）注册全局 FFI 类型名，两份拷贝会把
+ * `DSH_STARTUPINFOW` 注册两次 → `Error: Duplicate type name 'DSH_STARTUPINFOW'`
+ * （smoke `35850241442` 三平台倒在 `Smoke L1 (assembled resource tree)`）。
+ *
+ * npm 7+ 会实际安装 peer，所以闭包必须沿着它走。刻意**不含** `devDependencies`：
+ * 它们不会被安装进发布树。
+ *
+ * @param {object} manifest 包 manifest（`npm view` 的合并结果同样适用）。
+ * @returns {string[]} 依赖名列表（去重、保持首次出现顺序）。
+ */
+export function referencedPackageNames(manifest) {
+  const names = new Set()
+  for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    const value = manifest?.[field]
+    if (value !== null && typeof value === 'object') {
+      for (const name of Object.keys(value)) names.add(name)
+    }
+  }
+  return [...names]
+}
+
+/**
  * 从 lockfile 里取某个包**在树中的全部安装位置**（相对仓库根的键）。
  *
  * ## 为什么不能用 `node_modules/<pkg>` 写死位置（2026-09-23 的真实事故）
@@ -306,6 +339,32 @@ export function selfTest() {
     packageInstallDirs(lockTop, PICKER).every((key) => !key.endsWith('-browse')),
     true
   )
+
+  // --- referencedPackageNames：闭包必须沿三字段走，漏掉 peer 会留下混血树 ---
+  const manifestFull = {
+    dependencies: { '@deepseek-ai/dsh-base': '0.1.5-rc.2' },
+    optionalDependencies: { '@deepseek-ai/dsh-opt': '0.1.5-rc.2' },
+    peerDependencies: { '@deepseek-ai/dsh-settings': '^0.1.5-rc.2' },
+    devDependencies: { '@deepseek-ai/dsh-testkit': '0.1.5-rc.2' }
+  }
+  eq(
+    '闭包字段：dependencies + optional + peer 全覆盖',
+    referencedPackageNames(manifestFull),
+    ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-opt', '@deepseek-ai/dsh-settings']
+  )
+  eq('闭包字段：devDependencies 必须排除（不进发布树）', referencedPackageNames(manifestFull).includes('@deepseek-ai/dsh-testkit'), false)
+  // 可证伪性：只给 peer 边时**必须**仍然抽出来——只读 dependencies 的实现会返回 []。
+  eq(
+    '闭包字段：仅 peer 边也要抽出（第二处事故的形态）',
+    referencedPackageNames({ peerDependencies: { '@deepseek-ai/dsh-settings': '^0.1.5-rc.2' } }),
+    ['@deepseek-ai/dsh-settings']
+  )
+  eq('闭包字段：仅 optional 边也要抽出', referencedPackageNames({ optionalDependencies: { '@deepseek-ai/dsh-opt': '1.0.0' } }), ['@deepseek-ai/dsh-opt'])
+  eq('闭包字段：三字段同名只算一次', referencedPackageNames({ dependencies: { a: '1' }, peerDependencies: { a: '1' } }), ['a'])
+  eq('闭包字段：空 manifest → 空', referencedPackageNames({}), [])
+  eq('闭包字段：null manifest 不抛错', referencedPackageNames(null), [])
+  eq('闭包字段：字段为 null 不抛错', referencedPackageNames({ dependencies: null }), [])
+  eq('闭包字段：字段非对象不抛错', referencedPackageNames({ dependencies: 'oops' }), [])
 
   if (failures.length > 0) {
     throw new Error(`harness-lockfile 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
