@@ -303,6 +303,46 @@ WebView2Loader.dll: cannot open shared object file
   同一台机器上跑一遍）。**不许**按宿主 triple 分支：宿主工具链是环境属性，按它分支会导致
   本机与 CI 各验一半、双双变绿——缺陷正是这样躲过全部自测的。
 
+#### 🔴 归档条目名用反斜杠：Linux 侧核验必然红（2026-09-23 alpha.6 实测根因，已修复勿回归）
+
+`Compress-Archive` 这个命令名在**不同 PowerShell 上产出的 zip 不一样**：
+
+| 生产者 | 条目名 |
+|---|---|
+| Windows PowerShell **5.1**（runner 里的 `powershell`） | `resources\harness\a.json` ❌ |
+| PowerShell **7.x**（`pwsh`） | `resources/harness/a.json` ✅ |
+
+同一台机器、同一份源目录实测对照：5.1 产出 3/3 条含反斜杠，7.6.6 产出 0/3。
+
+后果链条：Linux 的 Info-ZIP `unzip` 遇到反斜杠条目**判警并返回退出码 1**，而 `--verify-download`
+把非 0 一律当失败 → 发布红在 `cli-publish` 的「核验便携版产物」这一步。即便它「成功」，也只
+解出字面名 `resources\harness\a.json`，随后 `dirStats(probeDir/resources)` 数到 0 个文件。
+
+**为什么潜伏这么久**：打包期的回读校验跑在 **Windows**（`Expand-Archive` 把 `\` 当分隔符，宽容），
+发布期的核验跑在 **Linux**（`unzip` 严格）。两个平台各自只看自己那一半——与本小节开头
+「平台 ≠ 工具链」「按宿主环境分支的断言 = 只验一半」是同一个病，只是这次病在**归档格式**上。
+
+**修法（勿改回）**：
+
+- 在**产出侧**规范化：`normalizeZipSeparators()` 把条目名的 `\` 原地**定长**替换成 `/`
+  （定长 ⇒ 偏移、CRC、压缩流一概不动，只碰名字字段）。修在产出侧而非核验侧，Release 上的
+  归档因此对任何标准工具可读，而不是要求每个消费方各自宽容。
+- 规范化后**硬失败**：`remaining > 0` 抛错；`entries === 0`（中央目录读不出）也抛错。
+  静默放过等于把缺陷推到 Linux 上才现形。
+- 只读**中央目录**（EOCD → CD 记录），**不许**扫 `PK\x03\x04`：数据区里完全可能出现同样的
+  字节序列，扫到就会改坏归档。
+- `--verify-download` 的失败信息**必须带解包器的输出**：原先 `stdio: 'ignore'` 把唯一能解释
+  失败的信息丢了，只剩一句「退出码 1」。现在捕获 stderr 并附进 problem。
+  > 本机 sandbox 下「stdout 被管道接管」的外部 spawn 一律 `EBUSY`（`encoding: 'utf8'` 与默认
+  > 都失败，`stdio: ['ignore','ignore','pipe']` 成功），故只接管 stderr——诊断信息本来就在 stderr。
+- 自测（`verify:portable-package` 54 → **71 项**）：夹具用**纯 Node** 直写 zip 结构，
+  **不拿 PowerShell 当输入**——被怀疑的生产者不能同时充当判据的输入，否则它一变测试就跟着变
+  （对称失效）。断言覆盖：多级名字整体规范化、定长（只改 10 个字节且全为 `0x5C → 0x2F`）、
+  幂等、正斜杠归档逐字节不变、EOCD 损坏时读不到条目且不动文件。
+- 独立复核手段（本机没有 `unzip`，故用标准库）：规范化后的归档交给 **Python `zipfile`**
+  读一遍——`namelist()` 无反斜杠、`testzip()` 返回 `None`（CRC 全通）、内容可读。这比拿自己写的
+  读取器复核自己写的改写器可信。
+
 
 ---
 

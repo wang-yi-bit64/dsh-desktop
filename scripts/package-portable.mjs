@@ -352,6 +352,221 @@ export function zipExtractCommand({ archive, destDir, platform = process.platfor
   return { command: 'unzip', args: ['-o', '-q', archive, '-d', destDir] }
 }
 
+// ---------------------------------------------------------------------------
+// zip 条目名的分隔符：Windows PowerShell 5.1 的 `Compress-Archive` 写反斜杠
+// ---------------------------------------------------------------------------
+
+/**
+ * CRC-32（IEEE 802.3）。刻意手写而不是用 `zlib.crc32`——后者要 Node ≥ 20.15，
+ * 而这里只需要一个确定的行为。只服务于自测夹具。
+ *
+ * @param {Buffer} buf
+ * @returns {number} 无符号 32 位 CRC
+ */
+function crc32Of(buf) {
+  let crc = 0xffffffff
+  for (let i = 0; i < buf.length; i += 1) {
+    crc ^= buf[i]
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+/**
+ * 从尾部定位 EOCD（`0x06054b50`）。必须校验「记录 + 注释长度 == 文件长度」：
+ * 否则数据区里偶然出现的同样 4 个字节会被误当成 EOCD。
+ *
+ * @param {Buffer} buf
+ * @returns {number} EOCD 起始偏移；找不到返回 `-1`
+ */
+function findEndOfCentralDirectory(buf) {
+  const minEocd = 22
+  for (let pos = buf.length - minEocd; pos >= 0; pos -= 1) {
+    if (buf.readUInt32LE(pos) !== 0x06054b50) continue
+    const commentLen = buf.readUInt16LE(pos + 20)
+    if (pos + minEocd + commentLen === buf.length) return pos
+  }
+  return -1
+}
+
+/**
+ * 读 zip 的**中央目录**，返回每个条目的名字、名字字段偏移与局部头偏移。
+ *
+ * 为什么读中央目录而不是扫 `PK\x03\x04`：数据区里完全可能出现同样的字节序列，
+ * 扫描法会把它们当成本地头，于是改坏归档。中央目录是权威索引。
+ *
+ * @param {Buffer} buf
+ * @returns {Array<{name: string, nameOffset: number, nameLength: number, localHeaderOffset: number}>}
+ */
+export function readZipEntries(buf) {
+  const eocd = findEndOfCentralDirectory(buf)
+  if (eocd === -1) return []
+  const total = buf.readUInt16LE(eocd + 10)
+  let pos = buf.readUInt32LE(eocd + 16)
+  const entries = []
+  for (let i = 0; i < total; i += 1) {
+    if (pos + 46 > buf.length || buf.readUInt32LE(pos) !== 0x02014b50) break
+    const nameLength = buf.readUInt16LE(pos + 28)
+    const extraLength = buf.readUInt16LE(pos + 30)
+    const commentLength = buf.readUInt16LE(pos + 32)
+    entries.push({
+      name: buf.subarray(pos + 46, pos + 46 + nameLength).toString('utf8'),
+      nameOffset: pos + 46,
+      nameLength,
+      localHeaderOffset: buf.readUInt32LE(pos + 42)
+    })
+    pos += 46 + nameLength + extraLength + commentLength
+  }
+  return entries
+}
+
+/**
+ * 只取条目名（供断言使用）。
+ *
+ * @param {string} file
+ * @returns {string[]}
+ */
+export function zipEntryNames(file) {
+  return readZipEntries(readFileSync(file)).map((entry) => entry.name)
+}
+
+/**
+ * 把 zip 里所有条目名的分隔符 `\` 规范成 `/`——**原地、定长**替换。
+ *
+ * ## 🔴 为什么必须在打包侧做（2026-09-23 alpha.6 实测根因）
+ *
+ * 归档是用 `Compress-Archive` 打的，而**同一个命令名在不同 PowerShell 上行为不同**：
+ *
+ * | 生产者 | 条目名 |
+ * |---|---|
+ * | Windows PowerShell **5.1**（runner 里的 `powershell`） | `resources\harness\a.json` ❌ |
+ * | PowerShell **7.x**（`pwsh`） | `resources/harness/a.json` ✅ |
+ *
+ * 实测对照（本机同时有两者，同一份源目录）：5.1 产出 3/3 条含反斜杠，7.6.6 产出 0/3。
+ *
+ * 后果链条：Linux 的 Info-ZIP `unzip` 遇到反斜杠条目**判警并返回退出码 1**，而
+ * `--verify-download` 把非 0 一律当失败 → 发布日期红在 `cli-publish`。
+ * 即便它「成功」了，也只会解出字面名 `resources\harness\a.json`，随后
+ * `dirStats(probeDir/resources)` 数到 0 个文件，内容校验照样红。
+ *
+ * 为什么潜伏这么久：**打包期的回读校验跑在 Windows 上**（`Expand-Archive` 把 `\`
+ * 当分隔符，宽容），而**发布期的核验跑在 Linux 上**（`unzip` 严格）。两个平台各自
+ * 看自己那一半，于是「本机/打包侧全绿、发布侧红」。这与本仓已记录过的
+ * 「按宿主环境分支的断言 = 只验一半」是同一个病。
+ *
+ * 修在**产出侧**而不是核验侧：Release 上的归档因此变成任何标准工具都能读的形态，
+ * 而不是要求每个消费方各自宽容。
+ *
+ * 判据做成纯函数（输入输出都是文件与字节）以便自测钉住：定长替换意味着
+ * **只有名字字段里的 `0x5C` 会被改成 `0x2F`**，偏移、CRC、压缩流全部不动。
+ *
+ * @param {string} file zip 路径（**原地修改**）
+ * @returns {{entries: number, patched: number, remaining: number}}
+ *   `entries` 读到的条目数、`patched` 实际修补的条目数、`remaining` 修补后仍含
+ *   反斜杠的条目数（调用方应据此硬失败）。
+ */
+export function normalizeZipSeparators(file) {
+  const buf = readFileSync(file)
+  const entries = readZipEntries(buf)
+  let patched = 0
+  for (const entry of entries) {
+    let touched = false
+    // 1) 中央目录里的名字。
+    for (let i = 0; i < entry.nameLength; i += 1) {
+      const at = entry.nameOffset + i
+      if (buf[at] === 0x5c) {
+        buf[at] = 0x2f
+        touched = true
+      }
+    }
+    // 2) 局部头里的同一个名字。长度必然相同（zip 要求两处一致），故按同一起点对齐。
+    const local = entry.localHeaderOffset
+    if (local + 30 <= buf.length && buf.readUInt32LE(local) === 0x04034b50) {
+      const localNameLength = buf.readUInt16LE(local + 26)
+      const count = Math.min(localNameLength, entry.nameLength)
+      for (let i = 0; i < count; i += 1) {
+        const at = local + 30 + i
+        if (buf[at] === 0x5c) {
+          buf[at] = 0x2f
+          touched = true
+        }
+      }
+    }
+    if (touched) patched += 1
+  }
+
+  const remaining = readZipEntries(buf).filter((entry) => entry.name.includes('\\')).length
+  // 没有任何改动就不写盘：避免无谓重写（幂等）。
+  if (patched > 0) writeFileSync(file, buf)
+  return { entries: entries.length, patched, remaining }
+}
+
+/**
+ * 造一个最小但结构合法的 zip（仅用于自测夹具）。
+ *
+ * 刻意**不用 PowerShell 当夹具**：被怀疑的生产者不能同时充当判据的输入，
+ * 否则它一变，测试就跟着变。这里用纯 Node 直写 zip 结构，任何平台都跑得出
+ * 同一种字节。
+ *
+ * @param {Array<{name: string, data: Buffer}>} entries
+ * @returns {Buffer}
+ */
+function buildFixtureZip(entries) {
+  const parts = []
+  const centrals = []
+  let offset = 0
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name, 'utf8')
+    const data = entry.data
+    const crc = crc32Of(data)
+
+    const local = Buffer.alloc(30 + nameBuf.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4) // version needed
+    local.writeUInt16LE(0, 6) // flags
+    local.writeUInt16LE(0, 8) // method 0 = stored
+    local.writeUInt16LE(0, 10) // mod time
+    local.writeUInt16LE(0x2821, 12) // mod date（任意合法值）
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(nameBuf.length, 26)
+    local.writeUInt16LE(0, 28)
+    nameBuf.copy(local, 30)
+    parts.push(local, data)
+
+    const central = Buffer.alloc(46 + nameBuf.length)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4) // version made by
+    central.writeUInt16LE(20, 6) // version needed
+    // 8 flags / 10 method / 30 extraLen / 32 commentLen / 34 diskStart / 36 internalAttrs
+    // 全部留 0，正是「stored、无附加字段」的合法形态。
+    central.writeUInt16LE(0, 10) // mod time
+    central.writeUInt16LE(0x2821, 12) // mod date（与局部头一致，避免工具抱怨非法日期）
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(nameBuf.length, 28)
+    central.writeUInt32LE(0, 38) // external attrs：留 0，避免解包端纠结权限位
+    central.writeUInt32LE(offset, 42)
+    nameBuf.copy(central, 46)
+    centrals.push(central)
+
+    offset += local.length + data.length
+  }
+
+  const cd = Buffer.concat(centrals)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(entries.length, 8)
+  eocd.writeUInt16LE(entries.length, 10)
+  eocd.writeUInt32LE(cd.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  return Buffer.concat([...parts, cd, eocd])
+}
+
 /**
  * `.sha256` 边车内容：`<hex>  <文件名>`（两个空格）。
  */
@@ -546,12 +761,30 @@ export function verifyDownloaded({ dir, manifestPath, removeTree = removeTreeBes
       const extract = spawnSync(spec.command, spec.args, {
         ...(spec.env ? { env: { ...process.env, ...spec.env } } : {}),
         ...(isZip ? {} : { cwd: dirname(archive) }),
-        stdio: 'ignore'
+        // 🔴 曾用 `stdio: 'ignore'`：那会把**唯一能解释失败的信息**丢掉，剩下
+        //    「退出码 1」这种指向不明的结论。2026-09-23 的反斜杠条目事故里，真正
+        //    的原因（unzip 的告警原文）本来一句话就能说清。
+        //
+        //    刻意写成 `['ignore','ignore','pipe']` 而不是 `encoding: 'utf8'`（等价于
+        //    pipe 三个流）：**本机 sandbox 下「stdout 被管道接管」的外部 spawn 一律
+        //    报 EBUSY**（实测 `encoding:'utf8'` 与默认都失败、`['ignore','ignore','pipe']`
+        //    成功），而这条核验的默认清理器断言要在本机跑得通。诊断信息在 stderr，
+        //    所以只接管 stderr 就够。
+        stdio: ['ignore', 'ignore', 'pipe']
       })
       if (extract.error || extract.status !== 0) {
+        const stderrText = Buffer.isBuffer(extract.stderr)
+          ? extract.stderr.toString('utf8')
+          : String(extract.stderr ?? '')
+        const detail = [
+          extract.error ? `spawn ${extract.error.code ?? extract.error.message}` : null,
+          stderrText.trim().split('\n').slice(0, 5).join(' / ') || null
+        ]
+          .filter(Boolean)
+          .join('；')
         problems.push(
           `${manifest.archive} 无法解包（命令 ${spec.command}，退出码 ${extract.status ?? 'n/a'}${
-            extract.error ? `，${extract.error.code ?? extract.error.message}` : ''
+            detail ? `，${detail}` : ''
           }）`
         )
       } else {
@@ -744,6 +977,27 @@ export function packagePortable({ bundleDir, outDir, triple, version }) {
         `Compress-Archive 失败（退出码 ${compress.status ?? 'n/a'}${
           compress.error ? `，${compress.error.message}` : ''
         }）——归档可能未产出或被截断：${archive}`
+      )
+    }
+
+    // 2b) 条目名分隔符规范化——**必须在打包侧做**，否则 Linux 上的核验必然红。
+    //     Windows PowerShell 5.1 的 `Compress-Archive` 写的是 `\`（见
+    //     `normalizeZipSeparators` 的实测对照），而 `--verify-download` 跑在 ubuntu、
+    //     用的 Info-ZIP `unzip` 遇到反斜杠条目会判警并返回退出码 1。
+    const normalized = normalizeZipSeparators(archive)
+    if (normalized.entries === 0) {
+      throw new Error(`归档里读不出任何条目（中央目录损坏或归档为空）：${archive}`)
+    }
+    if (normalized.remaining > 0) {
+      throw new Error(
+        `归档里仍有 ${normalized.remaining} 个条目名含反斜杠，规范化未完成：${archive}\n` +
+          `  继续下去 Linux 的 unzip 会判警退回 1，发布会在核验阶段失败——这是硬失败，不是警告。`
+      )
+    }
+    if (normalized.patched > 0) {
+      console.log(
+        `[package-portable] 已规范化 ${normalized.patched}/${normalized.entries} 个条目名的分隔符（\\ → /）` +
+          `——PowerShell 5.1 的 Compress-Archive 会写成反斜杠`
       )
     }
   } finally {
@@ -1435,6 +1689,91 @@ export function selfTest() {
     )
   } finally {
     rmSync(tmp, { recursive: true, force: true })
+  }
+
+  // 6) zip 条目名分隔符：PowerShell 5.1 的 `Compress-Archive` 写 `\`，必须被规范成 `/`。
+  //
+  //    这条是 2026-09-23 alpha.6 发布失败（`cli-publish` 里 `unzip` 退出码 1）的回归钉。
+  //    夹具用**纯 Node** 直写 zip 结构，不拿 PowerShell 当输入——被怀疑的生产者不能
+  //    同时充当判据的输入，否则它一变测试就跟着变（对称失效）。
+  {
+    const zipTmp = mkdtempSync(join(tmpdir(), 'dsh-zip-sep-'))
+    try {
+      const target = join(zipTmp, 'bs.zip')
+      writeFileSync(
+        target,
+        buildFixtureZip([
+          { name: 'resources\\harness\\a.json', data: Buffer.from('{}') },
+          { name: 'resources\\node_modules\\pkg\\index.js', data: Buffer.from('x') },
+          { name: 'app.exe', data: Buffer.from('BIN') }
+        ])
+      )
+      const before = readFileSync(target)
+      check(
+        zipEntryNames(target).includes('resources\\harness\\a.json'),
+        '分隔符夹具：自造 zip 必须真的含反斜杠条目（否则后面几条断言会白过）'
+      )
+
+      const result = normalizeZipSeparators(target)
+      check(result.entries === 3, `分隔符规范化：应读到 3 个条目，实际 ${result.entries}`)
+      check(result.patched === 2, `分隔符规范化：应修补 2 个含反斜杠的条目，实际 ${result.patched}`)
+      check(result.remaining === 0, '分隔符规范化：完成后不得残留反斜杠条目')
+
+      const names = zipEntryNames(target)
+      check(names.includes('resources/harness/a.json'), '分隔符规范化：名字必须变成正斜杠形态')
+      check(
+        names.includes('resources/node_modules/pkg/index.js'),
+        '分隔符规范化：多级名字必须整体规范化（不能只改第一处）'
+      )
+      check(names.includes('app.exe'), '分隔符规范化：本来就没有反斜杠的名字必须原样保留')
+
+      // 定长替换：长度不变，且改动字节**恰好**是名字里的 `\`——局部头与中央目录各一份。
+      //   `resources\harness\a.json` 有 2 个 + `resources\node_modules\pkg\index.js` 有 3 个
+      //   = 每个名字副本 5 个；两处副本共 10 个。
+      const after = readFileSync(target)
+      check(after.length === before.length, '分隔符规范化：必须定长替换（文件长度不得变化）')
+      const changed = []
+      for (let i = 0; i < after.length; i += 1) {
+        if (after[i] !== before[i]) changed.push(i)
+      }
+      check(changed.length === 10, `分隔符规范化：应只改 10 个字节，实际 ${changed.length}`)
+      check(
+        changed.every((i) => before[i] === 0x5c && after[i] === 0x2f),
+        '分隔符规范化：改动的字节必须全部是 0x5C → 0x2F（不得碰数据区与 CRC）'
+      )
+
+      // 幂等：再跑一次不得改动任何东西。
+      const second = normalizeZipSeparators(target)
+      check(second.patched === 0, '分隔符规范化：幂等——第二次不得再修补')
+      check(second.entries === 3, '分隔符规范化：第二次仍应读到 3 个条目')
+      check(readFileSync(target).equals(after), '分隔符规范化：第二次运行不得改动文件')
+
+      // 干净输入（已经是正斜杠）必须**逐字节不变**：不该有任何无谓重写。
+      const cleanZip = join(zipTmp, 'clean.zip')
+      writeFileSync(
+        cleanZip,
+        buildFixtureZip([
+          { name: 'resources/harness/a.json', data: Buffer.from('{}') },
+          { name: 'app.exe', data: Buffer.from('BIN') }
+        ])
+      )
+      const cleanBefore = readFileSync(cleanZip)
+      const cleanResult = normalizeZipSeparators(cleanZip)
+      check(cleanResult.patched === 0, '分隔符规范化：正斜杠归档不应被判为需修补')
+      check(readFileSync(cleanZip).equals(cleanBefore), '分隔符规范化：正斜杠归档必须逐字节不变')
+
+      // 可伪证性：中央目录被破坏时必须**读不到条目**（0）并原样保留文件，
+      // 交由调用方的 `entries === 0` 硬失败——而不是拿着坏索引去改归档。
+      const brokenZip = join(zipTmp, 'broken.zip')
+      const brokenBuf = buildFixtureZip([{ name: 'a\\b.txt', data: Buffer.from('z') }])
+      brokenBuf.writeUInt32LE(0xdeadbeef, brokenBuf.length - 22)
+      writeFileSync(brokenZip, brokenBuf)
+      const broken = normalizeZipSeparators(brokenZip)
+      check(broken.entries === 0, '可伪证性：EOCD 被破坏时必须读不到条目（0），交给调用方硬失败')
+      check(readFileSync(brokenZip).equals(brokenBuf), '可伪证性：读不到条目时不得改动文件')
+    } finally {
+      rmSync(zipTmp, { recursive: true, force: true })
+    }
   }
 
   if (failures.length > 0) {
