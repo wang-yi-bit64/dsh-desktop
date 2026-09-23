@@ -800,6 +800,38 @@ package-portable 失败：EACCES: permission denied, unlink '/tmp/dsh-portable-p
 > ⚠️ 这条与前面几条构成同一个序列：`v0.7.0-alpha.5` 一共暴露出**四处**「被前置失败掩盖的潜伏缺陷」
 > （picker 位置 → FFI 单例 → sharp libc → 清理否决结论）。**修好一个红灯不要假定下一个也绿**，
 > 尤其不要把「Release 已存在」当成「发布成功」——按**资产清单**数（见 §8.5）。
+> 序列在 `v0.7.0-alpha.6` 的准备里继续了**第五处**，见下一节。
+
+### 镜像目录的脚本清单写死：CI 在一片绿之后才红（2026-09-23，已修复勿回归）
+
+`ci.yml` 的 `Build CLI and dry-run the publish steps`（`npm run verify:cli-publish`）**本机无法复现**——
+它需要一个已构建的 release 二进制，而本机 node 连 git/tar 都 spawn 不了（`EBUSY`）。
+于是 `12e7e49` 让 `package-cli.mjs` 开始导入 `./remove-tree.mjs` 之后，**没有任何本地检查会跑它**，
+直到下一次 CI：
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/dsh-publish-dryrun-85OKdf/scripts/remove-tree.mjs'
+imported from /tmp/dsh-publish-dryrun-85OKdf/scripts/package-cli.mjs
+```
+
+根因：演练在临时目录里搭「最小检出布局」，而**要复制哪些脚本是写死的**
+（`['package-cli.mjs', 'package-portable.mjs']`，注释还写着「两个脚本都只依赖 Node 内置模块，
+因此复制三个文件即可」）。这个前提被新的本地 import 打破，而写死的清单**没有任何机制**会因此报错——
+`ERR_MODULE_NOT_FOUND` 只在子进程启动那一刻才出现，且被包装成「步骤退出码 1，
+不是产物类缺失」这种指向不明的告警。**同一形态的第三例**（前两例：四处手抄的资源清单、
+`needsWebView2LoaderDll` 的候选清单），结论不变：**手抄清单迟早与真实依赖脱节，要算不要抄。**
+
+**修法（勿改回）**：
+
+- `scriptMirrorClosure()` 按**本地导入闭包**算要复制的脚本——四种写法都抓（`import x from './y'`、
+  `export … from './y'`、动态 `import('./y')`、副作用 `import './y'`），只认 `./` 前缀；
+  引用了不存在的脚本时**响亮抛错**并点名文件，不静默少拷。
+- 复制完再用 `unresolvedMirroredImports()` 复核一遍：把「子进程里的 `ERR_MODULE_NOT_FOUND`」
+  提前成这里的一句人话（独立第二判据——闭包靠正则，正则可能漏写法）。
+- `mirrorSelfCheck()` 是纯逻辑自检（`--self-test` 本机可跑，是这条链路唯一能本地验证的部分），
+  其中**硬编码**「`remove-tree.mjs` 必须在闭包里」作为**独立事实**，不用闭包自己现算——
+  否则判据错了期望值跟着错，又变成对称失效（与 §「按宿主环境分支的断言」同一教训）。
+  另含可证伪性走查：合成三层树验证传递边被穿透、裸包名不被当成本地文件。
 
 ### 把构建目标插进 `run:` 字符串：只有 Windows 的 job 红（2026-09-15 实测，已修复勿回归）
 

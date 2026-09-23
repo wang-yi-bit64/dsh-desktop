@@ -48,9 +48,15 @@
  *
  * ## 无副作用
  *
- * 演练在**临时目录**里搭一个最小检出布局（`scripts/package-cli.mjs` +
- * `scripts/package-portable.mjs` + `package.json` + `dist/`），不在仓库根跑——
- * 否则它会清空真的 `dist/`，而演练本身还是绿的。
+ * 演练在**临时目录**里搭一个最小检出布局（`package.json` + `dist/` + 两个入口脚本
+ * **及其本地导入的传递闭包**），不在仓库根跑——否则它会清空真的 `dist/`，而演练本身
+ * 还是绿的。
+ *
+ * > ⚠️ 复制哪些脚本由 {@link scriptMirrorClosure} **算**出来，不写死。写死的清单会随
+ * > 「入口脚本新增一个本地 import」而静默失效，症状只出现在子进程里：
+ * > `ERR_MODULE_NOT_FOUND: Cannot find module '…/scripts/remove-tree.mjs'`
+ * > ——2026-09-23 就是这样红的（`package-cli.mjs` 开始导入它，而清单没跟上）。
+ * > 算得对不对由 {@link mirrorSelfCheck} 钉住（硬编码 `remove-tree.mjs` 必须在闭包里）。
  *
  * ## 用法
  *
@@ -415,6 +421,160 @@ export function selfCheck({ text, plan }) {
   return failures
 }
 
+/**
+ * 本地（相对路径）导入说明符的四种写法。刻意宽松——**宁多勿漏**：漏一种写法
+ * 会让镜像少拷一个文件，而症状要到子进程里才以 `ERR_MODULE_NOT_FOUND` 出现。
+ *
+ * 裸包名（`node:fs` / `some-pkg`）**不算**：它们不由镜像提供。
+ *
+ * @param {string} source - `.mjs` 源文本。
+ * @returns {string[]} 去重后的相对说明符，如 `['./remove-tree.mjs']`。
+ */
+export function relativeImportSpecifiers(source) {
+  const patterns = [
+    /\bimport\s+[^'"]*?\bfrom\s*['"](\.[^'"]+)['"]/g, // import x from './y.mjs'
+    /\bexport\s+[^'"]*?\bfrom\s*['"](\.[^'"]+)['"]/g, // export { x } from './y.mjs'
+    /\bimport\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g, // await import('./y.mjs')
+    /^[ \t]*import\s+['"](\.[^'"]+)['"]/gm, // 副作用导入 import './y.mjs'
+  ]
+  const found = new Set()
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) found.add(match[1])
+  }
+  return [...found]
+}
+
+/**
+ * 算出镜像目录需要复制的脚本集合：入口脚本 **+ 其本地导入的传递闭包**。
+ *
+ * ## 为什么是「算」而不是「列」
+ *
+ * 原先这里写死 `['package-cli.mjs', 'package-portable.mjs']`，理由是「两个脚本都只依赖
+ * Node 内置模块」。这个前提在 `package-cli.mjs` 开始导入 `./remove-tree.mjs` 之后就**不再成立**，
+ * 而写死的清单没有任何机制会因此报错：演练在临时目录里搭好最小检出布局，子进程一启动就
+ * `ERR_MODULE_NOT_FOUND: Cannot find module '/tmp/dsh-publish-dryrun-…/scripts/remove-tree.mjs'`。
+ * 2026-09-23 的 CI 正是这样红的（`12e7e49` 加了这个导入；该提交从未跑过 CI，于是它是「下一个从未绿过的灯」）。
+ *
+ * 换成算闭包之后，新增本地模块**自动**被带上；而「算得对不对」由 `mirrorSelfCheck()` 钉住
+ * （那里硬编码了 `remove-tree.mjs` 必须在闭包里，作为独立事实而非用闭包自己现算）。
+ *
+ * @param {object} options
+ * @param {string} options.projectRoot - 仓库根。
+ * @param {string[]} options.entries - 入口脚本文件名（相对 `scripts/`）。
+ * @returns {string[]} 需要复制的文件名（已排序）。
+ * @throws {Error} 闭包引用了不存在的脚本——宁可响亮失败，也不要少拷一个再让子进程去撞。
+ */
+export function scriptMirrorClosure({ projectRoot: root, entries }) {
+  const seen = new Set()
+  const queue = [...entries]
+  while (queue.length > 0) {
+    const name = queue.shift()
+    if (seen.has(name)) continue
+    const full = join(root, 'scripts', name)
+    if (!existsSync(full)) {
+      throw new Error(`镜像闭包引用了不存在的脚本：scripts/${name}（它被某个入口或已被导入的模块 import）`)
+    }
+    seen.add(name)
+    for (const specifier of relativeImportSpecifiers(readFileSync(full, 'utf8'))) {
+      // 只关心同目录的本地模块；`../x.mjs` 之类不属于镜像要复制的范围。
+      if (specifier.startsWith('./')) queue.push(specifier.slice(2))
+    }
+  }
+  return [...seen].sort()
+}
+
+/**
+ * 复核一组文件里引用的本地模块是否都在**同一集合**内。
+ *
+ * 与闭包推导的关系是「独立第二判据」：闭包靠正则抓说明符，正则会漏写法；这条直接从
+ * 已被复制的文件出发再抓一遍，漏了就报出来。它把「子进程里的 ERR_MODULE_NOT_FOUND」
+ * 提前成一句能直接读懂的话。
+ *
+ * @param {object} options
+ * @param {string} options.dir - 存放这些文件的目录。
+ * @param {string[]} options.files - 目录内的文件名集合。
+ * @returns {string[]} 形如 `package-cli.mjs → remove-tree.mjs` 的缺失项。
+ */
+export function unresolvedMirroredImports({ dir, files }) {
+  const present = new Set(files)
+  const missing = []
+  for (const file of files) {
+    const source = readFileSync(join(dir, file), 'utf8')
+    for (const specifier of relativeImportSpecifiers(source)) {
+      if (!specifier.startsWith('./')) continue
+      const target = specifier.slice(2)
+      if (!present.has(target)) missing.push(`${file} → ${target}`)
+    }
+  }
+  return missing
+}
+
+/** 演练的入口脚本；镜像闭包从它们出发。 */
+const MIRROR_ENTRIES = ['package-cli.mjs', 'package-portable.mjs']
+
+/**
+ * 镜像闭包的纯逻辑自检（不需要二进制、不需要 git）。
+ *
+ * 三类断言：**独立事实**（真实仓库的闭包必须含 `remove-tree.mjs`）、**完整性**
+ * （闭包内不得有指向镜像外的相对导入）、**可证伪性**（合成三层树，走查必须穿透传递边、
+ * 且不得把裸包名当成本地文件）。
+ *
+ * @returns {string[]} 失败项描述；空数组表示通过。
+ */
+export function mirrorSelfCheck() {
+  const failures = []
+  const closure = scriptMirrorClosure({ projectRoot, entries: MIRROR_ENTRIES })
+
+  // A) 独立事实：不用闭包现算，直接钉住它是回归的形状。
+  //    写死成 `remove-tree.mjs` 而不是「非空」——「非空」在漏拷时照样过。
+  if (!closure.includes('remove-tree.mjs')) {
+    failures.push(
+      '镜像闭包漏了 remove-tree.mjs（package-cli.mjs 导入它）——演练会在子进程里 ERR_MODULE_NOT_FOUND'
+    )
+  }
+  for (const entry of MIRROR_ENTRIES) {
+    if (!closure.includes(entry)) failures.push(`镜像闭包漏了入口脚本 ${entry}`)
+  }
+
+  // B) 完整性：闭包必须自洽，否则演练会死在子进程里而不是这里。
+  const missing = unresolvedMirroredImports({ dir: join(projectRoot, 'scripts'), files: closure })
+  if (missing.length > 0) {
+    failures.push(`镜像闭包不自洽（引用了未纳入的文件）：${missing.join('、')}`)
+  }
+
+  // C) 可证伪性：合成一棵 a → b → c 的树，另加裸包名与副作用导入。
+  const tmp = mkdtempSync(join(tmpdir(), 'dsh-mirror-selftest-'))
+  try {
+    mkdirSync(join(tmp, 'scripts'), { recursive: true })
+    writeFileSync(
+      join(tmp, 'scripts', 'a.mjs'),
+      "import { b } from './b.mjs'\nimport 'node:fs'\nimport z from 'some-bare-package'\nimport './side-effect.mjs'\n"
+    )
+    writeFileSync(join(tmp, 'scripts', 'b.mjs'), "export { c } from './c.mjs'\n")
+    writeFileSync(join(tmp, 'scripts', 'c.mjs'), 'export const c = 1\n')
+    writeFileSync(join(tmp, 'scripts', 'side-effect.mjs'), '\n')
+
+    const walked = scriptMirrorClosure({ projectRoot: tmp, entries: ['a.mjs'] })
+    for (const expected of ['a.mjs', 'b.mjs', 'c.mjs', 'side-effect.mjs']) {
+      if (!walked.includes(expected)) failures.push(`走查未穿透传递边：漏了 ${expected}`)
+    }
+    if (walked.length !== 4) {
+      failures.push(`走查把非本地模块也算进来了：期望 4 个，实际 ${walked.length} 个（${walked.join('、')}）`)
+    }
+    if (relativeImportSpecifiers("import fs from 'node:fs'\n").length !== 0) {
+      failures.push('裸包名被判成了本地导入')
+    }
+  } finally {
+    try {
+      rmSync(tmp, { recursive: true, force: true })
+    } catch {
+      // 临时目录清理失败不影响断言结论，不掩盖真正的失败项。
+    }
+  }
+
+  return failures
+}
+
 function main({ selfTestOnly = false } = {}) {
   const argv = process.argv.slice(2)
   let binary = join(projectRoot, 'target', 'release', 'dsh-host-cli')
@@ -430,7 +590,7 @@ function main({ selfTestOnly = false } = {}) {
 
   // 0) 纯逻辑自检**先于**一切外部依赖：它不需要 bash、不需要二进制，本机
   //    `target/` 不可写时仍然能跑通——这正是 `--self-test` 存在的理由。
-  const selfFailures = selfCheck({ text, plan })
+  const selfFailures = [...selfCheck({ text, plan }), ...mirrorSelfCheck()]
   if (selfFailures.length > 0) {
     console.error(`❌ 演练自检失败 ${selfFailures.length} 项：`)
     for (const failure of selfFailures) console.error(`  - ${failure}`)
@@ -439,6 +599,9 @@ function main({ selfTestOnly = false } = {}) {
   console.log(
     `✅ 产物类契约自检通过：本机 ${host} —— 夹具能造 ${fixtureClasses(plan).length} 类、` +
       `本机造不出 ${declared.length} 类（工作流清单与两者逐条对齐）`
+  )
+  console.log(
+    `✅ 镜像闭包自检通过：${scriptMirrorClosure({ projectRoot, entries: MIRROR_ENTRIES }).join('、')}`
   )
   if (selfTestOnly) return
 
@@ -463,13 +626,23 @@ function main({ selfTestOnly = false } = {}) {
     //
     //    刻意**不**用仓库根：那样会真的清空/覆盖 `dist/`——如果这个演练在 CI 的
     //    打包步骤之后运行，它会抹掉刚产出的真产物，而演练本身还是绿的。
-    //    （两个脚本都只依赖 Node 内置模块，因此复制三个文件即可。）
+    //
+    //    ⚠️ 要复制哪些脚本**不能写死**。曾经写死成两个入口，理由是「都只依赖 Node
+    //       内置模块」；`package-cli.mjs` 后来导入了 `./remove-tree.mjs`，这个前提
+    //       失效而清单无人更新 → 演练在子进程里 ERR_MODULE_NOT_FOUND（2026-09-23）。
+    //       现在按**本地导入闭包**算（`scriptMirrorClosure`），新增模块自动被带上。
     const outDir = join(work, 'dist', 'cli')
     const portableOut = join(work, 'dist', 'portable')
     mkdirSync(join(work, 'scripts'), { recursive: true })
     mkdirSync(outDir, { recursive: true })
-    for (const file of ['package-cli.mjs', 'package-portable.mjs']) {
+    const mirrorFiles = scriptMirrorClosure({ projectRoot, entries: MIRROR_ENTRIES })
+    for (const file of mirrorFiles) {
       copyFileSync(join(projectRoot, 'scripts', file), join(work, 'scripts', file))
+    }
+    // 复制完之后复核一遍：把「子进程启动即 ERR_MODULE_NOT_FOUND」提前成这里的一句人话。
+    const unresolved = unresolvedMirroredImports({ dir: join(work, 'scripts'), files: mirrorFiles })
+    if (unresolved.length > 0) {
+      throw new Error(`镜像目录不自洽，子进程必然 ERR_MODULE_NOT_FOUND：${unresolved.join('、')}`)
     }
     copyFileSync(join(projectRoot, 'package.json'), join(work, 'package.json'))
 
