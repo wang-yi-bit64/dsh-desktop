@@ -7,6 +7,12 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.7] - 2026-09-23
+
+### 🐛 修复
+
+- **portable**: normalize zip entry separators before publishing ([59bd75c](https://github.com/wang-yi-bit64/dsh-desktop/commit/59bd75c07ea921c6b994db9ede88d2aafe9f7eae))
+
 ## [0.7.0-alpha.6] - 2026-09-23
 
 ### 🐛 修复
@@ -17,6 +23,7 @@
 
 ### 🧹 其他
 
+- **release**: record the alpha.6 CI fix in the changelog ([a7b1b2b](https://github.com/wang-yi-bit64/dsh-desktop/commit/a7b1b2b8a0ba302a47e5f752d0ddc86f65656bfa))
 - **release**: 0.7.0-alpha.6 ([9e112e2](https://github.com/wang-yi-bit64/dsh-desktop/commit/9e112e275b562027a4546233ea606f87854d8943))
 
 ## [0.7.0-alpha.5] - 2026-09-23
