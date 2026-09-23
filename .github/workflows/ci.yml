@@ -125,6 +125,13 @@ jobs:
       - name: Verify harness lockfile rules
         run: npm run verify:harness-lockfile
 
+      # 「临时目录清理失败不得否决主结论」的判据。守的是 2026-09-23 alpha.5 的事故：
+      # `cli-publish` 的 `finally` 里 `rmSync` 报 EACCES 冒泡，把一次**通过**的 portable
+      # 核验判成了发布失败，还吞掉了 problems 的真实内容。这类缺陷只有真跑发布才炸，
+      # 静态检查全绿——所以判据必须在这里独立成门禁。
+      - name: Verify temp-dir cleanup rules
+        run: npm run verify:remove-tree
+
       # 发布工作流自身的静态判据（自测）。它守的是两类「只有真跑发布才炸」的缺陷：
       # tauri-action 的 tauriScript/args 拼装（重复 build → `unexpected argument`），
       # 以及 shell 变量紧邻非 ASCII 字符（macOS bash 3.2 会并入变量名）。

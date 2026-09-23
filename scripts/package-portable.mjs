@@ -40,6 +40,10 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// 临时目录清理是**辅助动作**：它失败绝不能否决主结论（2026-09-23 alpha.5 的真实事故——
+// `finally` 里的 EACCES 冒泡，把一次通过的核验判成了发布失败）。见 remove-tree.mjs 模块文档。
+import { removeTreeBestEffort } from './remove-tree.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 // ---------------------------------------------------------------------------
@@ -464,10 +468,16 @@ export function inspectExtracted({ destDir }) {
 /**
  * 核验**已经发布出去**的那份便携版产物。
  *
- * @param {{dir: string, manifestPath: string}} opts
+ * @param {object} opts
+ * @param {string} opts.dir 已下载产物所在目录
+ * @param {string} opts.manifestPath manifest 文件路径
+ * @param {(dir: string) => {ok: boolean, error?: string}} [opts.removeTree] 临时目录清理器，
+ *   默认 `removeTreeBestEffort`（永不抛）。**可注入是为了能断言**「清理失败不影响核验结论」——
+ *   2026-09-23 alpha.5 的事故正是 `finally` 里的 EACCES 冒泡，把一次通过的核验判成了发布失败，
+ *   并且顺带吞掉了 `problems` 的真实内容。
  * @returns {{problems: string[], manifest: object}}
  */
-export function verifyDownloaded({ dir, manifestPath }) {
+export function verifyDownloaded({ dir, manifestPath, removeTree = removeTreeBestEffort }) {
   const problems = []
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   const archive = join(resolve(dir), manifest.archive)
@@ -564,7 +574,13 @@ export function verifyDownloaded({ dir, manifestPath }) {
         }
       }
     } finally {
-      rmSync(probeDir, { recursive: true, force: true })
+      // 🔴 清理必须 best-effort：`finally` 里抛出的异常会**覆盖** try 块的返回值，
+      // 于是「临时目录删不掉」这种与核验无关的失败，会把一次通过的核验判成发布失败，
+      // 还会连带吞掉 problems 的真实内容（2026-09-23 alpha.5 的真实事故）。
+      const cleanup = removeTree(probeDir)
+      if (!cleanup.ok) {
+        console.warn(`⚠️ 便携版核验的临时目录未能清理（不影响核验结论）：${cleanup.error}`)
+      }
     }
   }
 
@@ -731,7 +747,8 @@ export function packagePortable({ bundleDir, outDir, triple, version }) {
       )
     }
   } finally {
-    rmSync(stageDir, { recursive: true, force: true })
+    // 同上：清理失败不得否决打包结论。
+    removeTreeBestEffort(stageDir)
   }
 
   // 2) 边车 + manifest。
@@ -792,7 +809,8 @@ export function packagePortable({ bundleDir, outDir, triple, version }) {
       }
       return inspectExtractedContents({ destDir: verifyDir, exeName: exeInfo.name, triple })
     } finally {
-      rmSync(verifyDir, { recursive: true, force: true })
+      // 同上：清理失败不得否决结论。
+      removeTreeBestEffort(verifyDir)
     }
   })()
 
@@ -1298,6 +1316,27 @@ export function selfTest() {
       check(
         fullGate.problems.length === 0,
         `门禁守卫：补上 runtimeFiles 的同一归档必须通过（实际问题：${fullGate.problems.join('；')}）`
+      )
+
+      // 🔴 2026-09-23 alpha.5 事故的回归守卫：**清理临时目录失败不得否决核验结论**。
+      // 那次 `finally` 里的 `rmSync` 报 `EACCES … unlink '…/resources/harness/node_modules'`
+      // 冒泡出去，把一次**通过**的核验判成了发布失败，还顺带吞掉了 problems 的真实内容。
+      // 这里注入一个「永远失败」的清理器，结论必须与正常路径**逐字一致**。
+      // 可伪证性：若实现让清理异常冒泡，这一行会**直接抛错**——自测当场判红。
+      const noisyGate = verifyDownloaded({
+        dir: gateDir,
+        manifestPath: fullManifestPath,
+        removeTree: () => ({ ok: false, error: 'simulated EACCES: permission denied' })
+      })
+      check(
+        JSON.stringify(noisyGate.problems) === JSON.stringify(fullGate.problems),
+        '门禁守卫：清理临时目录失败时核验结论必须逐字不变（2026-09-23 alpha.5 事故会在这里判红）'
+      )
+      // 反向：默认清理器下必须仍然通过——否则上面那条「一致」可能只是两条路径都失败而已。
+      const cleanGate = verifyDownloaded({ dir: gateDir, manifestPath: fullManifestPath })
+      check(
+        cleanGate.problems.length === 0,
+        `门禁守卫：默认清理器下核验必须通过（实际问题：${cleanGate.problems.join('；')}）`
       )
     }
 

@@ -23,6 +23,7 @@
     "verify:targets": "node scripts/dsh-targets.mjs --self-test",
     "verify:prune": "node scripts/prune-harness-deps.mjs --self-test",
     "verify:variants": "node scripts/prune-platform-variants.mjs --self-test",
+    "verify:remove-tree": "node scripts/remove-tree.mjs --self-test",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "verify:release-workflow:self-test": "node scripts/verify-release-workflow.mjs --self-test",
     "verify:harness-tree": "node scripts/verify-harness-tree.mjs src-tauri/resources/harness/node_modules",

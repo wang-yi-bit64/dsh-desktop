@@ -52,6 +52,10 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// 临时目录清理是**辅助动作**：它失败绝不能否决主结论（见 remove-tree.mjs 模块文档，
+// 2026-09-23 alpha.5 的 `finally` EACCES 事故）。CLI 侧此前用的是裸 `rmSync`。
+import { removeTreeBestEffort } from './remove-tree.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** 产物内固定文件名。 */
@@ -255,7 +259,7 @@ export function smokeRun({ binaryPath, version }) {
     })
     problems.push(...checkMissingResourceExit(statusRun.status))
   } finally {
-    rmSync(dataDir, { recursive: true, force: true })
+    removeTreeBestEffort(dataDir)
   }
   return problems
 }
@@ -526,8 +530,8 @@ export function packageCli({ binPath, triple, outDir, hostTriple: host }) {
 
     return { base, archive, sidecar, binary: source, bytes: manifest.archiveBytes, manifestPath, manifest, smoke }
   } finally {
-    rmSync(stageDir, { recursive: true, force: true })
-    rmSync(verifyDir, { recursive: true, force: true })
+    removeTreeBestEffort(stageDir)
+    removeTreeBestEffort(verifyDir)
   }
 }
 

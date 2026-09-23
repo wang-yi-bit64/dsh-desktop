@@ -35,6 +35,7 @@
 - **`scripts/`**：
   - `prepare-harness.mjs`：解析、下载并组装 300MB+ 的 Node 运行时与 Harness 依赖包到 `src-tauri/resources/`；**按 `--dsh-target=<name>` 选组装哪条上游通道**（版本、补丁目录、vendored 目录、staging 目录全由 [`dsh-targets.mjs`](scripts/dsh-targets.mjs) 推导）；**依赖安装优先用提交式 lockfile + `npm ci`**（`harness-locks/<target>/`，零解析、可复现；CI 上缺失/失配直接失败），仅本地无 lockfile 时才回退在线解析；幂等快速路径按 `tauri.conf.json` → `bundle.resources` 的完整清单校验产物完整性，并要求 MANIFEST 的 `target` 与本次目标一致（`resources/` 两通道共用，否则会交付另一条线的树）；按 [`patches/LAYERS.md`](patches/LAYERS.md) 的分级决定补丁失败是降级还是中断（`--strict` 恢复全量 fail-fast）。
   - `harness-lockfile.mjs`：提交式 lockfile 的**纯逻辑层**（路径推导 / `inputs.json` 一致性三规则 / 家族钉死推导 / 闭包字段抽取 / 安装位置推导），含 `--self-test`（34 项）；I/O、registry 查询与 npm 调用留在 `prepare-harness.mjs`。
+  - `remove-tree.mjs`：**尽力而为**的临时目录删除（三级降级：直接删 → 递归恢复写权限 → OS 命令；**永不抛错**，返回 `{ ok, error, attempts }`），含 `--self-test`（21 项）。守的是「**辅助动作不得否决主结论**」——2026-09-23 alpha.5 的发布死在 `finally` 里一句 `rmSync` 的 EACCES 上，把一次**通过**的 portable 核验判成了发布失败。`package-cli.mjs` / `package-portable.mjs` 的生产路径清理点全部用它。
   - `../harness-locks/<target>/`：与该目标绑定、**必须成对提交**的 `package-lock.json` + `inputs.json`（输入快照——lockfile 本身不记录 overrides）。生成/再生成：`npm run harness:lockfile -- --dsh-target=<t>`（next 解析约 40 分钟、alpha 数分钟；版本锚点/补丁集/vendored 变更后必跑，见升级清单 Step 1 与「依赖解析的堆爆炸」一节）。
   - `dsh-targets.mjs`：**双上游通道的唯一事实源**——目标名 ↔ npm dist-tag ↔ DSH 版本，以及「版本号 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
@@ -167,6 +168,9 @@ npm run verify:harness-lockfile
 #      需联网——先直连 registry 并发算家族传递闭包，再 npm install --package-lock-only；
 #      产出 harness-locks/<target>/ 下 package-lock.json + inputs.json，两者必须成对提交）
 npm run harness:lockfile -- --dsh-target=<next|alpha>
+
+# 20e. 临时目录清理判据自测（三级降级 / 永不抛错 / 不跟随符号链接）
+npm run verify:remove-tree
 
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
 #     默认按 MANIFEST 里记录的 target 取补丁表，也可 --dsh-target=<name> 指定
@@ -754,6 +758,48 @@ npm **只在包自己声明了 `libc` 时才按 libc 过滤**（`os`/`cpu`/`libc
    扫 release.yml 里「未加花括号的 `$NAME` 紧邻非 ASCII 字符」的可执行行（注释与 `${{ … }}` 表达式除外）。
 
 两条判据都带**可伪证性检查**：把上述旧写法当夹具，断言必须变红。
+
+### 临时目录清理失败否决了主结论：一次通过的核验被判成发布失败（2026-09-23 实测，已修复勿回归）
+
+`v0.7.0-alpha.5` 的发布在**最后一步** `publish CLI + portable artifacts` 失败。日志里最刺眼的是：
+**前面三条都绿**，红的只是一句与核验无关的清理：
+
+```
+✅ 已发布产物核验通过：dsh-host-cli-…-aarch64-apple-darwin.tar.gz   sha256=6811d79b…
+✅ 已发布产物核验通过：dsh-host-cli-…-x86_64-pc-windows-msvc.zip    sha256=8dd3a2ac…
+✅ 已发布产物核验通过：dsh-host-cli-…-x86_64-unknown-linux-gnu.tar.gz sha256=b3a06859…
+package-portable 失败：EACCES: permission denied, unlink '/tmp/dsh-portable-probe-dxo46J/resources/harness/node_modules'
+```
+
+根因不是核验判据，而是 `verifyDownloaded()` **`finally` 里的 `rmSync(probeDir, …)`**：
+
+1. `--verify-download` 跑在 ubuntu 的 `cli-publish` 上，要解包的是 **Windows 产出的 `.zip`**；
+   `unzip` 恢复出的目录权限位可能不可写（zip 不记录 Unix 权限），删到
+   `resources/harness/node_modules` 这种深层目录时 `unlink` 报 EACCES。
+   `rmSync` 的 `force: true` **只忽略「不存在」，不忽略 EACCES**。
+2. `finally` 里抛出的异常会**覆盖** try 块的返回值 → 一次**通过**的核验被这句清理判成了
+   发布失败；更糟的是 `problems` 数组**从未被打印**，没人知道核验到底过没过
+   （诊断时只能从「三条 CLI 绿 + 没有其他 ERROR」反推它本来是过的）。
+
+**修法**：新建 [`scripts/remove-tree.mjs`](scripts/remove-tree.mjs)，把「删临时目录」做成
+**尽力而为**的纯逻辑，`package-cli.mjs` / `package-portable.mjs` 的**生产路径**清理点全部改用它：
+
+- `removeTreeBestEffort(dir)` **永不抛**，返回 `{ ok, error, attempts }`；调用方最多打一条
+  `console.warn`，**结论照常返回**；
+- 三级降级：直接删 → 递归恢复写权限后再删（`grantWritePermissionRecursive`，**不跟随符号链接**——
+  `chmod` 顺着链接会改到仓库里真实文件的权限）→ OS 兜底（`rm -rf` / `rmdir /s /q`）；
+- `remover` / `osRemover` / `chmod` 均可注入，因此「三级顺序」与「不跟随链接」这两条契约
+  能在纯函数测试里断言，不必依赖宿主的权限语义；
+- `verifyDownloaded` 新增可注入的 `removeTree`，自测注入「永远失败」的清理器，
+  断言**结论逐字不变**——这是本次事故的回归守卫（实现若再让异常冒泡，该自测当场判红）。
+
+判据入口：`npm run verify:remove-tree`（自测 21 项），已接入 ci.yml 与 release.yml 的静态门禁；
+`verify:portable-package` 52 → 54 项。**教训**：辅助动作（清理、日志、上报）**不得有能力否决主结论**；
+把它们写进 `finally` 时要问一句「这里抛了会怎样」——答案是「会覆盖主结论」，那就必须吞掉并降级为告警。
+
+> ⚠️ 这条与前面几条构成同一个序列：`v0.7.0-alpha.5` 一共暴露出**四处**「被前置失败掩盖的潜伏缺陷」
+> （picker 位置 → FFI 单例 → sharp libc → 清理否决结论）。**修好一个红灯不要假定下一个也绿**，
+> 尤其不要把「Release 已存在」当成「发布成功」——按**资产清单**数（见 §8.5）。
 
 ### 把构建目标插进 `run:` 字符串：只有 Windows 的 job 红（2026-09-15 实测，已修复勿回归）
 

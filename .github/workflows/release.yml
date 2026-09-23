@@ -116,6 +116,7 @@ jobs:
           npm run verify:prune
           npm run verify:variants
           npm run verify:harness-lockfile
+          npm run verify:remove-tree
           npm run verify:release-workflow
           npm run verify:cli-package
           npm run verify:profile-names
