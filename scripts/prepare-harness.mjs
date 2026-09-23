@@ -126,9 +126,20 @@ function log(message) {
   console.log(`[prepare-harness] ${message}`)
 }
 
-function run(command, args, cwd) {
+/**
+ * Run a command synchronously, inheriting stdio.
+ *
+ * @param {string} command - Executable name.
+ * @param {string[]} args - Argument list.
+ * @param {string} cwd - Working directory for the child.
+ * @param {Record<string, string>} [env] - Optional environment override for the
+ *   child only. Merged over `process.env` by the caller; when omitted the
+ *   child inherits the parent environment untouched.
+ * @returns {void}
+ */
+function run(command, args, cwd, env) {
   log(`$ ${command} ${args.join(' ')} (in ${cwd})`)
-  execFileSync(command, args, { cwd, stdio: 'inherit', shell: isWindows })
+  execFileSync(command, args, { cwd, stdio: 'inherit', shell: isWindows, ...(env ? { env } : {}) })
 }
 
 /**
@@ -553,7 +564,24 @@ log(`staged patches for target ${dshTarget} (DSH ${DSH_VERSION}) from ${patchesD
 // 2. Install the dependency tree from the npm registry.
 // ---------------------------------------------------------------------------
 log('installing Harness dependency tree (this can take a while)')
-run('npm', ['install', '--no-audit', '--no-fund'], staging)
+// 🔴 2026-09-23：`npm install` 的 arborist 解析这棵 2 万文件的依赖树时，堆占用
+//    会逼近甚至越过 Node 的**默认老生代上限**。该上限随宿主内存缩放——
+//    GitHub 的 7 GB runner（macos / ubuntu）约为 **2 GB**，16 GB 的 windows
+//    约为 4 GB。于是出现「同一份代码三平台只有 macos/ubuntu 红」的形状：
+//    smoke `35814756095` 两次在 `Prepare harness resources` 处
+//    `FATAL ERROR: Ineffective mark-compacts near heap limit`（SIGABRT / exit 134），
+//    各跑 16 分钟才死。上游任意一个**传递依赖**发布了新版本（解析结果变大）就足以
+//    把它推过线——本仓的 dependencies / overrides 只钉死了补丁包，其余范围会漂。
+//
+//    因此给这个子进程**显式抬高堆上限**（4 GB：显著高于悬崖，又低于 7 GB
+//    runner 的物理内存）。只加在这一步，不污染 `run()` 的其他调用方
+//    （patch-package、品牌资产脚本都不需要，也不该隐式改变它们的行为）。
+//    若用户已设置 NODE_OPTIONS，追加而不是覆盖。
+const npmInstallEnv = {
+  ...process.env,
+  NODE_OPTIONS: [process.env.NODE_OPTIONS, '--max-old-space-size=4096'].filter(Boolean).join(' ')
+}
+run('npm', ['install', '--no-audit', '--no-fund'], staging, npmInstallEnv)
 
 // ---------------------------------------------------------------------------
 // 3. Reapply the tracked desktop patches (tiered failure policy).
