@@ -26,21 +26,34 @@
  *
  * ## 判据的边界（为什么不会误删）
  *
- * 只对**目录名本身充当平台选择器**的三种布局动手，这是有界的：
+ * 只对**选择器写在哪里**明确的四种布局动手，这是有界的：
  *
  *   1. `prebuilds/` 或 `prebuilt/` 目录内（prebuildify 约定）——其 loader 按
  *      `${platform}-${arch}` 查找，其余条目**按构造即不可达**；
  *   2. 文件名形如 `musl_*` / `musl-*` 的目录（koffi 布局），其前导 token 是 libc；
  *   3. **裸 libc 名**做选择器（`bin/glibc/` 与 `bin/musl/` 并列）——0.1.5-rc.1 的
  *      `@deepseek-ai/node-addon-system-linux-x64` 就是这种；Linux 目标的保留名因此
- *      必须含 `glibc`，否则第 38 行那道安全丝认不出「同层有我们的变体」，
- *      会放过同层的 `musl`（2026-09-12 Linux 打包失败的复发原因）。
+ *      必须含 `glibc`，否则 `oursIsHere` 那道安全丝认不出「同层有我们的变体」，
+ *      会放过同层的 `musl`（2026-09-12 Linux 打包失败的复发原因）；
+ *   4. **包名本身**是 libc 选择器（`@img/sharp-linuxmusl-x64` 与 `@img/sharp-linux-x64`
+ *      并列）——见上文「libc 维度」，npm 过滤不了这一类。安全丝：**同层必须存在
+ *      glibc 对应物**（把包名里的 `linuxmusl` 换成 `linux`）才删，且只在
+ *      `platform === 'linux'` 时生效。
  *
- * 包**名**里带平台后缀的（`@img/sharp-linux-x64`、`@vscode/ripgrep-linux-x64`）不碰：
- * npm 已按 `os`/`cpu` 字段过滤过它们。
+ * 包**名**里带平台后缀的（`@img/sharp-linux-x64`、`@vscode/ripgrep-linux-x64`）分两种：
+ *
+ *   - **os/cpu 维度**：npm 已按 `os`/`cpu` 字段过滤过（`@img/sharp-win32-x64` 在 Linux
+ *     runner 上不会被装），本模块不碰；
+ *   - **libc 维度**：npm **过滤不了**——它只在包**自己声明了** `libc` 字段时才按 libc 过滤。
+ *     `@img/sharp-linuxmusl-x64@0.35.4` 在 lockfile 里只有 `os:["linux"]` / `cpu:["x64"]`，
+ *     于是 npm 认为它与 `@img/sharp-linux-x64` 同样适用，把**两个都装进树**
+ *     （2026-09-23 实测：`smoke 35856722738` 只有 ubuntu 红，linuxdeploy 在
+ *     `sharp-linuxmusl-x64-0.35.4.node` 上报 `Could not find dependency: libc.musl-x86_64.so.1`）。
+ *     故本模块必须兜底第 4 类判据（见下）。
  *
  * 还有一道保险：**在 prebuilds 目录之外**，只有当**同一层**目录里存在我们自己平台的
  * 变体（`oursIsHere`）时才按名删邻居——这样永远不会把「最后一个能用的」删没。
+ * 第 4 类判据另有一道同构的安全丝：**同层必须存在它的 glibc 对应物**才删。
  *
  * 用法：
  * ```bash
@@ -62,6 +75,33 @@ import { pruneNodeModules } from './prune-harness-deps.mjs'
  * 命中这只是必要条件——还要 `(insidePrebuilds || oursIsHere)` 才删。
  */
 const PLATFORM_TOKENS = /^(darwin|linux|linuxmusl|win32|android|freebsd|musl|glibc)$/
+
+/**
+ * 「包名即 libc 选择器」的第 4 类判据：包名里的 musl 标记。
+ *
+ * sharp 系列用**包名**区分 libc（`@img/sharp-linux-x64` / `@img/sharp-linuxmusl-x64`），
+ * 而 npm 只在包**自己声明了** `libc` 字段时才按 libc 过滤。`@img/sharp-linuxmusl-x64@0.35.4`
+ * 只声明了 `os:["linux"]` / `cpu:["x64"]`，于是它与 glibc 版本**双双被装进树**，
+ * linuxdeploy 遍历到它的 `.node` 时解析 `libc.musl-x86_64.so.1` 失败，AppImage 打包整体失败
+ * （2026-09-23 实测，smoke `35856722738` 只有 ubuntu 红）。
+ */
+const MUSL_PACKAGE_MARKER = 'linuxmusl'
+
+/**
+ * 把一个「musl 选择器包名」换成它的 glibc 对应物名；不含标记时返回 `null`。
+ *
+ * 只做**整体 token 替换**（`linuxmusl` → `linux`），因此
+ * `@img/sharp-linuxmusl-x64` → `@img/sharp-linux-x64`、
+ * `@img/sharp-libvips-linuxmusl-x64` → `@img/sharp-libvips-linux-x64`。
+ * 返回 `null` 而非 `name` 本身，是为了让调用点无法把「不是这类名字」误当成命中。
+ *
+ * @param {string} name 包目录名（不含 scope 时也要能判，例如 `foo-linuxmusl-x64`）
+ * @returns {string|null} glibc 对应物名；不含 `linuxmusl` 标记时为 `null`
+ */
+export function glibcSiblingName(name) {
+  if (!name.includes(MUSL_PACKAGE_MARKER)) return null
+  return name.split(MUSL_PACKAGE_MARKER).join('linux')
+}
 
 /**
  * 计算目标平台「我们自己」的变体目录名集合。
@@ -112,6 +152,10 @@ export function isForeignVariantName(name, keep) {
 /**
  * 剪掉一棵依赖树里与目标平台无关的原生变体（原地修改）。
  *
+ * 覆盖四类判据（详见模块文档「判据的边界」）：prebuilds 目录内的 `platform-arch`、
+ * `musl_*` 目录、裸 libc 目录名（`bin/glibc` 与 `bin/musl`），以及**包名里的 libc 选择器**
+ * （`@img/sharp-linuxmusl-x64`——`platform === 'linux'` 时且同层存在 glibc 对应物才删）。
+ *
  * @param {string} root 依赖树根目录（通常是 `<resources>/harness/node_modules`）
  * @param {{platform: string, arch: string}} [target] 打包目标；默认取当前进程宿主
  * @returns {{ removed: string[] }} 被删目录的相对路径列表，便于报告与断言
@@ -119,6 +163,10 @@ export function isForeignVariantName(name, keep) {
 export function pruneForeignPlatformVariants(root, target = { platform: process.platform, arch: process.arch }) {
   const keep = keepNamesFor(target)
   const removed = []
+  // 第 4 类判据（包名即 libc 选择器）只对 Linux 目标生效：本仓发布的 Linux 产物是
+  // glibc 链接的。若将来新增 musl 目标，必须把这里翻转成「保留 musl、删 glibc」，
+  // 否则会删掉目标平台唯一的构建。
+  const pruningMuslPackages = target.platform === 'linux'
 
   const walk = (dir, insidePrebuilds) => {
     let entries
@@ -131,10 +179,20 @@ export function pruneForeignPlatformVariants(root, target = { platform: process.
     // 保险：只有当我们自己的变体就在这一层时，才允许在 prebuilds 之外按名删除——
     // 于是「最后一个能用的」永远不会被删掉。
     const oursIsHere = dirs.some((entry) => keep.has(entry.name))
+    // 同层名字快照，供第 4 类判据的「glibc 对应物存在吗」安全丝使用。
+    // 在遍历前取快照：断言的依据是「这一层**本来**有什么」，不受本轮删除顺序影响。
+    const namesHere = new Set(dirs.map((entry) => entry.name))
 
     for (const entry of dirs) {
       const full = join(dir, entry.name)
-      if (isForeignVariantName(entry.name, keep) && (insidePrebuilds || oursIsHere)) {
+      // 第 4 类：包名本身是 libc 选择器，且同层有 glibc 对应物。
+      const glibcTwin = glibcSiblingName(entry.name)
+      const isForeignMuslPackage =
+        pruningMuslPackages && glibcTwin !== null && namesHere.has(glibcTwin)
+      if (
+        isForeignMuslPackage ||
+        (isForeignVariantName(entry.name, keep) && (insidePrebuilds || oursIsHere))
+      ) {
         try {
           rmSync(full, { recursive: true, force: true })
           removed.push(full)
@@ -190,6 +248,15 @@ function makeFixture(root) {
   put('lonely/darwin-arm64/keep.node')
   // 只有 musl、没有 glibc 邻居的孤独 libc 变体：安全丝必须挡住（保留）
   put('lonely-libc/bin/musl/system.node')
+  // @img/sharp 布局：**包名本身**是 libc 选择器。0.35.4 的 bin 包不声明 `libc` 字段，
+  // 于是 npm 在 linux/x64 上把 glibc 与 musl 两份都装进树（2026-09-23 现场：
+  // linuxdeploy 在 sharp-linuxmusl-x64-0.35.4.node 上解析 libc.musl-x86_64.so.1 失败）。
+  put('@img/sharp-linux-x64/lib/sharp-linux-x64.node')
+  put('@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64.node')
+  put('@img/sharp-libvips-linux-x64/lib/libvips.node')
+  put('@img/sharp-libvips-linuxmusl-x64/lib/libvips.node')
+  // prebuilds 之外、且**没有** glibc 对应物的孤独 musl 包：安全丝必须挡住（保留）
+  put('@img/sharp-lonely-linuxmusl-x64/lib/x.node')
   // 与平台无关的运行时模块：绝不能被这套判据碰到
   put('yaml/dist/doc/directives.js')
   put('demo/package.json')
@@ -257,6 +324,35 @@ export function selfTest() {
       '变体剪枝：没有同 libc 邻居的孤独 musl 变体被误删（安全丝对裸 libc 布局失效）'
     )
 
+    // 4c) 包名即 libc 选择器（@img/sharp 布局）：musl 包必须删、glibc 包必须留。
+    check(
+      !exists('@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64.node'),
+      '变体剪枝：包名选择器的 musl 包未被删除（2026-09-23 linuxdeploy 打包事故未修）'
+    )
+    check(exists('@img/sharp-linux-x64/lib/sharp-linux-x64.node'), '变体剪枝：sharp 的 glibc 包被误删')
+    check(
+      !exists('@img/sharp-libvips-linuxmusl-x64/lib/libvips.node'),
+      '变体剪枝：libvips 的 musl 包未被删除（带 scope + 中间词，替换必须是整体 token）'
+    )
+    check(exists('@img/sharp-libvips-linux-x64/lib/libvips.node'), '变体剪枝：libvips 的 glibc 包被误删')
+    // 安全丝：同层**没有** glibc 对应物的孤独 musl 包必须保留——证明删除是
+    // 「有 glibc 兄弟」驱动的，不是见到包名里有 linuxmusl 就删。
+    check(
+      exists('@img/sharp-lonely-linuxmusl-x64/lib/x.node'),
+      '变体剪枝：没有 glibc 对应物的孤独 musl 包被误删（安全丝对包名选择器失效）'
+    )
+
+    // 4d) 纯函数：只对含标记的名字给出对应物，且是**整体 token** 替换。
+    check(glibcSiblingName('@img/sharp-linux-x64') === null, 'glibcSiblingName：非 musl 名应为 null')
+    check(
+      glibcSiblingName('@img/sharp-linuxmusl-x64') === '@img/sharp-linux-x64',
+      'glibcSiblingName：scope 名替换错误'
+    )
+    check(
+      glibcSiblingName('sharp-libvips-linuxmusl-arm64') === 'sharp-libvips-linux-arm64',
+      'glibcSiblingName：中间词应整体替换而不是只换开头'
+    )
+
     // 5) 目标参数化：换成 darwin/arm64，保留集合必须整体翻转。
     const macRoot = mkdtempSync(join(tmpdir(), 'variant-selftest-mac-'))
     try {
@@ -265,6 +361,12 @@ export function selfTest() {
       check(existsSync(join(macRoot, 'node-pty/prebuilds/darwin-arm64/pty.node')), '变体剪枝：darwin/arm64 目标下误删了 darwin-arm64')
       check(!existsSync(join(macRoot, 'node-pty/prebuilds/linux-x64/pty.node')), '变体剪枝：darwin/arm64 目标下未删除 linux-x64')
       check(existsSync(join(macRoot, 'lonely/darwin-arm64/keep.node')), '变体剪枝：darwin/arm64 目标下误删了孤独变体')
+      // 第 4 类判据**只对 linux 目标**生效：darwin 目标下不得按 libc 剪包，
+      // 否则一旦将来新增 musl Linux 目标，目标平台唯一的构建会被删掉。
+      check(
+        existsSync(join(macRoot, '@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64.node')),
+        '变体剪枝：非 linux 目标下按 libc 剪了包（判据越界）'
+      )
     } finally {
       rmSync(macRoot, { recursive: true, force: true })
     }
@@ -276,6 +378,14 @@ export function selfTest() {
       pruneNodeModules(bugRoot)
       const survived = existsSync(join(bugRoot, '@koromix/koffi-linux-x64/musl_x64/koffi.node'))
       check(survived, '变体剪枝：可伪证性检查失败——现有 prune 应当留下 musl_x64，断言才有意义')
+      // 第 4 类同理：现有门禁对「包名里的 libc 选择器」完全无感，musl 包必然幸存。
+      const survivedSharp = existsSync(
+        join(bugRoot, '@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64.node')
+      )
+      check(
+        survivedSharp,
+        '变体剪枝：可伪证性检查失败——现有 prune 应当留下 sharp 的 linuxmusl 包，断言才有意义'
+      )
     } finally {
       rmSync(bugRoot, { recursive: true, force: true })
     }
