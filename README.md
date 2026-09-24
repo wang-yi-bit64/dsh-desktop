@@ -236,12 +236,14 @@ git push origin main --follow-tags          # pushing the tag triggers the relea
 
 The upstream runtime the shell bundles is maintained on **two channels in parallel**. Each channel pins its own `@deepseek-ai/dsh` version and owns its own patch set (`patches/<target>/`) and vendored override packages (`packages/<target>/`):
 
-| Channel | Upstream line | Pinned DSH | Desktop version example |
-|---------|---------------|-----------|-------------------------|
-| `next` (default) | npm `next` dist-tag (rc stage) | `0.1.5-rc.2` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.1.6-alpha.2` | `0.6.0-alpha.2` |
+| Target | Upstream line (`channel`) | Pinned DSH | Desktop suffix (`publishChannel`) | Desktop version example |
+|---------|---------------|-----------|-------------------------|-------------------------|
+| `next` (default) | npm `next` dist-tag (rc stage) | `0.1.5-rc.2` | `rc` | `0.7.0-rc.1` |
+| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.1.6-alpha.2` | `alpha` | `0.7.0-alpha.2` |
 
-The desktop version's **pre-release suffix names the channel it bundles**: `0.5.0-next.1` ships the DSH rc line, `0.6.0-alpha.1` ships the DSH alpha line. The release workflow derives the build target from the tag itself (`scripts/dsh-targets.mjs --channel-of`), so **the tag suffix chooses the runtime** — there is no second channel declaration to keep in sync. A tag naming no known channel (say `beta`) **fails the release** rather than falling back to the default target: a silent fallback would produce a package whose version says one line while its runtime is another, and that mismatch would only surface after users installed it.
+**Two different "channel" names — do not conflate them.** Each target carries `channel` (which upstream npm dist-tag to assemble from — an upstream fact you cannot rename) and `publishChannel` (the desktop tag's pre-release suffix — this repo's own naming). Upstream's `next` dist-tag currently points at an `rc`-stage version, so the desktop suffix is `rc` while the target key stays `next`. Forcing them to be the same string means that renaming the desktop suffix would send the drift sentinel looking for an upstream `rc` tag that does not exist, silently falling back to `latest`.
+
+The desktop version's **pre-release suffix is `publishChannel`**: `0.7.0-rc.1` ships the DSH `next` target, `0.7.0-alpha.1` ships the DSH `alpha` line. The release workflow derives the build target from the tag itself (`scripts/dsh-targets.mjs --channel-of`), so **the tag suffix chooses the runtime** — there is no second channel declaration to keep in sync. A tag with no known suffix (say `beta`) **fails the release** rather than falling back to the default target: a silent fallback would produce a package whose version says one line while its runtime is another, and that mismatch would only surface after users installed it. ⚠️ The old `0.7.0-next.1` suffix is **no longer valid input** — it was retired with the rename.
 
 To assemble a channel locally, pass `--dsh-target` (defaults to `next`):
 

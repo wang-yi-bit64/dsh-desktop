@@ -12,21 +12,32 @@
  *
  * | 桌面发布通道 | 上游线 | 该通道的产物 |
  * |---|---|---|
- * | `next`（默认线） | npm `next` dist-tag（rc 阶段） | `v0.5.0-next.1` 之类 |
+ * | `next`（默认线） | npm `next` dist-tag（rc 阶段） | `v0.5.0-rc.1` 之类 |
  * | `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `v0.6.0-alpha.1` 之类 |
  *
  * 两个目标各自持有一套**补丁集**（`patches/<target>/`）与**vendored 覆盖包**
  * （`packages/<target>/`），互不干扰；`prepare:harness` 按 `--dsh-target` 选一套。
  *
- * ## 目标名 = 桌面版本的预发布**通道名**
+ * ## 🔴 两个「通道名」不是一回事（2026-09-24 解耦）
  *
- * 这不是巧合，而是刻意的：`v0.6.0-alpha.1` 一眼就能看出它捆的是 alpha 线的上游
- * 运行时，`v0.5.0-next.1` 捆的是 next 线。发布工作流据此从 tag 反推该组装哪个
- * 目标（{@link targetForVersion}），**不需要**在 tag 之外再声明一次通道。
+ * 每个目标条目有**两个**通道字段，它们回答的是两个独立的问题：
+ *
+ * | 字段 | 回答的问题 | 值的来源 | 可否随意改 |
+ * |---|---|---|---|
+ * | `channel` | 组装时**拉上游哪条 npm dist-tag 线** | 上游客观事实（`next` / `alpha`） | ❌ **不能**——上游就叫这个名 |
+ * | `publishChannel` | 桌面 tag 的**预发布后缀**叫什么 | 本仓自己的命名决定 | ✅ 能（`next` → `rc` 就是这么改的） |
+ *
+ * 混为一谈的代价（这正是 2026-09-24 要修的东西）：上游的 `next` dist-tag 现在
+ * **指向一个 `rc` 阶段版本**（`dist-tag` 是「哪条发布线」，预发布标识是「这条线
+ * 走到哪一步了」，两者独立——这一点 `verify-upstream-drift.mjs` 的注释早已写明）。
+ * 若强行让两者同名，想把桌面后缀改成语义更准的 `rc` 时，就会连带去查一个
+ * **上游根本不存在的 `rc` dist-tag**，让漂移哨兵静默退回 `latest`、永久误报。
+ *
+ * `targetForVersion` 走 `publishChannel`；漂移哨兵走 `channel`。各取所需。
  *
  * ## 未知通道必须失败，不得回退到默认目标
  *
- * `v0.5.0-beta.1` 这种 tag：`beta` 不是任何目标的通道名。此时
+ * `v0.5.0-beta.1` 这种 tag：`beta` 不是任何目标的 `publishChannel`。此时
  * {@link targetForVersion} 返回 `null`，调用方**必须报错**——静默回退到默认目标
  * 会产出「版本号说 beta、运行时却是 next 线」的包，而这类错配只有用户装上才会
  * 发现（且 updater 的版本比较会跟着一起错）。
@@ -36,7 +47,7 @@
  * ```bash
  * node scripts/dsh-targets.mjs                      # 打印目标表
  * node scripts/dsh-targets.mjs --self-test          # 纯逻辑自检（不联网）
- * node scripts/dsh-targets.mjs --channel-of v0.5.0-next.1   # tag/版本 → 目标名
+ * node scripts/dsh-targets.mjs --channel-of v0.5.0-rc.1   # tag/版本 → 目标名
  * ```
  *
  * 退出码：`0` 正常 · `1` 自检失败或未知通道 · `2` 参数错误。
@@ -59,11 +70,13 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const DSH_TARGETS = {
   next: {
     channel: 'next',
+    publishChannel: 'rc',
     dshVersion: '0.1.5-rc.2',
     summary: '上游 next 线（rc 阶段）——默认发布的运行时基线'
   },
   alpha: {
     channel: 'alpha',
+    publishChannel: 'alpha',
     dshVersion: '0.1.6-alpha.2',
     summary: '上游 alpha 线（下一 minor 的早期预览）——与 next 线并行维护'
   }
@@ -81,7 +94,8 @@ export function listTargetNames() {
  * 取目标定义。
  *
  * @param {string} name 目标名（如 `next`）。
- * @returns {{name: string, channel: string, dshVersion: string, summary: string}} 目标定义（含名字）。
+ * @returns {{name: string, channel: string, publishChannel: string, dshVersion: string, summary: string}}
+ *   目标定义（含名字）。
  * @throws {Error} 名字不在总表里——**不**回退到默认目标：静默回退会让产物捆错运行时。
  */
 export function resolveTarget(name) {
@@ -130,20 +144,57 @@ export function channelOfPrerelease(version) {
 }
 
 /**
- * 版本号 → 构建目标名。
+ * 桌面版本的预发布后缀 → 构建目标名。
  *
  * 规则（与 `AGENTS.md` §8.4 的通道约定一致）：
  *   · 无预发布后缀（正式版）→ 默认目标（stable 线跟随默认目标）；
- *   · 预发布且通道名是已知目标 → 该目标；
- *   · 预发布但通道名未知（如 `beta`）→ `null`，调用方**必须报错**（见模块文档）。
+ *   · 预发布且后缀命中某目标的 `publishChannel` → 该目标；
+ *   · 预发布但后缀未命中（如 `beta`）→ `null`，调用方**必须报错**（见模块文档）。
+ *
+ * 🔴 查的是 **`publishChannel`**（本仓自己的 tag 后缀约定），**不是** `channel`
+ * （上游 dist-tag 名）。两者独立——上游 `next` dist-tag 当下指向一个 `rc` 阶段
+ * 版本，因此本仓的 tag 后缀写 `rc` 却要组装 `next` 目标的补丁集，这是**正常**的。
+ * 详见 {@link targetForPublishChannel} 与模块文档的「两个通道名不是一回事」。
  *
  * @param {string} version 语义化版本（可带前导 `v`）。
- * @returns {string|null} 目标名；未知通道时为 `null`。
+ * @returns {string|null} 目标名；未知后缀时为 `null`。
  */
 export function targetForVersion(version) {
-  const channel = channelOfPrerelease(version)
-  if (channel === null) return DEFAULT_TARGET
-  return DSH_TARGETS[channel] === undefined ? null : channel
+  const suffix = channelOfPrerelease(version)
+  if (suffix === null) return DEFAULT_TARGET
+  return targetForPublishChannel(suffix)
+}
+
+/**
+ * 桌面 tag 的预发布后缀 → 构建目标名。
+ *
+ * 与 {@link targetForVersion} 的分工：本函数只做「后缀 → 目标」这一步，方便
+ * 调用方在已经拿到后缀时不必再拼一个假版本号。未知后缀返回 `null`（不回退）。
+ *
+ * @param {string} suffix 预发布后缀（如 `rc` / `alpha`）。
+ * @returns {string|null} 目标名；无匹配时为 `null`。
+ */
+export function targetForPublishChannel(suffix) {
+  const wanted = String(suffix ?? '').trim()
+  if (wanted.length === 0) return null
+  for (const name of listTargetNames()) {
+    if (DSH_TARGETS[name].publishChannel === wanted) return name
+  }
+  return null
+}
+
+/**
+ * 组装目标名 → 它跟踪的上游 npm dist-tag 名。
+ *
+ * 与 {@link targetForPublishChannel} 方向相反、字段不同：这里取的是 `channel`
+ * （上游客观事实），不是 `publishChannel`（本仓命名）。漂移哨兵用这个。
+ *
+ * @param {string} name 目标名。
+ * @returns {string} 上游 dist-tag 名。
+ * @throws {Error} 目标名未知。
+ */
+export function upstreamTagFor(name) {
+  return resolveTarget(name).channel
 }
 
 /**
@@ -211,18 +262,41 @@ export function selfTest() {
   eq('channel：build metadata 不算通道', channelOfPrerelease('0.5.0+build.7'), null)
   eq('channel：非法版本', channelOfPrerelease('not-a-version'), null)
 
-  // 版本 → 目标：正式版落默认目标，未知通道必须判 null（不得回退）。
+  // 版本 → 目标：正式版落默认目标；后缀按 publishChannel 查表，未知后缀必须判 null。
   eq('target：正式版 → 默认目标', targetForVersion('0.5.0'), DEFAULT_TARGET)
-  eq('target：next 通道', targetForVersion('0.5.0-next.1'), 'next')
+  eq('target：rc 后缀 → next 目标（publishChannel 解耦）', targetForVersion('0.5.0-rc.1'), 'next')
   eq('target：alpha 通道', targetForVersion('0.6.0-alpha.1'), 'alpha')
-  eq('target：未知通道（beta）必须是 null', targetForVersion('0.5.0-beta.1'), null)
-  eq('target：未知通道（rc）必须是 null', targetForVersion('0.5.0-rc.1'), null)
+  eq('target：未知后缀（beta）必须是 null', targetForVersion('0.5.0-beta.1'), null)
+  // 🔴 可伪证性：`next` 作为**桌面后缀**已不再是任何目标的 publishChannel
+  //    （它现在是纯上游 dist-tag 名）。若有人把 targetForVersion 改回按
+  //    `channel` 查表，这条会立刻红——那正是本次解耦要防的倒退。
+  eq(
+    'target：旧后缀 next 必须判 null（已不再是 publishChannel）',
+    targetForVersion('0.5.0-next.1'),
+    null
+  )
 
-  // 目标表本身：每个目标的通道名必须与键一致，且版本号可解析出同样的通道。
+  // publishChannel 反查：后缀 → 目标名，独立于 channel。
+  eq('publishChannel：rc → next', targetForPublishChannel('rc'), 'next')
+  eq('publishChannel：alpha → alpha', targetForPublishChannel('alpha'), 'alpha')
+  eq('publishChannel：未知后缀 → null', targetForPublishChannel('beta'), null)
+  eq('publishChannel：空串 → null', targetForPublishChannel('  '), null)
+  // 两个名字**必须**不同：这是解耦的立论点，也是「上游 next dist-tag 指向 rc 版本」的编码。
+  eq('next 目标的 channel（上游 tag）', upstreamTagFor('next'), 'next')
+  eq('next 目标的 publishChannel（桌面后缀）', resolveTarget('next').publishChannel, 'rc')
+  eq('两个字段确实不同（解耦的证明）', upstreamTagFor('next') !== resolveTarget('next').publishChannel, true)
+
+  // 目标表本身：`channel` 必须与键一致（键名即上游 dist-tag 名），
+  // 而「版本后缀能反推回自己」要走 **publishChannel** —— 这正是解耦后的分工。
   for (const name of listTargetNames()) {
     const target = resolveTarget(name)
     eq(`目标 ${name} 的 channel 与键一致`, target.channel, name)
-    eq(`目标 ${name} 的版本能反推回自己`, targetForVersion(`9.9.9-${target.dshVersion.startsWith('0.1.6') ? 'alpha' : 'next'}.1`), name)
+    eq(`目标 ${name} 的 channel 是已知 npm dist-tag 名`, ['latest', 'next', 'alpha'].includes(target.channel), true)
+    eq(
+      `目标 ${name} 的 publishChannel 能反推回自己`,
+      targetForVersion(`9.9.9-${target.publishChannel}.1`),
+      name
+    )
   }
 
   // 未登记目标必须抛错，而不是回退（静默回退 = 捆错运行时）。
@@ -281,8 +355,10 @@ function main() {
     const target = targetForVersion(value)
     if (target === null) {
       console.error(
-        `❌ ${value} 的预发布通道（${channelOfPrerelease(value)}）不对应任何 DSH 目标；` +
-          `可用通道：${listTargetNames().join(' / ')}`
+        `❌ ${value} 的预发布后缀（${channelOfPrerelease(value)}）不对应任何 DSH 目标的 publishChannel；` +
+          `可用后缀：${listTargetNames()
+            .map((n) => DSH_TARGETS[n].publishChannel)
+            .join(' / ')}`
       )
       exit(1)
     }
@@ -295,7 +371,10 @@ function main() {
     const target = resolveTarget(name)
     const mark = name === DEFAULT_TARGET ? ' ← 默认' : ''
     console.log(`  ${name.padEnd(6)} DSH ${target.dshVersion.padEnd(14)} ${target.summary}${mark}`)
-    console.log(`         补丁：patches/${name}/   vendored：packages/${name}/   staging：harness-deps/${name}/`)
+    console.log(
+      `         上游 tag：${target.channel}   桌面后缀：${target.publishChannel}   ` +
+        `补丁：patches/${name}/   vendored：packages/${name}/`
+    )
   }
 }
 

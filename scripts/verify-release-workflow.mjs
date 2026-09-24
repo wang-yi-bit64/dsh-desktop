@@ -485,7 +485,11 @@ export function checkCliCrateRetained(workspaceCargo, scriptsSmoke, scriptsFault
  *     只能落回默认目标，于是 `0.6.0-alpha.1` 的包里装的是 next 线的运行时
  *     （版本号与运行时不一致，用户装上才发现）；
  *   · 不经过 `dsh-targets.mjs --channel-of` 而自己猜通道 —— tag 后缀与目标表的
- *     对应关系会有两份实现，早晚漂移；
+ *     对应关系会有两份实现，早晚漂移。🔴 2026-09-24 解耦后这条**更重要**了：
+ *     `--channel-of` 查的是 `publishChannel`（本仓的 tag 后缀命名，`next` 目标 = `rc`），
+ *     而**不是**上游 dist-tag 名（那是 `channel` 字段的值）。若有人在 YAML 里
+ *     直接 `case "$SUFFIX" in next) DSH_TARGET=next`，一旦后缀改成 `rc` 就会漏掉——
+ *     而且漏的方式是**报错退出**（`rc` 不在 dist-tag 名单里时会更糟：静默退回 latest）；
  *   · 组装步骤**不用 env 传目标名** —— 真实事故：`--dsh-target="${DSH_TARGET}"`
  *     在 Windows runner（PowerShell）上把值丢掉了，参数退化成 `--dsh-target=`，
  *     只有 Windows 的 job 红、macOS/Linux 正常。用 env 传值把 shell 引用整个消掉；
@@ -924,6 +928,16 @@ export function selfTest() {
   check(
     !checkDualChannelShape(text.replace(/dsh-targets\.mjs --channel-of/, 'echo next')).ok,
     '可伪证性：不用 dsh-targets.mjs 推导通道必须判红（两套映射必然漂移）'
+  )
+  // 8b) 🔴 解耦回归：YAML 里**硬编码后缀→目标**的映射必须判红。
+  //     这条守的是 2026-09-24 的解耦本身——若有人写
+  //     `case "$SUFFIX" in rc) DSH_TARGET=next ;;`，就把「后缀 = 目标键」
+  //     这个错误假设又搬回 YAML 了（后缀与目标键现在**不再相等**）。
+  check(
+    !checkDualChannelShape(
+      text.replace(/dsh-targets\.mjs --channel-of "\$VERSION"/, 'echo "${VERSION##*-}"')
+    ).ok,
+    '可伪证性：把通道推导换成 YAML 内联的后缀解析必须判红（后缀与目标键已解耦）'
   )
   // 可证伪性：**真实炸过的**写法——把 env 传值换成 run 内插值。
   // Windows runner（PowerShell）上它把值丢掉，只有 Windows 的 job 红。

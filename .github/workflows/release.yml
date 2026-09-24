@@ -67,9 +67,14 @@ jobs:
       # 解析 tag → 版本 → 是否预发布 → **该组装哪条 DSH 通道**。四者都要用，
       # 集中在一处产出，避免每个 job 各写一遍推导逻辑（那必然出现某一处漏改）。
       #
-      # `dsh_target` 由**版本号的预发布通道名**决定（`0.6.0-alpha.1` → alpha 线、
-      # `0.5.0-next.1` → next 线），与 `scripts/dsh-targets.mjs` 的总表同源。
-      # 未知通道（如 `beta`）**直接失败**，不回退默认目标——静默回退会产出
+      # `dsh_target` 由**版本号的预发布后缀**决定（`0.6.0-alpha.1` → alpha 线、
+      # `0.7.0-rc.1` → next 线），与 `scripts/dsh-targets.mjs` 的总表同源。
+      #
+      # 🔴 后缀是**本仓的命名**（`publishChannel`），不等于上游 npm dist-tag 名：
+      #    `next` 目标跟踪的上游 tag 是 `next`，而它的桌面后缀是 `rc`
+      #    （上游 `next` dist-tag 当下就指向一个 `rc` 阶段版本）。两者独立，
+      #    所以这里用 `--channel-of` 查的是 publishChannel，而漂移哨兵查的是 channel。
+      # 未知后缀（如 `beta`）**直接失败**，不回退默认目标——静默回退会产出
       # 「版本号说 beta、运行时却是 next 线」的包，而用户要装上才发现。
       - name: Resolve tag, version, prerelease flag and DSH target
         id: resolve

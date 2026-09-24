@@ -85,8 +85,11 @@ const vendorDir = join(projectRoot, 'vendor')
 // ---------------------------------------------------------------------------
 // 构建目标：决定内置哪个上游 DSH 版本、用哪一套补丁与 vendored 覆盖包。
 // 双通道（next / alpha）并存，见 [`dsh-targets.mjs`](./dsh-targets.mjs)。
-//   next  → DSH 0.1.5-rc.2   （默认）
-//   alpha → DSH 0.1.6-alpha.1
+//   next  → DSH 0.1.5-rc.2   （默认；桌面后缀 rc）
+//   alpha → DSH 0.1.6-alpha.2 （桌面后缀 alpha）
+// ⚠️ 目标键（`next`）是**上游 npm dist-tag 名**，与桌面 tag 的后缀（`publishChannel`，
+//    见 dsh-targets.mjs）不是一回事——`next` 目标的桌面后缀是 `rc`。这里按**目标键**
+//    选补丁/vendored/staging 目录，所以目录名仍是 `next`，不随桌面后缀改名。
 // 每个目标有自己的 staging 目录（harness-deps/<target>/），因此两条线可以
 // 交替组装、互不污染（同一目录会让幂等指纹在两条线之间来回失效）。
 // ---------------------------------------------------------------------------

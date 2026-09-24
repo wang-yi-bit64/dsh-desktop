@@ -38,6 +38,13 @@
   - `remove-tree.mjs`：**尽力而为**的临时目录删除（三级降级：直接删 → 递归恢复写权限 → OS 命令；**永不抛错**，返回 `{ ok, error, attempts }`），含 `--self-test`（21 项）。守的是「**辅助动作不得否决主结论**」——2026-09-23 alpha.5 的发布死在 `finally` 里一句 `rmSync` 的 EACCES 上，把一次**通过**的 portable 核验判成了发布失败。`package-cli.mjs` / `package-portable.mjs` 的生产路径清理点全部用它。
   - `../harness-locks/<target>/`：与该目标绑定、**必须成对提交**的 `package-lock.json` + `inputs.json`（输入快照——lockfile 本身不记录 overrides）。生成/再生成：`npm run harness:lockfile -- --dsh-target=<t>`（next 解析约 40 分钟、alpha 数分钟；版本锚点/补丁集/vendored 变更后必跑，见升级清单 Step 1 与「依赖解析的堆爆炸」一节）。
   - `dsh-targets.mjs`：**双上游通道的唯一事实源**——目标名 ↔ npm dist-tag ↔ DSH 版本，以及「版本号 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
+    > 🔴 **两个「通道名」不是一回事（2026-09-24 解耦）**：目标条目有两个字段，回答两个独立问题——
+    > `channel` 是**上游 npm dist-tag 名**（组装时拉哪条线，上游客观事实，不可改），
+    > `publishChannel` 是**桌面 tag 的预发布后缀**（本仓命名，可改）。
+    > 当前 `next` 目标：`channel: 'next'` 而 `publishChannel: 'rc'`——上游 `next` dist-tag 当下
+    > 就指向一个 `rc` 阶段版本，所以桌面发 `v0.7.0-rc.1` 却要组装 `next` 目标的补丁集，这是**正常**的。
+    > `targetForVersion` / `--channel-of` 查 `publishChannel`；漂移哨兵查 `channel`（用 `upstreamTagFor`）。
+    > **若把两者强行同名**，想改桌面后缀时就会连带去查一个上游不存在的 dist-tag，让哨兵静默退回 `latest` 并永久误报。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
   - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
@@ -1408,10 +1415,10 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 自 2026-09-15 起，本仓**同时维护两条上游运行时通道**，各自钉一个 DSH 版本、持有一套
 补丁与 vendored 覆盖包：
 
-| 目标 | 上游线 | 固定的 DSH | 补丁 / vendored | 对应的桌面版本形态 |
-|------|--------|-----------|----------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.1.5-rc.2` | `patches/next/`（14 个）、`packages/next/` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `0.6.0-alpha.2` |
+| 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
+|------|--------|-----------|----------------|------------------|------------------|
+| `next`（默认） | npm `next` dist-tag | `0.1.5-rc.2` | `patches/next/`（14 个）、`packages/next/` | `rc` | `0.7.0-rc.1` |
+| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
 
 > **两条线的补丁数可以不同，这是正常的**：`alpha` 线上游已补齐平台化侧栏宽度，
 > 本仓那条补丁按 `retireWhen` 退役（14 → 13）；`next` 线尚未跟进到同版本，因此仍保留。
@@ -1420,11 +1427,24 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 - **唯一事实源是 [`scripts/dsh-targets.mjs`](scripts/dsh-targets.mjs)** 的 `DSH_TARGETS`：
   目标名 ↔ 通道 ↔ 版本号。`prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target=<name>`
   从该表推导（含该目标的补丁目录、vendored 目录与 staging 目录 `harness-deps/<target>/`）。
-- **桌面版本号的预发布后缀就是通道名**，这不是装饰：`release.yml` 的 preflight 用
+- 🔴 **两个「通道名」不是一回事（2026-09-24 解耦，此前被混为一谈）**：
+
+  | 字段 | 回答的问题 | 值的来源 | 现取值（`next` 目标） |
+  |---|---|---|---|
+  | `channel` | 组装时**拉上游哪条 npm dist-tag** | 上游客观事实，**不可改** | `next` |
+  | `publishChannel` | 桌面 tag 的**预发布后缀** | 本仓命名，**可改** | `rc` |
+
+  造成为何必须分开：上游 `next` dist-tag 现在**指向一个 `rc` 阶段版本**——dist-tag 是
+  「哪条发布线」，预发布标识是「这条线走到哪一步了」，两者独立。本仓想把桌面后缀改成语义
+  更准的 `rc`（因为发的确实是 rc 阶段的包），但**不能**因此去查一个上游根本不存在的 `rc` tag
+  （那会让漂移哨兵静默退回 `latest`，把一条自己管着的线永久误报成落后或持平）。
+- **桌面版本号的预发布后缀是 `publishChannel`**，`release.yml` 的 preflight 用
   `node scripts/dsh-targets.mjs --channel-of "$VERSION"` 从 tag 反推该组装哪个运行时，
-  因此**不需要在 tag 之外再声明一次通道**。未知通道（如 `0.5.0-beta.1`）**直接失败**，
+  因此**不需要在 tag 之外再声明一次通道**。未知后缀（如 `0.7.0-beta.1`）**直接失败**，
   不回退默认目标——静默回退会产出「版本号说 beta、运行时却是 next 线」的包，
   而这类错配只有用户装上才会发现（updater 的版本比较会跟着一起错）。
+  ⚠️ 后缀是 `publishChannel` 而**不是**目标键：`v0.7.0-rc.1` 组装的是 **`next`** 目标。
+  `v0.7.0-next.1` 这类**旧后缀已不再是合法输入**（会报错），改名后不要再用。
 - **两条线的补丁做的是同一件事，只是行号随上游版本变化**。因此 `patch-layers.mjs` 的
   分级表按**包名**索引：新增一条上游线**不需要**动它；只有引入新包才要补登记。
 - **移植补丁必须重算行号**：`patch-package` 按 `@@ -N` 的行号定位，偏移取 0、-1、+1…
@@ -1459,6 +1479,10 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > **alpha.2 是「上游追上我们」的第一次**：平台化侧栏宽度被上游原生实现（我们那条退役）、
 > 键盘导航修复被上游反向采纳。这说明补丁面在收缩——维持这些补丁的成本在下降，
 > 而不是无限增长。
+>
+> 📌 **表里的 `v0.5.0-next.1` 是历史形态，不改写**：2026-09-24 起 `next` 目标的桌面后缀
+> 改为 `rc`（因为它发的确实是 rc 阶段的包），此后同一条线发的是 `v0.7.0-rc.1` 之类。
+> **这两者是同一个目标**——目标键始终是 `next`（上游 dist-tag 名），变的只是桌面后缀。
 
 > ✅ **发布链路首次全绿（2026-09-23，`v0.7.0-alpha.7`）**：**22 / 22 个资产**、
 > `0 个 0 字节`、`prerelease: true`，`release.yml` **9/9 job success**——包含

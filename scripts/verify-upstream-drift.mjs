@@ -45,7 +45,12 @@ import { argv, env, exit } from 'node:process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { DSH_TARGETS, listTargetNames, resolveTarget } from './dsh-targets.mjs'
+import {
+  DSH_TARGETS,
+  listTargetNames,
+  resolveTarget,
+  targetForVersion
+} from './dsh-targets.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const prepareScript = join(projectRoot, 'scripts', 'prepare-harness.mjs')
@@ -247,13 +252,31 @@ async function selfTest() {
   // （dist-tag 是「哪条发布线」，预发布阶段是「这条线走到哪一步了」，两者独立）。
   // 真正要守的是 channel 别写成不存在的 tag——那样哨兵会静默退回 `latest`，
   // 把一条自己管着的线误报成「落后」或「持平」。
+  //
+  // 🔴 2026-09-24 解耦后这条更硬：目标的 `channel`（上游 tag）与 `publishChannel`
+  //    （桌面 tag 后缀）**本来就不该相等**——`next` 目标的桌面后缀是 `rc` 而
+  //    上游 tag 是 `next`。此处因此**删掉了**早先那条「channel 与键一致」的断言：
+  //    它当时之所以能过，只是因为字段名恰好撞上，而不是因为存在真实约束。
+  //    保留并加强的是「channel 必须是真实 dist-tag 名」这条（它才是真约束）。
   check('目标数 ≥ 2（双通道并存）', listTargetNames().length >= 2, true)
   for (const name of listTargetNames()) {
     const t = resolveTarget(name)
-    check(`目标 ${name} 的 channel 与键一致`, t.channel, name)
     check(`目标 ${name} 的 channel 是已知 dist-tag 名`, ['latest', 'next', 'alpha'].includes(t.channel), true)
+    // publishChannel 才是桌面后缀，它必须非空且能反查回同一个目标。
+    check(
+      `目标 ${name} 的 publishChannel 非空且可反查`,
+      targetForVersion(`9.9.9-${t.publishChannel}.1`),
+      name
+    )
     check(`目标 ${name} 自身不落后于自己`, judgeDrift(t.dshVersion, t.dshVersion).ok, true)
   }
+  // 可伪证性：把 publishChannel 改成上游不存在的值仍应能反查（它不过是本仓命名），
+  // 但把 channel 改成不存在的 dist-tag 必须判红——这两条一起守住解耦的两侧。
+  check(
+    '可伪证性：channel 写成不存在的 dist-tag 必须判红',
+    ['latest', 'next', 'alpha'].includes('rc'),
+    false
+  )
 
   // 无网络 → 必须落到 skip（既不判失败，也不冒充「已核对」）
   const offline = await fetchDistTags({ registry: 'http://127.0.0.1:9', timeoutMs: 1500 })
@@ -279,6 +302,9 @@ async function main() {
 
   const targets = listTargetNames().map((name) => ({
     name,
+    // 🔴 这里取的是 `channel`（**上游** npm dist-tag 名），不是 `publishChannel`
+    //    （桌面 tag 后缀）。`next` 目标的桌面后缀是 `rc` 而上游 tag 是 `next`，
+    //    哨兵要追的是后者——追错会去查一个上游不存在的 `rc` tag 并静默退回 `latest`。
     channel: DSH_TARGETS[name].channel,
     current: resolveTarget(name).dshVersion
   }))
