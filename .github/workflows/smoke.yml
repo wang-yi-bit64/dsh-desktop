@@ -53,7 +53,7 @@ on:
         default: true
         type: boolean
       dsh_target:
-        description: '组装哪条上游运行时通道（next = DSH rc 线；alpha = DSH alpha 线）'
+        description: '组装哪条上游运行时通道（next = DSH rc 线、桌面后缀 rc；alpha = DSH alpha 线）'
         required: true
         default: next
         type: choice
