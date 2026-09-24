@@ -142,6 +142,15 @@ jobs:
       - name: Verify release workflow guards
         run: npm run verify:release-workflow:self-test
 
+      # Release 资产清单判据（F13 的真守卫）。它守的是 2026-09-24 的实测缺口：
+      # CLI 通道退役时只数了 `cli-publish` 的一类职责，便携版「核验 + 上传」那半截
+      # 没被搬走 ⇒ 每次发布实际只有 10 个资产，而 `AGENTS.md §8.5` 承诺 13 个。
+      # 在此之前**全仓零判据**断言资产数——数字只活在文档里，是一句承诺而非断言。
+      # ⚠️ 期望值（含 10 个平台资产的**逐项名字模式**）取自真实 Release 的实测输出，
+      # 不是从 tauri.conf.json 反推——按假设写的模式会让自测与被测**对称失效**（已踩）。
+      - name: Verify release asset manifest guard
+        run: npm run verify:release-assets:self-test
+
       # CLI 打包链路自检（纯逻辑 + 当前平台真归档回读）。它守住三类「哈希对得上但
       # 产物没用」的缺陷：产物名里的版本与 package.json 漂移、边车格式不是 sha256sum
       # 能读的形状、归档丢掉可执行位。自带可伪证夹具（篡改 / 去执行位 / 边车不匹配 /

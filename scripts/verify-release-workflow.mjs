@@ -55,6 +55,45 @@ const CARGO_TOML = join(projectRoot, 'Cargo.toml')
 const WORKFLOW_FILES = ['ci.yml', 'release.yml', 'smoke.yml']
 
 /**
+ * CLI 产物的上传路径——**退役通道的核心断言**。
+ *
+ * 匹配 `dist/cli` 作为路径段出现（`dist/cli/*`、`./dist/cli/foo`），
+ * 但不匹配 `dist/cli-x` 这类「恰好以 cli 开头」的名字（避免误判）。
+ */
+const CLI_UPLOAD_PATH = /(?:^|[\s"'])\.?\/?dist\/cli(?:\/|\s|$|")/
+
+/**
+ * 便携版产物的上传路径——**必须存在**（F13：期望资产 13 含这 3 个）。
+ *
+ * `package-portable.mjs` 的 `--out dist/portable` 决定了这个位置。
+ */
+const PORTABLE_UPLOAD_PATH = /(?:^|[\s"'])\.?\/?dist\/portable\/\*/
+
+/**
+ * 取出 `gh release upload` 的**可执行命令行**。
+ *
+ * 只在**剥掉整行注释后**的文本上取，且只取以可执行指令开头的行
+ * （`- run:` / `run:` 之后的裸命令，以及多行 `run: |` 块内的命令）。
+ *
+ * 为什么必须逐行而不是全文正则：本仓已两次踩到「退役说明里逐字引用了
+ * `gh release upload` 来交代删掉了什么，而判据扫全文 → 守卫被自己的文档命中」。
+ * 取「宾语」的判据更需要精确到行——否则无法区分「上传了 cli」与「注释里说
+ * 曾上传 cli」。
+ *
+ * @param {string} code 已剥注释的工作流文本
+ * @returns {string[]} 命令行数组（保留原缩进与引号，便于报错时回显）
+ */
+function uploadCommandLines(code) {
+  return code
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim()
+      // 只认「命令就是 gh release upload …」的行；YAML 键行（`run: |`）不是命令。
+      return /^gh\s+release\s+upload\b/.test(trimmed) || /^-\s*run:\s*gh\s+release\s+upload\b/.test(trimmed)
+    })
+}
+
+/**
  * 读入工作流并**归一化行尾**。
  *
  * 判据里有多条按行切分/替换的断言（job 切片、可伪证夹具），它们必须与检出配置无关：
@@ -298,6 +337,21 @@ export function stripYamlComments(text) {
  * 因此判据改为**双向**：发布 job 必须缺席，而 crate 与打包器必须仍在。
  * 单边判据（只查缺席）会让「误删 crate」畅通无阻。
  *
+ * ### 第 2 条判据的三向修订（2026-09-24）
+ *
+ * 第 2 条原为「`gh release upload` 一概不得出现」。它在 F13（便携版不上传）
+ * 修复时变成硬阻塞——**便携版必须靠这个动作上传**。修订为按**宾语**判：
+ *
+ * | 方向 | 宾语 | 判定 |
+ * |---|---|---|
+ * | 禁 | `dist/cli/*` | 🔴 判红（CLI 退役的核心断言） |
+ * | 准 | `dist/portable/*` | ✅ 放行（期望资产 13 含它） |
+ * | 必须 | 至少一条 `dist/portable/*` | 🔴 缺失即判红（否则资产掉到 10，F13 复现） |
+ *
+ * 这样「守 CLI 不复活」与「修好便携版发布」两个目标**同时成立**，
+ * 而不是互相否决。⚠️ 判据取自 {@link uploadCommandLines}——只看**可执行行**，
+ * 不看注释，理由同 {@link stripYamlComments}。
+ *
  * ⚠️ 所有「不得出现」的判据都在 {@link stripYamlComments} 之后的文本上跑——
  * 否则退役说明里引用的 `gh release upload` 会让守卫恒红（实测踩到）。
  *
@@ -321,9 +375,40 @@ export function checkCliArtifactShape(text) {
     }
   }
 
-  // 2) 产物上传动作必须缺席。job 名可以改，但这个动作改不了——它是「上传」这件事本身。
-  if (/gh release upload/.test(code)) {
-    problems.push('release.yml 里仍有 `gh release upload`——上传通道退役后不应再有产物上传动作')
+  // 2) 产物上传动作：**三向判据**（2026-09-24 修订，原为「一概禁止」）。
+  //
+  //    原判据是 `if (/gh release upload/) problems.push(…)`。它在 F13 修复时变成
+  //    硬阻塞：便携版（3 个 zip + `.sha256`）**必须**挂到 Release 上，而唯一可行的
+  //    实现就是 `gh release upload`。于是「守住 CLI 不复活」与「修好便携版发布」
+  //    两个正当目标直接打架——原判据分不清「上传便携版」（要的）与
+  //    「上传 CLI」（不要的）。
+  //
+  //    改法的关键：**不禁止动作本身，而是限制它的宾语**。
+  //      · 准许：`dist/portable/*`（便携版是发布资产的一部分，期望资产 13 含它）
+  //      · 禁止：`dist/cli/*`（CLI 退役的核心断言，别被放宽的口子漏过去）
+  //
+  //    ⚠️ 判据必须**逐条命令**看宾语，不能只看「文件里有没有出现 dist/cli」——
+  //    后者会被注释/文档里的说明命中（本仓已两次踩到这个坑，见 {@link stripYamlComments}）。
+  for (const line of uploadCommandLines(code)) {
+    if (CLI_UPLOAD_PATH.test(line)) {
+      problems.push(
+        `release.yml 里仍有把 CLI 产物上传到 Release 的动作：\`${line.trim()}\`\n` +
+          '（CLI 发布通道已于 2026-09-24 退役：零外部消费者 + 产物不含 runtime 不自足）'
+      )
+    }
+  }
+  // 反向：便携版上传路径**必须存在**，否则资产数是 10 而不是 13（F13）。
+  // 这一条与上面的「禁 dist/cli」方向相反，两者必须能同时为真。
+  if (uploadCommandLines(code).length === 0) {
+    problems.push(
+      'release.yml 里没有任何 `gh release upload`——便携版（3 个资产）无法挂到 Release 上，' +
+        '期望资产数会从 13 掉到 10（F13）。上传宾语必须是 `dist/portable/*`'
+    )
+  } else if (!uploadCommandLines(code).some((line) => PORTABLE_UPLOAD_PATH.test(line))) {
+    problems.push(
+      'release.yml 里的 `gh release upload` 没有一条指向 `dist/portable/*`——' +
+        '便携版的三个资产（zip + .sha256 + manifest）没有加进 Release（F13）'
+    )
   }
 
   // 3) 打包器必须仍在被 preflight 调用。取消的是**上传**，不是**打包能力**：
@@ -712,10 +797,45 @@ export function selfTest() {
     !checkCliArtifactShape(`${text}\n  cli-publish:\n    runs-on: ubuntu-latest\n`).ok,
     '可伪证性：只加回 cli-publish 也必须判红（子串匹配会让它被 cli 掩盖）'
   )
-  // 上传动作本身必须缺席——job 名可以改，这个动作改不了。
+  // 上传动作：按**宾语**判（2026-09-24 三向修订，见 checkCliArtifactShape 文档）。
+  //
+  // ⚠️ 夹具写法有两条硬要求，缺一条就变成「自测喂了被测遇不到的输入」：
+  //   1. **形状要真**：`release.yml` 里的上传是 `run: |` 块内的裸命令行
+  //      （`          gh release upload "${TAG}" dist/portable/* --clobber`），
+  //      不是 `- run: gh release upload …` 单行。
+  //   2. **基线要全**：夹具必须基于**真实的 `text`**（含 `preflight` job），
+  //      只把上传那段换掉。从零合成的夹具会让「没有 preflight」这类**无关判据**
+  //      跟着红，把待验判据的结论淹没——实测踩到过。
+  const uploadProbe = (body) =>
+    checkCliArtifactShape(
+      text.replace(/\n\s*gh release upload[^\n]*\n/, `\n${body}\n`)
+    )
+
   check(
-    !checkCliArtifactShape(`${text}\n      - run: gh release upload "$TAG" dist/cli/*\n`).ok,
-    '可伪证性：任何 `gh release upload` 残留都必须判红（改名换姓也拦得住）'
+    uploadProbe('          gh release upload "$TAG" dist/cli/*').problems.some((p) => /CLI 产物上传/.test(p)),
+    '可伪证性：上传 dist/cli/* 必须判红（CLI 退役的核心断言）'
+  )
+  check(
+    uploadProbe('          gh release upload "$TAG" ./dist/cli/dsh.tar.gz').problems.some((p) =>
+      /CLI 产物上传/.test(p)
+    ),
+    '可伪证性：用相对路径 ./dist/cli/... 也判红（宾语判据不得只看字面 dist/cli）'
+  )
+  check(
+    uploadProbe('          gh release upload "$TAG" dist/portable/*').problems.length === 0,
+    '可伪证性：上传 dist/portable/* 必须完全放行（这是 F13 修复的正当动作）'
+  )
+  // 反向：把上传整段换成无关命令 → 判红（资产会掉到 10）。
+  check(
+    uploadProbe('          echo no upload here').problems.some((p) => /没有任何 `gh release upload`/.test(p)),
+    '可伪证性：没有任何上传动作必须判红（否则资产静默掉到 10，F13 复现）'
+  )
+  // 宾语不是 portable → 判红（传了，但传的不是便携版）。
+  check(
+    uploadProbe('          gh release upload "$TAG" dist/other/*').problems.some((p) =>
+      /没有一条指向 `dist\/portable\/\*`/.test(p)
+    ),
+    '可伪证性：上传宾语不是 dist/portable/* 必须判红（传了，但传的不是便携版）'
   )
   // 打包器必须仍在 preflight 里：退役的是上传，不是打包能力的验证。
   check(
@@ -737,8 +857,8 @@ export function selfTest() {
     '可伪证性：注释里引用 gh release upload 必须放行（否则退役说明会让守卫恒红）'
   )
   check(
-    !checkCliArtifactShape(`${text}\n      - run: gh release upload "$TAG" dist/cli/*\n`).ok,
-    '可伪证性：可执行位置的 gh release upload 仍必须判红（剥注释不得把判据一起剥掉）'
+    !checkCliArtifactShape(`jobs:\n  demo:\n    steps:\n      - name: 夹具\n        run: |\n          gh release upload "$TAG" dist/cli/*\n`).ok,
+    '可伪证性：可执行位置的 gh release upload dist/cli 仍必须判红（剥注释不得把判据一起剥掉）'
   )
   // 同理，job 名出现在注释里不得被判为「job 复活」。
   check(
@@ -898,7 +1018,10 @@ function run() {
   if (!cliShape.ok) {
     for (const p of cliShape.problems) console.error(`  ✗ CLI 退役形状：${p}`)
   } else {
-    console.log('✅ CLI 发布通道保持退役状态（无 cli / cli-publish job、无 gh release upload）')
+    console.log(
+      '✅ CLI 发布通道保持退役状态（无 cli / cli-publish job、上传宾语不含 dist/cli）'
+    )
+    console.log('✅ 便携版上传路径存在（dist/portable/*，F13 的期望资产 13 靠它兑现）')
   }
   const crate = checkCliCrateRetained(
     readFileSync(CARGO_TOML, 'utf8'),

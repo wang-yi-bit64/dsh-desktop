@@ -26,6 +26,8 @@
     "verify:remove-tree": "node scripts/remove-tree.mjs --self-test",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "verify:release-workflow:self-test": "node scripts/verify-release-workflow.mjs --self-test",
+    "verify:release-assets": "node scripts/verify-release-assets.mjs",
+    "verify:release-assets:self-test": "node scripts/verify-release-assets.mjs --self-test",
     "verify:harness-tree": "node scripts/verify-harness-tree.mjs src-tauri/resources/harness/node_modules",
     "verify:ipc-surface": "node scripts/verify-ipc-surface.mjs",
     "verify:ipc-surface:self-test": "node scripts/verify-ipc-surface.mjs --self-test",

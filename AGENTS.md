@@ -144,6 +144,12 @@ npm run verify:variants
 npm run verify:release-workflow
 npm run verify:release-workflow:self-test
 
+# 17b. 发布资产清单守卫（期望 13 项，按名字逐一枚举；含自测）
+#      F13 的真守卫：此前「13」只活在文档里，全仓零判据 ⇒ 实际产出 10 而门禁全绿。
+#      另可核对真实 Release：npm run verify:release-assets -- --check-release <tag>
+npm run verify:release-assets
+npm run verify:release-assets:self-test
+
 # 18. 官方 profile 保留名守卫（`desktop` 大小写变体）+ 契约锚点；含自测
 npm run verify:profile-names
 npm run verify:profile-names:self-test
@@ -1195,7 +1201,7 @@ alpha.6 的准备期正是这样跑掉了三轮：推 `9e112e2`（CI 三平台�
 | CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，四个输入：`scope` / `os` / `fault_injection` / `dsh_target`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。`dsh_target` 选组装哪条上游通道（`next` / `alpha`）。**不发布任何东西** |
 | Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` **逐通道**对照各自的 npm dist-tag（`next` 对 `next`、`alpha` 对 `alpha`），落后即红。**不构建任何东西**——只回答「该规划升级了吗」 |
-| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + **从 tag 的预发布通道名推导 `dsh_target`** + 秒级静态门禁）→ 三平台并行出包（`build`）并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；Windows 的 `portable` job 出便携 zip。🗄️ 原 `cli` / `cli-publish` 两个 job 已于 2026-09-24 退役（见 §8.4 末条） |
+| Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + **从 tag 的预发布通道名推导 `dsh_target`** + 秒级静态门禁）→ 三平台并行出包（`build`）并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；Windows 的 `portable` job 出便携 zip → `publish-assets` 把便携版三件挂到 Release（**F13 修复，2026-09-24 新增**：此前它们只停在 Actions artifacts 里，Release 上永远只有 10 项而非期望的 13）。🗄️ 原 `cli` / `cli-publish` 两个 job 已于 2026-09-24 退役（见 §8.4 末条） |
 
 - **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
   `schedule`（每天一次）、新增 `drift.yml`。二者合起来让「main 的 HEAD 有没有烂」与「上游
@@ -1316,21 +1322,35 @@ gh api "repos/wang-yi-bit64/dsh-desktop/releases?per_page=100" \
 gh release view "$TAG" --json assets --jq '.assets[]|"\(.size)\t\(.name)"' | sort -n | head -5
 ```
 
-**发布后核对（CLI 产物，人工下载）**：`release.yml` 的 `cli-publish` 会自己核验一遍下载副本，但「产物在
-Release 页面上真的可下载」这件事只有人点一次才知道（`cli-publish` 读的是 workflow artifact，
-不是公开资产 URL）：
+**发布后核对（自动化，2026-09-24 起）**：上面那个「数资产个数」的人工步骤现在有脚本了——
+`npm run verify:release-assets -- --check-release <tag>` 会**逐项比对资产名字**，而不只是数个数：
 
 ```bash
-TAG=v0.3.0
-BASE="dsh-host-cli-${TAG#v}-x86_64-pc-windows-msvc"
-curl -fL -o "$BASE.zip" \
-  "https://github.com/wang-yi-bit64/dsh-desktop/releases/download/${TAG}/${BASE}.zip"
-curl -fL -o "$BASE.zip.sha256" \
-  "https://github.com/wang-yi-bit64/dsh-desktop/releases/download/${TAG}/${BASE}.zip.sha256"
-sha256sum -c "$BASE.zip.sha256"   # macOS: shasum -a 256 -c
+TAG=v0.7.0-alpha.7
+npm run verify:release-assets -- --check-release "$TAG"
+# 通过 → ✅ Release <tag> 的资产清单完整（13 项）
+# 失败 → 逐条列出缺了哪一项（含 kind / platform），并单独报「出现了 CLI 资产」
+npm run verify:release-assets -- --print-expected   # 打印期望清单，供人工比对
 ```
 
-正文里的 CLI 表格由 `--release-notes` 渲染（幂等，重跑不会出现两遍）。
+⚠️ **为什么必须有脚本而不是照旧人工数个数**：F13（2026-09-24 发现）的形态是
+「CLI 通道退役时只数了 `cli-publish` 的一类职责，便携版『核验 + 上传』那半截没被搬走」
+⇒ 此后**每次发布的实际资产是 10 而不是 13，而全部门禁绿灯**。根因不是「忘了调一次上传」，
+而是**全仓零判据断言资产数**——13 只活在本节文字里，是一句**承诺**而非**断言**。
+现在判据有三个层次，各守一件事：
+
+| 判据 | 守什么 | 跑在哪 |
+|---|---|---|
+| `verify:release-assets`（默认） | `release.yml` **形状上能不能**产出 13 项 | 静态，进 `ci.yml` 与 release `preflight` |
+| `verify:release-assets -- --check-release <tag>` | 某次发布**实际**产出几项 | 发布后手动（需 `gh` + 联网） |
+| `verify:release-workflow` | 上传动作的**宾语**是 `dist/portable/*` 而非 `dist/cli/*` | 静态，进 `ci.yml` 与 `preflight` |
+
+🔴 **命名模式取自实测，不得从 `tauri.conf.json` 反推**。`productName` 是 `DSH Desktop`（带空格），
+tauri-bundler 把它渲染成 `DSH.Desktop_<ver>_x64-setup.exe`（**点号分隔产品名、下划线分隔版本**），
+而 macOS 的 updater 包是 `DSH.Desktop_aarch64.app.tar.gz`（**没有版本段**）。
+第一版判据把模式写成 `DSH-Desktop-…`（连字符），**自测夹具也用同一套错名字** ⇒ 13 项全绿、
+实际一个资产都匹配不上——这是本仓「自测与被测犯同一个错 → 对称失效」的又一例。
+`judgeAssets` 因此额外配了一条**反向夹具**：喂入连字符命名必须判红。
 
 #### 发布失败后的 tag 清理
 

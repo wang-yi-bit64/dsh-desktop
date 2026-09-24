@@ -118,6 +118,8 @@ jobs:
           npm run verify:harness-lockfile
           npm run verify:remove-tree
           npm run verify:release-workflow
+          npm run verify:release-assets
+          npm run verify:release-assets:self-test
           npm run verify:cli-package
           npm run verify:profile-names
           npm run verify:drift:self-test
@@ -448,6 +450,85 @@ jobs:
           name: portable-windows
           path: dist/portable/*
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 把便携版挂到 Release 上（F13 修复，2026-09-24）
+  # ---------------------------------------------------------------------------
+  # ## 为什么需要这个 job
+  #
+  # `build` job 用 tauri-action，它**自带**上传能力（9 个平台安装包 + `.sig`
+  # + `latest.json`）。而 `portable` job 只把 zip/.sha256/manifest 传到了
+  # **Actions workflow artifacts** 里——那是 Actions 页面上的临时产物，
+  # **不是 Release 资产**。于是 AGENTS.md §8.5 声明的「期望资产 13」实际只能
+  # 兑现 10：3 个便携版停在 artifacts 里，用户从 Releases 页面下载不到。
+  #
+  # 根因不是「忘了调一次上传」：这一步原本属于已退役的 `cli-publish` job
+  # （它做「下载 artifact → 核验 → `gh release upload` → 写正文」四件事），
+  # 删那个 job 时只数了它的 CLI 职责，便携版的这半截**从来没被搬过来**。
+  # 与「插件隔离」同族：删一个 job 前先数它承载几类职责。
+  #
+  # ## 为什么是独立 job 而不是塞进 portable
+  #
+  # 1. **Release 对象由 `build` 的 tauri-action 创建**（`releaseDraft: false`），
+  #    所以上传必须 `needs: build`——而 `portable` 只 `needs: preflight`，
+  #    两者并行。塞进 `portable` 就必须让 portable 也等 build，白白拖长关键路径。
+  # 2. 这里后续还要承接 R1 的「三平台 `patchSetHash` 汇总」（那也需要一个
+  #    `needs: [build, portable]` 的落点）。两处汇总同址 = 一处真相。
+  #
+  # ## 为什么用 `gh release upload` 而不是别的 action
+  #
+  # `softprops/action-gh-release` 之流会**自己创建 Release**，与 tauri-action
+  # 抢同一个对象（`--clobber` 语义不明）。`gh release upload` 只**追加资产**到
+  # 已存在的 Release，语义最窄、副作用最小。
+  #
+  # ⚠️ 该动作受 `verify-release-workflow` 的守卫约束，且是**按宾语**判的：
+  #    上传 `dist/portable/*` 放行，上传 `dist/cli/*` 判红（CLI 退役断言不得放宽）。
+  publish-assets:
+    name: attach portable assets to the release
+    needs: [preflight, build, portable]
+    runs-on: ubuntu-latest
+    steps:
+      # ⚠️ artifact 名要与 `portable` job 里 `upload-artifact` 的 `name` 逐字一致。
+      #    改一处必须改另一处——守卫不查这个（跨 job 的字符串相等性静态判不了），
+      #    真正的防线是发布后按资产清单核对（13 项）。
+      - uses: actions/download-artifact@v5
+        with:
+          name: portable-windows
+          path: dist/portable
+
+      - name: Verify downloaded portable assets
+        # 核验必须先于上传：`package-portable.mjs --verify-download` 会核对
+        # `.sha256` 边车与实际字节是否一致，并**解包**复检运行时树与旁挂依赖
+        # （`WebView2Loader.dll` 缺失即启动 0xC0000135）。少了这一步，就是把
+        # 「产物未经核验就上架」——比不做更糟（用户会以为它被验过）。
+        #
+        # ⚠️ 参数是**位置式**的：`--verify-download <目录>` + `--manifest <文件>`，
+        #    没有 `--dir`。基线名由版本号推导（`portableBaseName`），故两者都要
+        #    显式给全，别指望默认值。
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist/portable
+          VERSION="${{ needs.preflight.outputs.version }}"
+          node scripts/package-portable.mjs \
+            --verify-download dist/portable \
+            --manifest "dist/portable/DSH-Desktop-${VERSION}-portable.manifest.json"
+
+      - name: Upload portable assets to the release
+        # ⚠️ `shell: bash` 是必须的：本步用了 POSIX 反斜杠续行，而 ubuntu-latest
+        #    的默认 shell 恰好就是 bash——但守卫（shellContinuationProblems）刻意
+        #    **不看 `runs-on`**，只认「有续行就必须显式声明」。别因为「这里是
+        #    Linux」就省掉它：以后谁把 runs-on 改掉，缺陷只在 Windows 现形。
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `${VAR}` 花括号形式是硬要求：macOS 的 bash 3.2 在无 UTF-8 locale 时
+          # 不把紧邻的全角标点当变量名终止符（release.yml:264 附近有同样注释）。
+          gh release upload "${TAG}" dist/portable/* --clobber
+          echo "已把便携版资产挂到 Release ${TAG}"
 
   # ---------------------------------------------------------------------------
   # 🗄️ CLI 发布通道 — 已退役（2026-09-24），**不要加回来**
