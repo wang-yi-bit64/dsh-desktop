@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| 状态 | 已接受（Phase 1 已上线；Phase 2 计划中） |
-| 日期 | 2026-09-13（v0.4.0 首次验证） |
-| 唯一产地 | `scripts/package-cli.mjs`、`release.yml` 的 `cli` / `cli-publish` job |
+| 状态 | ⚠️ **部分取代（2026-09-24）**：发布通道已退役；归档 + 校验的**打包能力**保留。见文末「后续」 |
+| 日期 | 2026-09-13（v0.4.0 首次验证）；2026-09-24（发布通道退役） |
+| 唯一产地 | 现为 `scripts/package-cli.mjs`（打包）+ `release.yml` 的 `preflight`（`verify:cli-package`）。原 `cli` / `cli-publish` 两个 job 已删除 |
 
 ## 背景
 
@@ -46,6 +46,60 @@
 ## 守卫与证据
 
 - `npm run verify:cli-package`（含 self-test；CI 与 release preflight）。
-- `npm run verify:cli-publish`（发布步骤**原文**演练：从 release.yml 抽出 run 块
-  逐字执行，假 gh 截网）。
-- `docs/dev-plan-cli-distribution.md` §3.5.1（核对记录）。
+- ~~`npm run verify:cli-publish`~~ —— 随发布通道退役一并归档到
+  `docs/archive/dry-run-cli-publish.mjs`。
+- `docs/dev-plan-cli-distribution.md` §3.5.1（核对记录）、§5（退役评估）。
+
+## 后续 — 发布通道退役（2026-09-24）
+
+**决定**：删除 `release.yml` 的 `cli` 与 `cli-publish` 两个 job（含 `gh release upload`
+与 Release 正文渲染），停止把 CLI 二进制作为 Release 资产发布。
+**保留**：`crates/dsh-host-cli` crate、`scripts/package-cli.mjs` 及其全部判据、
+`preflight` 里的 `verify:cli-package`。
+
+### 依据（逐条实测，不是印象）
+
+| 判据 | 实测值 | 指向 |
+|---|---|---|
+| 本仓之外的外部消费者 | **0** | 取消 |
+| 仓库内消费者用的哪一份 | 全部 `target/debug/`（`smoke-launch.mjs` / `fault-inject.mjs` / `cli_blackbox.rs`），与上传产物**零交集** | 取消 |
+| 产物自足性 | **不自足**——不含 runtime，`start` 必然退出码 3（ADR-045 自己的硬边界） | 取消 |
+| 定位对产物的依赖 | **不依赖**——INV-6 靠「存在一个能跑二进制的入口」，不靠「挂在 Release 上」 | 取消 |
+
+**为什么不自足是核心论据**：本 ADR 的备选方案段已否决「含 runtime 的完整包」（重复
+分发 300MB），因此产物的**唯一可能用户**是已装桌面的用户——而他们的 `resources/`
+就在安装目录里，根本不需要从 GitHub 下这个 CLI。定位与产物形状错位，正是
+「对外可引用性名不副实」的根源。
+
+### 为什么保留打包能力（而非一并删除）
+
+`package-cli.mjs` 的约 40 项判据（归档丢可执行位、边车必须是 `sha256sum -c` 读得动的
+形状、篡改与截断能否判红）**与「要不要上传」无关**，属于 ADR-031 的可证伪守卫资产。
+删掉它们等于削掉一批已经写好、本机跑得动的能力证据，与 ADR-047「保留全部本地验证
+门禁」相抵触。取消的是**上传**这一动作，不是**打包与核验**这套能力。
+
+### 与 ADR-047 的关系
+
+ADR-047 把项目定位从「发布产品」改为「能力证明资产」，并删除了烧钱或纯运维的项。
+本次退役是同一判据的延伸：**一个无人下载的产物 = 纯运维成本**。但两者不完全等同——
+ADR-047 删除的是「发布工程」，本次删除的是「发布动作」，两者都不触碰能力证据本身。
+
+### 成本与可逆性
+
+- 维护面净减：`release.yml` 减 183 行（`cli` 三平台 job + `cli-publish`）、
+  归档 813 行演练脚本、CI 减一个需 release 二进制的步骤。
+- 可逆性高：恢复需四处一起做（归档脚本移回、`package.json` 恢复 `verify:cli-publish`、
+  `ci.yml` 恢复演练步骤、`verify-release-workflow.mjs` 改回正向断言），清单写在
+  `docs/archive/dry-run-cli-publish.mjs` 的文件头。
+- **历史资产未删**：已发布 Release 上的 9 个 CLI 资产保留（可下载、链接有效）；
+  GitHub 上删资产**不可逆**，删除反而破坏历史可追溯性。
+  后续发布的期望资产数由 22 改为 **13**。
+- **恢复触发条件不变**（本节第 4 条原文仍有效）：出现第一个非本仓消费者。
+
+### 一处真实踩到的守卫缺陷（已修）
+
+退役说明在 `release.yml` 里**逐字引用**了 `gh release upload` 来交代删掉了什么，
+而「不得有上传动作」的判据扫全文 → **守卫被自己的文档命中，恒红**。
+修法是新增 `stripYamlComments()`：所有「不得出现」类判据先剥掉整行注释再判，
+并配两条互补夹具（注释里的引用必须放行、可执行位置的同一串必须判红）。
+这已是本仓第二次踩「注释命中判据」的坑（前一次见 ADR-031 的相关记录）。

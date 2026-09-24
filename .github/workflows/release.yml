@@ -450,186 +450,52 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # CLI 产物：把 dsh-host-cli 作为可引用产物发布（见 docs/dev-plan-cli-distribution.md）
+  # 🗄️ CLI 发布通道 — 已退役（2026-09-24），**不要加回来**
   # ---------------------------------------------------------------------------
-  # 为什么单独成 job 而不是塞进 build：
-  #   · 它**不依赖 300MB 资源树**，也不需要 WebKit/GTK 等桌面依赖，因此跑得比出包快得多，
-  #     没必要绑在 build 后面（build 失败时 CLI 也该照常发布——两者是不同的产物）；
-  #   · build 的 matrix 要按平台传 --bundles，与这里的三平台同构但语义不同，混在一起
-  #     会让两件事的判据互相污染。
-  cli:
-    name: ${{ matrix.os }} / cli artifact
-    needs: preflight
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.preflight.outputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      # 只缓存 workspace 根（不含 src-tauri）——CLI 的依赖树就是 dsh-host + clap，
-      # 与壳层完全不同，共用一个缓存 key 只会互相挤掉对方。
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          key: cli
-
-      # 不需要 `npm ci`：打包脚本只用 Node 内置模块（含 PowerShell / tar 子进程）。
-      - name: Build dsh-host-cli
-        run: cargo build --release -p dsh-host-cli
-
-      # 打包 + 三类校验（全部在脚本里，不放这里写 bash）：
-      #   1. 回读校验——解包后与原二进制逐字节一致、可执行位还在；
-      #   2. 产物执行自检——解包出来那一份真的跑 `--version` 与一次 `status`，
-      #      确认「哈希对得上但一执行就炸」（架构不符 / 缺动态库）不会漏过去；
-      #   3. manifest 落盘——下面的上传与发布说明都从它取文件名，不靠 glob 猜。
-      - name: Package and verify CLI artifact
-        run: npm run package:cli -- --bin target/release/dsh-host-cli --out dist/cli
-
-      # 传成 workflow artifact 而不是直接 `gh release upload`：release 由 build job 的
-      # tauri-action 创建，并行上传会撞「release 还不存在」。先落 artifact，
-      # 由下面的 cli-publish（needs: build）统一上传并**重新核验一遍**。
-      - uses: actions/upload-artifact@v6
-        with:
-          name: cli-${{ matrix.os }}
-          path: dist/cli/*
-          if-no-files-found: error
-
-  cli-publish:
-    name: publish CLI + portable artifacts
-    # needs: build 是硬性的：Release 对象由 build job 的 tauri-action 创建，
-    # 先于它上传会失败。needs: cli 同样是硬性的——少一个平台就是在发布一个
-    # 覆盖不全的产物集，而用户从资产列表上看不出少了哪个平台。
-    # needs: portable 同样硬性：便携版是独立产物，缺了它 Release 不完整。
-    needs: [preflight, build, cli, portable]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.preflight.outputs.tag }}
-
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: cli-*
-          merge-multiple: true
-          path: dist/cli
-
-      # 下载便携版产物并核验 manifest / 边车 / 归档三者一致。
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: portable-windows
-          merge-multiple: true
-          path: dist/portable
-
-      # 这里是**下载回来**的产物（走了一遍 artifact 存储），不是构建目录里的原件：
-      # 上传链路改坏文件这件事，本地怎么验都验不出来。逐平台核验归档 / 边车与
-      # manifest 三者是否一致。
-      - name: Verify downloaded artifacts against their manifests
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          # ⚠️ 下面两条报错前缀 `missing-artifact-class:` 是**机器可读标记**，不是装饰：
-          #    `scripts/dry-run-cli-publish.mjs` 的豁免判据锚在它上面，用来区分
-          #    「本机造不出这一类」（预期受限，演练放行）与「链路真的断了」（判红）。
-          #    **改写后面的散文没关系，删掉标记会让演练当场判红**——那正是想要的：
-          #    判据不该靠措辞匹配（原先的写法则会因为一次措辞改动而静默失效）。
-          #    格式固定为 `::error::missing-artifact-class: <产物类> <说明>`：
-          #    产物类与说明之间**必须有空格**，否则类名会被解析成一个连着说明的怪串。
-          #
-          # CLI manifest 核验（原有逻辑，不变）。
-          cli_manifests=(dist/cli/*.manifest.json)
-          if [ ${#cli_manifests[@]} -eq 0 ]; then
-            echo "::error::missing-artifact-class: dist/cli/*.manifest.json 下没有下载到任何 CLI manifest——打包或 artifact 传递链路断了"
-            exit 1
-          fi
-          if [ ${#cli_manifests[@]} -ne 3 ]; then
-            echo "::warning::期望 3 个平台的 CLI manifest，实际 ${#cli_manifests[@]} 个"
-          fi
-          for manifest in "${cli_manifests[@]}"; do
-            node scripts/package-cli.mjs --verify-download dist/cli --manifest "${manifest}"
-          done
-
-          # 便携版 manifest 核验。
-          portable_manifests=(dist/portable/*.manifest.json)
-          if [ ${#portable_manifests[@]} -eq 0 ]; then
-            echo "::error::missing-artifact-class: dist/portable/*.manifest.json 下没有下载到任何 portable manifest——打包或 artifact 传递链路断了"
-            exit 1
-          fi
-          for manifest in "${portable_manifests[@]}"; do
-            node scripts/package-portable.mjs --verify-download dist/portable --manifest "${manifest}"
-          done
-
-      - name: Upload artifacts to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          files=()
-          missing=()
-
-          # ⚠️ 这份模式清单是「发布产物集必须完整」的判据本体，**每一条都必须有产出方**。
-          #
-          #    🔴 2026-09-22 修正：清单里曾有一条 `'dist/portable/*.tar.gz'`——它
-          #    **永远不可能命中**。便携版是 Windows 独占产物（`portable` job 是
-          #    `windows-latest`，`archiveExtension` 只对含 `windows` 的三元组给 `.zip`），
-          #    因此 `dist/portable/` 下只会有 `.zip`。后果是**每一次发布都必然在这里
-          #    红**，而且报的是「该类产物缺失」——听起来像打包断了，实际是这个模式
-          #    从来没被满足过。这类「判据写了一个不可能成立的条件」的缺陷，
-          #    静态上靠 `npm run verify:release-workflow`（反向判据）、动态上靠
-          #    `scripts/dry-run-cli-publish.mjs` 的产物类契约（清单 = 夹具能造的 ∪
-          #    本机造不出的）两道门禁守着。改这份清单请同步改演练里的声明。
-          for pattern in 'dist/cli/*.zip' 'dist/cli/*.tar.gz' 'dist/cli/*.sha256' 'dist/cli/*.manifest.json' \
-                         'dist/portable/*.zip' 'dist/portable/*.sha256' 'dist/portable/*.manifest.json'; do
-            matched=(${pattern})
-            if [ ${#matched[@]} -eq 0 ]; then
-              # 标记前缀见核验步骤的说明：演练靠它区分「本机造不出」与「链路断了」。
-              echo "::error::missing-artifact-class: ${pattern} 下没有任何产物——该类产物缺失，不应发布一个不完整的产物集"
-              missing+=("${pattern}")
-              continue
-            fi
-            files+=("${matched[@]}")
-          done
-
-          # 一次报全，而不是首个即退出：首因会掩盖其余缺失——修复者按「只缺这一类」
-          # 去补，下一轮再撞上第二类。2026-09-22 那次即如此（同时缺 portable zip 与
-          # 一个不可能命中的类，却只看到第一条）。
-          if [ ${#missing[@]} -gt 0 ]; then
-            printf '缺失 %s 类产物：\n' "${#missing[@]}"
-            printf '  %s\n' "${missing[@]}"
-            exit 1
-          fi
-
-          echo "将上传 ${#files[@]} 个文件："
-          printf '  %s\n' "${files[@]}"
-          gh release upload "${TAG}" "${files[@]}" --clobber
-
-      # 把 CLI 产物写进 Release 正文，否则用户得自己去翻 Assets 列表才知道有它——
-      # 「可引用」的前提是**可发现**。渲染与幂等替换都在 package-cli.mjs 里
-      # （有自测钉着「重跑不会出现两遍表格」），这里只做读 / 写。
-      - name: Append a CLI download section to the release notes
-        env:
-          # GITHUB_REPOSITORY 由 runner 提供，渲染链接时要用；这里显式声明以便本地复现时也能读懂。
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.preflight.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          NOTES="$(mktemp)"
-          # `--jq '.body'` 对空正文返回字面量 null（不是空串）：直接喂给渲染器会得到
-          # 一段以 "null" 开头的正文。这里统一归一成空串。
-          gh release view "${TAG}" --json body --jq '.body // ""' > existing.md
-          node scripts/package-cli.mjs --release-notes dist/cli --tag "${TAG}" \
-            --existing-notes existing.md > "${NOTES}"
-          gh release edit "${TAG}" --notes-file "${NOTES}"
-          rm -f "${NOTES}" existing.md
+  # 此处原有 `cli`（三平台构建 + 打包 + upload-artifact）与 `cli-publish`
+  # （下载核验 → gh release upload → 写 Release 正文）两个 job。
+  #
+  # ## 为什么删
+  #
+  # 1. **零外部消费者**。三个消费者全部在仓库内，且全部使用 `target/debug/` 的
+  #    本地构建，与上传产物**零交集**：`scripts/smoke-launch.mjs`（L1/L2 冒烟）、
+  #    `scripts/fault-inject.mjs`（三平台孤儿清理硬门禁）、
+  #    `crates/dsh-host-cli/tests/cli_blackbox.rs`。
+  # 2. **产物不自足**。归档**不含 runtime**（ADR-045 的硬边界），`start` 必然退出
+  #    码 3；对已装桌面的用户无增量价值（他们的 `resources/` 就在安装目录里），
+  #    对第三方又跑不起来。定位与产物形状错位 = 「可引用」名不副实。
+  # 3. **定位不依赖产物**。INV-6（无 GUI 核心库）靠「存在一个能跑二进制的入口」
+  #    兑现，不靠「二进制挂在 Release 上」。
+  #
+  # 逐条实测见 `docs/dev-plan-cli-distribution.md` §5；决策记录见 ADR-045 的
+  # 「后续」段与 ADR-047「从发布产品到能力证明资产」。
+  #
+  # ## 什么被保留了（退役的是发布，不是能力）
+  #
+  # · `crates/dsh-host-cli` —— INV-6 的兑现载体，两个门禁的依赖。**删不得。**
+  # · `scripts/package-cli.mjs`（857 行）—— 其约 40 项判据（归档丢可执行位、
+  #   边车格式 `sha256sum -c` 读不读得动、篡改能否判红）与「要不要上传」无关，
+  #   属于 ADR-031 的可证伪守卫资产。仍由 `preflight` 的
+  #   `npm run verify:cli-package` 在每次发布前跑（秒级，早于组装 300MB）。
+  # · 归档格式：`dist/cli/` 的**本地**打包能力，供需要时手动产出。
+  #
+  # ## 什么被归档了
+  #
+  # · `scripts/dry-run-cli-publish.mjs`（813 行）—— 它 100% 服务于「上传步骤正确性」
+  #   这一个目标，上传取消后失去唯一标的。移入 `docs/archive/`。
+  #
+  # ## 历史资产未删
+  #
+  # 已发布 Release 上的 9 个 CLI 资产（v0.4.0 ~ v0.7.0-alpha.7）**保持原样**：
+  # 它们可下载、可核对、链接有效，删除反而破坏历史可追溯性，且 GitHub 上删资产
+  # **不可逆**（`gh release delete` 没有保留资产的选项）。
+  # 如需核对剩余完整性，期望资产数由 22 降为 **13**：
+  # 9 平台安装包 + 1 `latest.json` + 3 便携版。
+  #
+  # ## 恢复条件
+  #
+  # ADR-045 的触发条件未失效：**出现第一个非本仓消费者**时恢复。恢复是一种
+  # **决策**而非改动——须先改 ADR-045 状态、同步 README/AGENTS 的宣称、
+  # 再连同 `scripts/verify-release-workflow.mjs` 的 `checkCliArtifactShape`
+  # 一起改回来（它现在断言这两个 job **不得存在**，是防复活守卫）。
+  # 不要只把 YAML 贴回来就以为完事——那样守卫会红，也绕过了「为什么删」的记录。

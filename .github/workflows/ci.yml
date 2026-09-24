@@ -267,15 +267,17 @@ jobs:
       - name: "cargo test (headless fast gate: dsh-host + dsh-host-cli)"
         run: cargo test -p dsh-host -p dsh-host-cli
 
-      # CLI 发布步骤的**原文**演练：从 release.yml 抽取 cli-publish 的 run 块逐字执行，
-      # 用一个假 gh 截住网络调用。它覆盖「只有真发布才炸」的那一维（shell 语义、
-      # glob 展开、相对路径、gh 参数形状）。放在 cargo test 之后是因为它需要一个
-      # 已构建的 release 二进制——build 一次约一分钟，换来的是发布链路的真执行证据。
-      # ⚠️ 它排除的是「脚本写错了」，不是「环境不允许」（见脚本头部说明）。
-      - name: Build CLI and dry-run the publish steps
-        run: |
-          cargo build --release -p dsh-host-cli
-          npm run verify:cli-publish
+      # 🗄️ 2026-09-24：此处原有「Build CLI and dry-run the publish steps」步骤
+      # （`cargo build --release -p dsh-host-cli` + `npm run verify:cli-publish`）。
+      # CLI 发布通道已退役（理由见 `release.yml` 的退役说明与
+      # `docs/dev-plan-cli-distribution.md` §5），而 `verify:cli-publish` 的**唯一标的**
+      # 就是 `cli-publish` 的上传步骤——上传取消后它失去意义，已连同脚本一起归档到
+      # `docs/archive/dry-run-cli-publish.mjs`。
+      #
+      # 注意这里**不再**构建 CLI：crate 本身仍由下面的 `cargo test --workspace`、
+      # 以及 smoke.yml 的 `cargo build -p dsh-host-cli` 覆盖，本步骤去掉不减少
+      # 任何有效覆盖（它当初存在的理由只是为演练准备一个 release 二进制）。
+      # 打包器的判据仍由上面的 `verify:cli-package`（纯逻辑、秒级）守着。
 
       - name: cargo test
         run: cargo test --workspace

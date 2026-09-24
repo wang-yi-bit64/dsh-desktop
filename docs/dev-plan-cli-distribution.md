@@ -1,8 +1,13 @@
 # CLI 与 Runtime 可引用产物 — 开发计划
 
-> 状态：**Phase 1 已执行（2026-09-13）；Phase 2 未开工，带明确触发条件。**
+> 状态：**Phase 1 已执行（2026-09-13）→ 发布通道已退役（2026-09-24），见 §5。
+> Phase 2 未开工，带明确触发条件。**
 > 上游依据：[`roadmap.md`](roadmap.md) H1（资产化 `dsh-host`，H1-c 发布为可引用产物、H1-d 用 CLI 自证）。
 > 本文只覆盖**分发形态**；`dsh-host` 的代码架构边界见 [`AGENTS.md`](../AGENTS.md) §3 与 INV-6。
+
+> ⚠️ **读本文时请注意**：§3 记录的是 Phase 1 当时**做了什么**，其中的接线点表
+> （§3.3）与核验记录（§3.5.1）描述的是**当时**的状态。**当前状态以 §5 为准**——
+> 两个发布 job 已删除，只保留打包能力与 `preflight` 的静态门禁。
 
 ---
 
@@ -176,3 +181,76 @@ harness-runtime-<dsh-version>+<rev>-<platform>-<arch>.tar.zst   + MANIFEST.json 
 - 不把 `dsh-host` 发布到 crates.io 作为 Phase 2 的替代或前置：库只服务 Rust 消费者，
   而「可复用」的主要抓手是 CLI 与 runtime 这类**进程级**产物。库发布的边际收益是
   「有一页 registry 可引用」，触发条件同样是「出现第二个真实消费者」。
+
+---
+
+## 5. Phase 1 回退 — CLI 发布通道退役（2026-09-24）
+
+**结论：取消「把 CLI 二进制上传到 Release」，保留 crate 与打包能力。**
+决策记录见 [`adr/045-cli-distributable-artifact.md`](adr/045-cli-distributable-artifact.md) 的「后续」段。
+
+### 5.1 评估的四条判据（逐条实测）
+
+| 判据 | 实测 | 指向 |
+|---|---|---|
+| 本仓之外的消费者 | **0** | 取消 |
+| 仓库内消费者用哪一份 | 全部 `target/debug/`，与上传产物**零交集** | 取消 |
+| 产物自足性 | **不自足**（不含 runtime，`start` 必然退出码 3） | 取消 |
+| 定位对产物的依赖 | **不依赖**（INV-6 靠「有入口」而非「有下载」） | 取消 |
+
+三条仓库内消费者与其取用路径：
+
+| 消费者 | 用途 | 路径 |
+|---|---|---|
+| `scripts/smoke-launch.mjs` | L1 无头 / L2 GUI 冒烟 | `target/debug/` |
+| `scripts/fault-inject.mjs` | 孤儿清理 + 退出码归因（三平台硬门禁） | `target/debug/` |
+| `crates/dsh-host-cli/tests/cli_blackbox.rs` | 退出码契约 | `target/debug/` |
+
+**「不自足」为什么是核心论据**：本计划 §2 已否决「含 runtime 的完整包」（重复分发
+300MB），故产物的唯一可能用户是已装桌面的用户——而他们的 `resources/` 就在安装目录里。
+定位与产物形状错位，即「对外可引用性名不副实」。
+
+### 5.2 改了什么
+
+| 位置 | 改动 |
+|---|---|
+| `release.yml` | 删除 `cli`（三平台构建 + 打包 + upload-artifact）与 `cli-publish`（下载核验 → `gh release upload` → 正文渲染）两个 job，共 183 行；原位留下退役说明（含恢复条件） |
+| `scripts/dry-run-cli-publish.mjs` | → `docs/archive/dry-run-cli-publish.mjs`（文件头写明归档理由与恢复清单） |
+| `package.json` | 删除 `verify:cli-publish` |
+| `ci.yml` | 删除「Build CLI and dry-run the publish steps」步骤（去掉一次 release 构建） |
+| `scripts/verify-release-workflow.mjs` | `checkCliArtifactShape` **方向反转**为防复活判据；新增 `stripYamlComments` 与 `checkCliCrateRetained` |
+
+### 5.3 没改什么（**这些必须保留**）
+
+- **`crates/dsh-host-cli`**：INV-6 的兑现载体，三个消费者的执行对象。
+- **`scripts/package-cli.mjs`**（857 行）：约 40 项判据与「要不要上传」无关，
+  属 ADR-031 的可证伪守卫资产。仍由 `preflight` 的 `verify:cli-package` 每次发布跑。
+- **`package:cli` / `verify:cli-package`**：本地打包能力与门禁。
+- **历史 Release 资产**：9 个 CLI 资产保留（可下载、链接有效；GitHub 删资产不可逆）。
+
+### 5.4 守卫为什么是双向的
+
+退役后 `verify-release-workflow.mjs` 同时断言两个相反方向：
+
+1. `cli` / `cli-publish` job 与 `gh release upload` **必须缺席**（防静默复活）；
+2. crate、打包守卫、`target/debug/` 消费者 **必须仍在**（防「取消发布」顺手删掉定位载体）。
+
+只有单边判据的话，第二个方向完全无保护——而它恰好是把「退役」误做成「删除能力」的路径。
+
+> 🔴 **实施时真实踩到的缺陷**：退役说明逐字引用了 `gh release upload` 来交代删掉了什么，
+> 而判据扫全文 → **守卫被自己的文档命中，恒红**。修法是 `stripYamlComments()`：
+> 所有「不得出现」类判据先剥整行注释再判，并配两条互补夹具
+> （注释里的引用放行 + 可执行位置的同一串判红）。这是本仓第二次踩「注释命中判据」的坑。
+
+### 5.5 恢复触发条件（不变）
+
+**出现第一个非本仓消费者**时恢复。恢复是**决策**而非改动：须先改 ADR-045 状态、
+同步两份 README 与 `AGENTS.md` 的宣称、再把 `checkCliArtifactShape` 改回正向断言。
+清单写在 `docs/archive/dry-run-cli-publish.mjs` 文件头。
+
+### 5.6 后续发布的期望资产数：**22 → 13**
+
+9 平台安装包 + 1 `latest.json` + 3 便携版。核对完整性时按此数，不要按 22 判红。
+
+> 已退役的 `alpha.1` ~ `alpha.7` 等历史发布仍各自带着当时的 CLI 资产——那是历史事实，
+> **不**因本次退役而改变，也**不要**去删（不可逆且破坏可追溯性）。

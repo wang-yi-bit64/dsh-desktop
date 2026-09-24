@@ -40,6 +40,9 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const WORKFLOW_DIR = join(projectRoot, '.github', 'workflows')
 const RELEASE_YML = join(WORKFLOW_DIR, 'release.yml')
 const TAURI_CONF = join(projectRoot, 'src-tauri', 'tauri.conf.json')
+// 工作区清单：CLI crate 必须保留的判据住在**工作区**里而不是 workflow 里——
+// 「取消发布」不该顺手把 INV-6 的兑现载体一起删掉，那个决定与发布无关。
+const CARGO_TOML = join(projectRoot, 'Cargo.toml')
 
 /**
  * 需要跑「shell 可移植性」检查的工作流。
@@ -216,11 +219,17 @@ export function jobBlock(text, name) {
 /**
  * 取出 Release 正文段落那一步是否**委托**给了有自测的脚本。
  *
- * 这里刻意**不再**去解析/执行 heredoc 内联脚本：那段逻辑已经搬进
+ * 这里刻意**不再**去解析/执行 heredoc 内联脚本：那段逻辑曾搬进
  * `scripts/package-cli.mjs`（`--release-notes`），其渲染与幂等性由
  * `npm run verify:cli-package` 的自测覆盖。留在 YAML 里的内联脚本是**不可测**的
  * ——YAML 解析器不碰 `run: |` 的内容，语法错 / argv 下标错只有真发布才炸，
- * 而发布不可逆。因此本守卫改判「有没有委托出去」与「有没有内联脚本残留」。
+ * 而发布不可逆。因此本守卫判「有没有内联脚本残留」。
+ *
+ * ⚠️ 2026-09-24：CLI 发布通道退役后，`--release-notes` 的**唯一消费者**（`cli-publish`
+ * 的正文渲染步骤）已删除，因此 `delegated` 不再可能为真，`checkCliArtifactShape`
+ * 不再据它判红。本函数保留只为一件事：`inlineHeredoc` 那条判据与发布通道无关
+ * （任何写进 YAML 的脚本都不可测），继续有效。`delegated` 字段保留供将来有新的
+ * 正文段落时复用，但**不要**在退役状态下断言它必须为真——那会让整个守卫恒红。
  *
  * @param {string} text release.yml 全文
  * @returns {{delegated: boolean, inlineHeredoc: boolean}}
@@ -232,150 +241,153 @@ export function inspectNotesStep(text) {
 }
 
 /**
- * CLI 可引用产物在发布工作流里的形状判据。
+ * 剥掉 YAML 的整行注释，只留可执行文本。
  *
- * 每一条都对应一类**只在真发布时暴露**的失败：
- *   · 构建/打包步骤缺席 —— 产物根本没产出来，而工作流是绿的；
- *   · 上传不用 `--clobber` —— workflow_dispatch 兜底重跑时因资产已存在而失败
- *     （而重跑正是发布失败后的补救通道）；
- *   · 发布 job 不 `needs: build` —— Release 对象由 build 的 tauri-action 创建，
- *     先于它上传会失败；
- *   · 不传 `.sha256` 边车 —— 用户拿到归档却无从核对，「可引用」少了最关键的一环；
- *   · 平台不齐 —— 发布一个缺平台的产物集，用户从资产列表上看不出来；
- *   · 必需清单里写了**不可能命中**的模式（`dist/portable/*.tar.gz`）—— 便携版只有
- *     `.zip`，这条永远缺席，等于每次发布都判红（2026-09-22 实际发生）；
- *   · 「该类产物缺失」的报错没有机器可读标记 —— 发布演练的豁免判据会静默失效
- *     （2026-09-22 实际发生：判据靠散文匹配，一句话改写法就让三个平台一起红）；
- *   · Release 正文段落靠内联脚本 —— 不可测（见 {@link inspectNotesStep}）。
+ * ## 为什么必须有这一步
+ *
+ * 本仓的注释习惯是把**坏写法**引在注释里说明缺陷（`release.yml` 的退役说明就
+ * 逐字写了 `gh release upload` 来交代删掉了什么）。判据若扫全文，会被自己的
+ * 文档命中而**恒红**——退役说明一写上去，守卫当场误报。
+ *
+ * 这个坑在本仓出现过两次，都是同一形状：
+ *   · `checkCliArtifactShape` 的「不可能命中的模式」判据第一次落地就被自己的注释命中；
+ *   · 2026-09-24 退役说明里的 `gh release upload` 命中「不得有上传动作」判据。
+ * 前一次改成了「只在 `for pattern in …` 语句里扫」。这里更彻底：一律先剥注释。
+ *
+ * ## 边界的诚实说明
+ *
+ * 只剥**整行注释**（行首可选空白 + `#`），不处理行尾 `# …`——YAML 里行尾注释
+ * 出现于引号内的可能性无法用正则区分（`name: "a # b"`）。本函数的消费者都是
+ * 「某个动作是否出现」的判据，而 YAML 的 `run:` 块注释本来就是整行，因此够用。
+ * 若将来要判的文本可能把动作写进行尾注释，必须改成真正的 YAML 解析。
+ *
+ * @param {string} text 工作流全文
+ * @returns {string} 剥掉整行注释后的文本
+ */
+export function stripYamlComments(text) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n')
+}
+
+/**
+ * CLI 可引用产物**发布通道已退役**的形状判据（2026-09-24 起，方向反转）。
+ *
+ * ## 为什么方向反转
+ *
+ * 原判据断言 `cli` / `cli-publish` 两个 job **存在且形状正确**。退役的依据是
+ * 「零外部消费者 + 产物不自足」，逐条实测见
+ * [`docs/dev-plan-cli-distribution.md`](../docs/dev-plan-cli-distribution.md) §5：
+ *
+ *   · **零外部消费者**：三个消费者（`smoke-launch.mjs` / `fault-inject.mjs` /
+ *     `cli_blackbox.rs`）全部使用 `target/debug/` 的本地构建，与上传产物零交集；
+ *   · **产物不自足**：归档不含 runtime，`start` 必然退出码 3，对「已装桌面的用户」
+ *     无增量价值（他们本地就有 resources），对第三方又跑不起来；
+ *   · **定位不依赖产物**：INV-6 靠「存在一个能跑二进制的入口」，不靠「挂在 Release 上」。
+ *
+ * ## 为什么仍然要有判据（而不是直接删掉这个函数）
+ *
+ * 「取消发布」是一个**有意的决定**，不是遗漏。没有守卫的话，两个方向都会静默退化：
+ *   · 有人（或某次从旧分支合并）把 `cli-publish` job 加回来 —— 发布链路悄悄复活，
+ *     而它已被判定为不必要，白烧三台 runner 与一轮上传核验；
+ *   · 有人以为「顺手把 crate 也删了吧」—— `dsh-host-cli` crate 是**必须保留**的，
+ *     它是 INV-6 的兑现载体、两个硬门禁的依赖、`verify:claims` 的对照对象。
+ *     见 {@link checkCliCrateRetained}。
+ *
+ * 因此判据改为**双向**：发布 job 必须缺席，而 crate 与打包器必须仍在。
+ * 单边判据（只查缺席）会让「误删 crate」畅通无阻。
+ *
+ * ⚠️ 所有「不得出现」的判据都在 {@link stripYamlComments} 之后的文本上跑——
+ * 否则退役说明里引用的 `gh release upload` 会让守卫恒红（实测踩到）。
  *
  * @param {string} text release.yml 全文
  * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
  */
 export function checkCliArtifactShape(text) {
   const problems = []
-  const buildJob = jobBlock(text, 'cli')
-  const publishJob = jobBlock(text, 'cli-publish')
+  const code = stripYamlComments(text)
 
-  if (!buildJob) {
-    problems.push('没有 `cli` job——CLI 产物根本没产出')
-  } else {
-    if (!/cargo build --release -p dsh-host-cli/.test(buildJob)) {
-      problems.push('`cli` job 没有构建步骤（cargo build --release -p dsh-host-cli）')
-    }
-    if (!/npm run package:cli/.test(buildJob)) {
-      problems.push('`cli` job 没有调用打包脚本（npm run package:cli）——命名 / sha256 / 回读校验都会缺失')
-    }
-    for (const os of ['windows-latest', 'macos-latest', 'ubuntu-latest']) {
-      if (!buildJob.includes(os)) problems.push(`\`cli\` job 的平台矩阵缺 ${os}`)
-    }
-    if (!/upload-artifact/.test(buildJob)) {
-      problems.push('`cli` job 没有把产物落成 workflow artifact——cli-publish 将无物可取')
-    }
-  }
-
-  if (!publishJob) {
-    problems.push('没有 `cli-publish` job——产物没有被上传到 Release')
-  } else {
-    if (!/needs:\s*\[[^\]]*\bbuild\b[^\]]*\]/.test(publishJob)) {
-      problems.push('`cli-publish` 未声明 needs: build——Release 对象由 build 的 tauri-action 创建，先上传必失败')
-    }
-    if (!/\bcli\b/.test(publishJob.match(/needs:\s*\[([^\]]*)\]/)?.[1] ?? '')) {
-      problems.push('`cli-publish` 的 needs 里没有 cli——会在产物还没构建完时就去取')
-    }
-    if (!/gh release upload[\s\S]{0,600}--clobber/.test(publishJob)) {
-      problems.push('上传 CLI 产物时没有 --clobber——workflow_dispatch 兜底重跑会因「资产已存在」失败')
-    }
-    // 四类产物必须逐类点名（CLI 两种归档 + 边车 + manifest）。少了边车这一类，
-    // 用户拿到归档却无从核对，「可引用」就少了最关键的一环。
-    //
-    // 2026-09-22 起 portable 产物与 CLI 产物共用同一个上传步骤（`gh release upload` 一次
-    // 传全部 glob），因此判据改为「每类 CLI 产物必须出现」——portable 产物走同一组
-    // glob，只要 CLI 那组齐了，portable 那组必然也在同一步骤里。
-    for (const [label, pattern] of [
-      ['zip 归档', /dist\/cli\/\*\.zip'/],
-      ['tar.gz 归档', /dist\/cli\/\*\.tar\.gz'/],
-      ['sha256 边车', /dist\/cli\/\*\.sha256'/],
-      ['manifest', /dist\/cli\/\*\.manifest\.json'/]
-    ]) {
-      if (!pattern.test(publishJob)) {
-        problems.push(`上传时没有包含 ${label}（${pattern.source}）——产物集不完整`)
-      }
-    }
-    // `shopt -s nullglob`：不设它，某个 glob 没命中时 bash 会把字面量
-    // `dist/cli/*.tar.gz` 当文件名传给 gh，报错指向一个不存在的路径，
-    // 而不是「这类产物缺失」。
-    if (!/shopt -s nullglob/.test(publishJob)) {
-      problems.push('上传步骤没有 `shopt -s nullglob`——glob 未命中时会传出字面量路径，错误信息会误导')
-    }
-    // 反向判据：**不可能命中**的模式不得出现在必需清单里。
-    //
-    // 🔴 2026-09-22：清单里曾长期躺着一句 `'dist/portable/*.tar.gz'`，它永远不可能
-    // 命中——`portable` job 是 `windows-latest` 独占，而 `archiveExtension` 只对含
-    // `windows` 的三元组给 `.zip`。于是每一次发布都会在这个循环里红，报的还是
-    // 「该类产物缺失」（听起来像打包链路断了，实际是这个条件从来没成立过）。
-    // 这类「判据写了一个不可能成立的条件」静态上就该拦，不能等发布时才撞。
-    //
-    // ⚠️ 只在 `for pattern in …; do` 这段**语句**里扫，不扫整个 job 块：本仓的注释
-    //    习惯是把坏写法引在注释里说明缺陷（上面这段就是），扫全文会让守卫自己误报
-    //    ——实测过：这条判据第一次落地就被自己的注释命中。
-    const patternList = /^[^\S\n]*for pattern in[\s\S]*?;\s*do[^\S\n]*$/m.exec(publishJob)?.[0] ?? ''
-    if (!patternList) {
-      problems.push('找不到上传步骤的 `for pattern in …; do` 清单——反向判据失锚（改了写法就要同步改这里）')
-    } else {
-      for (const impossible of ['dist/portable/*.tar.gz']) {
-        if (patternList.includes(`'${impossible}'`)) {
-          problems.push(
-            `上传清单里有不可能命中的模式 ${impossible}——便携版只有 .zip` +
-              '（portable job 是 windows-only），把它写进必需清单等于每次发布都在此判红'
-          )
-        }
-      }
-    }
-    // 「该类产物缺失」的报错必须带**机器可读标记**，且必须指向循环变量。
-    //
-    // 演练（`scripts/dry-run-cli-publish.mjs`）要区分两件不同的事：本机造不出这一类
-    // （预期受限，放行）与链路真的断了（判红）。原先它靠匹配报错里的散文
-    // （`没有任何 *.zip`），措辞一改就**静默失效**——豁免没了，演练在三个平台一起红，
-    // 而根因只是一句话被改写。因此判据改锚在标记上：
-    //   · 标记丢了 → 这里判红（而不是等演练变红后去猜）；
-    //   · 标记在但丢了 `${pattern}` → 演练无从知道缺的是哪一类，豁免会退化成
-    //     「任何缺失都放行」，同样判红。
-    if (!/::error::missing-artifact-class: \$\{pattern\} /.test(publishJob)) {
+  // 1) 上传通道必须缺席。逐个 job 判，而不是查 `cli` 这个子串——`cli-publish`
+  //    里也含 `cli`，用子串判会让两个 job 的缺席互相掩盖。
+  for (const job of ['cli', 'cli-publish']) {
+    if (jobBlock(code, job)) {
       problems.push(
-        '上传步骤里「该类产物缺失」的报错必须写成 `::error::missing-artifact-class: ${pattern} …`' +
-          '（标记 + 循环变量）——演练的豁免判据锚在它上面'
+        `\`${job}\` job 又出现了——CLI 发布通道已于 2026-09-24 退役` +
+          '（零外部消费者 + 产物不含 runtime 不自足）。' +
+          '若确有外部消费者出现，应先按 ADR-045 恢复决策、再连同守卫一起改回来，' +
+          '不要让它在没人注意时复活'
       )
-    }
-    // 核验步骤的两条同类报错也要带标记，且标记后必须是上传清单里的同一个类名、
-    // **并与说明之间留一个空格**——否则演练那边会把「类名 + 说明」解析成一个怪串，
-    // 豁免判定随之失败（第一版就是这样踩的坑，已由演练自检的可伪证性用例守着）。
-    for (const missingClass of ['dist/cli/*.manifest.json', 'dist/portable/*.manifest.json']) {
-      const literalPattern = new RegExp(
-        `::error::missing-artifact-class: ${missingClass.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `
-      )
-      if (!literalPattern.test(publishJob)) {
-        problems.push(
-          `核验步骤里「缺 ${missingClass}」的报错必须写成 ` +
-            `\`::error::missing-artifact-class: ${missingClass} <说明>\`（标记 + 类名 + 空格）——` +
-            `演练靠它区分「本机造不出这一类」与「链路断了」`
-        )
-      }
-    }
-    if (!/--verify-download/.test(publishJob)) {
-      problems.push('没有核验「下载回来的」产物（--verify-download）——artifact 存储链路改坏文件本地验不出来')
-    }
-    // `gh ... --jq '.body'` 对空正文返回字面量 null，会把 "null" 写进新正文。
-    if (/'\.body\b[^']*'/.test(publishJob) && !/\.body \/\/ ""/.test(publishJob)) {
-      problems.push(`读取 Release 正文时未做 null 归一（应为 '.body // ""'）——空正文会变成字面量 null`)
     }
   }
 
-  const notes = inspectNotesStep(text)
-  if (!notes.delegated) {
-    problems.push('Release 正文的 CLI 段落没有委托给 package-cli.mjs（--release-notes + --tag）')
+  // 2) 产物上传动作必须缺席。job 名可以改，但这个动作改不了——它是「上传」这件事本身。
+  if (/gh release upload/.test(code)) {
+    problems.push('release.yml 里仍有 `gh release upload`——上传通道退役后不应再有产物上传动作')
   }
-  if (notes.inlineHeredoc) {
+
+  // 3) 打包器必须仍在被 preflight 调用。取消的是**上传**，不是**打包能力**：
+  //    `package-cli.mjs` 的判据（归档丢可执行位、边车格式、篡改可证伪）与上传无关，
+  //    属于 ADR-031「可证伪守卫」这一项目核心资产，删掉等于削掉可跑的能力证据。
+  const preflight = jobBlock(code, 'preflight')
+  if (!preflight) {
+    problems.push('没有 `preflight` job——退役后它仍须跑静态门禁')
+  } else if (!/npm run verify:cli-package/.test(preflight)) {
+    problems.push(
+      '`preflight` 里没有 `npm run verify:cli-package`——打包器的判据与上传无关，' +
+        '退役的是上传通道，不是打包能力的验证（取消它等于静默丢掉一批可证伪断言）'
+    )
+  }
+
+  // 4) YAML 里不得有内联脚本——发布工作流不可测的脚本只有真发布才炸，而发布不可逆
+  //    （原判据精神，保留有效；与退役无关）。
+  if (/<<'NODE'/.test(code)) {
     problems.push("release.yml 里残留内联脚本（<<'NODE'）——YAML 内的脚本不可测，应移入有自测的脚本")
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
+ * CLI **crate** 必须保留（与发布通道退役是两件事）。
+ *
+ * 退役的是「把二进制挂到 Release 上」，不是「存在一个能跑二进制的入口」。
+ * `dsh-host-cli` 是 INV-6（无 GUI 核心库）的兑现载体：没有它，「主链路能在
+ * 命令行独立复现」就只是一句话。它同时是 `smoke-launch.mjs`（L1/L2 冒烟）与
+ * `fault-inject.mjs`（三平台孤儿清理硬门禁）的依赖。
+ *
+ * 判据住在**工作区内**（`Cargo.toml` 的 members）而不是 workflow 里——因为
+ * 这个决定与发布无关，却会被「取消发布」这件事顺手牵连。
+ *
+ * @param {string} workspaceCargo Cargo.toml 全文
+ * @param {string} scriptsSmoke smoke-launch.mjs 全文
+ * @param {string} scriptsFault fault-inject.mjs 全文
+ * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
+ */
+export function checkCliCrateRetained(workspaceCargo, scriptsSmoke, scriptsFault) {
+  const problems = []
+
+  if (!/"crates\/dsh-host-cli"/.test(workspaceCargo)) {
+    problems.push(
+      '`crates/dsh-host-cli` 不在 workspace members 里——CLI **crate** 必须保留：' +
+        '它是 INV-6 的兑现载体，且 smoke / fault-inject 两个门禁依赖它。' +
+        '退役的只是「上传到 Release」，不是这个 crate'
+    )
+  }
+  if (!/cargo build -p dsh-host-cli/.test(scriptsSmoke)) {
+    problems.push('`smoke-launch.mjs` 不再构建 dsh-host-cli——L1/L2 冒烟会失去无 GUI 手柄')
+  }
+  if (!/dsh-host-cli/.test(scriptsFault)) {
+    problems.push('`fault-inject.mjs` 不再引用 dsh-host-cli——孤儿清理硬门禁会失去执行载体')
+  }
+  // 内部消费者必须走 `target/debug`（本地构建），这是「与上传产物零交集」的实证。
+  // 一旦有人把它改成去下载发布产物，退役决策的前提就被推翻了，必须当场暴露。
+  for (const [label, text] of [
+    ['smoke-launch.mjs', scriptsSmoke],
+    ['fault-inject.mjs', scriptsFault]
+  ]) {
+    if (!/'target',\s*\n?\s*'debug'|'target', 'debug'|\/target\/debug\//.test(text)) {
+      problems.push(`${label} 不再从 target/debug 取 CLI 二进制——内部消费者与发布产物零交集是退役决策的前提`)
+    }
   }
   return { ok: problems.length === 0, problems }
 }
@@ -679,107 +691,106 @@ export function selfTest() {
   check(findUnbracedVarBeforeNonAscii('echo "v${TAG}x"').length === 0, '可伪证性：`${TAG}` 花括号写法不应被命中')
   check(findUnbracedVarBeforeNonAscii('# 注释里的 $TAG）不算').length === 0, '可伪证性：注释行不应被命中')
 
-  // 4) 真实工作流：CLI 可引用产物的形状。
+  // 4) 真实工作流：CLI 发布通道**已退役**，不得复活。
   const cli = checkCliArtifactShape(text)
-  check(cli.ok, `release.yml：CLI 产物形状不合法 → ${cli.problems.join('；')}`)
+  check(cli.ok, `release.yml：CLI 退役形状不合法 → ${cli.problems.join('；')}`)
 
-  // 4a) 可伪证性：把每条判据各自打回缺陷写法，必须判红。
-  const withoutClobber = text.replace(/(gh release upload[\s\S]{0,400}?) --clobber/, '$1')
+  // 4a) 可伪证性：**两个方向都要验**。只验「缺陷写法必须判红」的话，一条永远
+  //     返回问题的判据也能通过；只验「真实文件必须判绿」的话，把 job 加回来
+  //     也拦不住。退役类判据的方向是「不得出现」，因此夹具必须证明
+  //     「把它加回来会立刻变红」。
+  for (const job of ['cli', 'cli-publish']) {
+    const revived = `${text}\n  ${job}:\n    runs-on: ubuntu-latest\n    steps: []\n`
+    check(
+      !checkCliArtifactShape(revived).ok,
+      `可伪证性：把 \`${job}\` job 加回来必须判红（否则发布通道会静默复活）`
+    )
+  }
+  // 反向：`cli` 这个子串在 `cli-publish` 里也出现，说明必须按 job 切片判，
+  // 用子串判会让两个 job 的缺席互相掩盖。
   check(
-    !checkCliArtifactShape(withoutClobber).ok,
-    '可伪证性：去掉 --clobber 必须判红（否则重跑通道的缺陷拦不住）'
+    !checkCliArtifactShape(`${text}\n  cli-publish:\n    runs-on: ubuntu-latest\n`).ok,
+    '可伪证性：只加回 cli-publish 也必须判红（子串匹配会让它被 cli 掩盖）'
   )
-  // 四类产物写在同一条 `for pattern in …` 行上，去掉其中一项即可证伪该条判据。
-  // 2026-09-22 起 CLI 与 portable 产物共用同一行，因此夹具必须定向去掉
-  // `dist/cli/...` 这一组，不能只去 `*.sha256`（portable 那组还在）。
-  const withoutSidecar = text.replace(/'dist\/cli\/\*\.sha256' ?/g, '')
-  check(!checkCliArtifactShape(withoutSidecar).ok, '可伪证性：不传 .sha256 边车必须判红')
-  const withoutManifest = text.replace(/'dist\/cli\/\*\.manifest\.json' ?/g, '')
-  check(!checkCliArtifactShape(withoutManifest).ok, '可伪证性：不传 manifest 必须判红')
-  // 两条 2026-09-22 新增的反向/契约判据，同样要能被打回缺陷写法。
-  const withoutMarker = text.replace(/missing-artifact-class: /g, '')
+  // 上传动作本身必须缺席——job 名可以改，这个动作改不了。
   check(
-    !checkCliArtifactShape(withoutMarker).ok,
-    '可伪证性：删掉 missing-artifact-class 标记必须判红（演练的豁免判据锚在它上面）'
+    !checkCliArtifactShape(`${text}\n      - run: gh release upload "$TAG" dist/cli/*\n`).ok,
+    '可伪证性：任何 `gh release upload` 残留都必须判红（改名换姓也拦得住）'
   )
-  const withoutLoopVar = text.replace(/\$\{pattern\} 下没有任何产物/g, '下没有任何产物')
+  // 打包器必须仍在 preflight 里：退役的是上传，不是打包能力的验证。
   check(
-    !checkCliArtifactShape(withoutLoopVar).ok,
-    '可伪证性：标记里丢掉 ${pattern} 必须判红（否则豁免退化成「任何缺失都放行」）'
+    !checkCliArtifactShape(text.replace(/npm run verify:cli-package/g, 'echo skipped')).ok,
+    '可伪证性：从 preflight 摘掉 verify:cli-package 必须判红（打包判据与上传无关，不该一起丢）'
   )
-  const classThenReasonGlued = text.replace(/\.json 下没有下载到/g, '.json下没有下载到')
-  check(
-    !checkCliArtifactShape(classThenReasonGlued).ok,
-    '可伪证性：类名与说明之间少了空格必须判红（演练会把两者粘成一个类名）'
-  )
-  const withPortableTarGz = text.replace(
-    /'dist\/portable\/\*\.zip'/,
-    "'dist/portable/*.zip' 'dist/portable/*.tar.gz'"
-  )
-  check(
-    !checkCliArtifactShape(withPortableTarGz).ok,
-    '可伪证性：把不可能命中的 dist/portable/*.tar.gz 放回必需清单必须判红'
-  )
-  const withoutBuildNeed = text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, cli, portable]')
-  check(!checkCliArtifactShape(withoutBuildNeed).ok, '可伪证性：去掉 needs: build 必须判红')
-  const withoutVerify = text.replace(/--verify-download/g, '--noop')
-  check(!checkCliArtifactShape(withoutVerify).ok, '可伪证性：去掉下载后核验必须判红')
-  const withoutPackage = text.replace(/npm run package:cli/g, 'echo skipped')
-  check(!checkCliArtifactShape(withoutPackage).ok, '可伪证性：去掉打包步骤必须判红')
-
-  // 5) 可伪证性：Release 正文段落改为「必须委托、不得内联」。
-  const delegatedOnly = text.replace(/--release-notes/g, '--noop')
-  check(!checkCliArtifactShape(delegatedOnly).ok, '可伪证性：不委托段落渲染必须判红')
+  // 内联脚本判据与发布通道无关，保留有效。
   const withInline = `${text}\n          node - x <<'NODE'\n          console.log(1)\n          NODE\n`
   check(
     !checkCliArtifactShape(withInline).ok,
     '可伪证性：工作流里出现内联脚本（<<\'NODE\'）必须判红——YAML 内的脚本不可测'
   )
-  check(inspectNotesStep(text).delegated, '真实工作流必须委托 package-cli.mjs 渲染段落')
+  // 4aa) 🔴 可伪证性（真实踩过）：退役说明**逐字引用了** `gh release upload` 来交代
+  //      删掉了什么，而判据扫全文 → 守卫被自己的文档命中，恒红。
+  //      两条互补断言：注释里的引用必须放行，可执行位置的同一串必须判红。
+  //      只验后者的话，「把判据删掉」也能让前者通过。
+  check(
+    checkCliArtifactShape(`${text}\n  # 退役说明：删掉了 gh release upload 与 cli-publish\n`).ok,
+    '可伪证性：注释里引用 gh release upload 必须放行（否则退役说明会让守卫恒红）'
+  )
+  check(
+    !checkCliArtifactShape(`${text}\n      - run: gh release upload "$TAG" dist/cli/*\n`).ok,
+    '可伪证性：可执行位置的 gh release upload 仍必须判红（剥注释不得把判据一起剥掉）'
+  )
+  // 同理，job 名出现在注释里不得被判为「job 复活」。
+  check(
+    checkCliArtifactShape(`${text}\n  # 历史上曾有 cli-publish: 这个 job，已于 2026-09-24 删除\n`).ok,
+    '可伪证性：注释里提到 cli-publish: 必须放行'
+  )
+  // stripYamlComments 本身的两向断言：剥掉整行注释、保留正文与缩进。
+  check(
+    stripYamlComments(['  # x', '    run: y', ''].join('\n')) === '    run: y\n',
+    'stripYamlComments 必须只剥整行注释、保留缩进与正文'
+  )
+  check(
+    stripYamlComments(['run: "a # b"', ''].join('\n')) === 'run: "a # b"\n',
+    'stripYamlComments 不得吞掉引号内的 # （只剥行首注释）'
+  )
+  // 退役后 `--release-notes` 无消费者，因此不得再要求它存在（否则守卫恒红）。
+  check(
+    checkCliArtifactShape(text).ok && !inspectNotesStep(text).delegated,
+    '退役状态下不得再断言 `--release-notes` 必须存在（它随 cli-publish 一起删了）'
+  )
 
-  // 6) 按 job 切片本身要能被证伪：切不出块、或切错块都必须被察觉。
-  check(jobBlock(text, 'cli-publish') !== null, 'jobBlock 必须能切出 cli-publish')
-  check(jobBlock(text, 'cli-publish').includes('gh release upload'), '切出的 cli-publish 块必须含上传步骤')
-  check(!jobBlock(text, 'cli-publish').includes('uses: tauri-apps/tauri-action'), '切出的 cli-publish 块不得混入 build job')
+  // 4b) CLI **crate** 必须保留——与发布通道退役是两件事。
+  const workspaceCargo = readFileSync(CARGO_TOML, 'utf8')
+  const smokeScript = readFileSync(join(projectRoot, 'scripts', 'smoke-launch.mjs'), 'utf8')
+  const faultScript = readFileSync(join(projectRoot, 'scripts', 'fault-inject.mjs'), 'utf8')
+  const kept = checkCliCrateRetained(workspaceCargo, smokeScript, faultScript)
+  check(kept.ok, `CLI crate 保留判据不合法 → ${kept.problems.join('；')}`)
+  // 可伪证性：误删 crate 的三个方向各自都要判红——否则「取消发布」会顺手把
+  // 定位载体一起删掉，而没有任何东西会拦。
+  check(
+    !checkCliCrateRetained(workspaceCargo.replace(/\s*"crates\/dsh-host-cli",?/, ''), smokeScript, faultScript).ok,
+    '可伪证性：把 dsh-host-cli 从 workspace members 摘掉必须判红'
+  )
+  check(
+    !checkCliCrateRetained(workspaceCargo, smokeScript.replace(/cargo build -p dsh-host-cli/g, 'echo skip'), faultScript).ok,
+    '可伪证性：smoke 不再构建 CLI 必须判红'
+  )
+  check(
+    !checkCliCrateRetained(workspaceCargo, smokeScript, faultScript.replace(/dsh-host-cli/g, 'something-else')).ok,
+    '可伪证性：fault-inject 不再引用 CLI 必须判红'
+  )
+  // 内部消费者必须走 target/debug —— 这是「与发布产物零交集」这个退役前提的实证。
+  check(
+    !checkCliCrateRetained(workspaceCargo, smokeScript.replace(/'target',\s*\n\s*'debug'/, "'downloads'"), faultScript).ok,
+    '可伪证性：smoke 改为从下载产物取 CLI 必须判红（退役前提被推翻）'
+  )
+
+  // 5) 按 job 切片本身要能被证伪：切不出块、或切错块都必须被察觉。
+  check(jobBlock(text, 'build') !== null, 'jobBlock 必须能切出 build')
+  check(jobBlock(text, 'build').includes('tauri-apps/tauri-action'), '切出的 build 块必须含 tauri-action')
+  check(!jobBlock(text, 'build').includes('gh release upload'), '切出的 build 块不得混入 cli-publish 的上传步骤')
   check(jobBlock(text, 'no-such-job-xyz') === null, '不存在的 job 必须返回 null（而不是悄悄返回全文）')
-  // 平台判据必须只看 cli job：把 cli 的平台去掉，即便 build 的矩阵里还有这些平台也要判红。
-  const cliBlockStart = text.indexOf('cli:')
-  const buildOnly = text.slice(0, cliBlockStart) + text.slice(text.indexOf('cli-publish:'))
-  check(
-    !checkCliArtifactShape(buildOnly).ok,
-    '可伪证性：删掉 cli job 必须判红（平台齐全不能由 build 的矩阵冒充）'
-  )
-  // 6a) 上传图省事的写法必须判红：不设 nullglob、以及不做正文 null 归一。
-  //     注意 `shopt -s nullglob` 在文件里出现两次（核验步骤与上传步骤各一次），
-  //     夹具必须**全部**去掉——只去第一处时上传步骤仍然合规，断言会假红为「没判红」。
-  const withoutNullglob = text.replace(/shopt -s nullglob\n/g, '')
-  check(!checkCliArtifactShape(withoutNullglob).ok, '可伪证性：去掉 shopt -s nullglob 必须判红')
-  const withoutBodyNorm = text.replace(/\.body \/\/ ""/, '.body')
-  check(
-    !checkCliArtifactShape(withoutBodyNorm).ok,
-    '可伪证性：去掉正文 null 归一（.body // ""）必须判红'
-  )
-  check(
-    !checkCliArtifactShape(text.replace(/needs: \[preflight, build, cli, portable\]/, 'needs: [preflight, build, portable]')).ok,
-    '可伪证性：needs 里去掉 cli 必须判红'
-  )
-
-  // 7) 判据必须与检出配置无关（AGENTS §7.3）：同一份工作流换成 CRLF 也须得出同样结论。
-  //    缺了这条，上面那些按行切分/替换的断言会在 CRLF 检出下悄悄失效——
-  //    「本地绿、CI 红」按平台随机出现，而根因在行尾。
-  //
-  //    夹具从**原始字节**造：先归一到 LF 再转成 CRLF，这样无论本机检出是哪种行尾，
-  //    拿到的都是一份确定的 CRLF 文本（直接在可能已是 CRLF 的读入结果上替换
-  //    `\n` → `\r\n` 会得到 `\r\r\n`，那种畸形文本证明不了任何事）。
-  const crlf = readFileSync(RELEASE_YML, 'utf8').replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')
-  check(
-    checkCliArtifactShape(crlf.replace(/\r\n/g, '\n')).ok === checkCliArtifactShape(text).ok,
-    '可伪证性：归一化行尾后判定必须一致（判据不得依赖检出配置）'
-  )
-  check(
-    !checkCliArtifactShape(crlf.replace(/\r\n/g, '\n').replace(/shopt -s nullglob\n/g, '')).ok,
-    '可伪证性：CRLF 检出下去掉 nullglob 同样必须判红'
-  )
 
   // 8) 真实工作流：双通道发布形状（tag 后缀 → 构建目标、prerelease 标记）。
   const dual = checkDualChannelShape(text)
@@ -882,7 +893,25 @@ function run() {
     console.log(`✅ 三个工作流的 bash 续行步骤都显式声明了 shell: bash（${WORKFLOW_FILES.join(' / ')}）`)
   }
 
-  if (!ok || hits.length > 0 || shellProblems.length > 0) process.exit(1)
+  // 4) CLI 发布通道已退役（2026-09-24）：不得复活，且 crate 不得被顺手删掉。
+  const cliShape = checkCliArtifactShape(text)
+  if (!cliShape.ok) {
+    for (const p of cliShape.problems) console.error(`  ✗ CLI 退役形状：${p}`)
+  } else {
+    console.log('✅ CLI 发布通道保持退役状态（无 cli / cli-publish job、无 gh release upload）')
+  }
+  const crate = checkCliCrateRetained(
+    readFileSync(CARGO_TOML, 'utf8'),
+    readFileSync(join(projectRoot, 'scripts', 'smoke-launch.mjs'), 'utf8'),
+    readFileSync(join(projectRoot, 'scripts', 'fault-inject.mjs'), 'utf8')
+  )
+  if (!crate.ok) {
+    for (const p of crate.problems) console.error(`  ✗ CLI crate 保留：${p}`)
+  } else {
+    console.log('✅ CLI crate 仍在（workspace members + smoke / fault-inject 的 target/debug 路径）')
+  }
+
+  if (!ok || hits.length > 0 || shellProblems.length > 0 || !cliShape.ok || !crate.ok) process.exit(1)
 }
 
 const isDirectRun = (() => {

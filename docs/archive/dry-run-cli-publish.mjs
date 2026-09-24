@@ -1,5 +1,38 @@
 #!/usr/bin/env node
 /**
+ * 🗄️ 已归档（2026-09-24）— 本脚本**不再被 CI 或 npm 调用**，保留仅供参考。
+ *
+ * ## 为什么归档
+ *
+ * CLI 发布通道（`release.yml` 的 `cli` / `cli-publish` 两个 job）已退役，
+ * 本脚本的**唯一标的**随之消失：它存在的全部意义就是把 `cli-publish` 的 `run:`
+ * 段落原文跑一遍。没有那个 job，它没有东西可抽取、可执行。
+ *
+ * 配对改动（若要恢复，四处**必须**一起做）：
+ *   1. `docs/archive/dry-run-cli-publish.mjs` → `scripts/dry-run-cli-publish.mjs`；
+ *   2. `package.json` 恢复 `"verify:cli-publish": "node scripts/dry-run-cli-publish.mjs"`；
+ *   3. `ci.yml` 恢复「Build CLI and dry-run the publish steps」步骤
+ *      （含 `cargo build --release -p dsh-host-cli` 前置）；
+ *   4. `scripts/verify-release-workflow.mjs` 的 `checkCliArtifactShape` 改回
+ *      「断言两个 job 存在且形状正确」（现在是反过来的防复活判据）。
+ *   另需确认 `release.yml` 的上传步骤带 `missing-artifact-class:` 标记——
+ *   本脚本的豁免判据锚在它上面，标记丢了会让豁免静默失效（2026-09-22 那次的根因）。
+ *
+ * ## 退役理由（一句话）
+ *
+ * 零外部消费者（三个消费者全用 `target/debug` 本地构建，与上传产物零交集）
+ * + 产物不自足（归档不含 runtime，`start` 必然退出码 3）。
+ * 逐条实测见 `docs/dev-plan-cli-distribution.md` §5，决策见 ADR-045「后续」段。
+ *
+ * ⚠️ 归档**不等于作废**：下面这些经验仍然有效，恢复时不必重新踩一遍——
+ * 「手抄一份实现去验收，验的是抄件而非真正发布的那段」
+ * （这是本脚本从 `.sh` 手抄版改成「从 YAML 原文抽取 run 块」的**直接原因**）；
+ * 以及「豁免判据不得锚在散文上，必须锚在机器可读标记上」。
+ *
+ * ---
+ * 以下为归档时的原文，未作修改。
+ * ---
+ *
  * dry-run-cli-publish.mjs — 把 `release.yml` 里 `cli-publish` 的 `run:` 段落**原文**跑一遍。
  *
  * ## 为什么不能手抄一份
