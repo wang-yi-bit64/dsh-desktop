@@ -7,6 +7,13 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-alpha.8] - 2026-09-25
+
+### 🐛 修复
+
+- **release-assets**: share one process runner so the L2 check works on this host ([2699297](https://github.com/wang-yi-bit64/dsh-desktop/commit/2699297e0fad6bc5cd6e3c8bd9f310814906ed18))
+- **release**: checkout before verifying the portable assets ([4991828](https://github.com/wang-yi-bit64/dsh-desktop/commit/4991828fa0ab859942dd3e9db551391bf9dbaf1f))
+
 ## [0.7.0-rc.1] - 2026-09-25
 
 ### ✨ 新功能
