@@ -7,6 +7,39 @@
 
 <!-- changelog-entries -->
 
+## [0.7.0-rc.1] - 2026-09-25
+
+### ✨ 新功能
+
+- **harness**: promote the patch-hunk relocator and close two silent-pass paths ([e278353](https://github.com/wang-yi-bit64/dsh-desktop/commit/e278353358d925cbaedcaee6343e73cd365aa90c))
+- **harness**: re-anchor the next target to 0.1.5-rc.3 and self-attest lock inputs ([f12e153](https://github.com/wang-yi-bit64/dsh-desktop/commit/f12e15392e7bddbbad8ae1eda78aa2ae512ff5ed))
+
+### 🐛 修复
+
+- **scripts**: give the release-path spawns an explicit stdio so they survive this host ([51e7e40](https://github.com/wang-yi-bit64/dsh-desktop/commit/51e7e409e4882f67e2a577b1c87a99d5d3a4d0c4))
+- **release**: attach portable assets to the release (F13) ([1a329ec](https://github.com/wang-yi-bit64/dsh-desktop/commit/1a329ec06643b5a6be8a216848a287f0c4f67095))
+
+### ♻️ 重构
+
+- **targets**: decouple the upstream dist-tag name from the desktop tag suffix ([0fb6d0f](https://github.com/wang-yi-bit64/dsh-desktop/commit/0fb6d0fb38d70e4a45c0c09d5d1c7dc437e1f4a5))
+- **release**: retire CLI publish channel, keep crate and packaging capability ([64cdd7b](https://github.com/wang-yi-bit64/dsh-desktop/commit/64cdd7be61861678919473665ff1768bf3012325))
+
+### 📝 文档
+
+- **plan**: re-audit the release-channel plan and guard its version claims ([6fec20a](https://github.com/wang-yi-bit64/dsh-desktop/commit/6fec20ae2355a452c5a4d98efe1183026db2deab))
+- **smoke**: note the desktop suffix next to the upstream line in the dsh_target hint ([636252f](https://github.com/wang-yi-bit64/dsh-desktop/commit/636252fd8a959636cf710c2a94d91fd446d28de5))
+- **release**: plan the three-channel release refactor, with risk review and optimizations ([c230244](https://github.com/wang-yi-bit64/dsh-desktop/commit/c2302441c3b10ea55c0252ed82c64b5ae9f8a000))
+- **agents**: finish the cleanup — no drafts left ([011ebff](https://github.com/wang-yi-bit64/dsh-desktop/commit/011ebffd1eb0d7c195e550f32bcff67eb8f172da))
+- **agents**: reconcile the cleanup record with the draft that was deleted ([0309520](https://github.com/wang-yi-bit64/dsh-desktop/commit/0309520fd8f0c2c239b2057395a4a67e2211463a))
+- **agents**: correct the tag-cleanup record against what actually happened ([fdef0cb](https://github.com/wang-yi-bit64/dsh-desktop/commit/fdef0cb87e53dcff55f268f034c04eb0e8716c26))
+- **agents**: record the failed-release tag cleanup and its rules ([67a9678](https://github.com/wang-yi-bit64/dsh-desktop/commit/67a9678e74db8d7a3537a8e6357751008268a8eb))
+- **agents**: make the stale-tag record state-independent ([d78447f](https://github.com/wang-yi-bit64/dsh-desktop/commit/d78447fc65269e559df917c3ef32f975950337f2))
+- **agents**: record the alpha.7 release and the tag-resurrection hazard ([2e96619](https://github.com/wang-yi-bit64/dsh-desktop/commit/2e9661919ac3f1a3eee3d3087000fc7e2c12e435))
+
+### 🧹 其他
+
+- **harness**: regenerate the next lockfile for rc.3 and sync the current-state docs ([bc60e97](https://github.com/wang-yi-bit64/dsh-desktop/commit/bc60e97b7add665e7c72d6947f14e07804afa232))
+
 ## [0.7.0-alpha.7] - 2026-09-23
 
 ### 🐛 修复
