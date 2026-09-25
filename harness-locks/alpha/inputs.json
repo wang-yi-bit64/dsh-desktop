@@ -1,4 +1,6 @@
 {
+  "target": "alpha",
+  "dshVersion": "0.1.6-alpha.2",
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.6-alpha.2",
     "node": "24.9.0",

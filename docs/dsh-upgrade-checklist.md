@@ -2,7 +2,8 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.1.5-rc.2`、alpha 线 `0.1.6-alpha.2`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
+> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`channel` 字段是**上游 npm dist-tag 名**（通道定义），而 `dshVersion` 是**本仓实际钉住的版本**（客观事实），二者可以不一致。例如 `next` 目标当前钉的是 `0.1.5-rc.3`，而 npm 的 `next` dist-tag 已前进到 `0.1.7-rc.1`——即 `next` 目标**当前实际对齐的是上游 `latest`**。升级前先跑 `node scripts/dsh-targets.mjs` 读**实际值**，不要按通道名推断版本。
+> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.1.5-rc.3`、alpha 线 `0.1.6-alpha.2`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
 ---
@@ -19,7 +20,7 @@
 | 4 | `patches/<target>/*.patch` **文件名** | `patches/<target>/` | 形如 `@deepseek-ai+dsh-client-ui-chat+<版本>.patch`，版本段必须跟**该目标**的 `dshVersion` 一致（仅 DSH 家族包跟随；`cordis-plugin-loader` 这类独立版本号的包不跟）。两个目标各持一套，`npm run verify:patches` 逐目标校验 |
 | 5 | `PATCH_LAYERS` 表 | `scripts/patch-layers.mjs` | 每条补丁的 `layer` / `why` / `retireWhen`；补丁增删必须同步。表**按包名索引**——新增一条上游通道**不需要**动它，只有引入新包才要补 |
 | 6 | `patches/LAYERS.md` | `patches/LAYERS.md` | 分级判据说明文档，需与 #5 保持一致（同样按包名列：同一个包在两条通道下做的是同一件事） |
-| 7 | vendored 覆盖包 | `packages/<target>/*.tgz` | 被打补丁包的 tgz 覆盖，**按目标分目录**；版本号在文件名里，须对应该目标的 DSH 版本 |
+| 7 | vendored 覆盖包 | `packages/<target>/*.tgz` | 被打补丁包的 tgz 覆盖，**按目标分目录**；版本号在文件名里，须对应该目标的 DSH 版本。⚠️ **两条线当前均为空**（alpha 于 2026-09-16、next 于 2026-09-24 退役——退役判据是与 registry 同版本 tarball 逐字节一致 ⇒ vendoring 前提不成立）。空目录**不报错**：`prepare-harness.mjs` 以 `readdirSafe` + `existsSync` 容忍该目录整体缺失 |
 | 8 | 本地定制包 | `vendor/*` | `dsh-desktop-*` 与 `dshmarket`；若声明了 `dsh.bundle` 或 `dsh.client`，受上游 profile 加载规则约束 |
 | 9 | 断言脚本 | `scripts/prepare-harness.mjs` 的 `assertPickerSurfaceIsHostBacked()` | 校验目录选择器仍走 Host seam；上游若重构该实现，断言必须**更新而不是删除** |
 | 10 | 文档中的版本引用 | `docs/system_design.md`、`README*.md`、`AGENTS.md` | 版本号与能力状态口径 |
@@ -114,7 +115,7 @@ boot / config-dump / 插件管理。
 - [ ] `scripts/dsh-targets.mjs`：更新 `DSH_TARGETS[<target>].dshVersion`——**唯一产地**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取（补丁目录 / vendored 目录 / staging 目录也一并由它推导）。只改你正在升的那条线
 - [ ] **`overrides` 已无手工维护段**：它由该目标的 `patches/<target>/*.patch` 文件名与 `packages/<target>/*.tgz` 自动推导（`prepare-harness.mjs`），所以没有「要改的 overrides 段」。要检查的是**钉住是否仍然必要**——上游若已修复相关问题，按 Step 5 退役对应补丁，override 会随文件名一起消失
 - [ ] `packages/<target>/*.tgz` 与 `vendor/*` 中声明依赖 DSH 版本的地方
-- [ ] **重新生成提交式 lockfile（2026-09-23 起，必做）**：版本锚点、补丁集、vendored 包任何一个变了，`harness-locks/<target>/` 的 lockfile 就与输入失配，CI 的组装会**硬失败**（`lockInputsMatch` 三条规则）。重新生成：
+- [ ] **重新生成提交式 lockfile（2026-09-23 起，必做）**：版本锚点、补丁集、vendored 包任何一个变了，`harness-locks/<target>/` 的 lockfile 就与输入失配，CI 的组装会**硬失败**（`lockInputsMatch` 四条规则，其中第 4 条校验快照自证的 `target` + `dshVersion`）。重新生成：
   ```bash
   npm run harness:lockfile -- --dsh-target=<target>   # 需联网；next 解析约 15-40 分钟，alpha 数分钟
   git add harness-locks/<target>/package-lock.json harness-locks/<target>/inputs.json

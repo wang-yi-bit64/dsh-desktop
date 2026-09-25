@@ -63,7 +63,7 @@
 - **`.github/ISSUE_TEMPLATE/`**：Issue 表单（YAML form，非 markdown 模板）。`bug_report.yml` 内嵌**脱敏诊断包两步指引**（菜单「Harness → Export Diagnostics…」导出 → 建完 issue 后拖进评论区，因为 GitHub 只允许对已创建的 issue 挂附件），并给出应用起不来时按平台取日志的路径表，同时**显式声明原始日志未脱敏**；`feature_request.yml` 明确 Harness 侧功能应提给上游；`config.yml` 关闭空白 issue 并挂 Discussions 联系入口。GitHub Discussions 已于 2026-09-12 开启（分类见 `docs/dev-plan-0.2-hardening.md` 批次 0.2-D）。**表单结构必须按 `json.schemastore.org/github-issue-forms.json` 核对**：`checkboxes` 不接受 `validations`，勾选项的必填写在 option 的 `required` 上——写错不会让 YAML 非法，只会让表单在 GitHub 侧渲染异常，「YAML 能解析」不能当通过判据。
 - **`CHANGELOG.md`**：**生成物，勿手工编辑**（改动会在下次生成时被覆盖）。数据源是 git 提交历史，见 §8.3。
 - **`patches/<target>/`**：`patch-package` 补丁，**按上游运行时通道分目录**（`next` / `alpha`，见 §8.6）+ [`LAYERS.md`](patches/LAYERS.md) 分级清单（`brand` / `ui-behavior` / `functional`）。分级表按**包名**索引——新增一条通道不需要动登记表。
-- **`packages/<target>/`**：按目标分目录的 vendored 覆盖包（被上游重新发布过、需要冻结字节的 tgz）。
+- **`packages/<target>/`**：按目标分目录的 vendored 覆盖包（被上游重新发布过、需要冻结字节的 tgz）。⚠️ **两条线当前均为空**（alpha 于 2026-09-16、next 于 2026-09-24 退役）——vendoring 的前提是「上游静默重发布过同版本号的 tarball，字节不同」，两条线各自实测**均不成立**（next 线是逐对 `diff -rq` 与 registry 内容**逐字节一致**）。`prepare-harness.mjs` 以 `readdirSafe` + `existsSync` 容忍该目录整体缺失。
 - **`docs/`**：架构设计、契约定义、不变量与技术规范：
   - `dsh-desktop-redesign-architecture-and-plan.md`：最新系统架构重构设计与执行计划。
   - `system_design.md`：核心系统架构设计、契约定义与不变量清单。
@@ -677,8 +677,8 @@ Node 默认老生代上限随宿主内存缩放（7GB runner ≈ 2GB），于是
 - `harness-locks/<target>/` 下成对提交 `package-lock.json` + `inputs.json`（输入快照；
   lockfile **不记录** overrides，没有快照就无法判断「这份 lockfile 是不是当前输入生成的」）。
 - 组装时 `lockInputsMatch` 校验（dependencies 逐键一致 / 当前 overrides 逐条在快照中 /
-  快照多余条目不得撞当前补丁名），命中则复制 lockfile 进 staging 后 `npm ci`——
-  **零解析、零漂移、可复现**。
+  快照多余条目不得撞当前补丁名 / **快照自证的 `target` + `dshVersion` 与本次组装一致**），
+  命中则复制 lockfile 进 staging 后 `npm ci`——**零解析、零漂移、可复现**。
 - **CI 上 lockfile 是硬要求**：`CI`/`GITHUB_ACTIONS` 环境下缺失或失配直接 `process.exit(1)`，
   绝不静默回退在线解析；本地回退时打 ⚠️ 并提示再生成命令。
 - 生成走 `npm run harness:lockfile -- --dsh-target=<t>`：先算出**家族传递闭包**（从
@@ -1417,8 +1417,14 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.1.5-rc.2` | `patches/next/`（14 个）、`packages/next/` | `rc` | `0.7.0-rc.1` |
+| `next`（默认） | 目标对应 npm `next` dist-tag，⚠️ **但当前锚在上游 `latest`** | `0.1.5-rc.3` | `patches/next/`（14 个）、`packages/next/`（已清空） | `rc` | `0.7.0-rc.1` |
 | `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
+
+> ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-24）：上游 `next` 已前进到
+> **`0.1.7-rc.1`**，而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是跨两个 minor 的移植含
+> **上游重构**（预检 clean 5 / conflict 9，**79 个 hunk 需重新撰写**），已另立批次；
+> 本批次先锚 `latest` 以取得可用基线。**`verify:drift` 对此会告警，属已知且已记录的状态**。
+> 详见 [`patches/LAYERS.md`](patches/LAYERS.md) 的「next 线（0.1.5-rc.3）的移植裁定」。
 
 > **两条线的补丁数可以不同，这是正常的**：`alpha` 线上游已补齐平台化侧栏宽度，
 > 本仓那条补丁按 `retireWhen` 退役（14 → 13）；`next` 线尚未跟进到同版本，因此仍保留。

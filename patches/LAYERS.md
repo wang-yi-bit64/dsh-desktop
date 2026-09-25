@@ -16,8 +16,8 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag（当前 `0.1.5-rc.2`） | `patches/next/` | `packages/next/` | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag（当前 `0.1.6-alpha.2`） | `patches/alpha/` | `packages/alpha/` | `0.6.0-alpha.2` |
+| `next` | ⚠️ 目标对应上游 `next` 线，但**当前锚在上游 `latest`（`0.1.5-rc.3`）**——上游 `next` 已前进到 `0.1.7-rc.1`，跨两个 minor 的移植另立批次（见下） | `patches/next/`（14 条） | `packages/next/`（**已清空**，2026-09-24） | `0.5.0-next.1` |
+| `alpha` | npm `alpha` dist-tag（当前 `0.1.6-alpha.2`） | `patches/alpha/`（13 条） | `packages/alpha/`（已清空） | `0.6.0-alpha.2` |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -101,6 +101,31 @@
 | `dsh-client-ui-deliverables` | Codex 风格本地路径引用解析；`paths` 为 `null` 时的空数组兜底 | 官方支持本地路径引用解析 |
 | `dsh-llm-deepseek` | 把 HTTP 403 从 `AUTH` 拆成独立 `FORBIDDEN` 码；缺失时 403 显示为鉴权错误（文案不准，不影响运行） | 官方错误码分类含 `FORBIDDEN` |
 | `dsh-llm-pi-ai` | 同上：消息文本中的 403 归类为 `FORBIDDEN` | 同上 |
+
+### next 线（0.1.5-rc.3）的移植裁定（2026-09-24）
+
+上游 `latest` 从 `0.1.5-rc.2` 前进到 `0.1.5-rc.3`。预检 **clean 14 · conflict 0**——
+14 个补丁（含 `cordis-plugin-loader`，它跟自己的版本号 `1.0.3`，不跟 DSH）**全部干净可用**，
+**无需重算行号、无需重写语义**，机械改版本段即可。
+
+**vendored 覆盖包全部退役：** `packages/next/` 原有的三个 tgz（`agent-preset` /
+`settings-models` / `workspace`）已验证**不再需要**——逐个把 vendored tgz 与 registry 的
+同版本 `0.1.5-rc.2` tarball 做 `diff -rq`，**三对全部逐字节一致**（vendoring 的前提是
+「上游静默重发布过 tarball、同版本号不同字节」，此处不成立）。删除后 `packages/` 目录整体消失；
+`prepare-harness` 以 `readdirSafe(vendoredDir)` + `existsSync(vendoredDir)` 双重容忍缺失，
+无需额外改动。这与 alpha 线（2026-09-16）的退役判据完全一致。
+
+> ⚠️ **本批次未推进到上游 `next`（`0.1.7-rc.1`）**——那是**跨两个 minor 的升级**：
+> 预检为 clean 5 · conflict 9，**79 个 hunk 需重新撰写**（`workspace` 34 / `settings-models` 17 /
+> `agent-preset` 15 / `model-selection` 6 / `deliverables` 2 / `llm-deepseek` 2 / `layout` 1 /
+> `sidebar` 1 / `dsh` 1，其中 `dsh` 属 `functional` 层）。抽样 `dsh-llm-deepseek` 证实是
+> **上游重构**而非行号漂移：rc.2 的 `function httpErrorCode`（2089 行文件、函数在 1526）在
+> rc.1（2231 行）被整体删除，逻辑并入 `type`-based 判定。**另立批次处理。**
+>
+> 📌 **`dsh-client-ui-layout` 的退役判据只在 `0.1.7` 线满足**：该上游改进
+> （`computeColumns(…, collapsedWidth)` + `data-platform` 推导）在 `0.1.6-alpha.2` 引入，
+> **rc.3 尚未回灌**——预检显示同一个 `layout` 补丁在 rc.1 有 1/2 段未匹配、在 rc.3 判 clean。
+> 故本批次 `layout` 补丁**必须保留**，不可照搬 alpha 线的退役结论。
 
 ### alpha 线（0.1.6-alpha.2）的移植裁定（2026-09-16）
 
