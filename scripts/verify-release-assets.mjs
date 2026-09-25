@@ -270,12 +270,10 @@ export function checkAssetShape(text) {
  * @returns {{ok: boolean, problems: string[], assets: string[], missing: string[], unexpected: string[]}}
  */
 export function checkReleaseAssets(tag, options = {}) {
-  const runner =
-    options.runner ??
-    ((cmd, args) => {
-      const out = spawnSync(cmd, args, { encoding: 'utf8' })
-      return { status: out.status ?? 1, stdout: out.stdout ?? '', stderr: out.stderr ?? '' }
-    })
+  // ⚠️ 必须与 `repoSlug` 共用同一份默认实现（见 `spawnRunner` 的注释）：
+  //    这里曾经内联了**第二份**同样的实现，于是只修 `repoSlug` 那份时
+  //    真实路径毫无变化——「修了同类点里的一个」正是本仓反复踩的形态。
+  const runner = options.runner ?? spawnRunner
 
   // owner/repo 推导失败（本机 `spawnSync git` 可能因 EBUSY 返回空）不应崩栈，
   // 而要降级成一条可读的 problems，让调用者看到真正的原因。
@@ -316,20 +314,37 @@ export function checkReleaseAssets(tag, options = {}) {
 }
 
 /**
+ * 默认的子进程调用器 —— **全文件唯一一份**，别在任何地方再内联写一遍。
+ *
+ * 🔴 2026-09-25：这里原来有两份**逐字相同**的内联默认实现（一份在 `repoSlug`、
+ * 一份在 `checkReleaseAssets`）。给前者加上 `stdio` 后 `--check-release` 仍然失败——
+ * 因为真实路径用的是后者那份，`repoSlug` 的默认实现在这条链上根本走不到。
+ * **修「同类点的其中一个」比不修更危险：它会让剩下的缺口看起来已经被处理过。**
+ *
+ * ⚠️ `stdio: ['ignore',…]` 不是风格问题：Windows 上默认的 `stdin: 'pipe'` 会让 spawn
+ * 直接失败（`EBUSY`），而这里的失败**外表是「推导不出 owner/repo」**——本仓当初据此
+ * 把它当成「不可修的宿主限制」，甚至把 `'EBUSY'` 写进了自测夹具当作既定条件。
+ * GitHub 的这三种调用（`git remote get-url` / `gh api`）都不读 stdin，语义等价。
+ *
+ * @param {string} cmd
+ * @param {string[]} args
+ * @returns {{status: number, stdout: string, stderr: string}}
+ */
+function spawnRunner(cmd, args) {
+  const out = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  return { status: out.status ?? 1, stdout: out.stdout ?? '', stderr: out.stderr ?? '' }
+}
+
+/**
  * 从 git remote 推导 `owner/repo`。
  *
  * @param {(cmd: string, args: string[]) => {status: number, stdout: string, stderr: string}} [runner]
- *   git 调用器（自测 / 受限宿主注入用）。缺省走真实 `spawnSync`。
+ *   git 调用器（自测 / 受限宿主注入用）。缺省走 {@link spawnRunner}。
  * @returns {string} `owner/repo`
  * @throws {Error} 远端 URL 缺失或不匹配 GitHub 形态
  */
 function repoSlug(runner) {
-  const run =
-    runner ??
-    ((cmd, args) => {
-      const out = spawnSync(cmd, args, { encoding: 'utf8' })
-      return { status: out.status ?? 1, stdout: out.stdout ?? '', stderr: out.stderr ?? '' }
-    })
+  const run = runner ?? spawnRunner
   const res = run('git', ['remote', 'get-url', 'origin'])
   const url = (res.stdout ?? '').replace(/\r/g, '').trim()
   // 支持 https://github.com/o/r(.git) 与 git@github.com:o/r(.git) 两种形态。
