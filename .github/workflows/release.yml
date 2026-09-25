@@ -494,6 +494,20 @@ jobs:
     needs: [preflight, build, portable]
     runs-on: ubuntu-latest
     steps:
+      # 🔴 checkout 是**必须**的，2026-09-25 实测缺了它直接失败：
+      #    `node:internal/modules/cjs/loader:1433 … Error: Cannot find module
+      #     '/home/runner/work/dsh-desktop/dsh-desktop/scripts/package-portable.mjs'`
+      #    —— `download-artifact` 只把便携版三件放到 `dist/portable/`，**不提供工作树**，
+      #    所以下面的核验步骤连脚本文件都找不到。Release 因此停在 10 项（缺便携版 3 件），
+      #    属于「部分失败的 Release 永久残缺」。
+      #    该 job 是 F13（2026-09-24）新增的，**这是它第一次真正执行**，缺陷此前无从暴露。
+      #    守卫 `missingCheckoutJobs()` 现在专门盯这个。
+      # ⚠️ `ref` 必须是 tag（与其余三个 job 同一纪律：**代码来自 tag**，工作流 YAML 才来自
+      #    dispatch ref）。写成默认的 `github.ref` 会在手动重跑时取到分支上更新的脚本。
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+
       # ⚠️ artifact 名要与 `portable` job 里 `upload-artifact` 的 `name` 逐字一致。
       #    改一处必须改另一处——守卫不查这个（跨 job 的字符串相等性静态判不了），
       #    真正的防线是发布后按资产清单核对（13 项）。

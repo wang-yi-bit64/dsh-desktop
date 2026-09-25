@@ -256,6 +256,57 @@ export function jobBlock(text, name) {
 }
 
 /**
+ * 每个**会执行仓库内文件**的 job 都必须先 `actions/checkout`。
+ *
+ * 🔴 2026-09-25 实测事故（`v0.7.0-rc.1`）：`publish-assets` 只有 `download-artifact`
+ * + `node scripts/package-portable.mjs …`，**没有 checkout**。`download-artifact` 只把
+ * 便携版三件放进 `dist/portable/`，**不提供工作树**，于是 runner 上连脚本文件都不存在：
+ *
+ * ```
+ * Error: Cannot find module '/home/runner/work/dsh-desktop/dsh-desktop/scripts/package-portable.mjs'
+ * ```
+ *
+ * 后果不是「该步失败」而是**Release 永久残缺**：它停在 10 项（9 安装包 + `latest.json`），
+ * 缺便携版 3 件。而该 job 是 F13（2026-09-24）新增的——**这是它第一次真正执行**，
+ * 所以「缺 checkout」此前无从暴露。这正是本仓「被前置失败掩盖 / 从未被执行」那一族。
+ *
+ * 判据刻意按「**是否真的会跑仓库内的文件**」判，而不是「每个 job 都必须 checkout」：
+ * 纯 artifact 搬运的 job 不需要工作树，一律要求会变成噪音（与「门禁必须窄而准」同一取舍）。
+ *
+ * ⚠️ 只看 `jobs:` 段，不从全文找 `  xxx:` —— 否则 `on:` 下的 `push:` / `workflow_dispatch:`
+ *   也会被当成 job（它们恰好也是 2 空格缩进）。
+ *
+ * @param {string} text release.yml 全文
+ * @returns {{job: string, why: string}[]} 缺 checkout 却要跑仓库文件的 job
+ */
+export function missingCheckoutJobs(text) {
+  const problems = []
+  const jobsSection = /^jobs:\s*$/m.test(text) ? text.slice(text.search(/^jobs:\s*$/m)) : text
+  // 顶层 job 键：恰好 2 空格缩进 + 以冒号结尾 + 后面没有别的内容。
+  const names = [...jobsSection.matchAll(/^ {2}([a-zA-Z][\w-]*):\s*$/gm)].map((m) => m[1])
+
+  for (const name of names) {
+    const block = jobBlock(text, name)
+    if (!block) continue
+    // ⚠️ 先剥整行注释再判。实测本 job 的说明里**逐字引用了那条报错**
+    //    （`Error: Cannot find module '…/scripts/package-portable.mjs'`），
+    //    不剥注释就有被自己的文档命中的风险——本仓在「不得出现 X」类判据上踩过两次，
+    //    这里是同一陷阱的另一面：**扫描块内的判据必须先把注释排除**。
+    const code = stripYamlComments(block)
+    if (/uses:\s*actions\/checkout/.test(code)) continue
+    // 真的会把仓库里的文件交给解释器才算。
+    const runsRepoFile = /(?:node|bash|sh)\s+scripts\/|\bnpm\s+run\s+\w/.test(code)
+    if (runsRepoFile) {
+      problems.push({
+        job: name,
+        why: '没有 actions/checkout，但步骤里要执行仓库内的文件——runner 上没有工作树，脚本不存在',
+      })
+    }
+  }
+  return problems
+}
+
+/**
  * 取出 Release 正文段落那一步是否**委托**给了有自测的脚本。
  *
  * 这里刻意**不再**去解析/执行 heredoc 内联脚本：那段逻辑曾搬进
@@ -994,6 +1045,55 @@ export function selfTest() {
     '可伪证性：prerelease 硬编码必须判红（预发布会污染 stable 更新链路）'
   )
 
+  // 10) 会跑仓库脚本的 job 必须先 checkout。夹具直接复刻 2026-09-25 的真实事故形态。
+  check(
+    missingCheckoutJobs(text).length === 0,
+    `release.yml：存在「要跑仓库脚本却没 checkout」的 job → ${missingCheckoutJobs(text).map((p) => p.job).join('、')}`
+  )
+  {
+    // 负向：把 publish-assets 的 checkout 拿掉，必须判红——这条正是事故当天 CI 绿、
+    // Release 红的原因（没有任何静态判据在看这件事）。
+    const withoutCheckout = text.replace(
+      /(  publish-assets:[\s\S]*?steps:\n)([\s\S]*?)(      - uses: actions\/download-artifact)/,
+      '$1$3'
+    )
+    check(
+      withoutCheckout !== text,
+      '夹具前提：必须能真的摘掉 publish-assets 的 checkout（摘不掉说明正则失配，负向断言会白过）'
+    )
+    check(
+      missingCheckoutJobs(withoutCheckout).length === 1,
+      `可伪证性：摘掉 publish-assets 的 checkout 后必须判红（实得 ${missingCheckoutJobs(withoutCheckout).length} 条）`
+    )
+    check(
+      missingCheckoutJobs(withoutCheckout)[0]?.job === 'publish-assets',
+      '可伪证性：判红的必须是 publish-assets 本身'
+    )
+  }
+  {
+    // 注释安全：判据扫描的块里**逐字引用了那条报错**（含 `scripts/package-portable.mjs`），
+    // 所以必须先剥注释。缺了这一步，这个 job 的说明就会把守卫自己弄红。
+    const commentOnly = [
+      'jobs:',
+      '  demo:',
+      '    runs-on: ubuntu-latest',
+      '    steps:',
+      '      # 事故记录：Error: Cannot find module …/scripts/package-portable.mjs',
+      '      # node scripts/whatever.mjs 也曾这样写',
+      '      - run: echo hi',
+      '',
+    ].join('\n')
+    check(
+      missingCheckoutJobs(commentOnly).length === 0,
+      '可伪证性：注释里提到 scripts/ 不得被判红（否则守卫会被自己的文档命中）'
+    )
+    const realCode = commentOnly.replace('      - run: echo hi', '      - run: node scripts/whatever.mjs')
+    check(
+      missingCheckoutJobs(realCode).length === 1,
+      '可伪证性：同一串出现在可执行位置必须判红（与上一条互补）'
+    )
+  }
+
   if (failures.length > 0) {
     throw new Error(`发布工作流守卫失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
   }
@@ -1048,7 +1148,25 @@ function run() {
     console.log('✅ CLI crate 仍在（workspace members + smoke / fault-inject 的 target/debug 路径）')
   }
 
-  if (!ok || hits.length > 0 || shellProblems.length > 0 || !cliShape.ok || !crate.ok) process.exit(1)
+  // 5) 会执行仓库内文件的 job 必须先 checkout（2026-09-25 实测事故：publish-assets 缺它，
+  //    导致便携版 3 件永远上不了 Release）。
+  const noCheckout = missingCheckoutJobs(text)
+  if (noCheckout.length > 0) {
+    for (const p of noCheckout) console.error(`  ✗ ${p.job}：${p.why}`)
+  } else {
+    console.log('✅ 所有执行仓库脚本的 job 都先 checkout（代码取自 tag）')
+  }
+
+  if (
+    !ok ||
+    hits.length > 0 ||
+    shellProblems.length > 0 ||
+    !cliShape.ok ||
+    !crate.ok ||
+    noCheckout.length > 0
+  ) {
+    process.exit(1)
+  }
 }
 
 const isDirectRun = (() => {
