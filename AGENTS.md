@@ -46,7 +46,15 @@
     > `targetForVersion` / `--channel-of` 查 `publishChannel`；漂移哨兵查 `channel`（用 `upstreamTagFor`）。
     > **若把两者强行同名**，想改桌面后缀时就会连带去查一个上游不存在的 dist-tag，让哨兵静默退回 `latest` 并永久误报。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
-  - `stub-tauri-resources.mjs`：生成轻量桩资源树，用于无资源包环境下的快速编译与单测。
+    > ⚠️ **同一份补丁只用下面两条路径中的一条**：两者都能把行号算对，但**产出的补丁不完全相同**（重生成会顺带规范化上下文与计数行）。混用会让同一补丁在两次操作间来回变动，且看不出版本差异是「上游变了」还是「工具换了一条」。
+  - `relocate-patch-hunks.mjs`：把补丁的 `@@` 行号重定位到目标版本的真实位置。**与 `recount-patches.mjs` 互补，不是替代**——`recount-patches.mjs` 在纯净树上按内容应用后与纯净文件 `git diff --no-index` **重生成**补丁（依赖 `spawnSync git`，产出规范化补丁）；本脚本**只改写 `@@` 行**、其余原文**逐字节保真**、**无任何外部进程**。行号必然一致，但上下文与计数不保证逐字相同。用途：① 本机 `spawnSync` 不可用（`git` 报 EBUSY）时；② 只需处理纯行号漂移、不希望补丁被重新规范化时。`--pristine` **必传**；退出码 `1` = 存在定位不到 / 纯净树缺该文件 / **纯净树版本不符**。含 `--self-test`（36 项，覆盖「无漂移必须逐字节不变」「末尾空行不得当上下文行」等可证伪夹具）。
+    > 🔴 **它比 `recount-patches.mjs` 多一道版本身份判据（`pristineVersionProblem`），这是刻意的**：
+    > `--pristine` 的默认路径 `harness-deps/<target>-pristine` 是**目标键、不带版本**，
+    > 同一目录在通道内被复用（`next/` 从 rc.2 一路用到 rc.3）⇒ **路径证明不了里面是哪一版**。
+    > 2026-09-25 实测该目录装着 `0.1.7-rc.1` 而目标是 `0.1.5-rc.3`：`recount-patches.mjs` 会
+    > 照错树的行号把 4 个补丁**静默写回**，而本脚本全部拦下并点名两个版本。
+    > 基准取「补丁文件名里的版本段」而非 `dshVersion`，故对 `cordis-plugin-loader`
+    > 这类独立版本号的包天然正确。**换锚点后请把版本写进纯净树目录名。**
   - `mock-harness.mjs`：可注入故障的假 Harness（`--fail startup | no-url | port-in-use | after-ready`），集成测试的真实子进程目标。
   - `fault-inject.mjs`：基于 `dsh-host-cli` 的孤儿进程清理与退出码归因验证（6 类故障场景 / 10 项断言）；`npm run fault-inject`，在 Smoke 工作流中为**三平台硬门禁**（2026-09-12 起；此前仅 Windows 硬、其余 `continue-on-error`）。
   - `verify-ipc-surface.mjs`：壳接口面一致性静态检查（命令定义 ↔ 注册 ↔ 前端 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记）。这类断线 `dead_code` 看不见，见 §7.3。
@@ -195,6 +203,9 @@ npm run check:patch-applicability -- --dsh-target=next --target=0.1.6-alpha.2
 
 # 22b. 移植补丁后**重算行号**（patch-package 按行号定位，偏移超 ±20 行即失败；
 #      只按内容搜索的预检会漏报这类失败，真实组装才炸——见 §8.6）
+#      ⚠️ 默认 --pristine 是 harness-deps/<target>-pristine，**目标键、不带版本**，
+#      目录名证明不了里面是哪一版；换锚点后请显式指定带版本的目录，
+#      或改用 relocate-patch-hunks.mjs（它有版本判据，本脚本没有）。
 node scripts/recount-patches.mjs --dsh-target=<next|alpha> --pristine=<未打补丁的包根>
 
 # 23. 壳入口 ↔ 上游 CLI 调用约定 + macOS 父死看门狗 + **打包资源清单推导**（含自测）
@@ -1071,7 +1082,7 @@ E7 只认两种合法写法：`match` 臂**与守卫式早退**（`if id == CONS
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`（分级表按**包名**索引）、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]`（含 `target` 字段标明通道） |
 | **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道直接失败）；`smoke.yml` 有 `dsh_target` 输入；`verify:patches` 逐目标检查、`verify:drift` 逐通道对照 dist-tag。见 §8.6 |
-| ↳ 补丁行号重算（移植到另一条上游线时） | ✅ 已接线 | `scripts/recount-patches.mjs` + `check-patch-applicability` 的 ±20 窗口判据 | 升级/移植工序；`patch-package` 按行号定位且偏移超 ±20 行即失败，只按内容搜索的预检会漏报——见 §8.6 |
+| ↳ 补丁行号重算（移植到另一条上游线时） | ✅ 已接线 | `scripts/recount-patches.mjs`（重生成，依赖 git）+ `scripts/relocate-patch-hunks.mjs`（只改 `@@` 行、原文保真、无外部进程）**二选一** + `check-patch-applicability` 的 ±20 窗口判据 | 升级/移植工序；`patch-package` 按行号定位且偏移超 ±20 行即失败，只按内容搜索的预检会漏报。**同一份补丁只用一条路径**——见 §8.6 |
 | **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **20 个命令全部**返回 `CommandResult<T>`；五个页面（error / plugin-recovery / logs / updates / feedback）均解包 `success` |
 | ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
 | **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
@@ -1460,6 +1471,10 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
   `trajectory` 漂 135 行、`llm-deepseek` 漂 369 行）。修法与守卫：
   `node scripts/recount-patches.mjs --dsh-target=<target> --pristine=<未打补丁的包根>`，
   外加预检里那条按 ±20 窗口判定的断言（含可证伪自检）。
+  **替代路径**（本机 `spawnSync git` 不可用、或只想动行号而不想补丁被重新规范化时）：
+  `node scripts/relocate-patch-hunks.mjs --dsh-target=<target> --pristine=<未打补丁的包根> [--write]`
+  ——只改写 `@@` 行、原文逐字节保真、无外部进程。**同一份补丁只用其中一条路径**：
+  两者行号结论一致，但产出的补丁不完全相同（重生成会规范化上下文与计数行）。
 - **prerelease 不会污染 stable 更新链路**：GitHub 的 `releases/latest` 天然不含 prerelease，
   而 updater 端点正是指向 `releases/latest/download/latest.json`。守护这条性质的是
   `verify:release-workflow` 里「prerelease 标记必须从版本号派生」的断言——标记一旦硬编码，

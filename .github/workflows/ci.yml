@@ -96,6 +96,17 @@ jobs:
       - name: Verify patch layer manifest (all targets)
         run: npm run verify:patches
 
+      # 补丁 hunk 重定位工具的自测（纯逻辑，不 spawn 外部进程）。`patch-package` 按
+      # `@@ -N` 行号定位、偏移超 ±20 行即放弃，而只按内容搜索的预检仍报 clean ——
+      # 两条结论**相反**，因此重定位是移植补丁的必需步骤。而它**只改 `@@` 行、其余
+      # 原文逐字节保真**，判据（`indexOfBlock` 的定位语义、delta 累积、上下文计数）
+      # 写错时不会有别的检查变红 —— 自测与被测对称失效是本仓已踩过五次的坑，
+      # 所以这里必须独立成门禁。夹具为可伪证式：无漂移必须**逐字节不变**（防工具
+      # 顺手改写）、纯漂移只动 `@@`、定位不到的 hunk 原样保留、`\ No newline` 保留、
+      # **末尾空行不得当上下文行**（这正是 `recount-patches.mjs` 曾误报 87 处的形态）。
+      - name: Verify patch hunk relocation guard
+        run: npm run verify:relocate-hunks
+
       # 构建目标总表自检：目标名 ↔ 通道 ↔ 版本号的解析规则，以及「未知通道不得
       # 回退默认目标」这条硬约束（通道解析决定装哪个运行时，回退 = 出错包的运行时）。
       # 纯逻辑，不联网。

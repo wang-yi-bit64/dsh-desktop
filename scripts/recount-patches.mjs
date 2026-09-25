@@ -29,9 +29,13 @@
  * node scripts/recount-patches.mjs --dsh-target=<目标名> [--pristine=<纯净包根>]
  * ```
  *
- * `--pristine` 默认 `harness-deps/<target>/node_modules`（组装后的树不可用——
- * 它已经打过补丁了）。正确的输入是**未打补丁的上游包**，通常来自
- * `npm pack` 或 registry tarball 的临时解包。
+ * `--pristine` 默认 `harness-deps/<target>-pristine`。⚠️ 这个默认路径**是目标键、不带版本**，
+ * 同一目录在通道内被复用（`next/` 从 rc.2 一路用到 rc.3），所以**它证明不了里面是哪一版**。
+ * 本脚本**不校验**纯净树的版本（`existsSync` 过了就用），因此换锚点后务必把纯净树
+ * 连同版本一起命名（如 `harness-deps/next-pristine-0.1.7-rc.1`）并显式传 `--pristine=<dir>`，
+ * 否则会照旧版本的上下文行号把补丁写回。需要版本判据的场合用
+ * `relocate-patch-hunks.mjs`（它有 `pristineVersionProblem`）。
+ * 正确的输入是**未打补丁的上游包**，通常来自 `npm pack` 或 registry tarball 的临时解包。
  *
  * 退出码：`0` 全部重算并写回 · `1` 有补丁无法重算 · `2` 参数错误。
  */

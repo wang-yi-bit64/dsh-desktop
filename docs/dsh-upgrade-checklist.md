@@ -247,6 +247,15 @@ boot / config-dump / 插件管理。
       > **为什么必须做**：`patch-package` 定位 hunk 的方式**不是**按内容搜索，而是从补丁声明的 `@@ -N` 行号开始试探，偏移取 0、-1、+1 … **超过 ±20 行即放弃**（`dist/patch/apply.js` 的 `fuzzingOffset`）。「复制补丁、只改文件名」会让行号漂移：上下文仍能匹配（**预检按内容搜索，会报 clean**），但真实组装定位不到，**只在下载完 300MB 组装时**才报 `cannot apply the patch file`。2026-09-15 的 alpha 线移植就撞上了（`trajectory` 漂移 135 行）。
       >
       > `--pristine` 必须指向**未打补丁**的上游包（布局 `<root>/<包名>/…`；默认 `harness-deps/<target>-pristine`，不存在时脚本直接报错）。**不能**用组装后的 `harness-deps/<target>/node_modules`——它已经打过补丁，行号无从重算。重算完成后按脚本提示重跑真实组装复核（2.3）。
+      >
+      > ⚠️ **默认路径是目标键、不带版本，因此它证明不了里面是哪一版**。同一目录在通道内被复用（`next/` 从 rc.2 一路用到 rc.3）：2026-09-25 实测 `harness-deps/next-pristine/` 里装的是 `0.1.7-rc.1`，而当时目标是 `0.1.5-rc.3`。换锚点时**把版本写进目录名**（`harness-deps/next-pristine-0.1.7-rc.1`）并显式传 `--pristine=<dir>`；`recount-patches.mjs` **不校验**纯净树版本（`existsSync` 过了就用），只有 `relocate-patch-hunks.mjs` 有该判据——所以这条纪律靠人守。
+      >
+      > **替代路径**（当 `spawnSync` 外部进程不可用、或只处理纯行号漂移时）：
+      > ```bash
+      > node scripts/relocate-patch-hunks.mjs --dsh-target=<target> --pristine=<未打补丁的包根>          # 只报告
+      > node scripts/relocate-patch-hunks.mjs --dsh-target=<target> --pristine=<未打补丁的包根> --write  # 写回
+      > ```
+      > 与 `recount-patches.mjs` **互补而非替代**：前者在纯净树上按内容应用后与纯净文件 `git diff --no-index` **重生成**补丁（依赖 `git`，产出规范化补丁）；`relocate-patch-hunks.mjs` **只改写 `@@` 行**、其余原文**逐字节保真**、**无任何外部进程**（本机 `spawnSync git` 报 EBUSY 时唯一的路径）。行号必然一致，但上下文与计数**不保证逐字相同** ⇒ **同一份补丁只用其中一条路径**，混用会让补丁在两次操作间来回变动。退出码 `1` = 存在定位不到的 hunk（原样保留并列出，需人工判定是「上游真的删掉了那几行」还是「纯净树取错」）。
 - [ ] **2.3 试打补丁并解决冲突**：
       ```bash
       npm run prepare:harness -- --dsh-target=<target> --force

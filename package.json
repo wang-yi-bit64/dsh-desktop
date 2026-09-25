@@ -19,6 +19,7 @@
     "prepare:harness:strict": "node scripts/prepare-harness.mjs --force --strict",
     "harness:lockfile": "node scripts/prepare-harness.mjs --update-lockfile",
     "verify:harness-lockfile": "node scripts/harness-lockfile.mjs --self-test",
+    "verify:relocate-hunks": "node scripts/relocate-patch-hunks.mjs --self-test",
     "verify:patches": "node scripts/verify-patch-layers.mjs",
     "verify:targets": "node scripts/dsh-targets.mjs --self-test",
     "verify:prune": "node scripts/prune-harness-deps.mjs --self-test",
