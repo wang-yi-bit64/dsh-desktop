@@ -129,15 +129,20 @@ export function deriveFamilyPins(storedOverrides, currentBaseOverrides) {
  *   3. 快照里多出来的条目**不得**撞上当前任何补丁/vendored 包名——撞上说明对应补丁
  *      或 vendored 包被删除后没有重新生成 lockfile，那条「钉死」是陈旧残留。
  *
- * @param {object} stored inputs.json 的解析结果（`{ dependencies, overrides }`）。
+ * @param {object} stored inputs.json 的解析结果（`{ target, dshVersion, dependencies, overrides }`）。
  * @param {object} current 当前输入。
+ * @param {string} current.target 当前组装目标（目标键，如 `next`）。
+ * @param {string} current.dshVersion 该目标当前钉住的 DSH 版本。
  * @param {Record<string, string>} current.dependencies 组装将写入 staging 的 dependencies。
  * @param {Record<string, string>} current.overrides 当前基础 overrides（补丁 + vendored）。
  * @param {string[]} current.pinnedPackageNames 当前补丁 + vendored 推导出的**全部**包名
  *   （用于规则 3 的陈旧残留检测）。
  * @returns {{ ok: boolean, reasons: string[] }} `ok` 为 false 时 `reasons` 逐条说明。
  */
-export function lockInputsMatch(stored, { dependencies, overrides, pinnedPackageNames }) {
+export function lockInputsMatch(
+  stored,
+  { target, dshVersion, dependencies, overrides, pinnedPackageNames }
+) {
   const reasons = []
   const storedDeps = stored?.dependencies ?? null
   if (canonicalJson(storedDeps) !== canonicalJson(dependencies ?? null)) {
@@ -163,6 +168,29 @@ export function lockInputsMatch(stored, { dependencies, overrides, pinnedPackage
       )
     }
   }
+
+  // 规则 4：自证字段。目录键是**目标键**（`harness-locks/<target>/`），同一目标目录在通道内
+  // 长期复用（`next/` 从 rc.2 一路用到 rc.3），所以光看路径判断不出这份快照属于哪一版输入。
+  // 误把另一目标（或另一锚点）的 inputs.json 复制进来时，前三条规则会**静默按新位置的键值走**
+  // ——它们是拿快照与当前输入互比，而两份快照各自都自洽，谁也发现不了。
+  // 字段**缺失同样判红**：否则这条强化对「加字段之前生成的旧快照」静默放行，等于没加。
+  const storedTarget = typeof stored?.target === 'string' ? stored.target : null
+  if (storedTarget !== target) {
+    reasons.push(
+      storedTarget === null
+        ? `输入快照缺少自证字段 target（应为本目标的 ${target}）——快照早于该字段引入，需重新生成`
+        : `输入快照的 target 是 ${storedTarget}，当前组装目标是 ${target}——快照属于另一条通道`
+    )
+  }
+  const storedDshVersion = typeof stored?.dshVersion === 'string' ? stored.dshVersion : null
+  if (storedDshVersion !== dshVersion) {
+    reasons.push(
+      storedDshVersion === null
+        ? `输入快照缺少自证字段 dshVersion（应为本目标的 ${dshVersion}）——快照早于该字段引入，需重新生成`
+        : `输入快照的 dshVersion 是 ${storedDshVersion}，当前目标是 ${dshVersion}——锚点已变而未重新生成 lockfile`
+    )
+  }
+
   return { ok: reasons.length === 0, reasons }
 }
 
@@ -259,13 +287,17 @@ export function selfTest() {
   eq('空快照 → 空钉死', deriveFamilyPins({}, base), {})
   eq('null 快照 → 空钉死', deriveFamilyPins(null, base), {})
 
-  // --- lockInputsMatch：三条规则 ---
+  // --- lockInputsMatch：四条规则 ---
   const deps = { '@deepseek-ai/dsh': '0.1.5-rc.2', node: '24.9.0' }
   const storedInputs = {
+    target: 'next',
+    dshVersion: '0.1.5-rc.2',
     dependencies: { ...deps, dshmarket: 'file:../../vendor/dshmarket' },
     overrides: { '@deepseek-ai/dsh-client-ui-chat': '0.1.5-rc.2', '@deepseek-ai/dsh-base': '0.1.5-rc.2' }
   }
   const current = {
+    target: 'next',
+    dshVersion: '0.1.5-rc.2',
     dependencies: { ...deps, dshmarket: 'file:../../vendor/dshmarket' },
     overrides: { '@deepseek-ai/dsh-client-ui-chat': '0.1.5-rc.2' },
     pinnedPackageNames: ['@deepseek-ai/dsh-client-ui-chat']
@@ -296,6 +328,34 @@ export function selfTest() {
   // 可证伪性：规则 3 的包名名单**不含**家族钉死名时必须放行——
   // 否则任何一次正常命中都会被误判（对称失效的教训见 AGENTS.md WebView2 一节）。
   eq('规则3：名单不含钉死名 → 放行', lockInputsMatch(storedInputs, current).ok, true)
+
+  // --- 规则 4：自证字段 ---
+  // 缺字段必须判红。否则这条强化对「加字段之前生成的旧快照」静默放行，等于没加——
+  // 那正是本仓反复出现的「加了字段却没人读」形态。
+  const legacy = lockInputsMatch(
+    { dependencies: storedInputs.dependencies, overrides: storedInputs.overrides },
+    current
+  )
+  eq('规则4：旧快照缺自证字段 → 失配', legacy.ok, false)
+  eq('规则4 失配说明点名缺 target', legacy.reasons.join(' ').includes('缺少自证字段 target'), true)
+  eq(
+    '规则4 失配说明点名缺 dshVersion',
+    legacy.reasons.join(' ').includes('缺少自证字段 dshVersion'),
+    true
+  )
+
+  // 可伪证性对照：拿一份**内容全同、只是来路不同**的快照。前三条规则只把快照与当前输入互比，
+  // 而两份快照各自都自洽 ⇒ 它们**全部放行**，只有规则 4 拦得住。这一对同时说明：
+  // 「目录键是目标键」的前提下，字段自证是必需而非装饰（版本键方案下这靠目录名兜）。
+  const crossVerdict = lockInputsMatch({ ...storedInputs, target: 'alpha' }, current)
+  eq('规则4：跨通道快照 → 失配', crossVerdict.ok, false)
+  eq('规则4：跨通道时前三条**全部放行**（只剩规则 4 这一条原因）', crossVerdict.reasons.length, 1)
+  eq('规则4 跨通道说明点名来路', crossVerdict.reasons[0].includes('alpha'), true)
+
+  const staleAnchor = lockInputsMatch({ ...storedInputs, dshVersion: '0.1.5-rc.1' }, current)
+  eq('规则4：锚点已变而快照未重生成 → 失配', staleAnchor.ok, false)
+  eq('规则4：锚点漂移时前三条**全部放行**（只剩规则 4 这一条原因）', staleAnchor.reasons.length, 1)
+  eq('规则4 锚点漂移说明点名版本', staleAnchor.reasons[0].includes('0.1.5-rc.1'), true)
 
   // --- packageInstallDirs：安装位置必须从 lockfile 读，不能写死顶层路径 ---
   const PICKER = '@deepseek-ai/dsh-client-ui-directory-picker-native'

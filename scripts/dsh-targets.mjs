@@ -71,8 +71,8 @@ export const DSH_TARGETS = {
   next: {
     channel: 'next',
     publishChannel: 'rc',
-    dshVersion: '0.1.5-rc.2',
-    summary: '上游 next 线（rc 阶段）——默认发布的运行时基线'
+    dshVersion: '0.1.5-rc.3',
+    summary: '上游 rc 线——默认发布的运行时基线（当前锚在上游 npm `latest`；上游 `next` 已前进到 0.1.7-rc.1，移植成本另立批次）'
   },
   alpha: {
     channel: 'alpha',

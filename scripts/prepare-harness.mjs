@@ -85,7 +85,8 @@ const vendorDir = join(projectRoot, 'vendor')
 // ---------------------------------------------------------------------------
 // 构建目标：决定内置哪个上游 DSH 版本、用哪一套补丁与 vendored 覆盖包。
 // 双通道（next / alpha）并存，见 [`dsh-targets.mjs`](./dsh-targets.mjs)。
-//   next  → DSH 0.1.5-rc.2   （默认；桌面后缀 rc）
+//   next  → DSH 0.1.5-rc.3   （默认；桌面后缀 rc。⚠️ 当前锚在上游 npm `latest`
+//                              指向的版本；上游 `next` dist-tag 已前进到 0.1.7-rc.1）
 //   alpha → DSH 0.1.6-alpha.2 （桌面后缀 alpha）
 // ⚠️ 目标键（`next`）是**上游 npm dist-tag 名**，与桌面 tag 的后缀（`publishChannel`，
 //    见 dsh-targets.mjs）不是一回事——`next` 目标的桌面后缀是 `rc`。这里按**目标键**
@@ -479,6 +480,8 @@ if (updateLockfile) {
   const lockPresent = existsSync(harnessLockPath)
   if (storedInputs !== null && lockPresent) {
     const verdict = lockInputsMatch(storedInputs, {
+      target: dshTarget,
+      dshVersion: DSH_VERSION,
       dependencies,
       overrides,
       pinnedPackageNames: [...pinnedPackageNames]
@@ -865,7 +868,14 @@ if (installMode === 'update') {
   copyFileSync(generated, harnessLockPath)
   // inputs 快照与 lockfile 成对提交：lockfile 不记录 overrides，没有快照就无法
   // 判断「这份 lockfile 是不是当前输入生成的」（见 harness-lockfile.mjs 模块文档）。
-  writeFileSync(harnessLockInputsPath, `${JSON.stringify({ dependencies, overrides }, null, 2)}\n`)
+  // `target` / `dshVersion` 是**自证字段**：目录键是**目标键**（`harness-locks/<target>/`），
+  // 同一目标目录在通道内长期复用，光看路径判断不出这份快照属于哪一版输入。误把另一
+  // 目标的 inputs.json 复制进来时，`lockInputsMatch` 的第 4 条规则据这两个字段判红，
+  // 而不是「静默按新位置的键值走」。
+  writeFileSync(
+    harnessLockInputsPath,
+    `${JSON.stringify({ target: dshTarget, dshVersion: DSH_VERSION, dependencies, overrides }, null, 2)}\n`
+  )
   log(`lockfile → ${harnessLockPath}`)
   log(`inputs  → ${harnessLockInputsPath}`)
   log('请把 harness-locks/ 下这两个文件一并提交；之后 CI 与本地的组装都会用 npm ci 复现同一棵树')
