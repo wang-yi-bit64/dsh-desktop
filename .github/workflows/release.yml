@@ -129,6 +129,7 @@ jobs:
           npm run verify:profile-names
           npm run verify:drift:self-test
           npm run verify:claims
+          npm run verify:plan-facts
           npm run verify:ipc-surface
           npm run verify:ipc-surface:self-test
           npm run verify:shell-pages

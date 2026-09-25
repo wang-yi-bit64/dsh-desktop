@@ -208,6 +208,20 @@ jobs:
           npm run verify:claims
           npm run verify:claims:self-test
 
+      # 计划文档的事实守卫。它守的是本仓已发生**四次**的一类缺陷——「不重读仓库就写现状」
+      # （锁文件存在性 / 把已完成的事写成待办 / 批次被误标完成 / F1·F4 过期且 §3.2 的字段
+      # 命名与实现反向），以及一个**零守卫的缺口**：所有读 `dshVersion` 的代码都走
+      # `resolveTarget()` 动态解析，**没有任何守卫读文档**，于是改锚点时文档里的版本号
+      # 只能手工同步 —— 2026-09-25 就漏了三处，全靠人肉发现。
+      # 这条把两件事变成会失败的检查：① 文档里的「钉住的 DSH 版本」必须等于锚点；
+      # ② 计划文档的批次状态词在「头部摘要 / §5 标题 / §10.1 表行」三处必须自洽（账本是 SSOT）。
+      # 自带可证伪自检（30 项），含三条复刻真实事故形态的负向夹具
+      # （旧锚点未同步 / 整张声明表被删 / 头部与表行状态词打架）。
+      - name: Verify plan facts (docs ↔ anchors)
+        run: |
+          npm run verify:plan-facts
+          npm run verify:plan-facts:self-test
+
       # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
       # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
       # 断线跨语言（Rust ↔ HTML），编译器看不见，只能静态比对：

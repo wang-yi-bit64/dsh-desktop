@@ -40,6 +40,8 @@
     "verify:profile-names:self-test": "node scripts/verify-profile-names.mjs --self-test",
     "verify:claims": "node scripts/verify-claims.mjs",
     "verify:claims:self-test": "node scripts/verify-claims.mjs --self-test",
+    "verify:plan-facts": "node scripts/verify-plan-facts.mjs",
+    "verify:plan-facts:self-test": "node scripts/verify-plan-facts.mjs --self-test",
     "check:patch-applicability": "node scripts/check-patch-applicability.mjs",
     "report:patches": "node scripts/report-patches.mjs",
     "verify:harness-inject": "node scripts/verify-harness-inject.mjs",

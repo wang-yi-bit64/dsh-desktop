@@ -173,6 +173,11 @@ npm run verify:profile-names:self-test
 npm run verify:claims
 npm run verify:claims:self-test
 
+# 19b. 计划事实守卫（文档里的「钉住的 DSH 版本」必须等于锚点；
+#      计划文档的批次状态词在「头部摘要 / §5 标题 / §10.1 表行」三处必须自洽）；含自测
+npm run verify:plan-facts
+npm run verify:plan-facts:self-test
+
 # 20. 上游版本漂移哨兵（**逐通道**对照各自的 dist-tag；真检查会因上游领先而红，
 #     跑在 nightly；CI 只跑自测）
 npm run verify:drift

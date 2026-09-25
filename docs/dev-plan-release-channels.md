@@ -1,10 +1,16 @@
 # 发布通道重构计划：正式版 / 测试版 / 开发版三通道对齐上游版本控制
 
-> 状态：**部分已落地**。批次 1a / R1 已完成，其余待开工；本文是计划，不是既成事实。
+> 状态：**部分已落地**。P0 事实校验脚本**已完成**（`npm run verify:plan-facts`，自测 30 项）；
+> 批次 1b **半完成**（`next` 目标已锚到 `0.1.5-rc.3`；`alpha` 与 `stable` 未做）；
+> **批次 1a / R1 的目录换键迁移已整条撤销**（2026-09-25 改取「目标键 + 内容自证」，见 §5 批次 1a）；
+> 其余待开工。本文是计划，不是既成事实。
 > 范围：版本号语义、tag → 上游运行时的派生、发布门禁、更新源、宣称与文档。
 > 不在范围：补丁分级机制本身、CI 触发策略重构、签名/公证流程改造。
 >
 > **阅读顺序**：先读 §2（主路径及其批次依赖），它决定其余部分的可用性判据；§1 是事实底账，可作查询用。
+>
+> ⚠️ **本文件的状态词曾四次不可信**（1a 被误标完成、F1/F4/B1/B3 过期或与实现反向）。
+> 故 §10.1 的状态表在 `verify-plan-facts.mjs`（P0）落地前**仍只是待验证的声明**。
 
 ---
 
@@ -14,12 +20,17 @@
 
 ⚠️ 事实会过期。本文已在两处栽在同一个形态上：**依据记忆或早先的读盘结果写「现状」，而不重读仓库**。一次是 `harness-locks/` 的存在性（后被提交 `3f3c46c` 推翻），一次是把一件已完成的事（CLI 发布通道退役，HEAD = `64cdd7b`）写成待施工项。因此：**任何一条事实在被当作依据之前，先跑它的取证命令。**
 
+⚠️ **2026-09-25 追加第三、四种形态**（同一根因的两副面孔）：
+
+- **③ 事实移动得比文档快**：上游 `next` 在 09-24 → 09-25 一天内由 `0.1.7-rc.1` 前进到 `0.1.7-rc.2`。凡引用上游 dist-tag 的地方**必须当场重跑命令**，转录值只作历史刻度。
+- 🔴 **④ 文档里的版本号零守卫**：全仓所有读 `dshVersion` 的代码都走 `resolveTarget().dshVersion`（**动态解析**），**没有任何守卫读文档**。于是「改锚点」时文档里的现状声明只能靠人手工同步，漏了不会报红——本轮 `next` 从 `rc.2` 改到 `rc.3` 时就漏了三处（`README` 双语表、`docs/dsh-upgrade-checklist.md` 锚点行、`patches/LAYERS.md` 通道表），全部靠人肉发现。这是 P0 脚本（§10.1）必须覆盖的第二条判据。
+
 | # | 事实 | 证据 | 对发布流程的后果 |
 |---|------|------|----------------|
-| F1 | 上游三个 dist-tag：`latest`=0.1.5-rc.3、**`next`=0.1.7-rc.1**、`alpha`=0.1.7-alpha.2 | `npm view @deepseek-ai/dsh dist-tags`（**2026-09-24 复测**） | 🔴 **`latest` 与 `next` 已分叉**（原表述「两者指向同一 rc」已过期）。上游没有真正的 stable 线这一条仍成立；但 D2/D4 的日常形态随之改变——**「正式版钉旧 rc、测试版跟新 next」成为常态**，D4 的分支条件（版本分叉）已被激活。详见 [`docs/risk-review-release-channels.md`](risk-review-release-channels.md) §2 |
+| F1 | 上游三个 dist-tag：`latest`=0.1.5-rc.3、**`next`=0.1.7-rc.2**、`alpha`=0.1.7-alpha.2 | `npm view @deepseek-ai/dsh dist-tags`（**2026-09-25 复测**；`next` 在 09-24 → 09-25 一天内由 `0.1.7-rc.1` 前进到 `0.1.7-rc.2`——**这条事实移动很快，引用前务必重跑**） | 🔴 **`latest` 与 `next` 已分叉**（原表述「两者指向同一 rc」已过期）。上游没有真正的 stable 线这一条仍成立；但 D2/D4 的日常形态随之改变——**「正式版钉旧 rc、测试版跟新 next」成为常态**，D4 的分支条件（版本分叉）已被激活。详见 [`docs/risk-review-release-channels.md`](risk-review-release-channels.md) §2 |
 | F2 | 本仓只有 `next` / `alpha` 两条通道 | `scripts/dsh-targets.mjs:59-73` | 无「正式版」这一等公民 |
 | F3 | 无后缀版本号（正式版）**回落到默认目标 `next`** | `scripts/dsh-targets.mjs:143-147` | 发「正式版」= 悄悄捆一个上游 rc，Release 正文与产物都不声明这件事 |
-| F4 | ~~`harness-locks/` 不存在，打任何 tag 都会三平台全红~~ **已过期**：两条通道的锁文件现已提交。真正的残留缺口是**键与新鲜度**：锁文件当时按 `target` 命名，且两份都锚在落后版本。现已按精确版本键重建（见批次 1a） | `git ls-tree HEAD harness-locks` + 读 `inputs.json` 的 `dependencies['@deepseek-ai/dsh']`；CI 硬失败逻辑在 `scripts/prepare-harness.mjs:399-411` | 发布不再被「没有锁」卡住；但**每推进一次锚点就必须重生成一次锁**（`next` 线在线解析约 40 分钟 / 8 GB 堆）。此项已闭环 |
+| F4 | ~~`harness-locks/` 不存在，打任何 tag 都会三平台全红~~ **已过期**：两条通道的锁文件均已提交。真正的残留缺口是**键与新鲜度**：锁文件按 `target` 命名（`harness-locks/next/`、`harness-locks/alpha/`），且两份都锚在落后版本。**目录键的处置已于 2026-09-25 改判**：不做版本键迁移，改取「目标键 + 内容自证」，理由见 §5 批次 1a | `git ls-tree HEAD harness-locks` + `cat harness-locks/<target>/inputs.json`（**2026-09-25 实测**：两目录的 `inputs.json` 均含 `target` + `dshVersion` 自证字段）；CI 硬失败逻辑在 `scripts/prepare-harness.mjs` | 发布不再被「没有锁」卡住；但**每推进一次锚点就必须重生成一次锁**（`next` 线在线解析约 40 分钟 / 8 GB 堆）。此项已闭环 |
 | F5 | 两条通道锚点均落后上游，且哨兵只提示不阻断 | 实跑 `npm run verify:drift`（两条都 ⚠️） | 「对齐上游版本控制」必须包含一次真实升级 + 补丁移植，否则只是改文档 |
 | F6 | 更新源单端点 `releases/latest/download/latest.json` | `src-tauri/tauri.conf.json:21-24` | `releases/latest` 天然排除 prerelease ⇒ **预发布通道的用户永远收不到自动更新**，只能手工重装 |
 | F7 | `increment()` 一律丢弃预发布后缀；`bump auto` 只认 major/minor/patch | `scripts/version.mjs:100-109` | 表达不出「0.7.0-alpha.5 → alpha.6」与「0.8.0-rc.2 定稿为 0.8.0」。历史 12 个 tag 里 6 个预发布全靠手工 `version.mjs set` |
@@ -110,7 +121,7 @@ git push origin main --follow-tags                # tag 推上去即触发 relea
 ### 3.1 列车与晋升规则（要能被判据校验，不只是散文）
 
 1. **新特性只进 `alpha`**，且 alpha 跑在**下一个 base**（stable 在 0.8.0 时，alpha 是 0.9.0-alpha.N）。
-2. **`alpha → rc` = 冻结 + 晋升**：同一 base，内容来自 alpha 某个已验证版本；补丁集按 `patches/<channel>/` 移植并重算行号。
+2. **`alpha → rc` = 冻结 + 晋升**：同一 base，内容来自 alpha 某个已验证版本；补丁集按 `patches/<target>/` 移植并重算行号。
 3. **`rc → stable` = 定稿**：只允许 fix，不允许新特性；运行时锚点从 `next` 切到 `latest` 并要求恰等（见裁定 D2）。
 4. **hotfix 从 stable 落，向前回灌** `rc` / `alpha`；不允许某个修复只存在于中间通道。
 5. 三条通道**都从 `main` 打 tag**，不引入 per-channel 分支模型。
@@ -119,8 +130,16 @@ git push origin main --follow-tags                # tag 推上去即触发 relea
 
 - **发布通道（release channel）** = 桌面版本号后缀 = `stable` / `rc` / `alpha`，是对外语义。
 - **运行时线（upstream line）** = 上游 npm dist-tag = `latest` / `next` / `alpha`，是内部装配语义。
-- 二者在 `dsh-targets.mjs` 里拆成 `channel`（对外后缀）与 `distTag`（对上游）两个字段，**不再被迫同值**。这是本计划的结构性改动，改名只是它的副产品。
-- **内容边界**：`patches/` 按通道为**作者区**，但「这一版实际打了哪一套补丁」不能由目录名承担——相邻上游预发布版本的补丁集常只差 1~2 条，按版本全量铺目录会产生多棵近乎相同的树。故冻结方式取**内容哈希**：`patchSetHash` 在组装那一刻算定、写进 `MANIFEST`。细节见批次 R1/R2。
+- 二者在 `dsh-targets.mjs` 里拆成两个字段，**不再被迫同值**。这是本计划的结构性改动，改名只是它的副产品。
+  > 🔴 **字段名与本计划初稿相反（2026-09-25 实测）**：初稿把「对外后缀」叫 `channel`、「对上游」叫 `distTag`；
+  > **已落地的实现是反过来的**——`channel` = **上游 npm dist-tag 名**（客观事实，不可改），
+  > `publishChannel` = **桌面 tag 的预发布后缀**（本仓命名，可改）。
+  > 当前 `next` 目标实测为 `channel: 'next'` + `publishChannel: 'rc'`：上游 `next` 这条线当下指向一个
+  > `rc` 阶段版本，所以桌面发 `v0.7.0-rc.1` 却要组装 `next` 目标的补丁集，这是**正常**的。
+  > 查 `publishChannel` 的是 `targetForVersion` / `--channel-of`；查 `channel` 的是漂移哨兵（用 `upstreamTagFor`）。
+  > **若把两者强行同名**，想改桌面后缀时就会连带去查一个上游不存在的 dist-tag，让哨兵静默退回 `latest` 并永久误报。
+  > 本文余下凡写 `distTag` 处**一律读作 `channel`**；写「通道」处按上下文取其中一个，不要按本节的初稿命名照抄。
+- **内容边界**：`patches/` 按**目标键**为**作者区**（`patches/<target>/`，键名不随版本变），但「这一版实际打了哪一套补丁」不能由目录名承担——相邻上游预发布版本的补丁集常只差 1~2 条，按版本全量铺目录会产生多棵近乎相同的树。故冻结方式取**内容哈希**：`patchSetHash` 在组装那一刻算定、写进 `MANIFEST`。细节见批次 R1/R2。
 
 ### 3.3 不变量
 
@@ -129,7 +148,7 @@ git push origin main --follow-tags                # tag 推上去即触发 relea
 | CH-1 | `tag == package.json == Cargo.toml == tauri(继承)` | 已有：`version.mjs check --tag` |
 | CH-2 | **channel 只从版本号派生，不得独立存储**（既不在 tag 之外声明一次，也不写进配置文件） | 已有 `--channel-of`；新增 `verify-release-workflow` 断言不存在第二处通道声明 |
 | CH-3 | 每次发布的 `(desktopVersion, dshVersion, channel, upstreamTag, lockfileHash, patchSetHash)` 必须**全部**落进 `MANIFEST.json` | 批次 R2 |
-| CH-4 | 运行时锚点必须是**上游真实发布过的精确版本**（npm 上存在该版本；不是浮动的 dist-tag 解析结果） | 批次 R1 + preflight 联网核 |
+| CH-4 | 运行时锚点必须是**上游真实发布过的精确版本**（npm 上存在该版本；不是浮动的 dist-tag 解析结果） | preflight 联网核（原写「批次 R1」，但 R1 的目录键部分已撤销；该不变量与目录键无关） |
 | CH-5 | 上游未发布对应版本 ⇒ 该次发布不得存在（即禁止「我们自己凭空造一个版本号」） | preflight：`npm view @deepseek-ai/dsh@<锚点>` 必须命中 |
 
 **明确不采纳**的三条：`DESKTOP_VERSION === DSH_VERSION`、`GIT_TAG === v${DSH_VERSION}`、`RUNTIME_VERSION === DESKTOP_VERSION` —— 反证见 §4-D0 的 F9。
@@ -177,11 +196,12 @@ B 方案：`Desktop Version == 上游 DSH Version`，tag 直连上游，channel 
 | ↳ 若退一步「等上游发新版时一起发」 | 不涉及 | ⚠️ 不是发不出，而是**要等**。等多久由上游决定——F11 实测空窗 **12 天**，期间三次壳层修复（WebView2Loader 判据 / portable shell / npm 堆上限）都得压着。对启动即 `0xC0000135` 静默崩溃这类缺陷，12 天不可接受 ⇒ 结论不变，但**代价按「延迟」而非「无法发布」如实记** |
 | 上游快速迭代期（近 3 周 6 个版本） | 我们挑能构建的版本发，其余跳过 | 同样只能跳，但跳过期间连壳层修复也发不出去 |
 | 正式版能否先于上游 stable | 能（D2 因此存在，须如实声明） | 不能，「没有 DSH stable 就没有 Desktop stable」——这是 B 最干净的地方 |
-| 补丁/锁文件目录键 | 精确版本键（批次 R1） | 精确版本键（天然） |
+| 补丁/锁文件目录键 | 目标键 + 内容自证（2026-09-25 改判，原为「精确版本键 / 批次 R1」） | 精确版本键（天然） |
 | 与既有 12 个 tag 的连续性 | 连续（0.7.0-alpha.5 之后 0.8.0-rc / 0.9.0-alpha） | ❌ **版本号倒退**（0.7.x → 0.1.x），老用户 updater 永远收不到，必须手工重装一次 |
 | 上游 tag 形态 | 无关 | 需 `dsh-` 前缀映射，且上游**没有 GitHub Release** 只有 tag（F10），「对齐上游 Release」这个说法在对象上并不成立 |
 
-- ✅ **裁定：取 A**，同时吸收 B 的三点：锁文件按精确版本键、MANIFEST 记全身份元组、上游发现做成「同步 PR 而非自动发布」（批次 R1/R2/R3）。
+- ✅ **裁定：取 A**，同时吸收 B 的两点：MANIFEST 记全身份元组、上游发现做成「同步 PR 而非自动发布」（批次 R2/R3）。
+  > ⚠️ 原先吸收了 B 的**三点**，其中「锁文件按精确版本键」已于 2026-09-25 撤回（改取「目标键 + 内容自证」，理由见 §5 批次 1a）。撤回的理由与 B 无关：那条改动**买不到它的代价**。
 - ❌ **否 B 的理由**：唯一但致命——它让「壳层修了 bug」这件事没有发布通道。B 换来的简洁是真的，但它买走的正是本仓**最高频**的那类发布（即 §2 那条路径）。
 
 ### D1 测试版后缀：`rc`（裁定）vs 保留 `next`
@@ -210,8 +230,8 @@ B 方案：`Desktop Version == 上游 DSH Version`，tag 直连上游，channel 
 
 ### D4 stable 的补丁集：与 rc 版本相同则复用（裁定）
 
-- ✅ 裁案：`stable` 在 `dshVersion` 与 `rc` **逐字相同**时复用 `patches/rc/`；一旦两线版本分叉，必须存在 `patches/stable/`，否则 preflight 判红。
-- ❌ 三条通道各一份目录：模型最一致、无例外分支，但今天 `latest`==`next` 意味着**手抄 14 个逐字节相同的补丁**，且每次同步升级都要改两份。
+- ✅ 裁案：`stable` 在 `dshVersion` 与 `rc` **逐字相同**时复用 `patches/<rc 的目标键>/`；一旦两线版本分叉，必须存在独立的目标目录，否则 preflight 判红。
+- ❌ 三条通道各一份目录：模型最一致、无例外分支，但每条「版本恰好相同」的线上都要**手抄 14 个逐字节相同的补丁**，且每次同步升级都要改两份。
 - 复用的例外必须显式（别名复用只由「版本相同」派生，不允许手工指定），否则就是 F3 那类「静默捆错运行时」的新变体。
 
 
@@ -229,54 +249,97 @@ B 方案：`Desktop Version == 上游 DSH Version`，tag 直连上游，channel 
 
 ---
 
-### 批次 1a — 锁文件新鲜度与换键迁移 ❌ **待办（曾被误标为「已完成」）**
+### 批次 1a — 锁文件新鲜度与目录键处置 ❌ **原计划的换键迁移已整条撤销；自证化部分已落地**
 
-⚠️ 本节状态于 2026-09-24 由「✅ 已完成」改回「**待办**」。误标的原因是把「计划里描述过」当成了「仓库里已完成」——与 §1 开头承认的「不重读仓库就写现状」是同一形态。**实测反证**：
+⚠️ 本节状态曾于 2026-09-24 由「✅ 已完成」改回「**待办**」。误标的原因是把「计划里描述过」当成了「仓库里已完成」——与 §1 开头承认的「不重读仓库就写现状」是同一形态。**实测反证**（该次取证实测有效，保留为记录）：
 
 ```text
-$ ls harness-locks/        → alpha  next          （仍是通道键，未换成版本键）
+$ ls harness-locks/        → alpha  next          （仍是目标键，未换成版本键）
 $ ls patches/              → LAYERS.md alpha next （patches/next → patches/rc 未发生）
 ```
 
-要做的是两件事：
+#### 1a-1 换键迁移（`harness-locks/<版本>/`、`patches/next → patches/rc`）—— 🔴 **2026-09-25 整条撤销**
 
-- **换键迁移**：`harness-locks/next/` → `harness-locks/0.1.5-rc.2/`、`harness-locks/alpha/` → `harness-locks/0.1.6-alpha.2/`（与批次 R1 同一批改动做，避免动两次目录）。通道名从此只是「读哪个版本键」的入口。
-- **补新锁**：为三条通道的锚点各备一份锁（`stable` 与 `rc` 同版本时同源，不重复生成）。若 1b 已批准，则直接生成推进后的版本，旧版本锁保留用于重建历史包。
-- 目录更名同步：`patches/next → patches/rc`、`packages/next → packages/rc`（含 `verify:patches` 的目标枚举、`patches/LAYERS.md` 表述）。
-- 🔴 **更名最容易漏的雷：`patches/<target>/` 的静默降级（2026-09-24 取证）**。`patches/LAYERS.md`
-  的分级策略让 `brand` / `ui-behavior` 层的补丁失败**降级而非中断**。于是「`patchesDirFor` 指到新路径、
-  但补丁文件还在旧路径」这种更名半成品会**打出一个能装能跑、只是品牌/UI 补丁全丢的包**，而
-  `verify:harness-tree` 只看树健全性、未必看得见某个补丁没应用。这属本仓「被前置失败掩盖的潜伏缺陷」族。
-  **对策**：本批次必须新增一条**硬断言**——`patchesDirFor(target)` 指向的目录**必须存在且非空**，
-  且「整个补丁目录缺失」**不适用** `LAYERS.md` 的降级策略（那是配置错误，不是补丁冲突）。
-  存量物清点（五类，逐项确认）：
+**裁定：目录键保持「目标键」不变，改以内容自证替代。** 撤销的不是「原计划错了」，而是**它买不到它的代价**：
 
-  | # | 存量物 | 残留形态 | 失效表现 | 危险度 |
-  |---|---|---|---|---|
-  | S1 | `src-tauri/resources/MANIFEST.json` | `"target": "next"` | 快速路径断言失配 → 重新组装 300MB（变慢不变错） | 🟠 |
-  | S2 | staging 目录 | 目录名含 `next` | 新目录不存在 → 重下载；**旧目录永久残留** | 🟠 |
-  | S3 | `packages/next/*.tgz` | 路径含 `next` | 找不到 tgz → **硬失败**（好） | 🔴 |
-  | S4 | `patches/next/*.patch` | 路径含 `next` | **静默降级**（见上） | 🔴 **最高** |
-  | S5 | `harness-locks/next/` | 目录名 + `inputs.json` 内容 | 按目标推导路径，找不到 | 🔴 |
+| 论据 | 取证 |
+|---|---|
+| 计划 §R1 的核心理由「已发布版本无法精确重建」**不准确** | 只有 `v0.7.0-alpha.7` 一个 tag 含 `harness-locks/`；更早的 tag **全都没有**（锁机制 2026-09-23 才引入）。计划举的 `v0.7.0-alpha.4` 当时根本没有锁文件 ⇒ **自 `alpha.7` 起 git tag 已冻结锁**，改目录键对此**零增量** |
+| 改名的耦合面极小 ⇒ 成本不是障碍、**收益**才是问题 | `harness-lockfile.mjs:56` 是目录路径的唯一产地；**锁文件内容不含 `harness-locks` 路径** ⇒ 改名**不需要重生成锁**（不涉及那次 40 分钟解析） |
+| 目标键与版本键的信息量差异可由自证字段补齐 | 版本键能回答的「这份快照属于哪一版」，`inputs.json` 的 `dshVersion` 同样能回答，且**改锚点时无法漏**（漏了判红） |
+| `patches/` 更名的实际风险高于收益 | 计划自己记过：`patches/<target>/` 的静默降级会让更名半成品打出「能装能跑、补丁全丢」的包。**一个收益存疑的改名，不值得引入这一类风险** |
 
-- ⚠️ **`inputs.json` 缺自证字段（2026-09-24 实测）**：其结构实测为
-  `{ "dependencies": { "@deepseek-ai/dsh": "...", "node": "...", "pnpm": "..." }, "overrides": {...} }`，
-  **没有任何「这份 inputs 属于哪个目标/版本」的自证**。若它被误复制到另一目标目录，比对会
-  **静默按新位置的键值走**。本批次顺带加一个 `target` 字段，与 MANIFEST 的做法对齐。
-- **验收（可伪证）**：
-  1. `npm run prepare:harness` 在三条通道下都命中 `npm ci` 模式、**不打印「回退在线解析」警告**。
-  2. `inputs.json` 的依赖摘要在**另一台机器 / 清空 staging** 后能复算出同一 `lockfileHash`（可复现性自证）。**伪证**：改一条 `inputs.json` 的依赖项 → 重算值必须变化。
-  3. `npm run verify:patches` 全绿；`patches/` / `packages/` / `harness-locks/` 下**不留旧通道名残留**（`grep` 命中必须逐条能用「读历史/别名」解释）。
-  4. **不复现本次误标**：本节状态词与实跑结果一致（见 §1 的 P0 事实校验脚本）。
-  5. **负向·补丁目录缺失必须判红**（S4 的直防）：令 `patchesDirFor(target)` 指向一个不存在的目录
-     → 必须**硬失败**，**不得**因 `LAYERS.md` 降级而放过。这是本批次最重要的一条新判据。
+**撤销的落地范围**（下表全部**不做**）：
+
+| # | 原计划动作 | 现状与处置 |
+|---|---|---|
+| 1 | `harness-locks/next/` → `harness-locks/0.1.5-rc.2/` | ❌ 不做。实测键仍为 `next` / `alpha`，**这就是最终形态** |
+| 2 | `harness-locks/alpha/` → `harness-locks/0.1.6-alpha.2/` | ❌ 不做 |
+| 3 | `patches/next → patches/rc` | ❌ 不做 |
+| 4 | `packages/next → packages/rc` | ❌ **对象已消失**：`packages/` 目录整体删除（三条 vendored tgz 与 registry 同版本 tarball **逐字节一致**，确认为冗余后 `git rm`）。`packagesDirFor` 仍存在但当前无产物 |
+| 5 | 与批次 R1「同一批改动做」 | ❌ 不做（见批次 R1） |
+
+#### 1a-2 `inputs.json` 自证字段 —— ✅ **已落地，且比原计划更强**
+
+原计划只要求加 `target`。**实际落地加了两项**：`target` + `dshVersion`。
+
+```jsonc
+// harness-locks/next/inputs.json —— 2026-09-25 实测
+{ "target": "next", "dshVersion": "0.1.5-rc.3", "dependencies": { … }, "overrides": { … } }
+```
+
+- 判据落点：`scripts/harness-lockfile.mjs` 的 `lockInputsMatch()` **规则 4**——快照自证的 `target` + `dshVersion` 必须与本次组装一致，**字段缺失同样判红**（否则这条强化对「加字段之前生成的旧快照」静默放行，等于没加）。
+- **为什么字段必须两个**：目标键目录在通道内长期复用（`next/` 从 rc.2 一路用到 rc.3），光看路径判断不出这份快照属于哪一版输入；而只加 `target` 挡不住「同一目标内锚点已变但快照未重生成」这一类。
+
+#### 1a-3 `patches/<target>/` 存在性硬断言（S4）—— ⚠️ **半落地（组装期仍是开口）**
+
+计划的判据是「整目录缺失**不适用**降级策略（那是配置错误，不是补丁冲突）」。**实测现状分两层，只有一层被覆盖**：
+
+| 层 | 现状 | 是否达标 |
+|---|---|---|
+| 静态门禁 | `patch-layers.mjs:222-224` 在补丁数为 0 时产出 problem；`verify:patches` 据此硬失败。`listPatchFiles` 对**目录不存在**返回 `[]` ⇒ 缺目录也会命中该 problem | ✅ 达标（CI 与 release preflight 都跑 `verify:patches`） |
+| **组装期** | 🔴 `prepare-harness.mjs:930-933`：`files.length === 0` ⇒ 打印一行 `patches/<target>/ 为空，跳过补丁阶段` 后 **`return`** | ❌ **未达标**：这正是 S4 描述的静默降级——一个「配置错误」被当成「没什么要做」，组装出**零补丁**的包且不报错。另 `:576` 的指纹计算也把缺目录降级成字面量 `'no-patches'` |
+
+**遗留待办（仍未做）**：把组装期这条从「跳过」改为**硬失败**（区分「目录不存在 / 为空」= 配置错误 vs「个别补丁冲突」= 适用分层降级）。判据须配可伪证夹具：令 `patchesDirFor(target)` 指向不存在目录 ⇒ 组装必须**硬失败**。
+
+#### 1a-4 存量物清点（S1~S5）—— **判定整体失效：它们是 target 键，不是残留**
+
+| # | 原判「残留形态」 | 撤销后的判定 |
+|---|---|---|
+| S1 | `MANIFEST.json` 的 `"target": "next"` | ✅ **不是残留**，是正式值（目标键即正式键） |
+| S2 | staging 目录名含 `next` | ✅ 同上 |
+| S3 | `packages/next/*.tgz` | ✅ 目录已删除，对象不存在 |
+| S4 | `patches/next/*.patch` | ⚠️ 路径本身**不是**残留；但组装期的静默降级**是真缺陷**（见 1a-3） |
+| S5 | `harness-locks/next/` | ✅ **不是残留**，是正式值 |
+
+#### 1a-5 验收（可伪证）—— 按撤销后的实际范围改写
+
+1. ~~`prepare:harness` 在**三条通道**下都命中 `npm ci` 模式~~ → **不存在三条通道**（本仓只有 `next` / `alpha` 两条）。改为：两条目标各自命中 `npm ci`、**不打印「回退在线解析」警告**。
+2. `inputs.json` 的依赖摘要在另一台机器 / 清空 staging 后能复算出同一 `lockfileHash`。**伪证**：改一条 `inputs.json` 的依赖项 → 重算值必须变化。
+3. ~~`patches/` / `packages/` / `harness-locks/` 下不留旧通道名残留~~ → **撤销**：这些名字就是正式键，该条判据已无对象。
+4. **不复现本次误标**：本节状态词与实跑结果一致（见 §1 的 P0 事实校验脚本）。**这条升级为最高优先级**——本文件已在同一形态上失败四次。
+5. **负向·补丁目录缺失必须判红**（S4 的直防，**组装期仍是开口**）：见 1a-3 的遗留待办。
+
+**批次结论**：本批次**只剩两项待办** — ① 1a-3 的组装期硬失败；② 1a-5 第 4 条的 P0 事实校验脚本。其余（换键迁移、目录更名、`packages/`、存量物清理）**均已撤销或已完成**。
 
 ---
 
-### 批次 1b — 锚点对齐上游现值
+### 批次 1b — 锚点对齐上游现值 ⚠️ **半完成（`rc` 已完成；`alpha` 与 `stable` 未做）**
 
-- `rc`: 0.1.5-rc.2 → rc.3；`alpha`: 0.1.6-alpha.2 → 0.1.7-alpha.2；`stable` 锚到 `latest`。
-- 工序走 `docs/dsh-upgrade-checklist.md` 全流程：补丁移植 → `recount-patches` 重算行号 → `check:patch-applicability`（±20 窗口）→ 重生成 lockfile → `report:patches` → 三平台烟雾 → 体积三口径对比。
+原计划三项，逐项现状（**2026-09-25 实测**）：
+
+| 目标 | 原计划 | 现状 | 状态 |
+|---|---|---|---|
+| `rc`（= `next` 目标） | 0.1.5-rc.2 → rc.3 | `next` 目标的 `dshVersion` = **0.1.5-rc.3**（= 上游 `latest`） | ✅ **已完成**（`f12e153` 改锚 + 加自证字段，`bc60e97` 重生成锁文件 3m48s） |
+| `alpha` | 0.1.6-alpha.2 → 0.1.7-alpha.2 | 仍是 **0.1.6-alpha.2**（上游 `alpha` = 0.1.7-alpha.2） | ❌ **未做** |
+| `stable` | 锚到 `latest` | 本仓**没有 `stable` 目标**（只有 `next` / `alpha`，F2） | ❌ 未做（依赖批次 2） |
+
+- ⚠️ **`rc` 半程与计划的差别，须显式说明**：本轮只锚到 `0.1.5-rc.3`（= 上游 `latest`），
+  **没有跟进上游 `next` 的 `0.1.7-rc.1`** —— 那是跨两个 minor 的升级，移植成本另立批次。
+  这就是 §1-F1「`latest` 与 `next` 已分叉」在本仓的**第一次实际表现**：`next` 目标的 `channel`
+  指向 `next` 线，而锚的却是 `latest` 那一版。**这不是 bug**，是「先锚稳、再升」的刻意选择；
+  但正因为它反直觉，必须写进正文而不是留在提交信息里。
+- 工序走 `docs/dsh-upgrade-checklist.md` 全流程：补丁移植 → `recount-patches` / `relocate-patch-hunks` 重算行号 → `check:patch-applicability`（±20 窗口）→ 重生成 lockfile → `report:patches` → 三平台烟雾 → 体积三口径对比。
 - ⚠️ 这一批是唯一会真实改变产物内容的一批。若只想要「流程重构」，可先只做 2~6 + R 系列，把 1b 另立一次升级提交。
 - 🟢 **锁文件生成成本分摊（2026-09-24 取证：机制**已经存在**，缺口是流程纪律）**：
   在线解析约 **40 分钟 / 8GB 堆**（`npm install --package-lock-only`）。本仓已有全部所需机制——
@@ -284,27 +347,33 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
   CI 上 lockfile 缺失/失配**硬失败**、非 CI 才允许在线解析。所以**不需要新设计**，
   只需把工序写成纪律：**在本地或独立分支生成一次，`package-lock.json` + `inputs.json` 成对提交**，
   此后 release CI 的三处组装（`build` matrix ×3 + `portable`）全部零解析。**一次性成本换三倍收益。**
-- 🔴 **顺序硬约束**：本批次（生成 lockfile）**必须在批次 1a 之后**。否则为旧通道键目录生成的
-  锁在 1a 改成版本键后**立刻成为孤儿**，还得重跑 40 分钟。同理，生成前须确认
-  `dsh-targets.mjs` 的锚点已 `-- set` 到目标版本（实测现状：`next: 0.1.5-rc.2` 硬编码，
-  **比上游 `latest` 的 `0.1.5-rc.3` 还旧**；`alpha: 0.1.6-alpha.2` vs 上游 `0.1.7-alpha.2`）——
-  否则白跑 40 分钟。
+  > ✅ **2026-09-25 兑现一次**：`next` 锚点改动后按此纪律生成，实测 **3 分 48 秒**——远低于 40 分钟的估计
+  > （那是**首次冷解析**的代价；改锚点属**增量解析**）。质量判据：旧版本残留 0 · `packages/next` 引用 0 ·
+  > 同名包多版本 0 · 244 副本 / 244 唯一包名 · `0.1.5-rc.3 × 231`。
+- ~~🔴 **顺序硬约束**：本批次（生成 lockfile）必须在批次 1a 之后~~ → **2026-09-25 撤销**：
+  该约束的前提是 1a 会把目录改成版本键（那样先生成的锁**立刻成孤儿**）。**1a 的换键已整条撤销 ⇒ 约束消失**，
+  本批次与 1a **无顺序依赖**。仍然成立的是后半句：**生成前须确认锚点已改到目标版本**，否则白跑
+  （实测 `alpha: 0.1.6-alpha.2` vs 上游 `0.1.7-alpha.2` —— **做 alpha 半程前必须先改锚点**）。
 - **验收（可伪证）**：
-  1. `npm run verify:drift` 三条通道输出均为 `ok`。**伪证**：把某一通道的锚点在 `dsh-targets.mjs` 里退回旧值 → 该行必须变 ⚠️。
+  1. `npm run verify:drift` **两条目标**输出均为 `ok`。**伪证**：把某一目标的锚点在 `dsh-targets.mjs` 里退回旧值 → 该行必须变 ⚠️。（原文写「**三条通道**」——本仓只有两条，见 F2。）
   2. `report:patches` 无 `failed` 条目。**伪证**：故意删掉一条补丁的 `retireWhen` 使其无法应用 → 必须出现 `failed`。
+  3. **锚点改动的连带面（2026-09-25 新增——本轮漏了三处）**：改 `dshVersion` 后，`README.md` / `README.zh-CN.md` / `docs/dsh-upgrade-checklist.md` / `patches/LAYERS.md` 里的版本号**必须同步**，且**必须由判据守**。现状**零守卫**（所有读 `dshVersion` 之处都走 `resolveTarget()` 动态解析，没有任何守卫读文档）⇒ 见 §1 的第三/四种形态与 P0 脚本。
 
 ---
 
 ### 批次 2 — 通道契约层
 
-- `scripts/dsh-targets.mjs`：字段拆 `channel` / `distTag` / `aliasOf`；键改 `stable` / `rc` / `alpha`；`targetForVersion` 无后缀 → `stable`（**删掉「正式版回落默认目标」这条规则**）；`patchesDirFor` / `packagesDirFor` / `stagingDirFor` 走别名复用（D4）；`resolveTarget` 接受弃用别名 `next`。
-- 下游同步：`verify-upstream-drift.mjs` 三通道各自对照自己的 `distTag`；`runtime_manifest.rs` 的身份行能显示 `stable`。
+- `scripts/dsh-targets.mjs`：~~字段拆 `channel` / `distTag` / `aliasOf`~~ → **字段拆分的实际落法见 §3.2**（`channel` = 上游 dist-tag，`publishChannel` = 桌面后缀；**已于 `0fb6d0f` 落地**，与本计划的初稿命名相反）；**仍待办**：加 `aliasOf` 字段、键改 `stable` / `rc` / `alpha`；`targetForVersion` 无后缀 → `stable`（**删掉「正式版回落默认目标」这条规则**）；`patchesDirFor` / `packagesDirFor` / `stagingDirFor` 走别名复用（D4）；`resolveTarget` 接受弃用别名 `next`。
+- 下游同步：`verify-upstream-drift.mjs` 三通道各自对照自己的 `channel`（上游 dist-tag）；`runtime_manifest.rs` 的身份行能显示 `stable`。
 - 🔴 **本批次不需要「清理三平台 CI Cache」（2026-09-24 实测推翻该待办）**。原待办假设了
   `resources/` / `harness-deps/` 被缓存，实测 `release.yml` 全文的缓存面**只有两处**：
   `actions/setup-node@v5` 的 `cache: npm`（键 = `package-lock.json`）与 `Swatinem/rust-cache@v2`
   （键含 `Cargo.lock` + rustc 版本）。**两者都与目标名无关**，更名不动它们，
-  **无可清理项**。真正需要做的三条见批次 1a（`patches/<target>/` 存在性硬断言、
-  `inputs.json` 加 `target` 自证字段、本机残留的**显式路径清单**清理——不 glob）。
+  **无可清理项**。真正需要做的三条见批次 1a —— **2026-09-25 复核后只剩一条仍是待办**：
+  ~~`patches/<target>/` 存在性硬断言~~（静态层已在 `verify:patches` 覆盖，**组装期仍是开口**，
+  见 1a-3）、~~`inputs.json` 加 `target` 自证字段~~（**已落地**，且多加了 `dshVersion`）、
+  本机残留的**显式路径清单**清理——不 glob（**对象已变**：`packages/` 目录整体删除；
+  `harness-deps/` 是 gitignore 的本机缓存，两个工具的 `--pristine` 默认路径已在本轮改名堵住误用）。
   另注：`actions/upload-artifact@v6` 的 `portable-windows` 是 **artifact 不是 cache**，
   它随保留期自然过期；避免核验时下到旧包的办法是**artifact 名带版本**（已在
   `package-portable.mjs` 的 `portableBaseName(version)` 里）。
@@ -416,7 +485,7 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
   "desktopVersion": "0.8.0-rc.1",
   "dshVersion": "0.1.5-rc.3",
   "channel": "rc",                 // 派生值，但落盘供离线取证
-  "upstream": { "package": "@deepseek-ai/dsh", "distTag": "next", "tag": "dsh-v0.1.5-rc.3" },
+  "upstream": { "package": "@deepseek-ai/dsh", "channel": "next", "tag": "dsh-v0.1.5-rc.3" },
   "desktopCommit": "<sha>",
   "lockfileHash": "...", "patchSetHash": "..."
 }
@@ -429,13 +498,25 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
 
 ---
 
-### 批次 R1 — 装配产物从「按通道键」改为「按精确版本键」
+### 批次 R1 — 装配产物从「按通道键」改为「按精确版本键」❌ **2026-09-25 整条撤销**
 
-现状缺陷：`harness-locks/<target>/` 与 `patches/<target>/` 曾是**活的工作集**，每次推进上游版本就原地覆盖，于是**已发布版本无法精确重建**——`v0.7.0-alpha.4` 那份 lockfile 在下次 alpha 推进后就不存在了。而「能不能重建出当时那个包」恰恰是 Issue 取证的前提。
+> 🔴 **本批次的目录键部分（原「已并入 1a 执行」）已撤销**。撤销理由与取证表见 §5 批次 1a-1，
+> 核心两条：① 计划的核心理由「已发布版本无法精确重建」**不准确**（只有 `v0.7.0-alpha.7` 一个 tag 含
+> `harness-locks/`，更早的 tag 全都没有，锁机制 2026-09-23 才引入；计划举的 `v0.7.0-alpha.4`
+> 当时根本没有锁文件 ⇒ **自 `alpha.7` 起 git tag 已冻结锁**，改目录键对此零增量）；
+> ② 改名**不需要重生成锁**（锁文件内容不含 `harness-locks` 路径），所以成本不是障碍、**收益**才是问题。
+> **本批次仍然成立的部分**：`patchSetHash` 的冻结时点与三平台汇总（下面第 3 条起）——那部分与目录键无关，
+> 且是 §2 主路径的最小可用集之一（R2 + 批次 3 + 批次 5）。
 
-- `harness-locks/<dshVersion>/`：锁文件跟着它锁的版本走，通道只是读取时的入口。（已于批次 1a 落地。）
-- `patches/` 保持**按通道为作者区**（`patches/<channel>/`），但每次发布把「本次实际生效的补丁集」按内容冻结（清单 + 内容哈希进 MANIFEST，见 R2）。
+现状缺陷（**该缺陷描述本身仍然成立，只是结论改为「不改目录键」**）：`harness-locks/<target>/` 与 `patches/<target>/` 是**活的工作集**，每次推进上游版本就原地覆盖，于是**重建已发布版本时，目录里的内容已不是当时那一份**。而「能不能重建出当时那个包」恰恰是 Issue 取证的前提。
+
+- ~~`harness-locks/<dshVersion>/`：锁文件跟着它锁的版本走，通道只是读取时的入口。（已于批次 1a 落地。）~~
+  → **撤销**：键保持 `next` / `alpha`。**冻结能力改由自证字段承担**——`inputs.json` 的
+  `target` + `dshVersion` 在组装时被 `lockInputsMatch` 规则 4 校验，锚点变了而快照未重生成**即判红**；
+  历史可重建性**由 git tag 保证**（锁文件随 tag 冻结，自 `alpha.7` 起）。
+- `patches/` 保持**按目标键为作者区**（`patches/<target>/`，键名不变），但每次发布把「本次实际生效的补丁集」按内容冻结（清单 + 内容哈希进 MANIFEST，见 R2）。
   - ❌ 不做 `patches/versions/<v>/` 全量分版本目录：相邻上游预发布版本的补丁集常常**只差 1～2 条**（`retireWhen` 退役机制正是为此），按版本全量铺开会产生多棵近乎相同的树；补丁的正确性权威是**上游版本 + 行号**，不是目录名。这与 §4-D4 是同一个取舍的两面：**复用要有退出条件**（版本分叉即各自独立）。
+  - ✅ **本小节的结论在撤销后不变**，反而更被支持：既然「不按版本铺目录」，那也没有理由把**外层目录键**改成版本。
 - **📌 冻结时点（写死，否则「冻结的到底是哪套补丁」又是两处真相）**：
   - 计算点 = `prepare-harness.mjs` **应用完补丁、写 `MANIFEST.json` 的那一刻**（不是打 tag 时，也不是 preflight 事后重算）。输入是「本次真正落到盘上的补丁文件内容 + 各自 applied/skipped/failed 结果」，按文件名排序后取 sha256——同一套补丁在任何机器上算出同一值。
   - preflight 的职责因此是**核对**而非计算：三个平台各自上报 MANIFEST，由一个 `needs` 三平台的汇总步骤断言三份 `patchSetHash` 逐字节相同，不同即失败（这说明补丁应用受平台顺序/文件系统差异影响，本身就是缺陷）。⚠️ 这个位置**历史上借住在 `cli-publish`，而该 job 已随 F12 消失**——与 F13 是同一个坑的两种表现：**汇总步骤不能借住在一个随时可能被裁掉的产物 job 上**。落点即批次 4 的 `publish-assets` job——**不要**默认「build 之后」这种在工作流里并不存在的时点。
@@ -453,7 +534,7 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
 
 ```text
 每日 / 手动：发现某通道 dist-tag 有新版本
-  → 建分支：改 dshVersion 锚点 + recount-patches + 重生成 harness-locks/<新版本>/
+  → 建分支：改 dshVersion 锚点 + recount-patches / relocate-patch-hunks + 重生成 harness-locks/<target>/
   → 跑 check:patch-applicability（±20 窗口）+ verify:patches + 三平台 CI
   → 开 Sync PR（正文逐条列：补丁 applied/failed/retired、体积增量、失败项）
   → ★ 人合并才继续；合并后仍需人打 tag
@@ -505,7 +586,8 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
 | 三通道被误解为 CI 成本 ×3 | 低 | 出包仍只在打 tag 时发生；批次 4 不新增定时矩阵，drift 只比版本号 |
 | **删一个 job 时连带删掉它借住的其他职责**（F13 已发生一次：`cli-publish` 一消失，便携版的核验与上传同时没了，而**全部门禁绿灯**——`checkCliArtifactShape` 只管 CLI 不得复活） | 高（已成事实，待修） | 批次 4 建 `publish-assets` 承接「便携版核验 + 上传」与 R1 的三平台哈希汇总；`verify-release-workflow` 补**前向**守卫「必须存在把 `dist/portable/*` 上传到 Release 的步骤」，配可伪证夹具（删掉即判红）。教训写进 AGENTS.md §4 与 ADR-055 |
 | 便携版与 `dsh-host-cli` 被混为「同一类非核心产物」，下一次裁剪顺手把便携版一起摘掉 | 中 | F14 明确两者性质不同：便携版是**桌面交付形态**（免安装 zip，用户直接用它跑），CLI 归档是**仓内工具**且不含 runtime。§6 第 6 项与 AGENTS.md §8.5 都**逐项列出便携版三个文件**，缺任一即判发布不完整 |
-| 提交式 lockfile 与通道名同时改，diff 很大难审 | 中 | 1a（更名 + lockfile）与 2（派生逻辑）分提交；lockfile 是生成物，单独一个提交 |
+| ~~提交式 lockfile 与通道名同时改，diff 很大难审~~ **已失效**（通道名不改了，两者不会同时变） | ~~中~~ 无 | **2026-09-25 撤销**：目录换键已整条撤销 ⇒ 不存在「lockfile 与通道名同时改」的提交。纪律本身保留：lockfile 是生成物，**单独一个提交**（本轮 `bc60e97` 即如此，8 文件 / +2413 −2375） |
+| 🔴 **一个目录名同时承担「目标」与「版本」两种身份**（2026-09-25 新识别） | 中 | `--pristine` 默认路径 `harness-deps/<target>-pristine` 只带目标键，**证明不了里面是哪一版**。实测该目录当时装着 `0.1.7-rc.1` 而目标是 `0.1.5-rc.3`。处置：`relocate-patch-hunks.mjs` 加版本身份判据（`pristineVersionProblem`）、陈旧目录改名自述版本；**`recount-patches.mjs` 仍无该判据**，只能靠人守 |
 
 ---
 
@@ -604,21 +686,21 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
 
 | 批次 | 状态 | 说明 |
 |---|---|---|
-| **P0** | 待办（**前置**） | 事实校验脚本 `verify-plan-facts.mjs`——见 §1 与风险评审 §1.2 |
-| 1a | 待办（**曾被误标完成**） | 换键迁移 + 补新锁；实测证明未发生 |
-| 1b | 待办（**可独立后置**） | 唯一会真实改变产物内容的一批 |
-| 2 | 待办 | 通道契约层 |
+| **P0** | ✅ **已完成**（2026-09-25） | 事实校验脚本 `scripts/verify-plan-facts.mjs`（`npm run verify:plan-facts`，自测 30 项）。**覆盖面**：① 文档里的「钉住的 DSH 版本」必须等于锚点（补上「文档版本号零守卫」这个缺口，本轮曾漏三处）；② 计划文档的批次状态词在「头部摘要 / §5 标题 / §10.1 表行」三处自洽。**不在本脚本内**：上游 dist-tag 类**需联网**的事实（F1 等）由 `verify:drift` 承担 |
+| 1a | ⚠️ **大部分撤销 / 部分完成**（**曾被误标完成**） | 换键迁移与目录更名**整条撤销**（改取「目标键 + 内容自证」）；`inputs.json` 自证字段 ✅ 已落地；**仍待办**：组装期「补丁目录空 ⇒ 硬失败」、P0 |
+| 1b | ⚠️ **半完成**（**可独立后置**） | `rc` 半程 ✅ 已完成（`next` 锚到 `0.1.5-rc.3`）；`alpha`（0.1.6-alpha.2 → 0.1.7-alpha.2）与 `stable` ❌ 未做。唯一会真实改变产物内容的一批 |
+| 2 | 待办 | 通道契约层（**字段拆分已完成**：`channel` / `publishChannel`；仍待办：`aliasOf`、键改三值、删回落规则） |
 | 3 | 待办 | **§2 主路径最小可用集** |
 | 4 | 待办 | 含 F13 便携版修复，**可先于三通道改造单独执行**（Hotfix 独立发布） |
 | 5 | 待办 | **§2 主路径最小可用集**；唯一涉及运行时行为 |
 | 6 | 待办 | 宣称纪律与文档 |
 | R2 | 待办 | **§2 主路径最小可用集** |
-| R1 | 与 1a 同批 | 并入 1a 执行 |
-| R3 | 待办（最后） | 依赖 R1 的锁文件键与 1b 的锚点推进工序 |
+| R1 | ❌ **整条撤销** | 目录键部分不做（见 §5 批次 R1）；**仍成立的部分并入 R2**（`patchSetHash` 冻结时点 + 三平台汇总） |
+| R3 | 待办（最后） | 依赖 1b 的锚点推进工序（**不再依赖 R1 的锁文件键**——那部分已撤销） |
 
-**待办批次数：7 个主干（P0/1a/1b/2/3/4/5/6）+ 2 个 R 系列（R2/R3）。** 各批次内部工作量按需拆分，不预设天数。
+**待办批次数：5 个主干（1b 半程/2/3/4/5/6）+ 1 个 R 系列（R2）。** P0 已落地、1a 与 R1 已缩为「收尾」而非独立批次。各批次内部工作量按需拆分，不预设天数。
 
-> ⚠️ **P0 必须先跑**：本表的状态词在 2026-09-24 被证明**不可信**（1a 被误标为完成）。在 P0 落地前，本表的任何「待办/已完成」都只是**待验证的声明**，不是事实。
+> ⚠️ **P0 已落地（2026-09-25）**：`npm run verify:plan-facts` 已在 CI 中。它守两条——**文档里的版本号必须等于锚点**、**批次状态词三处自洽**。在本表更新状态词时，**必须同时改脚本内的 `PLAN_BATCH_STATUS` 账本**，否则 CI 会红（这是刻意的：第 3 次事故正是「头部说完成、正文说待办」，账本就是让两侧只能对齐到同一个值）。
 
 > 📌 **2026-09-24 追加的四项优化（详见 §10.4 / 优化文档）对本表的修订**：
 >
@@ -627,13 +709,13 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
 > | 批次 2 | **删掉「清理三平台 CI Cache」**（实测无缓存面） | **减一项** |
 > | 批次 4 / F13 | 新增**前置**：先改 `checkCliArtifactShape` 为三向断言（否则恒红） | **加一前置** |
 > | 批次 4 / F13 | 新增**资产清单判据**（13 项逐项枚举）——现状**零判据**是 F13 潜伏的根因 | **加一验收** |
-> | 批次 1a | 新增 **`patches/<target>/` 存在性硬断言**（堵静默降级）+ `inputs.json` 加 `target` 字段 | **加一验收** |
-> | 批次 1b | 锁文件生成**机制已存在**，缺口是流程纪律；但**必须排在 1a 之后**（否则孤儿，重跑 40min） | **加一顺序约束** |
+> | 批次 1a | 新增 **`patches/<target>/` 存在性硬断言**（堵静默降级）+ `inputs.json` 加 `target` 字段 | **加一验收**（2026-09-25 复核：静态层已覆盖、**组装期仍是开口**；`inputs.json` 字段 ✅ 已落地） |
+> | ~~批次 1b~~ | ~~锁文件生成**机制已存在**，缺口是流程纪律；但**必须排在 1a 之后**（否则孤儿，重跑 40min）~~ | **2026-09-25 撤销顺序约束**（1a 换键已撤销 ⇒ 前提消失），流程纪律部分保留 |
 > | 批次 5 | 验收第 4 项**三条判据全部改写**（见批次 5） | **改判据** |
 
 ### 10.2 顺序与依赖
 
-- **建议顺序**：`P0 → （F13 修复）→ 2 → 3 → R2 → 4 → 5 → 6`，`1a` 与 `R1` 同批、`1b` 作为独立升级提交插在任意时点，`R3` 放最后。
+- **建议顺序**：`（P0 ✅ 已落地）→ （F13 修复）→ 2 → 3 → R2 → 4 → 5 → 6`，`1a` / `R1` 只剩收尾项（组装期硬失败、P0 已交付），`1b` 作为独立升级提交插在任意时点，`R3` 放最后。
 - **两个前置插入项**（都不等批次 2）：
   - **P0**：事实校验脚本。理由——本计划已在同一形态上失败三次，靠纪律重校已被证伪。
   - **F13 + CLI 正文段**：当前 HEAD 上的真实缺陷（资产少 3 个 + 正文声明不存在的 CLI 资产），**且都在全部门禁绿灯下发生**。
@@ -644,21 +726,22 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
   [`docs/optimization-release-channels.md`](optimization-release-channels.md) §3.1。
 - ⚠️ **F13 的真守卫是「资产清单判据」**：现状**没有任何判据断言资产数**——「期望值 13」
   只写在 `AGENTS.md` 里。这正是 F13 能藏这么久的根因。Hotfix 必须顺手补上逐项枚举的资产断言。
-- ⚠️ **`1a` 必须早于 `1b` 的锁文件生成**（否则刚生成的 lockfile 在目录改版本键后立刻成孤儿，
-  **重跑 40 分钟 / 8GB 堆**）。见优化文档 §4.2。
+- ~~⚠️ **`1a` 必须早于 `1b` 的锁文件生成**（否则刚生成的 lockfile 在目录改版本键后立刻成孤儿，**重跑 40 分钟 / 8GB 堆**）。见优化文档 §4.2。~~
+  → **2026-09-25 撤销**：前提是 1a 会把目录改成版本键，而 **1a 的换键已整条撤销 ⇒ 约束消失**。实测 `next` 的锁文件生成耗时 **3m48s**（增量解析，非 40min 冷解析），即便重跑也不构成需前置约束的理由。
 - **阻塞关系**：
-  - **P0 阻塞一切**（它产出的是「其余批次的现状值」；若不先跑，所有状态词都不可信——本次 1a 误标即为实证）。
+  - ~~**P0 阻塞一切**~~ → ✅ **P0 已于 2026-09-25 落地**（`verify:plan-facts` 进 CI），该阻塞解除；但它立在「本表的状态词与文档的版本号」上之后，**状态词从此不能单边改**——改文档必须同时改脚本里的 `PLAN_BATCH_STATUS`。
   - **批次 2 阻塞 3/4/5 与 R 系列**（通道名与派生是它们的输入）。
   - 批次 4 阻塞 5（更新源步骤挂在 preflight 输出上）。
-  - `1a` 与 `R1` 合并为**一次**目录改动（原本两处各说了一遍换键）。
-  - R1 阻塞 R3（同步 PR 要往 `harness-locks/<version>/` 写）。
+  - ~~`1a` 与 `R1` 合并为**一次**目录改动（原本两处各说了一遍换键）。~~ → **撤销**：两者都不做目录改动。
+  - ~~R1 阻塞 R3（同步 PR 要往 `harness-locks/<version>/` 写）。~~ → **撤销**：同步 PR 往 `harness-locks/<target>/` 写（键不变），**不再依赖任何目录键改动**。
   - **R2 与 3 互相不阻塞，但 §2 主路径要求两者都已落地**（R2 提供可核字段，批次 3 提供判红逻辑）。
   - `1b` 不阻塞任何批次，它只决定「本次要不要真的推进上游」。
+  - **1b 的 `alpha` 半程已具备独立可执行性**（不依赖 2/3/4/5）：改锚点 + 补丁移植 + 重生成锁 + 两条通道各跑一次 `scope=full` 烟雾即可。
 - **按主路径排的优先级**：若要压缩投入，按 §2.1 的表取舍——**批次 3 / R2 / 批次 5 三项是主路径的最小可用集，其余都是门禁加固与宣称完善**。压缩时必须显式说明放弃了哪一项及其退化后果（即 §2.1 表中「缺了它的后果」那一列）。
 
 ### 10.3 已知风险与缺口的独立评审
 
-五项主要风险的取证结论与逐项可执行方案，见 [`docs/risk-review-release-channels.md`](risk-review-release-channels.md)。该文件**不采信本计划的事实陈述**，全部结论由 2026-09-24 实跑得出，并记录了本计划三处过期/误标的底账。
+五项主要风险的取证结论与逐项可执行方案，见 [`docs/risk-review-release-channels.md`](risk-review-release-channels.md)。该文件**不采信本计划的事实陈述**，全部结论由 2026-09-24 实跑得出，并记录了本计划三处过期/误标的底账。**2026-09-25 又追加四处**（F1 上游 `next` 前移、F4 结论反转、§3.2 字段命名与实现反向、§R1 核心理由被推翻）——**底账不是一次性的，每次用它之前都得重跑取证**。
 
 ### 10.4 四项优化的落地建议（2026-09-24 追加）
 
@@ -682,6 +765,6 @@ $ ls patches/              → LAYERS.md alpha next （patches/next → patches/
 
 | # | 未决项 | 为什么必须裁定 | 建议落点 |
 |---|---|---|---|
-| 1 | **D4 的判据从「目录存在性」改为「`patchSetHash` 差异」** | `next`/`latest` 已分叉，D4 的分支条件被激活；而现行 D4 要求「版本分叉 ⇒ 必须存在 `patches/stable/` 目录」，与 R1「不按目录名承担版本差异」自相矛盾。按目录判会奖励「复制一份」，按哈希判奖励「如实反映差异」 | 批次 R2 之前 |
+| 1 | **D4 的判据从「目录存在性」改为「`patchSetHash` 差异」** | `next`/`latest` 已分叉，D4 的分支条件被激活；而现行 D4 要求「版本分叉 ⇒ 必须存在独立的目标目录」，与「不按目录名承担版本差异」自相矛盾（该矛盾原先记在 R1 名下，**R1 的目录键部分已于 2026-09-25 撤销，矛盾依旧存在**）。按目录判会奖励「复制一份」，按哈希判奖励「如实反映差异」 | 批次 R2 之前 |
 | 2 | **stable 落后 rc 时的正文声明** | 分叉后「正式版锚点比测试版旧」成为常态。不说清则用户会以为是 bug | 批次 4 + §4-D2 |
 | 3 | **正文链路三段的守卫补齐** | 正文是三段拼接（横幅 shell / 提交区间 changelog / CLI 表），现状只有前两段有守卫，第三段零判据——这正是 CLI 段能复活的原因 | 批次 6 |
