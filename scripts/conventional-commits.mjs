@@ -210,6 +210,15 @@ export function readCommits(options = {}) {
       cwd,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
+      // ⚠️ `stdin: 'ignore'` 不是可有可无的：Windows 上若父进程的 stdin 不是可用的
+      //    管道句柄，**默认的 `stdin: 'pipe'` 会让 spawn 直接失败（`EBUSY`）**——
+      //    与命令本身无关。实测同一台机器上：默认 stdio → EBUSY，
+      //    `stdio: ['ignore','pipe','pipe']` → 正常拿到 `git version`。
+      //    `git log` 不读 stdin，所以这是**语义等价**的改动。
+      //    同文件 `latestTag()`、`version.mjs` 的 `refreshLock()`、
+      //    `changelog.mjs` 自测里的 git 早已这么写；漏在本行会让
+      //    `version:bump auto` / `changelog:*` 在那种机器上**整条失效**。
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
     const detail = (error.stderr || error.message || '').toString().trim();

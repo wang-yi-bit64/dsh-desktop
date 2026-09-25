@@ -128,7 +128,15 @@ const USAGE = `changelog.mjs — 从提交历史生成变更日志
  */
 export function repoUrl(cwd = process.cwd()) {
   try {
-    const remote = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd, encoding: 'utf8' }).trim();
+    // ⚠️ 必须显式给 stdio：Windows 上默认的 `stdin: 'pipe'` 会让 spawn 失败（`EBUSY`），
+    //    于是这里静默走进 catch、返回 `null`，变更日志的条目**悄悄退化成短 sha
+    //    而不是提交链接**——产出看着像有人写坏了模板，实则是取不到远端地址。
+    //    `git remote get-url` 不读 stdin，`stdio: ['ignore',…]` 语义等价。
+    const remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
     const ssh = /^git@([^:]+):(.+?)(?:\.git)?$/.exec(remote);
     if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
     const https = /^https?:\/\/(.+?)(?:\.git)?$/.exec(remote);

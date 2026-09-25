@@ -491,7 +491,14 @@ function parseArgs(argv) {
 
 /** 执行 git 命令并把输出透传（tag / commit 操作用）。 */
 function git(args, options = {}) {
-  return execFileSync('git', args, { encoding: 'utf8', ...options }).trim();
+  // ⚠️ `stdin: 'ignore'` 同上：Windows 上默认的 `stdin: 'pipe'` 会让 spawn 失败（`EBUSY`），
+  //    而 `set --commit` / `set --tag` 正是靠这个 helper 落提交与 tag 的。
+  //    放在 `...options` **之前**，调用方仍可覆盖（自测里给过 cwd）。
+  return execFileSync('git', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...options,
+  }).trim();
 }
 
 const isDirectRun = (() => {
