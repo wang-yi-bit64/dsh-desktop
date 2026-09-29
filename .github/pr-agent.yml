@@ -1,0 +1,30 @@
+name: PR Agent
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]   # 让你能在 PR 里手动 /review、/improve
+
+jobs:
+  pr_agent_job:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: PR Agent action step
+        id: pragent
+        uses: qodo-ai/pr-agent@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI.KEY: ${{ secrets.STEPFUN_API_KEY }}
+          OPENAI.API_BASE: "https://api.stepfun.com/step_plan/v1"
+          config.model: "step-5-preview"          # ← 换成你实际可用的模型 ID
+          config.fallback_models: '["step-5-preview"]'
+          config.custom_model_max_tokens: "1000000"     # ← 按模型真实上下文窗口填
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "false"  # 先关，需要时在 PR 里手动 /improve
