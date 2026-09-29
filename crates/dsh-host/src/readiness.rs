@@ -371,7 +371,7 @@ mod tests {
             || {
                 let tick = Arc::clone(&tick);
                 async move {
-                    if tick.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+                    if tick.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
                         Some(200)
                     } else {
                         None

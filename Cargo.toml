@@ -29,9 +29,9 @@ version = "0.7.0-alpha.8"
 authors = ["DataElement"]
 edition = "2021"
 license = "MIT"
-# 下界 1.85：传递依赖 `idna_adapter`（`url` → edition 2024）要求 Rust ≥ 1.85，
-# 低于该版本会报 `feature edition2024 is required` 而非可读的 MSRV 提示。
-rust-version = "1.85"
+# 下界 1.90：tauri 2.12 起把 MSRV 提到 1.90（此前的 1.85 来自传递依赖
+# `idna_adapter`（`url` → edition 2024））。低于该版本会报不可读的工具链错误。
+rust-version = "1.90"
 
 [workspace.dependencies]
 # 本地 crate
