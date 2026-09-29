@@ -250,6 +250,8 @@ boot / config-dump / 插件管理。
       >
       > ⚠️ **默认路径是目标键、不带版本，因此它证明不了里面是哪一版**。同一目录在通道内被复用（`next/` 从 rc.2 一路用到 rc.3）：2026-09-25 实测 `harness-deps/next-pristine/` 里装的是 `0.1.7-rc.1`，而当时目标是 `0.1.5-rc.3`。换锚点时**把版本写进目录名**（`harness-deps/next-pristine-0.1.7-rc.1`）并显式传 `--pristine=<dir>`；`recount-patches.mjs` **不校验**纯净树版本（`existsSync` 过了就用），只有 `relocate-patch-hunks.mjs` 有该判据——所以这条纪律靠人守。
       >
+      > ⚠️ **目录位置：版本进名字，目录出仓库（2026-09-29 补）。** 上一条的版本化目录若放在 `harness-deps/` 内，专项取消后忘记清理的基线会被当**项目源码**扫：2026-09-29 实测 `next-pristine-0.1.7-rc.1/` 里的上游 npm 代码被安全门（Mimosa git gate）扫出 3 条高危，把之后所有 agent 的 `git commit/push` 一路拦到残渣清理为止——而该目录本就 gitignored，永远进不了任何提交。`--pristine=` 是**显式路径参数**，基线一律放仓库外（如 `%TEMP%\dsh-pristine-<版本>`）；专项结束或升级取消时，连同基线一起清理（纯 registry 产物，随时可按本节流程重建）。
+      >
       > **替代路径**（当 `spawnSync` 外部进程不可用、或只处理纯行号漂移时）：
       > ```bash
       > node scripts/relocate-patch-hunks.mjs --dsh-target=<target> --pristine=<未打补丁的包根>          # 只报告
