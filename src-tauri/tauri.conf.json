@@ -6,7 +6,10 @@
   "build": {
     "frontendDist": "./frontend",
     "beforeDevCommand": "npm run prepare:harness -- --check",
-    "beforeBuildCommand": "npm run prepare:harness -- --check"
+    "beforeBuildCommand": "npm run prepare:harness -- --check",
+    "windows": {
+      "staticVCRuntime": false
+    }
   },
   "app": {
     "withGlobalTauri": true,
