@@ -328,7 +328,7 @@ jobs:
       # **不含 doc-test**（44 项 doc-test 单轮 ≥258s，是快反馈的最大单项成本）。
       # doc-test 归入 full 档，由下面的 schedule-only 步骤承接（每日一次的
       # 「最后一道网」语义，与 ADR-055 一致）；发布前也可本地 `npm run verify:full`。
-      - name: cargo test (fast tier: unit + integration, no doc-tests)
+      - name: "cargo test (fast tier: unit + integration, no doc-tests)"
         run: cargo test --workspace --tests
 
       - name: cargo doc-test (full tier, schedule only)
