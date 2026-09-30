@@ -38,7 +38,7 @@
 | 6 | `verify-runtime-upgrade` 定位为**既有门禁的编排器**,不重写 | 仓库已有 ~15 个 verify 脚本(§22);平行门禁必然漂移(本仓"手抄清单脱节"已有三例) |
 | 7 | 社区报告全部补 discussion 编号 | 上游 issue 区**关闭**,Discussions 是唯一可复核载体 |
 | 8 | Supervisor 2.0 / Recovery 2.0 增加跨语言契约与错误码族约束 | `HarnessSnapshot.phase` 兼容性(§11);`E1xxx~E7xxx` 族号体系(§12) |
-| 9 | **ADR-048(单通道收敛)在本周期被修订 #1 取代/延期**,需补 superseding 条目 | `docs/adr/README.md` 决策变更纪律 |
+| 9 | ✅ **已收尾(2026-09-30)**:ADR-048 已由 **ADR-052** 取代,双通道恢复在役 | 维护者 2026-09-30 裁定;见 `docs/adr/052-dual-upstream-channels-restored.md` |
 
 ---
 
@@ -407,9 +407,11 @@ provider / model / tool / schema path / request id / runtime version,并在 Diag
 `channel`(上游客观事实,不可改)≠ `publishChannel`(本仓命名,可改)的解耦设计保留;
 `targetForVersion` 查 `publishChannel`,漂移哨兵用 `channel`(`upstreamTagFor`)。
 
-**ADR-048(单通道收敛)在本周期被本裁定取代/延期**——按 `docs/adr/README.md` 补
-superseding 条目,理由:双目标机制已建成且边际成本为零;alpha 线上游仍活跃;
-单通道收敛的收益被 0.2.0 全量补丁移植的工作量挤占。
+**ADR-048(单通道收敛)已被本裁定取代,superseding 条目已补:ADR-052(2026-09-30)。**
+理由:双目标机制已建成且边际成本为零;alpha 线上游仍活跃;单通道收敛的收益被
+0.2.0 全量补丁移植的工作量挤占。ADR-048 的成本结构分析仍然有效——它正是 ADR-052
+明确接受的代价,对冲手段是"补丁数趋势 + retireWhen 减法"
+(见 `docs/dev-plan-defect-remediation.md` S5)。
 
 ---
 
@@ -553,7 +555,7 @@ compatibility checks`。一个 commit 尽量只有一个职责。
 
 **v1.1 新增两项**:
 
-- 补 ADR-048 的 superseding 条目(§15);
+- ~~补 ADR-048 的 superseding 条目(§15)~~ ✅ 已完成(2026-09-30,ADR-052);
 - 登记 0.2.0 观察清单(#8166 / #8140 / #8183 / #7903 / #7828 / #7908),作为 §6 门禁的
   跟踪底账。
 
