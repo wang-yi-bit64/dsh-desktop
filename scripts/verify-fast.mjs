@@ -51,6 +51,7 @@ const QUICK_STATIC = [
   'verify:shell-pages',
   'verify:harness-entry',
   'verify:harness-inject',
+  'verify:fault-patterns',
   'verify:patches',
   'verify:release-workflow',
   'verify:release-assets',

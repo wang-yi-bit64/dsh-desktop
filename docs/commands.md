@@ -50,6 +50,10 @@ npm run verify:shell-pages
 # 8. Harness 页注入脚本行为自测（19 项断言 + 可证伪性检查）
 npm run verify:harness-inject
 
+# 8b. 插件故障归因模式守卫（F1~F6；夹具逐字抄自 2026-09-22 装机日志）。
+#     2026-09-30 前它是零消费者的孤儿守卫，现已接进 verify:fast 的快速静态门禁
+npm run verify:fault-patterns
+
 # 9. 打包目标守卫（构建主机 vs 目标平台；自动推断，亦可 `-- self-test` 自检）
 npm run verify:target
 npm run verify:target -- --self-test

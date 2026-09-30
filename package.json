@@ -16,7 +16,6 @@
   ],
   "scripts": {
     "prepare:harness": "node scripts/prepare-harness.mjs",
-    "prepare:harness:strict": "node scripts/prepare-harness.mjs --force --strict",
     "harness:lockfile": "node scripts/prepare-harness.mjs --update-lockfile",
     "verify:harness-lockfile": "node scripts/harness-lockfile.mjs --self-test",
     "verify:relocate-hunks": "node scripts/relocate-patch-hunks.mjs --self-test",
@@ -71,7 +70,6 @@
     "smoke": "node scripts/smoke-launch.mjs",
     "smoke:headless": "node scripts/smoke-launch.mjs --level=1",
     "size:report": "node scripts/report-bundle-size.mjs",
-    "build:sidecar": "node scripts/build-sidecar.mjs",
     "dev": "npm run prepare:harness && tauri dev",
     "build": "npm run prepare:harness && tauri build",
     "tauri": "tauri"
