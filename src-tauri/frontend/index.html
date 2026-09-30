@@ -5,39 +5,73 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>DSH Desktop</title>
     <style>
-      :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      /* 启动屏对齐官方 harness 风格（deepseek.com/harness）：深海军蓝极光渐变、
+         白字、玻璃态胶囊。刻意不跟随系统明暗——官方 hero 就是深色底，浅色系统上
+         一块深色启动屏是品牌观感的一部分，不是遗漏。 */
+      :root {
+        color-scheme: dark;
+        font-family: "DM Sans", "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
       * { box-sizing: border-box; }
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-      body { color: #17181a; background: #f8f8f6; }
+      body {
+        color: #f3f5f9;
+        background:
+          radial-gradient(60% 42% at 72% 12%, rgba(77, 107, 254, 0.28), transparent 70%),
+          radial-gradient(52% 38% at 18% 30%, rgba(56, 130, 246, 0.16), transparent 72%),
+          linear-gradient(160deg, #16294f 0%, #0e1c3c 42%, #0a1226 72%, #070c18 100%);
+      }
+      /* 极光层：一块超尺寸的柔光缓慢漂移，给「正在启动」一点生命感。
+         prefers-reduced-motion 下静止。 */
+      body::before {
+        content: "";
+        position: fixed; inset: -40%;
+        background: radial-gradient(38% 30% at 50% 42%, rgba(96, 128, 255, 0.14), transparent 70%);
+        animation: aurora 14s ease-in-out infinite alternate;
+      }
+      @keyframes aurora {
+        from { transform: translate3d(-3%, -2%, 0) scale(1); }
+        to { transform: translate3d(3%, 2%, 0) scale(1.06); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        body::before { animation: none; }
+        .status::before { animation: none; opacity: .55; }
+      }
       main {
         position: fixed; inset: 0;
         display: grid; align-content: center; justify-items: center;
-        gap: 12px; padding: 32px; text-align: center;
+        gap: 16px; padding: 32px; text-align: center;
       }
-      .markFrame { display: grid; place-items: center; }
-      .mark { grid-area: 1 / 1; width: 196px; height: auto; image-rendering: pixelated; }
-      .markDark { display: none; }
-      .title { margin: 0; font-size: 23px; font-weight: 650; letter-spacing: -0.02em; }
-      .status { margin: -4px 0 0; color: #777a80; font-size: 13px; max-width: 480px; }
-      :root[data-theme='dark'] { color-scheme: dark; }
-      :root[data-theme='dark'] body { color: #f3f4f6; background: #141416; }
-      :root[data-theme='dark'] .markLight { display: none; }
-      :root[data-theme='dark'] .markDark { display: block; }
-      :root[data-theme='dark'] .status { color: #9ca0a8; }
-      @media (prefers-color-scheme: dark) {
-        :root:not([data-theme]) body { color: #f3f4f6; background: #141416; }
-        :root:not([data-theme]) .markLight { display: none; }
-        :root:not([data-theme]) .markDark { display: block; }
-        :root:not([data-theme]) .status { color: #9ca0a8; }
+      .mark { width: 176px; height: auto; image-rendering: pixelated; filter: drop-shadow(0 12px 36px rgba(0, 0, 0, 0.45)); }
+      .title {
+        margin: 0; font-size: 26px; font-weight: 400;
+        letter-spacing: 0.01em; color: #ffffff;
+      }
+      .status {
+        display: inline-flex; align-items: center; gap: 9px;
+        margin: 2px 0 0; padding: 8px 18px;
+        max-width: 520px; font-size: 13px; line-height: 1.5;
+        color: rgba(238, 242, 250, 0.86);
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        backdrop-filter: blur(8px);
+      }
+      .status::before {
+        content: "";
+        width: 7px; height: 7px; border-radius: 50%;
+        background: #7d97ff; box-shadow: 0 0 10px 1px rgba(125, 151, 255, 0.75);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.45; transform: scale(0.8); }
       }
     </style>
   </head>
   <body>
     <main>
-      <div class="markFrame" aria-hidden="true">
-        <img class="mark markLight" src="assets/dsh-loader.gif" alt="" />
-        <img class="mark markDark" src="assets/dsh-loader-dark.gif" alt="" />
-      </div>
+      <img class="mark" src="assets/dsh-loader-dark.gif" alt="" aria-hidden="true" />
       <h1 class="title" id="title">Starting DSH Desktop</h1>
       <p class="status" id="status">First launch may take a moment.</p>
     </main>
