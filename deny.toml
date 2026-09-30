@@ -1,0 +1,49 @@
+# cargo-deny 配置（缺陷治理计划 S3-2，2026-09-30）
+#
+# 守什么：555 个 crate 此前只有 dependabot 的「告警通道」，没有一处会在 CI 里
+# **主动失败**的扫描。cargo-deny 补上这一层：advisories 在役、licenses 白名单。
+#
+# 纪律：`ignore` 的每一条都必须附理由，并与 README「Security Notes / 安全与依赖说明」
+# 同源——两处说两套理由就是第二份真相。删除任何 ignore 项都必须让扫描真的变红
+# （S3-2 判据：「把 ignore 项删掉一次，必须报红，证明它真的在查」）。
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # RUSTSEC-2024-0370（proc-macro-error 1.0.4 unmaintained）：经 gtk 栈
+    # （glib-macros → glib 0.18.5 → gtk → tauri）传递引入，**无安全升级路径**，
+    # 等 Tauri 迁移 gtk-rs 0.20+ 时随之消失。首跑（加 ignore 前）即在本机报红、
+    # 加后转绿——「这条扫描真的在查」的实证（S3-2 判据）。
+    "RUSTSEC-2024-0370",
+    # 注：Dependabot 报的 glib 0.18.5 告警（GHSA-wrw7-89jp-8q8g）在 RustSec 数据库
+    # 中**无对应条目**（实测：RUSTSEC-2024-0429 与 GHSA ID 均报 not found /
+    # not detected，0.18.5 不在其受影响区间）。该告警由 Dependabot 通道单独承担，
+    # 处置口径见 README「安全与依赖说明」：仅 Linux、传递引入、不调用受影响 API、
+    # 修复随上游 Tauri 迁移 gtk-rs 0.20+ 自动解析。
+]
+
+[licenses]
+version = 2
+# 本仓依赖树的许可证白名单（以实际 cargo deny check licenses 结果为准再收紧）。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+]
+
+[bans]
+# 重复版本先只告警（本仓锁了 555 个 crate，多版本在传递依赖里常见且无害；
+# 什么时候升级为 deny 由 S5 的减法顺手评估，不在 S3 的范围里）。
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

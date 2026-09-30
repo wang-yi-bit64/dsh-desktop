@@ -94,7 +94,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
 
       # GUI（L2）与打安装包需要 GTK / xvfb；L1 是无头的，用不上，故只对 full 装。
       # xvfb 让 L2 在无显示器的 runner 上也能起窗口。
@@ -119,15 +119,17 @@ jobs:
           # 用绝对路径兜底；librsvg2-common 的 postinst 通常已刷新缓存，此行容错。
           /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache || true
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de   # stable（SHA 钉死；工具链名经下方 toolchain 输入传入）
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6   # v2
         with:
           workspaces: |
             .
             src-tauri
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -285,7 +287,7 @@ jobs:
       # 失败时把烟雾报告留档——这一层的失败通常只在日志里可读。
       - name: Upload smoke logs
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
         with:
           name: smoke-${{ inputs.scope }}-logs-${{ matrix.os }}
           if-no-files-found: ignore

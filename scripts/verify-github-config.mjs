@@ -29,17 +29,12 @@ import { argv, exit } from 'node:process'
 const ROOT = process.cwd()
 const WORKFLOW_DIR = join('.github', 'workflows')
 
-export const PRE_EXISTING_FLOATING = [
-  // S3-3 未执行：这些是本批之前就存在的浮动 ref。它们不影响本次准入判定，
-  // 但基线非空本身就是一条待办（守卫会打印提示）。
-  'actions/checkout@v5',
-  'actions/setup-node@v5',
-  'dtolnay/rust-toolchain@stable',
-  'Swatinem/rust-cache@v2',
-  'actions/download-artifact@v5',
-  'actions/upload-artifact@v6',
-  'tauri-apps/tauri-action@v0',
-]
+/**
+ * 基线外的浮动 ref 白名单。**空表是目标状态**——S3-3（2026-09-30）已把全部 7 个
+ * 预先存在的浮动 ref 钉到 40 位 SHA，此后任何浮动 ref（不管新旧）一律报红；
+ * 本表留作「将来确需豁免时在此登记 + 写理由」的机制，加条目必须附理由。
+ */
+export const PRE_EXISTING_FLOATING = []
 
 /** 一个文件是否是「工作流形态」：同时出现顶层的 on: 与 jobs:。 */
 export function isWorkflowShaped(text) {
@@ -87,7 +82,7 @@ function walk(dir, out = []) {
 }
 
 /** 纯函数：给定 [{path, text}]，返回 problems。路径用 posix 风格以便跨平台判据一致。 */
-export function checkFiles(files) {
+export function checkFiles(files, allowedFloating = PRE_EXISTING_FLOATING) {
   const problems = []
   let workflowShaped = 0
   let useRefs = 0
@@ -107,7 +102,7 @@ export function checkFiles(files) {
     if (inWorkflows) {
       const refs = extractUses(f.text)
       useRefs += refs.length
-      problems.push(...checkUsesRefs(p, refs))
+      problems.push(...checkUsesRefs(p, refs, allowedFloating))
     }
   }
   if (workflowShaped === 0) {
@@ -166,8 +161,15 @@ export function selfTest() {
   // 🔴 可伪证夹具 2：@v5 必须报红
   const r2 = checkFiles([{ path: join('.github', 'workflows', 'x.yml'), text: floatingWorkflow }])
   check('可伪证：@v5 必须报红（基线之外）', r2.problems.some((p) => /未钉 SHA/.test(p)))
-  // 基线表要**显式被断言**，否则「基线兜住了本该报红的写法」这件事没人看得见。
-  check('预先存在的浮动 ref 走基线（这是待办，不是通过）', checkFiles([{ path: join('.github', 'workflows', 'x.yml'), text: 'on: [push]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v5\n' }]).problems.length === 0)
+  // 基线机制要**显式被断言**，否则「基线兜住本该报红的写法」这件事没人看得见。
+  // S3-3（2026-09-30）后全局基线是**空表**，因此机制测试改为注入式：显式传一个
+  // 带浮动 ref 的 allowedFloating，验证该机制本身仍工作；空基线下的真实仓库里
+  // 同样的写法必须报红（与可伪证夹具 2 同一条断言）。
+  check(
+    '基线机制：显式注入的 allowedFloating 必须放行其条目',
+    checkFiles([{ path: join('.github', 'workflows', 'x.yml'), text: 'on: [push]\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v5\n' }], ['actions/checkout@v5']).problems.length === 0
+  )
+  check('S3-3 后基线为空：checkout@v5 在真实仓库里必须报红', checkUsesRefs('x.yml', ['actions/checkout@v5'], PRE_EXISTING_FLOATING).length === 1)
   const r3 = checkFiles([{ path: join('.github', 'workflows', 'x.yml'), text: pinnedWorkflow }])
   check('钉了 SHA 必须通过', r3.problems.length === 0)
   const r4 = checkFiles([{ path: join('.github', 'workflows', 'x.yml'), text: localAction }])

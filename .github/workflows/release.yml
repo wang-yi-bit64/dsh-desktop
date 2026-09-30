@@ -52,14 +52,14 @@ jobs:
       dsh_target: ${{ steps.resolve.outputs.dsh_target }}
       dsh_version: ${{ steps.resolve.outputs.dsh_version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
         with:
           # fetch-depth: 0 —— 生成变更说明需要「上一个 tag..本 tag」的完整区间，
           # 浅克隆拿不到 tag 与历史（GitHub 默认只取 1 个提交、不含 tag）。
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -165,7 +165,7 @@ jobs:
           - os: ubuntu-latest
             bundles: deb,appimage
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight.outputs.tag }}
@@ -189,15 +189,17 @@ jobs:
           # noble 的 gdk-pixbuf-query-loaders 不在 PATH，用 multiarch 绝对路径兜底。
           /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache || true
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de   # stable（SHA 钉死；工具链名经下方 toolchain 输入传入）
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6   # v2
         with:
           workspaces: |
             .
             src-tauri
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -316,7 +318,7 @@ jobs:
       # 全是预发布 ⇒ 那条路径自 2026-09-15 起零投递（实测返回 0.5.0-next.1，而已发布到
       # 0.7.x）。现在每个通道有自己的滚动 Release，见下面的 updater-channel job。
       - name: Build and publish release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5   # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -430,20 +432,22 @@ jobs:
     env:
       DSH_TARGET: ${{ needs.preflight.outputs.dsh_target }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
         with:
           fetch-depth: 0
           ref: ${{ needs.preflight.outputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de   # stable（SHA 钉死；工具链名经下方 toolchain 输入传入）
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6   # v2
         with:
           workspaces: |
             .
             src-tauri
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -503,7 +507,7 @@ jobs:
             --out dist/portable \
             --version "${{ needs.preflight.outputs.version }}"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
         with:
           name: portable-windows
           path: dist/portable/*
@@ -556,14 +560,14 @@ jobs:
       #    守卫 `missingCheckoutJobs()` 现在专门盯这个。
       # ⚠️ `ref` 必须是 tag（与其余三个 job 同一纪律：**代码来自 tag**，工作流 YAML 才来自
       #    dispatch ref）。写成默认的 `github.ref` 会在手动重跑时取到分支上更新的脚本。
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
         with:
           ref: ${{ needs.preflight.outputs.tag }}
 
       # ⚠️ artifact 名要与 `portable` job 里 `upload-artifact` 的 `name` 逐字一致。
       #    改一处必须改另一处——守卫不查这个（跨 job 的字符串相等性静态判不了），
       #    真正的防线是发布后按资产清单核对（13 项）。
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0   # v5
         with:
           name: portable-windows
           path: dist/portable

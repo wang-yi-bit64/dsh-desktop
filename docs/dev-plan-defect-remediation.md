@@ -297,8 +297,8 @@
 | 更新端点投递的版本 | rc = `0.7.1-rc.1` ✅（2026-09-30 实测）；alpha 休眠，不投递（C7/ADR-056） | = 该通道最新发布版本 |
 | 补丁数 × 通道数 | 27 × 2 | next 线下降 ≥30%；alpha 线冻结（休眠，不增不减——C7/ADR-056） |
 | AGENTS.md 体积 | 160,148 B | ✅ **已达成 32.7 KB**（原定 ≤32,768 B；因后续仍需修正 MSRV/端点两行事实，判据放宽为 **≤40 KB**——真正的硬约束是「小于 64 KB 指令预算且规则全可读」，40 KB 留 24 KB 余量） |
-| 无守卫覆盖的层（文档常量 / 游离配置） | 已知 ≥3 类命中 | 0 类 |
-| 门禁快档时长 | 无分档（含 doc-test 时 ≥258s） | verify:fast ≤60s |
+| 无守卫覆盖的层（文档常量 / 游离配置） | 文档常量层已由 verify:doc-facts 覆盖（2026-09-30）；游离配置层基线已清空（S3-3） | 0 类 |
+| 门禁快档时长 | ✅ verify:fast 温热实测 43s（S4-1/S4-2） | verify:fast ≤60s |
 | src-tauri 生产 unwrap | 29（其中 state.rs 15） | 0 或逐条有理由 |
 | dsh-host 外部消费者 | 0 | ≥1 |
 
@@ -342,6 +342,16 @@
 | C6 决策（S0-4 收尾） | ✅ 已裁决并落地 | ADR-055（保留每日 CI + drift，修订 ADR-047 删除清单第 2 项）；ADR-047 状态与新增「修订」段、ADR 索引同步 |
 | C4 决策（S6-5 收尾） | ✅ 已裁决并落地 | 追加进 ADR-044 的「明确不做」清单，附理由与恢复条件 |
 | C7/C8 决策（alpha 休眠；next 移植排期） | ✅ 已裁决并落地 | ADR-056（部分修订 ADR-052）+ ADR-052 修订段 + 索引；目标表新增 `status` 字段（唯一产地）；verify:update-channel / verify:drift 对休眠目标显式跳过、零在役目标报错；release preflight `--channel-of` 拒绝休眠通道（实测 exit 1）；AGENTS §7.2/§8.6 与 runbook §8.6 同步 |
+| S0-1 补 LICENSE / 修 authors | ✅ 已落地（第二批） | LICENSE（MIT，wang-yi-bit64）；package.json / Cargo.toml authors 改本仓作者；「来源与致谢」节进两份 README；三处一致性断言由 verify:doc-facts 承接 |
+| S0-2 补 SECURITY.md（含 S3-4） | ✅ 已落地（第二批） | 威胁模型（loopback / LAN 桥显式开启 / minisign 更新链 / 无遥测）+ 明示边界（同进程插件崩溃、无 OS 签名）+ 报告渠道 + 支持范围 + **CI 密钥暴露面表**（S3-4 一并完成；签名私钥实际出现在 release 与 smoke full 两处——按实情记载） |
+| S0-5 计划登记进 AGENTS §6 | ✅ 已落地（第二批） | AGENTS.md §6 可检索本文件名 |
+| S2-2 文档预算纪律 | ✅ 已落地（原 🟡 欠账销账） | AGENTS §7.3 新增条文：新计划须同时归档旧计划、计划无权延期 ADR，违反即文档回归 |
+| S2-3 verify:doc-facts | ✅ 已落地（第二批） | 5 类对账（rust-version / .nvmrc / license 三处 / ADR 计数 / MIN_NODE_MAJOR 零宣称合法）；自检 15 项以真实漂移为夹具；**上线首轮即抓到新漂移**（ADR 计数宣称 41、实际 42）并修正 |
+| S2-4 归档 release-channels 三文档 | ✅ 已落地（第二批） | 三份移入 docs/archive/（文首写明取代者）；verify:plan-facts 账本主体改指本计划（checkDecisionLedger：C1~C8 落地格必须有真实去向、引用的 ADR 文件必须存在）；在役 docs 总量净减约 147KB |
+| S3-1 dependabot cargo | ✅ 已落地（第二批） | cargo 生态 / directory=/（Cargo.lock 所在 workspace 根）/ 只开安全更新，与 npm 同口径 |
+| S3-2 cargo-deny | ✅ 已落地（第二批） | deny.toml（advisories + licenses）；本地实跑**首跑报红**（RUSTSEC-2024-0370 unmaintained，gtk 栈传递）→ 加 ignore 附理由后转绿——「真的在查」实证；glib GHSA 在 RustSec 无对应条目（实测 not found），该告警由 Dependabot 承担；ci.yml Linux job 挂 cargo-deny-action（钉 SHA） |
+| S3-3 action 全量钉 SHA | ✅ 已落地（第二批） | 7 个浮动 ref 全部钉 40 位 SHA（dtolnay 改经 `toolchain: stable` 输入传名）；verify:github-config 基线表**清空**（自检 12 项改为注入式基线机制测试） |
+| S4-1/S4-2 门禁分档 | ✅ 已落地（第二批） | `verify:fast`（26 步，**温热实测 43s ≤60s**）：全部 :self-test 自动发现 + 快速静态门禁 + `cargo test --tests`；`verify:full` = fast + doc-test（44 项 ≥258s）；ci.yml PR 路径改 `--tests`，doc-test 由 schedule-only 步骤承接（ADR-055 语义不变） |
 | ADR-052（C5：双通道恢复在役） | ✅ 已落地 | ADR-048 状态改为「已被 ADR-052 取代」并补后续段；ADR-022 标注「由 ADR-052 恢复在役」；ADR 索引新增 G 组（052–054）；0.8 计划修订 #9 与 §15 已收尾 |
 | S2-1 AGENTS.md 打薄 | ✅ 已达成 | 160,148 B → **33,144 B**；32 个 `###` + 9 个 `####` **零丢失**（逐个比对新家）；新增 `docs/commands.md`、`docs/release-runbook.md`、`docs/incidents/`（10 篇）+ 原文快照 |
 | S2-2 文档预算纪律 | 🟡 部分 | 本轮未把「新增计划文档必须同时归档旧文档 / 计划无权延期 ADR」写成 AGENTS.md 条文——**仍是欠账** |
@@ -358,15 +368,10 @@
 
 | 条目 | 状态 | 现场证据（2026-09-30） |
 |------|------|----------------------|
-| S0-1 补 LICENSE / 修 authors | ❌ 未做 | 根目录无 `LICENSE`；`package.json` 与 `Cargo.toml` 的 authors 仍是 `DataElement` |
-| S0-2 补 SECURITY.md | ❌ 未做 | 文件不存在 |
-| S0-5 把本计划登记进 AGENTS.md §6 | ❌ 未做 | `grep dev-plan-defect-remediation AGENTS.md` 无命中 |
-| S2-4 归档已裁撤的 release-channels 主题文档 | ❌ 未做 | 三份文件仍在 `docs/` 在役 |
-| S3-1 / S3-2 / S3-4 cargo 扫描 + secrets 成文 | ❌ 未做 | dependabot 仍只有 npm；无 deny.toml |
-| S4-1~S4-4 门禁分档 / doc-test 移出 / 扫出数为零普查 / state.rs 的 15 处生产 unwrap | ❌ 未做 | 单轮无头测试仍 ≥258s |
+| S4-3「扫出数为 0」断言普查 / S4-4 state.rs 的 15 处生产 unwrap | ❌ 未做 | 快档已分档（S4-1/S4-2 ✅）；普查与 unwrap 收敛未开工 |
 | S5-1~S5-4 补丁 retireWhen 减法 / UI 补丁专项 / 补丁数趋势 | ❌ 未做 | 27 个补丁仍两套并存（C3 留、C7 冻结：alpha 休眠不再恢复维护，减法只针对 next 线） |
 | S6-1~S6-5 dsh-host 零 Tauri 承诺 / CLI recover / 性质测试 / 可证伪承诺（S6-5 crate 发布已裁决：不发） | ❌ 未做 | C4 已裁决不发 crates.io（ADR-044 清单追加），S6-5 仅剩收尾记录 |
 
-**合计**：本计划约 30 个条目，本轮落地 **6** 个（S0-3、S1-2、S1-3、S2-1、ADR-052 系列、verify:github-config 与 verify:update-channel 两个新守卫），其余未开工。
+**合计**：本计划约 30 个条目。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档。**S 阶段剩余：S4-3、S4-4、S5 全部、S6 全部。**
 
 > **口径（2026-09-30 发布后更新）**：D1 在 **rc 通道已闭环**——v0.7.1-rc.1 发布后端点实测返回 `0.7.1-rc.1`，13/13 资产完整、`prerelease: true`。两条诚实边界：① **alpha 通道零投递是裁定结果**（C7 休眠，ADR-056），不再是待办；② **存量安装不会自愈**——端点是构建期注入的，v0.7.1-rc.1 之前的所有构建仍指向旧端点（`releases/latest` 排除预发布，停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。同一口径适用于所有依赖真实发布的条目。

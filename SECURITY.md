@@ -42,4 +42,4 @@
 | `STEPFUN_API_KEY` | `pr-agent.yml` | PR AI 评审的模型调用；触发面已收紧为「PR + 本仓成员」（ADR-054） |
 | `ANTHROPIC_API_KEY` 等 13 个模型 key | `pullfrog.yml` | 同上（模板声明的 provider 白名单） |
 
-原则：每个工作流的 `permissions` 取最小（`contents: read` 为基线，发布路径才 `contents: write`）；所有第三方 action 钉 40 位 commit SHA（`verify:github-config` 守着，基线表为空是目标状态）。
+原则：每个工作流的 `permissions` 取最小（`contents: read` 为基线，发布路径才 `contents: write`）；所有第三方 action 钉 40 位 commit SHA（`verify:github-config` 守着，基线表已于 2026-09-30 S3-3 清空——此后任何浮动 ref 一律报红）。

@@ -19,3 +19,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 0
+  # cargo 生态（S3-1，2026-09-30）：555 个 crate 此前零扫描通道。directory 指向
+  # workspace 根（Cargo.lock 所在处）；与 npm 同口径——只开安全更新，不开版本 PR。
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

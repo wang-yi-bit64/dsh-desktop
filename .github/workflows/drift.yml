@@ -40,9 +40,9 @@ jobs:
     name: upstream DSH drift
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -66,13 +66,13 @@ jobs:
     name: updater channel health
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
         with:
           # verify:update-channel 要读全部 v* tag 才能算出「该通道最新已发布版本」；
           # 浅克隆拿不到 tag，判据会退化成「永远通过」（release.yml 同款注释）。
           fetch-depth: 0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm

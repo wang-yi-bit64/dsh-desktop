@@ -60,7 +60,7 @@ jobs:
           - macos-latest
           - ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -75,17 +75,28 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de   # stable（SHA 钉死；工具链名经下方 toolchain 输入传入）
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      # 供应链扫描（S3-2）：advisories + licenses 在役即失败；ignore 的每一条都附理由
+      # 且与 README 安全节同源（见 deny.toml）。cargo-deny 默认解析**全目标**依赖图，
+      # 在任一平台跑都能覆盖 gtk 栈——按计划只挂 Linux job。
+      # 首跑实证（2026-09-30）：加 ignore 前对 RUSTSEC-2024-0370 报红、加后转绿。
+      - name: cargo-deny (advisories + licenses)
+        if: runner.os == 'Linux'
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25   # v2
+        with:
+          command: check advisories licenses
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6   # v2
         with:
           workspaces: |
             .
             src-tauri
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
         with:
           node-version-file: .nvmrc
           cache: npm
