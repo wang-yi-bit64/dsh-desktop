@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-tauri",
-  "version": "0.7.0-alpha.8",
+  "version": "0.7.1-rc.1",
   "description": "A Rust + Tauri 2.0 desktop shell for DeepSeek Harness.",
   "private": true,
   "type": "module",
@@ -22,6 +22,10 @@
     "verify:relocate-hunks": "node scripts/relocate-patch-hunks.mjs --self-test",
     "verify:patches": "node scripts/verify-patch-layers.mjs",
     "verify:targets": "node scripts/dsh-targets.mjs --self-test",
+    "verify:update-channel": "node scripts/updater-manifest.mjs --verify",
+    "verify:update-channel:self-test": "node scripts/updater-manifest.mjs --self-test",
+    "verify:github-config": "node scripts/verify-github-config.mjs",
+    "verify:github-config:self-test": "node scripts/verify-github-config.mjs --self-test",
     "verify:prune": "node scripts/prune-harness-deps.mjs --self-test",
     "verify:variants": "node scripts/prune-platform-variants.mjs --self-test",
     "verify:remove-tree": "node scripts/remove-tree.mjs --self-test",

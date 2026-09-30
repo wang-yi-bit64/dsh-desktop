@@ -7,6 +7,36 @@
 
 <!-- changelog-entries -->
 
+## [0.7.1-rc.1] - 2026-09-30
+
+### ✨ 新功能
+
+- **guards**: add verify:github-config and verify:update-channel ([1b9a323](https://github.com/wang-yi-bit64/dsh-desktop/commit/1b9a323624955a22cf32386cbe2a5083b7a8d206))
+- **harness**: make the updater endpoint per-channel via a rolling manifest ([d215624](https://github.com/wang-yi-bit64/dsh-desktop/commit/d215624b4fa8c7af75c7bb06805908b2bcff78e5))
+
+### 🐛 修复
+
+- **workflows**: move pr-agent.yml into .github/workflows and pin actions ([a67574e](https://github.com/wang-yi-bit64/dsh-desktop/commit/a67574eadd81eaa70c967f0926631889de010d26))
+- **build**: pin windows.staticVCRuntime=false for tauri 2.12 ([3107a45](https://github.com/wang-yi-bit64/dsh-desktop/commit/3107a4587818f40d2abf5b3d5f258af6f5fd7b92))
+
+### 📝 文档
+
+- **plan**: add the defect-remediation plan and close the 0.8 plan ADR-048 gap ([b0ec178](https://github.com/wang-yi-bit64/dsh-desktop/commit/b0ec17844dddcc43df2f5f4b02edcdc250faa7e0))
+- **agents**: return AGENTS.md to a rules-and-index manual (160KB -> 33KB) ([e13708a](https://github.com/wang-yi-bit64/dsh-desktop/commit/e13708a0e266e34988a14b7a7bce12c3acd243f7))
+- **adr**: add ADR-052..055 and revise 022/044/047/048 ([f9b0e37](https://github.com/wang-yi-bit64/dsh-desktop/commit/f9b0e374b886d074173344368f1a71f95aba3e12))
+- **checklist**: pristine 基线放仓库外——版本进名字，目录出仓库 ([2113d85](https://github.com/wang-yi-bit64/dsh-desktop/commit/2113d859ce9e0d910e69325d0d3da66ac71d3360))
+- **plan**: add the 0.8 development plan and its v1.1 convergence revision ([acc5a38](https://github.com/wang-yi-bit64/dsh-desktop/commit/acc5a38b5c1f0cc703e29efe8fa95615858567b6))
+
+### 📦 构建与打包
+
+- **deps**: upgrade tauri 2.11.5 -> 2.12.0 and raise MSRV to 1.90 ([b21da2c](https://github.com/wang-yi-bit64/dsh-desktop/commit/b21da2c4016cd2004fdb3fc506fcbe16f61084ad))
+
+### 🧹 其他
+
+- Add Qodo AI PR Agent workflow ([e9f8dc5](https://github.com/wang-yi-bit64/dsh-desktop/commit/e9f8dc59ebb37f528713292d64ef9ba5e76793a4))
+- Merge pull request #1 from wang-yi-bit64/upgrade/tauri-2.12 ([ce4fe6e](https://github.com/wang-yi-bit64/dsh-desktop/commit/ce4fe6e3f879b770726b1d3e46b84545a76ce157))
+- **gitignore**: ignore the .qoder/ better-harness run and scratch dirs ([b4fe335](https://github.com/wang-yi-bit64/dsh-desktop/commit/b4fe3356941e336189504f8ac19d19f9341a354a))
+
 ## [0.7.0-alpha.8] - 2026-09-25
 
 ### 🐛 修复
