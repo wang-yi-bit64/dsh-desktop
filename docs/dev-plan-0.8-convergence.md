@@ -17,7 +17,7 @@
 **与其他计划文档的关系**:
 
 - `docs/roadmap.md`(H0~H3)是定位权威;本计划是 0.8 周期的执行细化,不推翻定位。
-- `docs/dev-plan-release-channels.md` 的批次账本(P0/1a/1b/2~6/R1~R3)**不受本计划影响**;
+- `docs/dev-plan-release-channels.md` 的批次账本(P0/1a/1b/2~6/R1~R3)**已随该文档归档**(2026-09-30, S2-4 → `docs/archive/`);其唯一在役遗产 `verify:plan-facts` 的账本主体已改指缺陷治理计划;
   本计划 §15 的双通道裁定是对通道**结构**的裁定(`dsh-targets.mjs` 目标表零改动)。
 - `docs/dev-plan-cli-distribution.md`:CLI 发布通道维持退役(2026-09-24),本计划不恢复它;
   便携版(Windows zip)是已交付形态,发布门禁包含其核验(§16)。

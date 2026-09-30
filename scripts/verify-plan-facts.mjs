@@ -49,7 +49,7 @@
  *
  * 退出码：`0` 通过 · `1` 有事实漂移 / 自检失败 · `2` 文件缺失（环境不完整）。
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -106,40 +106,14 @@ const PROSE_DECLARATIONS = [
 ]
 
 /**
- * 计划文档的批次状态账本（**单一真源**）。
+ * 在役计划文档（批次/决策状态的**单一账本主体**）。
  *
- * 值 = 该批次状态里**必须出现**的关键词，§5 的小节标题与 §10.1 的表行**都要**含它。
- * 改批次状态时必须同时改这里与文档——这是刻意的：`verify:plan-facts` 的作用就是
- * 让「只改了文档一处」在 CI 上红掉。
+ * 历史：本守卫最初测的是 `docs/dev-plan-release-channels.md` 的批次账本（它曾四次
+ * 在同一形态上失败）。S2-4（2026-09-30）把 release-channels 主题三份文档归档后，
+ * 账本主体改指向**在役**的缺陷治理计划——账本检查必须跟着在役计划走，
+ * 检查一份已冻结的历史文档是空转。
  */
-export const PLAN_BATCH_STATUS = {
-  P0: '已完成',
-  '1a': '撤销',
-  '1b': '半完成',
-  2: '待办',
-  3: '待办',
-  4: '待办',
-  5: '待办',
-  6: '待办',
-  R1: '撤销',
-  R2: '待办',
-  R3: '待办'
-}
-
-/** 计划文档里「状态」段必须在场（否则开头的摘要就与下方批次表脱节）。 */
-const PLAN_STATUS_WORD_REQUIRED = '撤销'
-
-/**
- * 默认状态：**§5 小节标题不写状态词即表示它**。
- *
- * 为什么允许这个例外：若要求每个标题都写「待办」，就是让多数批次去附和账本，
- * 噪声大而信息量为零。真正要堵的是反面——**非默认状态必须显式写在标题里**，
- * 否则就会出现「头部说已撤销、§5 一个字不提」这种摘要与正文脱节（第 3 次事故的形态）。
- * 表行不受此例外影响：每一行都必须写出状态词。
- */
-const DEFAULT_BATCH_STATUS = '待办'
-
-const PLAN_DOC = 'docs/dev-plan-release-channels.md'
+const PLAN_DOC = 'docs/dev-plan-defect-remediation.md'
 
 // ---------------------------------------------------------------------------
 // 纯逻辑层（可自测；只吃字符串，不碰文件系统）
@@ -303,127 +277,53 @@ export function checkLockInputs(docs, targets) {
 }
 
 /**
- * 从计划文档里抽出 §10.1 的批次状态表：`批次 → 该行原文`。
+ * C3：在役计划的**决策账本**必须自洽（缺陷治理计划 §7 的形状）：
+ *   ① §7 决策表必须存在，且 C1~C8 每个决策都在；
+ *   ② 每个决策的「落地」格**必须非空**，并引用一个真实存在的去向——
+ *      ADR（`ADR-\d{3}`，文件须在 docs/adr/）或仓库内文档/脚本路径。
+ *      这是「计划无权延期 ADR」（AGENTS §7.3 S2-2 条文）的静态面：
+ *      一个没有落地去向的裁决 = 让执行者横跳，与没有裁决一样。
+ *   ③ §11 执行记录必须存在——「做过的」与「未开工的」分开记账（§11.1 的反乐观纪律）。
  *
- * 定位方式是**先找表头行**再往下读到第一个非表格行——不去全文找 `| <id> |`，
- * 因为文档里还有别的表（例如「优化修订」表）同样以 `| 批次 N |` 开头。
- *
- * @param {string} plan
- * @returns {Map<string, string>}
- */
-export function extractBatchTable(plan) {
-  const rows = new Map()
-  const lines = plan.split(/\r?\n/)
-  let inTable = false
-  for (const line of lines) {
-    if (!inTable) {
-      if (/^\|\s*批次\s*\|\s*状态\s*\|/.test(line)) inTable = true
-      continue
-    }
-    if (!/^\s*\|/.test(line)) break
-    const cells = splitTableRow(line)
-    const id = /^\*{0,2}([A-Za-z0-9]+)\*{0,2}$/.exec(cells[0])?.[1]
-    if (id === undefined) continue
-    if (/^-+$/.test(cells[1] ?? '')) continue
-    rows.set(id, line)
-  }
-  return rows
-}
-
-/**
- * 从计划文档里抽出 §5 的批次小节标题：`批次 → 标题原文`。
- *
- * @param {string} plan
- * @returns {Map<string, string>}
- */
-export function extractBatchSections(plan) {
-  const sections = new Map()
-  for (const line of plan.split(/\r?\n/)) {
-    const id = /^###\s*批次\s+([A-Za-z0-9]+)\s/.exec(line)?.[1]
-    if (id !== undefined) sections.set(id, line)
-  }
-  return sections
-}
-
-/**
- * 抽出计划文档开头的「状态」引用块全文。
- *
- * ⚠️ **必须整块取，不能只取首行**：该摘要跨 3 行以上（`> 状态：…` / `> …` / `> …`），
- * 只取首行会让「撤销 / 半完成」这些词恰好落在第二行时判红（假失败），
- * 而那正是本仓最常见的「判据没对准真实形状」缺陷。
- *
- * @param {string} plan
- * @returns {string|undefined}
- */
-export function planStatusParagraph(plan) {
-  const lines = plan.split(/\r?\n/)
-  const start = lines.findIndex((line) => /^>\s*状态：/.test(line))
-  if (start === -1) return undefined
-  const collected = []
-  for (let i = start; i < lines.length && /^>/.test(lines[i]); i += 1) collected.push(lines[i])
-  return collected.join('\n')
-}
-
-/**
- * C3：批次状态账本 ↔ 文档的两处（§5 小节标题、§10.1 表行）必须一致，
- * 且账本覆盖表里的全部批次、开头的「状态」段要点名非「待办」状态词。
- *
- * @param {{plan: string, ledger: Record<string, string>, headerWord: string}} input
+ * @param {{plan: string, adrFileNames: Set<string>}} input
  * @param {string} [planPath] 仅用于报错信息
  * @returns {string[]}
  */
-export function checkPlanLedger({ plan, ledger, headerWord }, planPath = PLAN_DOC) {
+export function checkDecisionLedger({ plan, adrFileNames }, planPath = PLAN_DOC) {
   const problems = []
-  const table = extractBatchTable(plan)
-  const sections = extractBatchSections(plan)
-
-  if (table.size === 0) {
-    problems.push(`${planPath}：找不到 §10.1 的批次状态表——检查的锚点消失了，判据无法落地`)
+  const rows = plan.split(/\r?\n/).filter((l) => /^\| C\d+\s*\|/.test(l))
+  if (rows.length < 8) {
+    problems.push(`${planPath}：§7 决策表只有 ${rows.length} 行（要求 ≥8，C1~C8）——决策表被删或被改写即判红`)
     return problems
   }
-
-  for (const [id, statusWord] of Object.entries(ledger)) {
-    const row = table.get(id)
-    if (row === undefined) {
-      problems.push(`${planPath}：账本里的批次 ${id} 在 §10.1 表里不存在`)
+  for (const row of rows) {
+    const id = /^\|\s*(C\d+)/.exec(row)?.[1] ?? '?'
+    const cells = splitTableRow(row)
+    // §7 表四列：| # | 问题 | 裁决 | 落地 | ——「落地」是第 4 格（cells[3]）。
+    const landing = cells[3] ?? ''
+    if (landing.trim().length === 0) {
+      problems.push(`${planPath}：决策 ${id} 的「落地」格为空——没有去向的裁决等于没裁决`)
       continue
     }
-    if (!row.includes(statusWord)) {
-      problems.push(`${planPath}：批次 ${id} 的 §10.1 表行不含期望状态词「${statusWord}」——表行是：${row.trim()}`)
-    }
-    const section = sections.get(id)
-    if (section === undefined) {
-      // P0 等批次没有 §5 小节，只查表行。
-      continue
-    }
-    if (statusWord === DEFAULT_BATCH_STATUS) continue // 默认态不必写进标题，见 DEFAULT_BATCH_STATUS
-    if (!section.includes(statusWord)) {
-      problems.push(`${planPath}：批次 ${id} 的 §5 小节标题不含期望状态词「${statusWord}」——标题是：${section.trim()}`)
-    }
-  }
-
-  for (const id of table.keys()) {
-    if (!(id in ledger)) {
-      problems.push(`${planPath}：§10.1 表里有批次 ${id}，但状态账本没有它——新批次必须同时登记进 PLAN_BATCH_STATUS`)
-    }
-  }
-
-  const header = planStatusParagraph(plan)
-  if (header === undefined) {
-    problems.push(`${planPath}：找不到开头的「> 状态：」段`)
-  } else {
-    // 开头的摘要必须点名所有非「待办」的状态词，否则摘要与表脱节（第 3 次事故正是这个形态）。
-    for (const word of new Set(Object.values(ledger))) {
-      if (word === '待办') continue
-      if (!header.includes(word)) {
-        problems.push(`${planPath}：开头「状态」段没有点名「${word}」——摘要与批次表脱节`)
+    // ADR 存在性检查扫**整行**：裁决格与落地格都可能引用 ADR，引用了就必须真实存在。
+    for (const adrId of row.matchAll(/ADR-(\d{3})/g)) {
+      const fileName = [...adrFileNames].find((f) => f.startsWith(adrId[1] + '-'))
+      if (fileName === undefined) {
+        problems.push(`${planPath}：决策 ${id} 引用了 ADR-${adrId[1]}，但 docs/adr/ 下没有对应文件`)
       }
     }
-    if (!header.includes(headerWord)) {
-      problems.push(`${planPath}：开头「状态」段不含「${headerWord}」`)
+    // 「去向」的三种合法形态：ADR / 仓库内路径（docs|scripts|patches|…/ 文件）/
+    // 本计划内的小节引用（§N）。三者都没有 = 裁决悬空。
+    const hasAdr = /ADR-\d{3}/.test(landing)
+    const hasPath = /(?:docs|scripts|patches|packages|crates|src-tauri|build|harness-locks)\/[\w.-]+/.test(landing)
+    const hasSection = /§\d/.test(landing)
+    if (!hasAdr && !hasPath && !hasSection) {
+      problems.push(`${planPath}：决策 ${id} 的「落地」格既不引用 ADR 也不引用仓库内路径或小节：${landing.trim()}`)
     }
   }
-
+  if (!/^## 11\. 执行记录/m.test(plan)) {
+    problems.push(`${planPath}：找不到「## 11. 执行记录」——台账与未开工清单的载体消失了`)
+  }
   return problems
 }
 
@@ -532,61 +432,56 @@ function selfTest() {
   eq('夹具6：缺文件 → 判红', checkLockInputs({ ...lockOk, 'harness-locks/alpha/inputs.json': undefined }, TARGETS).length > 0, true)
   eq('夹具6：非法 JSON → 判红', checkLockInputs({ ...lockOk, 'harness-locks/next/inputs.json': '{' }, TARGETS).length > 0, true)
 
-  // --- 夹具 7：批次表抽取只吃 §10.1 那张表 ---
-  const planFixture = [
-    '# 计划',
+  // --- 夹具 7：决策账本——C1~C8 每行必须有去向（ADR / 仓库路径 / 小节引用） ---
+  const adrFileNames = new Set(['052-dual-upstream-channels-restored.md', '053-channelized-updater-manifest.md', '055-keep-daily-ci-and-drift.md'])
+  const landingRow = (id, landing) => `| ${id} | 问题 | ✅ 裁决 | ${landing} |`
+  const planOk = [
+    '# 缺陷治理计划',
+    '| # | 问题 | 裁决 | 落地 |',
+    '|---|------|------|------|',
+    landingRow('C1', 'ADR-052；S0-3'),
+    landingRow('C2', 'ADR-053；S1-2'),
+    landingRow('C3', 'ADR-052；S5'),
+    landingRow('C4', 'ADR-055 清单追加；S6-5 收尾'),
+    landingRow('C5', 'ADR-052'),
+    landingRow('C6', 'ADR-055；S0-4'),
+    landingRow('C7', 'ADR-052'),
+    landingRow('C8', 'patches/LAYERS.md「移植裁定」；§6'),
     '',
-    '> 状态：**部分已落地**。**批次 1a / R1 已整条撤销**；批次 1b 半完成。',
-    '',
-    '## 10.1 规模',
-    '',
-    '| 批次 | 状态 | 说明 |',
-    '|---|---|---|',
-    '| **P0** | 待办（**前置**） | 事实校验脚本 |',
-    '| 1a | ⚠️ **大部分撤销** | 目录键 |',
-    '| 1b | ⚠️ **半完成** | 锚点 |',
-    '| R1 | ❌ **整条撤销** | 并入 |',
-    '',
-    '> | 批次 2 | **删掉某项** | **减一项** |'
+    '## 11. 执行记录',
+    ''
   ].join('\n')
-  const table = extractBatchTable(planFixture)
-  eq('夹具7：抽到 4 行', [...table.keys()], ['P0', '1a', '1b', 'R1'])
-  eq('夹具7：表头行本身不算批次', table.has('批次'), false)
-  const sections = extractBatchSections('### 批次 1a — x ❌ **整条撤销**\n### 批次 1b — y ⚠️ **半完成**')
-  eq('夹具7：小节标题抽到两个批次', [...sections.keys()], ['1a', '1b'])
-
-  // --- 夹具 8：**真实事故形态**——头部与表行状态词打架 ---
-  const ledgerFixture = { P0: '待办', '1a': '撤销', '1b': '半完成', R1: '撤销' }
+  eq('夹具7：决策表 8 行 + 落地格引用 ADR/路径 → 无问题', checkDecisionLedger({ plan: planOk, adrFileNames }), [])
+  // 反证 1：落地格引用了不存在的 ADR-099 → 红
+  const badAdr = checkDecisionLedger({
+    plan: planOk.replace(landingRow('C2', 'ADR-053；S1-2'), landingRow('C2', 'ADR-099；S1-2')),
+    adrFileNames,
+  })
+  eq('夹具7a：引用不存在的 ADR 必须判红', badAdr.length, 1)
+  eq('夹具7a：报错点名 ADR-099', badAdr[0].includes('ADR-099'), true)
+  // 反证 2：落地格为空 → 红（「没有去向的裁决等于没裁决」）
   eq(
-    '夹具8：账本 ↔ 表行/小节/摘要 一致 → 无问题',
-    checkPlanLedger({ plan: planFixture, ledger: ledgerFixture, headerWord: '撤销' }),
-    []
+    '夹具7b：落地格为空必须判红',
+    checkDecisionLedger({ plan: planOk.replace(landingRow('C1', 'ADR-052；S0-3'), landingRow('C1', '  ')), adrFileNames }).length,
+    1
   )
-  // 8a：表行退回「待办」（第 3 次事故的形态：正文说待办、实际已撤销）
-  const rowReverted = planFixture.replace('| 1a | ⚠️ **大部分撤销** |', '| 1a | 待办 |')
-  const rowProblem = checkPlanLedger({ plan: rowReverted, ledger: ledgerFixture, headerWord: '撤销' })
-  eq('夹具8a：表行状态词不符 → 判红', rowProblem.length, 1)
-  eq('夹具8a：报错点名批次与期望词', rowProblem[0].includes('批次 1a') && rowProblem[0].includes('撤销'), true)
-  // 8b：摘要段漏掉「半完成」
-  const headerLost = planFixture.replace('批次 1b 半完成。', '批次 1b 也在推进。')
-  const headerProblem = checkPlanLedger({ plan: headerLost, ledger: ledgerFixture, headerWord: '撤销' })
-  eq('夹具8b：摘要漏点名状态词 → 判红', headerProblem.length, 1)
-  eq('夹具8b：报错点名「半完成」', headerProblem[0].includes('半完成'), true)
-  // 8c：表里多了一个账本没有的批次
-  const extraRow = planFixture.replace('| R1 |', '| 9 | 待办 | 新批次 |\n| R1 |')
-  const extraProblem = checkPlanLedger({ plan: extraRow, ledger: ledgerFixture, headerWord: '撤销' })
-  eq('夹具8c：未登记的批次 → 判红', extraProblem.some((p) => p.includes('账本没有它')), true)
-  // 8d：表整个消失
-  const tableGone = checkPlanLedger({ plan: '# 计划\n没有表\n', ledger: ledgerFixture, headerWord: '撤销' })
-  eq('夹具8d：状态表消失 → 判红', tableGone.length, 1)
-  eq('夹具8d：报错说清锚点消失', tableGone[0].includes('锚点消失'), true)
-
-  // --- 夹具 9：账本自身必须是「批次表覆盖我们的全部批次」这一关系的反向检查 ---
+  // 反证 3：落地格只有一句不带去向的口号 → 红
   eq(
-    '夹具9：账本漏一个已在表里的批次 → 判红',
-    checkPlanLedger({ plan: planFixture, ledger: { P0: '待办', '1a': '撤销', '1b': '半完成' }, headerWord: '撤销' })
-      .some((p) => p.includes('账本没有它') && p.includes('R1')),
-    true
+    '夹具7b2：落地格无 ADR/路径/小节引用必须判红',
+    checkDecisionLedger({ plan: planOk.replace(landingRow('C3', 'ADR-052；S5'), landingRow('C3', '尽快做')), adrFileNames }).length,
+    1
+  )
+  // 反证 4：决策表被删（只剩 1 行）→ 红（锚点消失不得静默通过——扫出数>0 纪律）
+  eq(
+    '夹具7c：决策表整体消失必须判红',
+    checkDecisionLedger({ plan: '# 缺陷治理计划\n\n没有决策表了。\n\n## 11. 执行记录\n', adrFileNames }).length,
+    1
+  )
+  // 反证 5：§11 执行记录被删 → 红
+  eq(
+    '夹具7d：执行记录消失必须判红',
+    checkDecisionLedger({ plan: planOk.replace('## 11. 执行记录', '## 99. 其他'), adrFileNames }).length,
+    1
   )
 
   if (failures.length > 0) {
@@ -625,10 +520,13 @@ function main() {
   const docs = {}
   for (const path of new Set(paths)) docs[path] = readOrNull(path)
 
+  const adrFileNames = new Set(
+    readdirSync(join(projectRoot, 'docs', 'adr')).filter((f) => /^\d{3}-/.test(f))
+  )
   const problems = [
     ...checkVersionDeclarations(docs, targets),
     ...checkLockInputs(docs, targets),
-    ...checkPlanLedger({ plan: docs[PLAN_DOC] ?? '', ledger: PLAN_BATCH_STATUS, headerWord: PLAN_STATUS_WORD_REQUIRED })
+    ...checkDecisionLedger({ plan: docs[PLAN_DOC] ?? '', adrFileNames })
   ]
 
   if (problems.length > 0) {
@@ -640,7 +538,7 @@ function main() {
     process.exit(1)
   }
 
-  console.log(`✅ 计划事实一致：${new Set(paths).size} 个文件 · ${listTargetNames().length} 个目标的版本声明与锚点一致，批次状态账本自洽`)
+  console.log(`✅ 计划事实一致：${new Set(paths).size} 个文件 · ${listTargetNames().length} 个目标的版本声明与锚点一致，决策账本自洽`)
   process.exit(0)
 }
 

@@ -1,3 +1,5 @@
+> 🗄️ **已归档（2026-09-30，缺陷治理计划 S2-4）**。本文是「正式版 / 测试版 / 开发版三通道」主题的主计划，其生存空间已被后续决策取代：更新源方案 → [ADR-053](../adr/053-channelized-updater-manifest.md)（通道化 rolling manifest，v0.7.1-rc.1 起实测在役）；通道结构 → [ADR-052](../adr/052-dual-upstream-channels-restored.md)（双通道，其后 alpha 休眠见 [ADR-056](../adr/056-alpha-channel-dormant.md)）——三通道不再追求；版本号语义 → `docs/release-runbook.md` §8.1~§8.3 与 S1-4 单调守卫。本文唯一在役遗产是 `verify:plan-facts` 守卫（`scripts/verify-plan-facts.mjs`，账本主体已改指缺陷治理计划）。恢复前提：重启三通道重构须新立 ADR 并说明其与 ADR-052/053 的关系。内容原样保留供追溯。
+
 # 发布通道重构计划：正式版 / 测试版 / 开发版三通道对齐上游版本控制
 
 > 状态：**部分已落地**。P0 事实校验脚本**已完成**（`npm run verify:plan-facts`，自测 30 项）；

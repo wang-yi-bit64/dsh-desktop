@@ -1,3 +1,5 @@
+> 🗄️ **已归档（2026-09-30，S2-4）**。本文是对 `dev-plan-release-channels.md`（同日归档，见其文首说明）的增量优化建议；其中仍有生命力的建议已分别落入 ADR-053（更新源通道化）与缺陷治理计划 S1/S5 的判据。原样保留供追溯。
+
 # 发布通道重构：四项优化与落地建议
 
 > 对象：`docs/dev-plan-release-channels.md`（主计划）与 `docs/risk-review-release-channels.md`（风险评审）
