@@ -70,8 +70,14 @@ function applyHunks(lines, hunks, label) {
   return out
 }
 
-/** 下载一个包的文件表（含极简内存缓存，一次进程内同版本只拉一次）。 */
 const fetchCache = new Map()
+
+/**
+ * 下载并缓存指定包版本的文件表；下载失败时抛出错误。
+ * @param {string} pkg - npm 包名。
+ * @param {string} version - 要下载的版本。
+ * @returns {Promise<Map<string, string>>} 包内相对路径到文件内容的映射。
+ */
 async function pkgFiles(pkg, version) {
   const key = `${pkg}@${version}`
   if (!fetchCache.has(key)) {
@@ -87,6 +93,7 @@ async function pkgFiles(pkg, version) {
  * @returns {{text: string, conflicts: number, shortcut: string|null}}
  */
 function threeWayMerge(oursLines, baseLines, theirsLines, eol) {
+  /** 比较两个行数组的长度及对应行内容是否完全一致。 */
   const eq = (a, b) => a.length === b.length && a.every((l, i) => l === b[i])
   if (eq(oursLines, baseLines)) return { text: theirsLines.join(eol), conflicts: 0, shortcut: 'untouched-by-patch' }
   if (eq(baseLines, theirsLines)) return { text: oursLines.join(eol), conflicts: 0, shortcut: 'upstream-unchanged' }
@@ -109,6 +116,12 @@ function threeWayMerge(oursLines, baseLines, theirsLines, eol) {
   return { text: result.stdout ?? '', conflicts: result.status, shortcut: null }
 }
 
+/**
+ * 下载新旧包并三路合并目标补丁，写出合并树、新版纯净树与 report.json。
+ * 冲突标记保留在输出中供人工裁定；缺失文件或旧补丁无法应用时抛错。
+ * @param {string[]} args - 含 --to=、--out= 与可选 --dsh-target= 的命令行参数。
+ * @returns {Promise<void>} 文件与冲突报告写入 --out 指定的工作目录。
+ */
 async function modeMerge(args) {
   const target = resolveTarget(resolveDshTargetArg(args))
   const to = requiredValue(args, '--to=')
@@ -167,6 +180,13 @@ async function modeMerge(args) {
   console.log(`\n工作目录：${out}\n下一步：逐个解决 conflict 标记（裁定依据 patches/LAYERS.md），然后跑 regen --write。`)
 }
 
+/**
+ * 比较工作目录中已解决的 scoped 包文件与新版纯净树，生成归一化补丁。
+ * 默认只报告路径和行数；--write 写入目标补丁目录，旧版补丁仍需手工删除。
+ * 调用前需人工解决冲突标记，本函数不校验冲突是否已解决。
+ * @param {string[]} args - 含 --to=、--out=、可选 --dsh-target= 与 --write 的参数。
+ * @returns {Promise<void>} 报告生成结果，无差异的包只提示可退役。
+ */
 async function modeRegen(args) {
   const target = resolveTarget(resolveDshTargetArg(args))
   const to = requiredValue(args, '--to=')
@@ -248,6 +268,12 @@ async function modeRegen(args) {
   }
 }
 
+/**
+ * 递归复制目录中的文件，按需创建目标父目录并覆盖同名文件。
+ * @param {string} src - 已存在的源目录。
+ * @param {string} dest - 目标目录；源中的空目录不会单独创建。
+ * @returns {void}
+ */
 function copyTree(src, dest) {
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     const s = join(src, entry.name)
@@ -259,11 +285,13 @@ function copyTree(src, dest) {
 
 /** 与 recount-patches.mjs 同一套输出归一：去 index/mode 行，路径归一成 node_modules 布局。 */
 function normalizePatchText(raw) {
+  /** 去掉 diff 临时目录前缀，优先保留从 node_modules/ 开始的路径。 */
   const normalize = (value) => {
     const cleaned = String(value).trim()
     const marker = cleaned.indexOf('node_modules/')
     return marker >= 0 ? cleaned.slice(marker) : cleaned.replace(/^[ab]\//, '')
   }
+  /** 给归一化路径加上 diff 侧前缀；/dev/null 保持原样。 */
   const withPrefix = (prefix, value) => {
     const normalized = normalize(value)
     return normalized === '/dev/null' ? normalized : `${prefix}/${normalized}`
@@ -286,6 +314,12 @@ function normalizePatchText(raw) {
   return `${lines.join('\n').replace(/\n+$/, '')}\n`
 }
 
+/**
+ * 读取第一个匹配前缀的参数值；缺失或为空时打印错误并以退出码 2 结束进程。
+ * @param {string[]} args - 待查找的命令行参数。
+ * @param {string} prefix - 含等号的参数前缀，例如 --to=。
+ * @returns {string} 去掉前缀后的非空参数值。
+ */
 function requiredValue(args, prefix) {
   const value = args.find((a) => a.startsWith(prefix))?.slice(prefix.length)
   if (!value) {
@@ -295,6 +329,10 @@ function requiredValue(args, prefix) {
   return value
 }
 
+/**
+ * 从进程参数分派 merge 或 regen 模式；未知模式打印用法并以退出码 2 结束进程。
+ * @returns {Promise<void>} 等待所选模式完成，执行错误交由入口 catch 处理。
+ */
 async function main() {
   const args = process.argv.slice(2)
   const mode = args[0]
