@@ -87,7 +87,7 @@ alpha.6 的准备期正是这样跑掉了三轮：推 `9e112e2`（CI 三平台�
 |--------|------|------|--------|
 | CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，四个输入：`scope` / `os` / `fault_injection` / `dsh_target`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。`dsh_target` 选组装哪条上游通道（`next` / `alpha`）。**不发布任何东西** |
-| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` **逐通道**对照各自的 npm dist-tag（`next` 对 `next`、`alpha` 对 `alpha`），落后即红。**不构建任何东西**——只回答「该规划升级了吗」 |
+| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` **逐通道**对照各自的 npm dist-tag（`next` 对 `next`、`alpha` 对 `alpha`），落后即红；**休眠目标显式跳过**（alpha，ADR-056）。另有独立 job 跑 `verify:update-channel`（全通道更新端点健康，同样跳过休眠目标）。**不构建任何东西**——只回答「该规划升级了吗」 |
 | Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + **从 tag 的预发布通道名推导 `dsh_target`** + 秒级静态门禁）→ 三平台并行出包（`build`）并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；Windows 的 `portable` job 出便携 zip → `publish-assets` 把便携版三件挂到 Release（**F13 修复，2026-09-24 新增**：此前它们只停在 Actions artifacts 里，Release 上永远只有 10 项而非期望的 13）。🗄️ 原 `cli` / `cli-publish` 两个 job 已于 2026-09-24 退役（见 §8.4 末条） |
 
 - **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
@@ -303,7 +303,7 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | 目标对应 npm `next` dist-tag，⚠️ **但当前锚在上游 `latest`** | `0.1.5-rc.3` | `patches/next/`（14 个）、`packages/next/`（已清空） | `rc` | `0.7.0-rc.1` |
-| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
+| `alpha` | npm `alpha` dist-tag（🗄️ **2026-09-30 起休眠**，[ADR-056](../docs/adr/056-alpha-channel-dormant.md)） | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
 
 > ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-30 复核）：上游 `next` 已前进到
 > **`0.2.0-rc.2`**（drift 哨兵实测），而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是移植含
@@ -495,8 +495,9 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > 触发即实测踩中；checkout 同步 `fetch-depth: 0`，否则浅克隆拿不到 tag，判据退化成
 > 永远通过）。
 >
-> **两条诚实边界**：① alpha 通道在它的第一次通道化发布之前仍是零投递（每日 drift
-> 对 alpha 报红为预期状态）；② 存量安装不自愈——端点是构建期注入的，`v0.7.1-rc.1`
-> 之前的构建仍指向旧端点 `releases/latest/...`（GitHub latest 排除预发布，停在
-> `0.5.0-next.1`），修复只覆盖今后新装的构建。
+> **两条诚实边界**：① alpha 通道零投递是**裁定结果**——2026-09-30 起休眠（C7 /
+> [ADR-056](056-alpha-channel-dormant.md)：不发布、不追漂移，补丁冻结保留；`updater-alpha`
+> 不再等待引导，`--channel-of` 拒绝休眠通道发布）；② 存量安装不自愈——端点是构建期注入的，
+> `v0.7.1-rc.1` 之前的构建仍指向旧端点 `releases/latest/...`（GitHub latest 排除预发布，
+> 停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。
 

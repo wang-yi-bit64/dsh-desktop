@@ -56,14 +56,12 @@ jobs:
       - name: Upstream drift check
         run: npm run verify:drift
 
-  # 更新通道健康（ADR-053）：每条在役通道的端点 version ≥ 该通道最新已发布 tag。
+  # 更新通道健康（ADR-053）：每条**在役**通道的端点 version ≥ 该通道最新已发布 tag。
   # 为什么单独成 job：上游漂移与通道健康是**两台哨兵**——放同一个 job 里，前面那台
   # 红着（next 线的已知漂移）会让后面那台永远轮不到执行（2026-09-30 手动触发实测
   # 踩中）。分开后各自报告、互不遮蔽。
-  #
-  # ⚠️ 已知预期红（2026-09-30 登记）：updater-alpha 滚动 Release 要等 alpha 通道的
-  # 第一次通道化发布才会创建，在那之前本 job 每天因 404 报红——该通道现在确实
-  # 零投递，红是如实信号，不是回归。
+  # 休眠目标（alpha，ADR-056）被脚本显式跳过并说明；全部休眠时脚本报错而不是空转通过。
+  # 绿 = 在役通道的更新链路活着；红 = 某条在役通道断了，不是「这个提交有问题」。
   updater-channel:
     name: updater channel health
     runs-on: ubuntu-latest

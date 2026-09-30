@@ -95,6 +95,7 @@
 | [053](053-channelized-updater-manifest.md) | 更新链通道化：每通道一个滚动 Release manifest + 构建期注入端点 | 已接受，执行中 |
 | [054](054-ai-review-workflows-admission.md) | AI 评审工作流准入：接上而非删除，SHA 钉死 + 触发面收紧 | 已接受 |
 | [055](055-keep-daily-ci-and-drift.md) | 保留每日 CI 与 drift 哨兵（修订 ADR-047 的删除清单第 2 项） | 已接受 |
+| [056](056-alpha-channel-dormant.md) | alpha 线休眠：不发布、不追漂移，补丁冻结保留（部分修订 ADR-052） | 已接受 |
 
 ## 新增一条 ADR 的规则
 

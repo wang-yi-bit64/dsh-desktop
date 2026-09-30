@@ -15,9 +15,9 @@
  *   2. --publish <tag>                 把该版本 Release 的 latest.json 覆盖到滚动 Release
  *   3. --verify [--tag <tag>]          核对端点 version ≥ 该通道最新 v* tag 的版本。
  *                                      给 --tag 时只核对该 tag 所属通道：发布时自检只管
- *                                      「本次发布的通道活了」，其余通道的引导期缺失（滚动
- *                                      Release 尚未由它的第一次发布创建）不属于本次发布的
- *                                      失败——全通道健康归每周 drift / 手动全量核对
+ *                                      「本次发布的通道活了」——其余在役通道的问题与休眠
+ *                                      目标（ADR-056，显式跳过）不属于本次发布的失败；
+ *                                      全通道健康归每日 drift / 手动全量核对
  *                                      （2026-09-30 v0.7.1-rc.1 首发实测教训）
  *   4. --self-test                     纯逻辑自检（含可证伪夹具）
  *
@@ -200,7 +200,16 @@ async function verify(onlyChannel = null) {
     console.error('❌ 作用域通道 ' + onlyChannel + ' 不在 dsh-targets 总表里——先修通道名，再谈核对。')
     return 1
   }
+  // examined：实际被核对的**在役**通道数。休眠目标（ADR-056）显式跳过、不计入；
+  // 若为 0，下面必须报错——「没有可核对的东西」不能冒充「核对通过」（扫出数 > 0 纪律）。
+  let examined = 0
   for (const channel of channels) {
+    const targetEntry = listTargetNames().map((n) => resolveTarget(n)).find((t) => t.publishChannel === channel)
+    if (targetEntry.status === 'dormant') {
+      lines.push('· 通道 ' + channel + '：目标已裁定休眠（ADR-056），跳过通道健康核对')
+      continue
+    }
+    examined += 1
     const endpoint = endpointFor(channel, repo)
     const newest = newestTagFor(channel)
     let manifestVersion = null
@@ -218,6 +227,10 @@ async function verify(onlyChannel = null) {
     lines.push('· 通道 ' + channel + '：端点 ' + (manifestVersion ?? '不可达') + ' / 最新 tag ' + newest + note)
   }
   for (const line of lines) console.log(line)
+  if (examined === 0) {
+    console.error('❌ 没有在役目标可核对——全部休眠时没有可断言的东西（默认目标必须在役，见 ADR-056）。')
+    return 1
+  }
   if (problems.length > 0) {
     for (const p of problems) console.error('❌ ' + p)
     return 1
@@ -259,6 +272,10 @@ export function selfTest() {
   eq('scope：指定通道只留自己', scopedChannels(['rc', 'alpha'], 'rc'), ['rc'])
   eq('scope：不给作用域 = 全通道', scopedChannels(['rc', 'alpha'], null), ['rc', 'alpha'])
   eq('scope：作用域写错必须扫出 0（调用方据此报错）', scopedChannels(['rc', 'alpha'], 'beta'), [])
+  // 目标状态（ADR-056）：休眠目标跳过通道健康核对——跳过必须显式出现在输出里，
+  // 且不能冒充「已核对」（verify 里 examined 计数守着这条）。
+  eq('目标状态：alpha 休眠（ADR-056）', resolveTarget('alpha').status, 'dormant')
+  eq('目标状态：next 在役', resolveTarget('next').status, 'active')
   if (failed > 0) { console.error('updater-manifest self-test 失败 ' + failed + ' 项'); return 1 }
   console.log('✅ updater-manifest 自检通过（' + total + ' 项）')
   return 0

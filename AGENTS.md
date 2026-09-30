@@ -80,7 +80,7 @@
 - `docs/dev-plan-0.2-hardening.md`：产品/分发侧增补（0.2-A~D）；与 H0 的冲突裁决归用户。
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点 D1~D11 与裁决记录；「插件禁用语义」证据链在此。
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
-- `docs/adr/`：架构决策记录库（40 篇）；新能力先写代码、再按 `docs/adr/README.md` 登记。
+- `docs/adr/`：架构决策记录库（41 篇）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
 - `crates/dsh-contracts/src/constants.rs`（契约常量）、`errors.rs`（错误码 + `AppError`）、`ipc.rs`（`IpcEnvelope<T>` + 形状测试）、`rpc.rs`（JSON-RPC 唯一契约源，⚠️ 无运行时消费者）。
@@ -122,7 +122,7 @@
 | LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`（分级表按**包名**索引）、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]`（含 `target` 字段标明通道） |
-| **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道直接失败）；`smoke.yml` 有 `dsh_target` 输入；`verify:patches` 逐目标检查、`verify:drift` 逐通道对照 dist-tag。见 §8.6 |
+| **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15；**alpha 线 2026-09-30 起休眠**——[ADR-056](docs/adr/056-alpha-channel-dormant.md)：机制与目录保留，不发布、不追漂移，`status` 字段是唯一产地） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道**与休眠通道**直接失败）；`smoke.yml` 有 `dsh_target` 输入；`verify:patches` 逐目标检查、`verify:drift` 逐通道对照 dist-tag（休眠目标显式跳过）。见 §8.6 |
 | ↳ 补丁行号重算（移植到另一条上游线时） | ✅ 已接线 | `scripts/recount-patches.mjs`（重生成，依赖 git）+ `scripts/relocate-patch-hunks.mjs`（只改 `@@` 行、原文保真、无外部进程）**二选一** + `check-patch-applicability` 的 ±20 窗口判据 | 升级/移植工序；`patch-package` 按行号定位且偏移超 ±20 行即失败，只按内容搜索的预检会漏报。**同一份补丁只用一条路径**——见 §8.6 |
 | **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **20 个命令全部**返回 `CommandResult<T>`；五个页面（error / plugin-recovery / logs / updates / feedback）均解包 `success` |
 | ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
@@ -184,7 +184,7 @@
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | 目标对应 npm `next` dist-tag，⚠️ **但当前锚在上游 `latest`** | `0.1.5-rc.3` | `patches/next/`（14 个）、`packages/next/`（已清空） | `rc` | `0.7.0-rc.1` |
-| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
+| `alpha` | npm `alpha` dist-tag（🗄️ **2026-09-30 起休眠**，[ADR-056](docs/adr/056-alpha-channel-dormant.md)：不发布、不追漂移，补丁冻结保留） | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
 
 > ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-30 复核）：上游 `next` 已前进到
 > **`0.2.0-rc.2`**（drift 哨兵实测），而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是移植含

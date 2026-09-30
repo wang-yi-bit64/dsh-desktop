@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| 状态 | 已接受 |
+| 状态 | 已接受（决策 1 的 alpha 部分经 [ADR-056](056-alpha-channel-dormant.md) 修订为休眠） |
 | 日期 | 2026-09-30 |
 | 唯一产地 | scripts/dsh-targets.mjs（目标表）；本 ADR 与 docs/dev-plan-0.8-convergence.md §15 同源 |
 | 取代 | ADR-048（单通道收敂） |
@@ -45,3 +45,11 @@
 - npm run verify:patches —— 逐目标的分级与包名/版本一致性（当前 2 个目标）。
 - npm run verify:plan-facts —— 计划文档的版本锚点与批次状态账本自洽。
 - 本 ADR 与 docs/dev-plan-0.8-convergence.md §15 互为证据；ADR-048 的状态已改为「已被本 ADR 取代」。
+
+## 修订（2026-09-30）
+
+决策 1「next 与 alpha 两个目标均为活跃维护项」由 [ADR-056](056-alpha-channel-dormant.md) 部分修订：
+**alpha 线休眠**（不发布、不追漂移，补丁与 vendored 冻结保留），next 线维持在役；机制与目录保留的
+决定不变。直接诱因是通道化首发（v0.7.1-rc.1）实测「在役的 alpha 零投递」——守卫每天红、维护动作
+永远不会来，属于用红噪音训练人无视红灯。恢复在役的条件与版本约束（须严格大于当时最高 rc tag）
+见 ADR-056。

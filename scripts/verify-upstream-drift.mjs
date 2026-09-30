@@ -262,6 +262,7 @@ async function selfTest() {
   for (const name of listTargetNames()) {
     const t = resolveTarget(name)
     check(`目标 ${name} 的 channel 是已知 dist-tag 名`, ['latest', 'next', 'alpha'].includes(t.channel), true)
+    check(`目标 ${name} 的 status 合法`, ['active', 'dormant'].includes(t.status), true)
     // publishChannel 才是桌面后缀，它必须非空且能反查回同一个目标。
     check(
       `目标 ${name} 的 publishChannel 非空且可反查`,
@@ -270,6 +271,10 @@ async function selfTest() {
     )
     check(`目标 ${name} 自身不落后于自己`, judgeDrift(t.dshVersion, t.dshVersion).ok, true)
   }
+  // 目标状态（ADR-056）：alpha 休眠是有记录的裁定；默认目标必须在役，
+  // 否则本哨兵对「该规划升级了吗」永远无可核对的东西。
+  check('目标状态：alpha 休眠（ADR-056）', resolveTarget('alpha').status, 'dormant')
+  check('默认目标必须在役', resolveTarget('next').status, 'active')
   // 可伪证性：把 publishChannel 改成上游不存在的值仍应能反查（它不过是本仓命名），
   // 但把 channel 改成不存在的 dist-tag 必须判红——这两条一起守住解耦的两侧。
   check(
@@ -289,7 +294,7 @@ async function selfTest() {
   console.log('verify-upstream-drift self-test: 全部通过（含无网络 → SKIP 分支）')
 }
 
-/** 主流程：两条通道各自对照它对应的 dist-tag 检查一次。 */
+/** 主流程：各**在役**目标对照它对应的 dist-tag 检查一次；休眠目标（ADR-056）显式跳过。 */
 async function main() {
   if (argv.includes('--self-test')) {
     await selfTest()
@@ -306,6 +311,7 @@ async function main() {
     //    （桌面 tag 后缀）。`next` 目标的桌面后缀是 `rc` 而上游 tag 是 `next`，
     //    哨兵要追的是后者——追错会去查一个上游不存在的 `rc` tag 并静默退回 `latest`。
     channel: DSH_TARGETS[name].channel,
+    status: resolveTarget(name).status,
     current: resolveTarget(name).dshVersion
   }))
 
@@ -324,7 +330,15 @@ async function main() {
   console.log('')
 
   let blocked = 0
+  // examined：实际被对照的**在役**目标数。休眠目标（ADR-056）显式跳过、不计入；
+  // 全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役），必须报错而不是空转通过。
+  let examined = 0
   for (const target of targets) {
+    if (target.status === 'dormant') {
+      console.log(`  [${target.name} → npm ${target.channel}] 🗄️ 已裁定休眠（ADR-056）——不对照上游漂移`)
+      continue
+    }
+    examined += 1
     // 各通道对照**自己的** dist-tag：next 线追 `next`，alpha 线追 `alpha`；
     // 没有对应 tag 时退回 `latest`（那正是「这条线还没被上游单独标记」的意思）。
     const upstream = result.tags[target.channel] ?? latest
@@ -338,6 +352,11 @@ async function main() {
       blocked += 1
       console.error(`${prefix} ❌ ${drift.message}`)
     }
+  }
+
+  if (examined === 0) {
+    console.error('  ❌ 没有在役目标可核对——全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役）。')
+    exit(1)
   }
 
   if (blocked > 0) {

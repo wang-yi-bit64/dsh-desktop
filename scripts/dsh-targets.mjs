@@ -35,6 +35,16 @@
  *
  * `targetForVersion` 走 `publishChannel`；漂移哨兵走 `channel`。各取所需。
  *
+ * ## 目标状态（status）：在役 / 休眠（ADR-056）
+ *
+ * `status: 'active' | 'dormant'`，**唯一产地**。休眠 = 不发布、不做漂移追赶、
+ * 补丁与 vendored 冻结保留；`publishChannel` 后缀仍可解析（删除目标是另一个决策，
+ * 属 ADR-022 意义上的收敂）。消费方：
+ *   · release preflight 的 `--channel-of` —— 休眠目标**直接失败**（休眠通道不得发布，
+ *     恢复在役须先修订 ADR-056 并把 status 改回 active）；
+ *   · verify:update-channel / verify:drift —— 休眠目标**显式跳过**（不是静默消失）；
+ *   · 默认目标必须在役（self-test 断言）——全部休眠时哨兵无事可做，属配置矛盾。
+ *
  * ## 未知通道必须失败，不得回退到默认目标
  *
  * `v0.5.0-beta.1` 这种 tag：`beta` 不是任何目标的 `publishChannel`。此时
@@ -71,14 +81,16 @@ export const DSH_TARGETS = {
   next: {
     channel: 'next',
     publishChannel: 'rc',
+    status: 'active',
     dshVersion: '0.1.5-rc.3',
-    summary: '上游 rc 线——默认发布的运行时基线（当前锚在上游 npm `latest`；上游 `next` 已前进到 0.1.7-rc.1，移植成本另立批次）'
+    summary: '上游 rc 线——默认发布的运行时基线（当前锚在上游 npm `latest`；上游 `next` 已前进到 0.2.0-rc.2，移植批次排在缺陷治理之后——决策点 C8）'
   },
   alpha: {
     channel: 'alpha',
     publishChannel: 'alpha',
+    status: 'dormant',
     dshVersion: '0.1.6-alpha.2',
-    summary: '上游 alpha 线（下一 minor 的早期预览）——与 next 线并行维护'
+    summary: '上游 alpha 线——🗄️ 2026-09-30 起休眠（ADR-056）：不发布、不追漂移，补丁与 vendored 冻结保留；恢复前提见该 ADR'
   }
 }
 
@@ -94,7 +106,7 @@ export function listTargetNames() {
  * 取目标定义。
  *
  * @param {string} name 目标名（如 `next`）。
- * @returns {{name: string, channel: string, publishChannel: string, dshVersion: string, summary: string}}
+ * @returns {{name: string, channel: string, publishChannel: string, status: 'active'|'dormant', dshVersion: string, summary: string}}
  *   目标定义（含名字）。
  * @throws {Error} 名字不在总表里——**不**回退到默认目标：静默回退会让产物捆错运行时。
  */
@@ -292,12 +304,18 @@ export function selfTest() {
     const target = resolveTarget(name)
     eq(`目标 ${name} 的 channel 与键一致`, target.channel, name)
     eq(`目标 ${name} 的 channel 是已知 npm dist-tag 名`, ['latest', 'next', 'alpha'].includes(target.channel), true)
+    eq(`目标 ${name} 的 status 合法`, ['active', 'dormant'].includes(target.status), true)
     eq(
       `目标 ${name} 的 publishChannel 能反推回自己`,
       targetForVersion(`9.9.9-${target.publishChannel}.1`),
       name
     )
   }
+  // 目标状态（ADR-056）：alpha 休眠是有记录的裁定，不是「忘了维护」；
+  // 默认目标必须在役——全部休眠时所有哨兵都无事可做，属配置矛盾。
+  eq('目标状态：alpha 休眠（ADR-056）', resolveTarget('alpha').status, 'dormant')
+  eq('目标状态：next 在役', resolveTarget('next').status, 'active')
+  eq('默认目标必须在役', resolveTarget(DEFAULT_TARGET).status, 'active')
 
   // 未登记目标必须抛错，而不是回退（静默回退 = 捆错运行时）。
   throws('未知目标名必须抛错', () => resolveTarget('stable'))
@@ -362,6 +380,15 @@ function main() {
       )
       exit(1)
     }
+    // 休眠通道不得发布（ADR-056）：release preflight 走这条路推导目标，
+    // 在这里失败 = 「给休眠通道打 tag」在组装 300MB 之前就被拦下。
+    if (resolveTarget(target).status === 'dormant') {
+      console.error(
+        `❌ 目标 ${target}（后缀 ${channelOfPrerelease(value)}）已裁定休眠（ADR-056），休眠通道不得发布。` +
+          `恢复在役须先修订 ADR-056 并把目标表 status 改回 active。`
+      )
+      exit(1)
+    }
     console.log(target)
     return
   }
@@ -370,9 +397,10 @@ function main() {
   for (const name of listTargetNames()) {
     const target = resolveTarget(name)
     const mark = name === DEFAULT_TARGET ? ' ← 默认' : ''
-    console.log(`  ${name.padEnd(6)} DSH ${target.dshVersion.padEnd(14)} ${target.summary}${mark}`)
+    const statusMark = target.status === 'dormant' ? '  🗄️ 休眠（ADR-056）' : ''
+    console.log(`  ${name.padEnd(6)} DSH ${target.dshVersion.padEnd(14)} ${target.summary}${mark}${statusMark}`)
     console.log(
-      `         上游 tag：${target.channel}   桌面后缀：${target.publishChannel}   ` +
+      `         上游 tag：${target.channel}   桌面后缀：${target.publishChannel}   状态：${target.status}   ` +
         `补丁：patches/${name}/   vendored：packages/${name}/`
     )
   }
