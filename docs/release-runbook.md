@@ -473,3 +473,28 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > `-c credential.helper= -c credential.helper='!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f'`
 > （`GH_TOKEN=$(gh auth token)`）。
 
+> ✅ **通道化首发（2026-09-30，`v0.7.1-rc.1`）**：ADR-053 端点通道化后的第一次发布，
+> 也是 D1（更新零投递）在 rc 通道的闭环点。三轮发布前门禁都跑在 tag 指向的**同一提交**上。
+>
+> | 项 | 结果 |
+> |---|---|
+> | tag | `v0.7.1-rc.1` → `2a0b04c`（注释标签） |
+> | CI（`2a0b04c`） | run `36661995358` ✅ |
+> | Smoke `next`（`2a0b04c`） | run `36662000823` ✅ ——日志里 `DSH_TARGET: next` |
+> | Smoke `alpha`（`2a0b04c`） | run `36662006140` ✅ ——日志里 `DSH_TARGET: alpha` |
+> | `release.yml` | run `36663389288`：preflight / 3×build / portable / publish-assets ✅；`updater-channel` ❌（见下） |
+> | 资产 | 9 平台 + `latest.json` + 3 便携版 = **13**（`verify:release-assets --check-release` 逐项通过，`prerelease: true`） |
+> | 端点 | `updater-rc/latest.json` 实测返回 `0.7.1-rc.1` = 该通道最新 tag ✅ |
+> | 内置运行时 | DSH `0.1.5-rc.3`（`next` 目标，rc 后缀） |
+>
+> **首发抓到的缺陷**：`updater-channel` job 的发布后自检断言**全部在役通道**，而
+> `updater-alpha` 滚动 Release 要等 alpha 通道第一次通道化发布才会存在（HTTP 404），
+> 于是本次发布被该 job 误判失败——产物本身 13/13 完整。修法（`8205a17`）：
+> `--verify` 增加 `--tag` 作用域，发布时只核对本次发布的通道；全通道核对接线进每日
+> drift（checkout 同步 `fetch-depth: 0`，否则浅克隆拿不到 tag，判据退化成永远通过）。
+>
+> **两条诚实边界**：① alpha 通道在它的第一次通道化发布之前仍是零投递（每日 drift
+> 对 alpha 报红为预期状态）；② 存量安装不自愈——端点是构建期注入的，`v0.7.1-rc.1`
+> 之前的构建仍指向旧端点 `releases/latest/...`（GitHub latest 排除预发布，停在
+> `0.5.0-next.1`），修复只覆盖今后新装的构建。
+

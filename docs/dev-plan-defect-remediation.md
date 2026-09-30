@@ -112,7 +112,7 @@
 **S1-3 新增 verify:update-channel（治 D1）**
 - 动作：断言三件事——① 端点可解析；② 端点 version ≥ 该通道最新已发布 tag 的版本；③ 对应 Release 资产包含 latest.json 与签名产物。
 - 可证伪夹具：**以 2026-09-30 的线上真实状态（端点 = 0.5.0-next.1，而已发布到 0.7.x）为夹具，必须报红**。这条夹具必须进 --self-test，否则守卫只是恒真的装饰。
-- 运行时机：发布后（release.yml 末尾）与每周 drift 工作流；不打入每次提交（会因外部状态制造长期红灯，理由同 ADR-030）。
+- 运行时机：发布后（release.yml 末尾，**按通道作用域**）与每日 drift 哨兵（**全通道**）；不打入每次提交（会因外部状态制造长期红灯，理由同 ADR-030）。
 
 **S1-4 版本单调性守卫（治 D2）**
 - 动作：扩展 verify:version——候选版本必须**严格大于本仓所有已发布 tag 的版本**；同时新增一条规则：预发布只在 patch 位推进（如 0.7.1-alpha.1），禁止在 alpha/rc 之间回退到更低的同版本号。
@@ -290,7 +290,7 @@
 
 | 指标 | 现状（2026-09-30 实测） | S 阶段目标 |
 |------|------------------------|-----------|
-| 更新端点投递的版本 | 0.5.0-next.1（已停更 15 天） | = 该通道最新发布版本 |
+| 更新端点投递的版本 | rc = `0.7.1-rc.1` ✅（2026-09-30 实测）；alpha 未引导（滚动 Release 不存在） | = 该通道最新发布版本 |
 | 补丁数 × 通道数 | 27 × 2 | 每通道各自下降 ≥30%（C5 选双通道后，绝对值目标改为「每条线都在减」） |
 | AGENTS.md 体积 | 160,148 B | ✅ **已达成 32.7 KB**（原定 ≤32,768 B；因后续仍需修正 MSRV/端点两行事实，判据放宽为 **≤40 KB**——真正的硬约束是「小于 64 KB 指令预算且规则全可读」，40 KB 留 24 KB 余量） |
 | 无守卫覆盖的层（文档常量 / 游离配置） | 已知 ≥3 类命中 | 0 类 |
@@ -332,7 +332,7 @@
 | C1 → ADR-054；S0-3 接上 AI 评审配置 | ✅ 已落地 | `pr-agent.yml` 已移入 `.github/workflows/`（**.github/pr-agent.yml 已删除**）；两个 action 钉 40 位 SHA（pr-agent=10bbd9a4、pullfrog=9d9014df、checkout@v6=d23441a4、setup-node@v5=a0853c24）；`issue_comment` 触发面收紧为「PR + 本仓成员」 |
 | verify:github-config（新守卫） | ✅ 已落地 | 真检查：扫 10 个 YAML / 6 个工作流 / 30 个 uses / **错放 0**；自检 13 项（含「错放目录必须报红」「基线之外的浮动 ref 必须报红」「扫出 0 必须报错」） |
 | C2 → ADR-053；S1-2 通道化 manifest | ✅ 代码已落地 | `scripts/updater-manifest.mjs`（端点 URL 唯一产地）；`release.yml` 新增构建期注入步 + `updater-channel` job（单写者，含发布后自检）；`tauri.conf.json` 默认端点指向 `updater-rc`；实测 `--write-config` 对 rc/alpha 分别产出正确端点，未知通道 `beta` 以退出码 1 失败 |
-| verify:update-channel（新守卫） | ✅ 已落地；**当前为红** | 端点 404（滚动 Release 尚不存在）——这是**正确**状态：它要等第一次带本改动的发布才会变绿。自检 16 项，含「以 2026-09-30 真实状态（端点 0.5.0-next.1 / 最新 tag 0.7.0-rc.1）为夹具必须报红」 |
+| verify:update-channel（新守卫） | ✅ 已落地；**rc 通道已闭环（2026-09-30 v0.7.1-rc.1）** | 端点实测返回 `0.7.1-rc.1`（= 该通道最新 tag），13/13 资产完整——D1 在 rc 通道终结。**首发当日抓到一个真实缺陷**：发布后自检断言**全部**通道，把 alpha 的引导期 404 误判成本次发布失败——已修为 `--tag` 作用域（发布时只查本通道），全通道核对接线进每日 drift（`8205a17`）。自检 19 项，含「以 2026-09-30 真实状态（端点 0.5.0-next.1 / 最新 tag 0.7.0-rc.1）为夹具必须报红」 |
 | S1-4 版本单调性 | ✅ **已落地** | `version.mjs::checkVersionMonotonic` + `readPublishedTags`（浅克隆返回 null 并告警，权威执行点是 release preflight 的 fetch-depth:0）。**它上线即抓到真实缺陷**：`verify:version` 对当时的 `0.7.0-alpha.8` 报「低于已发布的最高 tag v0.7.0-rc.1」。semver 比较器收敛到共享库 `conventional-commits.mjs`（两个脚本不再各写一份）。自测新增 9 项，含以真实历史为可证伪夹具 |
 | 版本号落地 | ✅ 已定 `0.7.1-rc.1` | `version:set` 改 `package.json` + `Cargo.toml` + `Cargo.lock`；CHANGELOG 生成 0.7.1-rc.1 段（7 条提交）；`--channel-of 0.7.1-rc.1` → `next`（DSH `0.1.5-rc.3`）；`verify:version` 由红转绿 |
 | C6 决策（S0-4 收尾） | ✅ 已裁决并落地 | ADR-055（保留每日 CI + drift，修订 ADR-047 删除清单第 2 项）；ADR-047 状态与新增「修订」段、ADR 索引同步 |
@@ -345,7 +345,7 @@
 
 **本轮端到端验证**：23 个既有门禁全部 exit 0（含 verify:claims / verify:plan-facts / verify:release-workflow / verify:release-assets / verify:harness-entry）；actionlint 1.7.7（SHA256 与官方 checksums 核对通过）对 6 个工作流 **exit 0**；`updater-manifest --self-test` 16 项通过。
 
-> ⚠️ **两条红色是预期的，不是回归**：① `verify:update-channel` 在第一次带本改动的发布之前必然为红（滚动 Release 还不存在）；② S1-4 未做意味着 `verify:version` 仍不检查版本单调性。两者都已登记在上表。
+> ⚠️ **当前的预期红（2026-09-30 发布后更新）**：`verify:update-channel` 的**全通道**模式对 alpha 仍为红——`updater-alpha` 滚动 Release 要等 alpha 通道的第一次通道化发布才会创建（每日 drift 哨兵会因此报红，已在该步注释登记为预期状态）。发布时自检已改为通道作用域，不受影响。
 
 ### 11.1 未开工条目（完整台账）
 
@@ -364,4 +364,4 @@
 
 **合计**：本计划约 30 个条目，本轮落地 **6** 个（S0-3、S1-2、S1-3、S2-1、ADR-052 系列、verify:github-config 与 verify:update-channel 两个新守卫），其余未开工。
 
-> **口径**：D1（更新零投递）在本轮**代码已修，但尚未闭环**——它的判据是「端点 version ≥ 该通道最新 tag」，而该判据现在**是红的**。因此 D1 应记为「已修待验」，不是「已修复」。同一口径适用于所有依赖真实发布的条目。
+> **口径（2026-09-30 发布后更新）**：D1 在 **rc 通道已闭环**——v0.7.1-rc.1 发布后端点实测返回 `0.7.1-rc.1`，13/13 资产完整、`prerelease: true`。两条诚实边界：① **alpha 通道仍是零投递**，要等它的第一次通道化发布引导 `updater-alpha`；② **存量安装不会自愈**——端点是构建期注入的，v0.7.1-rc.1 之前的所有构建仍指向旧端点（`releases/latest` 排除预发布，停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。同一口径适用于所有依赖真实发布的条目。
