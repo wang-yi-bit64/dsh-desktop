@@ -99,6 +99,11 @@ npm run verify:claims:self-test
 npm run verify:plan-facts
 npm run verify:plan-facts:self-test
 
+# 19c. 文档↔常量派生事实对账（S2-3）：rust-version / .nvmrc / license 三处 /
+#      ADR 计数——文档是被测方，常量是产地；含真实漂移夹具的自测
+npm run verify:doc-facts
+npm run verify:doc-facts:self-test
+
 # 20. 上游版本漂移哨兵（**逐通道**对照各自的 dist-tag；真检查会因上游领先而红，
 #     跑在 nightly；CI 只跑自测）
 npm run verify:drift

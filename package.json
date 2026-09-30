@@ -44,6 +44,8 @@
     "verify:profile-names:self-test": "node scripts/verify-profile-names.mjs --self-test",
     "verify:claims": "node scripts/verify-claims.mjs",
     "verify:claims:self-test": "node scripts/verify-claims.mjs --self-test",
+    "verify:doc-facts": "node scripts/verify-doc-facts.mjs",
+    "verify:doc-facts:self-test": "node scripts/verify-doc-facts.mjs --self-test",
     "verify:plan-facts": "node scripts/verify-plan-facts.mjs",
     "verify:plan-facts:self-test": "node scripts/verify-plan-facts.mjs --self-test",
     "check:patch-applicability": "node scripts/check-patch-applicability.mjs",
