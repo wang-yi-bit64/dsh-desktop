@@ -13,7 +13,12 @@
  * ## 它负责三件事（端点 URL 只在此处构造，别处不许再拼）
  *   1. --write-config <tag|版本> <out>  构建期生成覆盖 plugins.updater.endpoints 的配置
  *   2. --publish <tag>                 把该版本 Release 的 latest.json 覆盖到滚动 Release
- *   3. --verify                        核对端点 version ≥ 该通道最新 v* tag 的版本
+ *   3. --verify [--tag <tag>]          核对端点 version ≥ 该通道最新 v* tag 的版本。
+ *                                      给 --tag 时只核对该 tag 所属通道：发布时自检只管
+ *                                      「本次发布的通道活了」，其余通道的引导期缺失（滚动
+ *                                      Release 尚未由它的第一次发布创建）不属于本次发布的
+ *                                      失败——全通道健康归每周 drift / 手动全量核对
+ *                                      （2026-09-30 v0.7.1-rc.1 首发实测教训）
  *   4. --self-test                     纯逻辑自检（含可证伪夹具）
  *
  * ## 通道从哪来
@@ -42,6 +47,15 @@ export function rollingTagFor(publishChannel) {
 
 export function endpointFor(publishChannel, repo = DEFAULT_REPO) {
   return 'https://github.com/' + repo + '/releases/download/' + rollingTagFor(publishChannel) + '/latest.json'
+}
+
+/**
+ * --verify 的作用域：给 only 时只保留该通道；不给 = 全通道（每周/手动全量核对用）。
+ * 返回空数组是**配置错误**的信号（通道名不在目标总表里），调用方必须据此报错——
+ * 「扫出数为 0 时先怀疑扫描器」（AGENTS.md §7.3）：作用域写错的核对一行绿都不该有。
+ */
+export function scopedChannels(channels, only) {
+  return only ? channels.filter((c) => c === only) : channels
 }
 
 /** 版本/tag → 该版本应使用的更新通道（= 目标的 publishChannel）。未知后缀直接抛错。 */
@@ -174,12 +188,19 @@ function publish(tag) {
   console.log('[updater-manifest] 已把 ' + tag + ' 的 latest.json 覆盖到 ' + rolling)
 }
 
-async function verify() {
+async function verify(onlyChannel = null) {
   const repo = repoSlug()
   const problems = []
   const lines = []
-  for (const name of listTargetNames()) {
-    const channel = resolveTarget(name).publishChannel
+  const channels = scopedChannels(
+    listTargetNames().map((name) => resolveTarget(name).publishChannel),
+    onlyChannel,
+  )
+  if (channels.length === 0) {
+    console.error('❌ 作用域通道 ' + onlyChannel + ' 不在 dsh-targets 总表里——先修通道名，再谈核对。')
+    return 1
+  }
+  for (const channel of channels) {
     const endpoint = endpointFor(channel, repo)
     const newest = newestTagFor(channel)
     let manifestVersion = null
@@ -201,13 +222,17 @@ async function verify() {
     for (const p of problems) console.error('❌ ' + p)
     return 1
   }
-  console.log('✅ 更新通道：每条在役通道的端点 version 均 ≥ 该通道最新已发布 tag')
+  console.log(onlyChannel
+    ? '✅ 更新通道 ' + onlyChannel + '：端点 version ≥ 该通道最新已发布 tag'
+    : '✅ 更新通道：每条在役通道的端点 version 均 ≥ 该通道最新已发布 tag')
   return 0
 }
 
 export function selfTest() {
   let failed = 0
+  let total = 0
   const eq = (name, actual, expected) => {
+    total += 1
     const ok = JSON.stringify(actual) === JSON.stringify(expected)
     if (!ok) { console.error('❌ ' + name + '：期望 ' + JSON.stringify(expected) + '，实际 ' + JSON.stringify(actual)); failed += 1 }
   }
@@ -229,8 +254,13 @@ export function selfTest() {
   eq('健康：端点高于最新 tag', checkChannelManifest({ channel: 'rc', manifestVersion: '0.7.1-rc.1', newestTagVersion: '0.7.0-rc.1' }).length, 0)
   eq('端点缺失必须报红', checkChannelManifest({ channel: 'rc', manifestVersion: null, newestTagVersion: '0.7.0-rc.1' }).length > 0, true)
   eq('未知后缀必须抛错（不得回退默认通道）', (() => { try { publishChannelForVersion('0.7.0-beta.1'); return 'no-throw' } catch { return 'throw' } })(), 'throw')
+  // 作用域（2026-09-30 v0.7.1-rc.1 首发实测：无作用域的全通道断言把 alpha 的引导期
+  // 404 误判成本次发布失败——发布时自检只管本次通道，全通道归 drift/手动核对）
+  eq('scope：指定通道只留自己', scopedChannels(['rc', 'alpha'], 'rc'), ['rc'])
+  eq('scope：不给作用域 = 全通道', scopedChannels(['rc', 'alpha'], null), ['rc', 'alpha'])
+  eq('scope：作用域写错必须扫出 0（调用方据此报错）', scopedChannels(['rc', 'alpha'], 'beta'), [])
   if (failed > 0) { console.error('updater-manifest self-test 失败 ' + failed + ' 项'); return 1 }
-  console.log('✅ updater-manifest 自检通过（16 项）')
+  console.log('✅ updater-manifest 自检通过（' + total + ' 项）')
   return 0
 }
 
@@ -252,8 +282,22 @@ async function main() {
     publish(tag)
     return 0
   }
-  if (args.includes('--verify')) return verify()
-  console.log('用法：updater-manifest.mjs --write-config <tag|版本> <out> | --publish <tag> | --verify | --self-test')
+  if (args.includes('--verify')) {
+    let onlyChannel = null
+    if (args.includes('--tag')) {
+      const i = args.indexOf('--tag')
+      const tag = args[i + 1]
+      if (!tag) { console.error('用法：--verify [--tag <tag>]'); return 2 }
+      try {
+        onlyChannel = publishChannelForVersion(tag)
+      } catch (error) {
+        console.error('❌ 无法从 tag 推导通道：' + error.message)
+        return 2
+      }
+    }
+    return verify(onlyChannel)
+  }
+  console.log('用法：updater-manifest.mjs --write-config <tag|版本> <out> | --publish <tag> | --verify [--tag <tag>] | --self-test')
   return 2
 }
 

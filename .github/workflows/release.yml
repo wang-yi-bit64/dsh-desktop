@@ -397,7 +397,10 @@ jobs:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           node scripts/updater-manifest.mjs --publish "$TAG"
-          node scripts/updater-manifest.mjs --verify
+          # --tag 把自检作用域限定在本次发布的通道（2026-09-30 v0.7.1-rc.1 首发实测：
+          # 无作用域的全通道断言会把其他通道的引导期 404 误判成本次发布失败）。
+          # 全通道健康归每周 drift / 手动 `npm run verify:update-channel`。
+          node scripts/updater-manifest.mjs --verify --tag "$TAG"
 
   # ---------------------------------------------------------------------------
   # 便携版（Windows zip）：与 NSIS 安装版并行构建，互不干扰。

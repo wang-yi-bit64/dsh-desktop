@@ -41,6 +41,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # verify:update-channel 要读全部 v* tag 才能算出「该通道最新已发布版本」；
+          # 浅克隆拿不到 tag，判据会退化成「永远通过」（release.yml 同款注释）。
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -55,3 +59,11 @@ jobs:
       # 网络不可达时脚本自行 SKIP（exit 0）并在日志里说明「未核对」。
       - name: Upstream drift check
         run: npm run verify:drift
+
+      # 更新通道健康（ADR-053）：每条在役通道的端点 version ≥ 该通道最新已发布 tag。
+      # 与上游漂移同属哨兵：红 = 某条通道的更新链路断了，不是「这个提交有问题」。
+      # ⚠️ 已知预期红（2026-09-30 登记）：updater-alpha 滚动 Release 要等 alpha 通道的
+      # 第一次通道化发布才会创建，在那之前本步每天因 404 报红——该通道现在确实零投递，
+      # 红是如实信号，不是回归。
+      - name: Updater channel health
+        run: npm run verify:update-channel
