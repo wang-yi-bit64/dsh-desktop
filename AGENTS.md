@@ -186,8 +186,8 @@
 | `next`（默认） | 目标对应 npm `next` dist-tag，⚠️ **但当前锚在上游 `latest`** | `0.1.5-rc.3` | `patches/next/`（14 个）、`packages/next/`（已清空） | `rc` | `0.7.0-rc.1` |
 | `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
 
-> ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-24）：上游 `next` 已前进到
-> **`0.1.7-rc.1`**，而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是跨两个 minor 的移植含
+> ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-30 复核）：上游 `next` 已前进到
+> **`0.2.0-rc.2`**（drift 哨兵实测），而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是移植含
 > **上游重构**（预检 clean 5 / conflict 9，**79 个 hunk 需重新撰写**），已另立批次；
 > 本批次先锚 `latest` 以取得可用基线。**`verify:drift` 对此会告警，属已知且已记录的状态**。
 > 详见 [`patches/LAYERS.md`](patches/LAYERS.md) 的「next 线（0.1.5-rc.3）的移植裁定」。

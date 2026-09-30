@@ -305,8 +305,8 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 | `next`（默认） | 目标对应 npm `next` dist-tag，⚠️ **但当前锚在上游 `latest`** | `0.1.5-rc.3` | `patches/next/`（14 个）、`packages/next/`（已清空） | `rc` | `0.7.0-rc.1` |
 | `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
 
-> ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-24）：上游 `next` 已前进到
-> **`0.1.7-rc.1`**，而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是跨两个 minor 的移植含
+> ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-30 复核）：上游 `next` 已前进到
+> **`0.2.0-rc.2`**（drift 哨兵实测），而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是移植含
 > **上游重构**（预检 clean 5 / conflict 9，**79 个 hunk 需重新撰写**），已另立批次；
 > 本批次先锚 `latest` 以取得可用基线。**`verify:drift` 对此会告警，属已知且已记录的状态**。
 > 详见 [`patches/LAYERS.md`](patches/LAYERS.md) 的「next 线（0.1.5-rc.3）的移植裁定」。
@@ -489,9 +489,11 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 >
 > **首发抓到的缺陷**：`updater-channel` job 的发布后自检断言**全部在役通道**，而
 > `updater-alpha` 滚动 Release 要等 alpha 通道第一次通道化发布才会存在（HTTP 404），
-> 于是本次发布被该 job 误判失败——产物本身 13/13 完整。修法（`8205a17`）：
+> 于是本次发布被该 job 误判失败——产物本身 13/13 完整。修法（`8205a17` + `003652d`）：
 > `--verify` 增加 `--tag` 作用域，发布时只核对本次发布的通道；全通道核对接线进每日
-> drift（checkout 同步 `fetch-depth: 0`，否则浅克隆拿不到 tag，判据退化成永远通过）。
+> drift 的**独立 job**（同 job 里排在后位会被上游漂移的既有红灯遮蔽——首发当日手动
+> 触发即实测踩中；checkout 同步 `fetch-depth: 0`，否则浅克隆拿不到 tag，判据退化成
+> 永远通过）。
 >
 > **两条诚实边界**：① alpha 通道在它的第一次通道化发布之前仍是零投递（每日 drift
 > 对 alpha 报红为预期状态）；② 存量安装不自愈——端点是构建期注入的，`v0.7.1-rc.1`
