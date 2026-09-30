@@ -76,8 +76,8 @@
 | [044](044-explicitly-out-of-scope.md) | 明确不做清单：遥测、公网隧道、oRPC/tRPC、重写 UI…… | 已接受 |
 | [045](045-cli-distributable-artifact.md) | CLI 可引用产物 Phase 1；产物不含 runtime，Phase 2 计划中 | 已接受 |
 | [046](046-no-code-signing.md) | 不买 OS 层代码签名证书；保留免费的 minisign 更新链校验 | 已接受 |
-| [047](047-zero-budget-roadmap-recast.md) | 零预算路线图重裁：从「发布产品」到「能力证明资产」 | 已接受 |
-| [048](048-single-upstream-channel.md) | 收敂为单一上游通道 | 已接受，执行中 |
+| [047](047-zero-budget-roadmap-recast.md) | 零预算路线图重裁：从「发布产品」到「能力证明资产」 | 已接受（删除清单第 2 项由 ADR-055 修订；双通道收敂由 ADR-052 推翻） |
+| [048](048-single-upstream-channel.md) | 收敂为单一上游通道 | **已被 ADR-052 取代**（2026-09-30） |
 
 ### F — 打包资源一致性（049–）
 
@@ -86,6 +86,15 @@
 | [049](049-bundle-resources-derived-guard.md) | 打包资源清单由推导校验（E5/E5d），不靠四处手抄保持一致 | 已接受 |
 | [050](050-guard-windows-vs-cleanup-budget.md) | 门禁的等待窗口必须与异步清理的预算对账（E6）；断言「预算内干净」而非单次采样 | 已接受 |
 | [051](051-archived-capability-known-gap.md) | 已归档能力的已知缺口登记口径：写进 §7.2 归档行，四字段齐全，不得用特例分支绕开 | 已接受 |
+
+### G — 通道、更新链与工具准入（052–）
+
+| # | 决策 | 状态 |
+|---|------|------|
+| [052](052-dual-upstream-channels-restored.md) | 双上游通道恢复在役（取代 ADR-048），按 0.8 计划 v1.1 修订 #1 | 已接受 |
+| [053](053-channelized-updater-manifest.md) | 更新链通道化：每通道一个滚动 Release manifest + 构建期注入端点 | 已接受，执行中 |
+| [054](054-ai-review-workflows-admission.md) | AI 评审工作流准入：接上而非删除，SHA 钉死 + 触发面收紧 | 已接受 |
+| [055](055-keep-daily-ci-and-drift.md) | 保留每日 CI 与 drift 哨兵（修订 ADR-047 的删除清单第 2 项） | 已接受 |
 
 ## 新增一条 ADR 的规则
 

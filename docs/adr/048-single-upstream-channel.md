@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| 状态 | 已接受，执行中（工程收尾随 P0/P1 排期） |
+| 状态 | **已被 [ADR-052](052-dual-upstream-channels-restored.md) 取代**（2026-09-30；保留供追溯） |
 | 日期 | 2026-09-20 |
 | 唯一产地 | `scripts/dsh-targets.mjs`（收敂后仅剩 `next` 推导）、`AGENTS.md` §8.6 |
 
@@ -44,3 +44,11 @@
   收敂后这条依然有效，防回退默认目标）。
 - `verify:release-workflow` 的 `checkDualChannelShape` 相应改写为单通道形状
   （执行时同步）。
+
+## 后续
+
+被 **ADR-052**（2026-09-30）取代：维护者裁定按 `docs/dev-plan-0.8-convergence.md` v1.1
+修订 #1 恢复**双通道在役**（`next` + `alpha`）。本 ADR 的收敂决定作废，但它对成本结构的
+分析**仍然有效**——那份分析正是 ADR-052 明确接受的代价，也是
+`docs/dev-plan-defect-remediation.md` S5「补丁数趋势」要对冲的对象。
+
