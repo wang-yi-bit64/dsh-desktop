@@ -80,6 +80,7 @@
 - `docs/dev-plan-0.2-hardening.md`：产品/分发侧增补（0.2-A~D）；与 H0 的冲突裁决归用户。
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点 D1~D11 与裁决记录；「插件禁用语义」证据链在此。
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
+- `docs/dev-plan-defect-remediation.md`：**缺陷治理专项**（批次 S0~S7，2026-09-30 起）——D1~D12 缺陷清单、可证伪判据、C1~C8 裁决与执行台账；动 S 批次任何条目前先读它。
 - `docs/adr/`：架构决策记录库（41 篇）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
@@ -166,6 +167,7 @@
   3. 引用这些术语的规范文档（如 `dsh-upgrade-checklist.md` 的操作说明）。
 - **跨语言断言必须可证伪**：新增「X 一定会发生」这类关于页面 / 脚本行为的断言时，按 `scripts/verify-harness-inject.mjs` 的模式配一段**变体回退检查**——把被守护的行为打回旧写法，断言必须变红，否则断言是装饰。同时守卫**不得依赖检出配置**（行尾、路径分隔符）：CRLF 检出下必须与 LF 表现一致。
 - **「扫出来再校验」的门禁必须断言数量不为零**（2026-09-22，`E5-空` / ADR-051 附带发现）：凡是先从源码里扫出一组 X、再逐个校验 X 的守卫，必须同时断言**扫出的数量 > 0**。只断言「扫到的都合规」会容忍「一个都没扫到」——那等于门禁替一段**不存在的检查**背书，比漏报更危险（输出还是一行绿色）。触发条件是**写法变更**：入口加了一种新的 import 形态、表格换了一种列结构，扫描器不认了就静默归零。本仓已踩两次——`verify-claims` C3 的表格解析，与 `verify-harness-entry` E5 漏认 `specifier: './x.mjs'` 形态（后者修前在**零个受检模块**下全绿，而它守的正是「三份打包清单漏登记」这条 v0.7.0-alpha.1 真实事故）。**扫出数为 0 时，先怀疑扫描器，再怀疑源码。**
+- **计划文档的预算纪律（2026-09-30 起，S2-2）**：新增任何计划类文档，必须同时归档或改写一份旧计划文档——在役 docs 总量不得只增不减；**计划文档无权延期或改写任何 ADR**，要改 ADR 只能走 superseding / 状态修订 ADR（ADR-055 之于 ADR-047、ADR-056 之于 ADR-052 是正确形态）。违反这条即视为文档回归。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
 - **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
   - 其中 **E7（菜单项 id ↔ `handle_menu_event` 分支）** 是批次 0.2-B1 新增的：托盘与应用菜单**共用同一批 id**，而「加了菜单项忘了接处理器」的后果是一个点了完全没反应的项——没有编译错误、没有日志、没有既有守卫能看见。`--self-test` 用三组夹具（缺分支 / 守卫式早退 / 注释里的 id）钉住该判定本身，已进 CI 与 release preflight。

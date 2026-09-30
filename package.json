@@ -4,7 +4,7 @@
   "description": "A Rust + Tauri 2.0 desktop shell for DeepSeek Harness.",
   "private": true,
   "type": "module",
-  "author": "DataElement",
+  "author": "wang-yi-bit64",
   "license": "MIT",
   "keywords": [
     "deepseek",

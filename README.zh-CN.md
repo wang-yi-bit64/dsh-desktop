@@ -318,3 +318,13 @@ npm run verify:harness-inject
 
 - **Dependabot / RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g)** —— `glib 0.18.5` 被标记存在 `glib::VariantStrIter` 的内存不安全性。它是经 Tauri 的 GTK3 后端引入的**仅 Linux、传递性**依赖，且项目未调用受影响 API。修复版本（`glib ≥ 0.20.0`）需等待上游 Tauri 迁移至 gtk-rs 0.20+ 后自动解析更新。
 - **诊断包是「写入前脱敏」，不是「写完之后再处理」。** 导出路径服务于「把你的日志发给我」这个场景，而用户手写这条消息时**不会先去删凭据**——`harness.log` 里就有明文的首航 token 与 `dsh-auth-*` cookie。因此每个文本条目在写进压缩包**之前**都要过五条脱敏规则（launch token / `dsh-auth-*` cookie / 路径用户名段 / API key 形态 / 代理口令），且每条规则的命中次数都会写进包内 `README.txt` 与命令返回值——「到底脱敏了没有」是可核对的事实，不是一句承诺。规则同时有正例（原文不得残留）与反例（版本号、端口、`E` 码、包名**不得**被误伤；一份把版本号涂掉的诊断包没有诊断价值）。包**不会**上传到任何地方，产物留在磁盘上，直到用户自己决定发出。
+
+## 来源与致谢
+
+本项目是一次从零开始的独立重写，**不是** `dataelement/dsh-desktop` 的 fork。应当说明的来源：
+
+- [DataElement](https://github.com/dataelement) 开发了基于 Electron 的原版 `dsh-desktop` 套壳，本壳在行为上刻意与其对齐；项目名沿用自该仓库，作为其 Rust/Tauri 后继形态。
+- [DeepSeek Harness](https://github.com/deepseek-ai/dsh)（npm 包 `@deepseek-ai/dsh`）才是本壳承载的产品本体——壳只负责生命周期管理与窗口承载。
+- 两者均为第三方项目、各自持有许可；本仓库的 [MIT 许可](LICENSE) 仅覆盖本仓库内的 Rust/Tauri 壳层代码。
+
+项目作者：[wang-yi-bit64](https://github.com/wang-yi-bit64)。

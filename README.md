@@ -319,3 +319,13 @@ To build a real installer, `npm run tauri build` downloads the NSIS toolchain on
 
 - **Dependabot / RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g)** — `glib 0.18.5` is flagged for an unsoundness in `glib::VariantStrIter`. It is a **Linux-only, transitive** dependency pulled in by Tauri's GTK3 backend, and our codebase never invokes the affected API. The fix will be automatically resolved once upstream Tauri migrates to gtk-rs 0.20+.
 - **Diagnostics bundles are redacted before they are written, not after.** The export path exists for the "please send me your logs" workflow, and users composing that message by hand will not strip credentials first — `harness.log` contains the launch token and `dsh-auth-*` cookies in plain text. Every text entry therefore passes through five redaction rules (launch token, `dsh-auth-*` cookies, user-name path segments, API-key shapes, proxy credentials) **before** being written into the archive, and each rule's hit count is recorded in the bundle's `README.txt` and in the command's return value, so "was anything actually redacted?" is a checkable fact rather than a promise. The rules have both positive cases (the original value must not survive) and negative cases (version numbers, ports, `E`-codes and package names must **not** be mangled — a bundle with its version numbers blanked out has no diagnostic value). Nothing is uploaded anywhere; the archive stays on disk until the user chooses to send it.
+
+## Acknowledgements
+
+This project is an independent, from-scratch rebuild — it is **not** a fork of `dataelement/dsh-desktop`. Credit where due:
+
+- [DataElement](https://github.com/dataelement) built the original Electron-based `dsh-desktop` wrapper whose behavior this shell intentionally mirrors; the project name is carried over from that repository as its Rust/Tauri successor.
+- [DeepSeek Harness](https://github.com/deepseek-ai/dsh) (npm package `@deepseek-ai/dsh`) is the actual product this shell hosts — the shell only manages its lifecycle and window.
+- Both are third-party projects with their own licenses; this repository's [MIT license](LICENSE) covers the Rust/Tauri shell code in this repository only.
+
+Project author: [wang-yi-bit64](https://github.com/wang-yi-bit64).

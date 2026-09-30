@@ -26,7 +26,7 @@ members = [
 
 [workspace.package]
 version = "0.7.1-rc.1"
-authors = ["DataElement"]
+authors = ["wang-yi-bit64"]
 edition = "2021"
 license = "MIT"
 # 下界 1.90：tauri 2.12 起把 MSRV 提到 1.90（此前的 1.85 来自传递依赖
