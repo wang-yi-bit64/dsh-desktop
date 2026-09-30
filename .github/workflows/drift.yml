@@ -41,10 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          # verify:update-channel 要读全部 v* tag 才能算出「该通道最新已发布版本」；
-          # 浅克隆拿不到 tag，判据会退化成「永远通过」（release.yml 同款注释）。
-          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -60,10 +56,29 @@ jobs:
       - name: Upstream drift check
         run: npm run verify:drift
 
-      # 更新通道健康（ADR-053）：每条在役通道的端点 version ≥ 该通道最新已发布 tag。
-      # 与上游漂移同属哨兵：红 = 某条通道的更新链路断了，不是「这个提交有问题」。
-      # ⚠️ 已知预期红（2026-09-30 登记）：updater-alpha 滚动 Release 要等 alpha 通道的
-      # 第一次通道化发布才会创建，在那之前本步每天因 404 报红——该通道现在确实零投递，
-      # 红是如实信号，不是回归。
-      - name: Updater channel health
+  # 更新通道健康（ADR-053）：每条在役通道的端点 version ≥ 该通道最新已发布 tag。
+  # 为什么单独成 job：上游漂移与通道健康是**两台哨兵**——放同一个 job 里，前面那台
+  # 红着（next 线的已知漂移）会让后面那台永远轮不到执行（2026-09-30 手动触发实测
+  # 踩中）。分开后各自报告、互不遮蔽。
+  #
+  # ⚠️ 已知预期红（2026-09-30 登记）：updater-alpha 滚动 Release 要等 alpha 通道的
+  # 第一次通道化发布才会创建，在那之前本 job 每天因 404 报红——该通道现在确实
+  # 零投递，红是如实信号，不是回归。
+  updater-channel:
+    name: updater channel health
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # verify:update-channel 要读全部 v* tag 才能算出「该通道最新已发布版本」；
+          # 浅克隆拿不到 tag，判据会退化成「永远通过」（release.yml 同款注释）。
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Updater channel check
         run: npm run verify:update-channel
