@@ -47,7 +47,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, 
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fetchPackageFiles, parsePatch, targetPackageVersion } from './check-patch-applicability.mjs'
+import { fetchPackageFiles, parsePatch } from './check-patch-applicability.mjs'
 import { packageNameFromPatchFile, versionFromPatchFile } from './patch-layers.mjs'
 import { patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
@@ -190,9 +190,25 @@ async function modeRegen(args) {
     }
   }
 
+  // merge 模式的 report.json 记录每个包的**旧补丁文件名**与合并时的 from 版本——
+  // 「文件名版本段是否跟随 DSH」的判据只能来自那里：段 == report.from ⇒ 跟随
+  // （新段取 --to）；否则是独立版本号的包（如 cordis-plugin-loader，段 1.0.3），
+  // 新文件名沿用原段。用 --to 命名独立包会给同一包生成两份补丁，patch-package
+  // 会两个都打，而 verify:patches 对独立包的版本段判据是循环的（期望值来自
+  // 文件名自身），抓不到这种重复——2026-09-30 实测踩过。
+  const reportPath = join(out, 'report.json')
+  if (!existsSync(reportPath)) throw new Error(`${out}/report.json 不存在——先跑 merge 模式生成工作目录`)
+  const report = JSON.parse(readFileSync(reportPath, 'utf8'))
+  const oldPatchOf = new Map(Object.entries(report.packages ?? {}).map(([pkg, stat]) => [pkg, stat.patch]))
+
   for (const pkg of pkgDirs) {
     const pristineNew = join(out, '__pristine_new', pkg)
-    if (!existsSync(pristineNew)) throw new Error(`${out}/__pristine_new/${pkg} 不存在——先跑 merge 模式生成工作目录`)
+    if (!existsSync(pristineNew)) throw new Error(`${out}/__pristine_new/${pkg} 不存在——merge 工作目录不完整`)
+    const oldPatch = oldPatchOf.get(pkg)
+    if (!oldPatch) throw new Error(`report.json 里没有 ${pkg} 的旧补丁记录——工作目录与报告不匹配`)
+    const oldSegment = versionFromPatchFile(oldPatch)
+    if (!oldSegment) throw new Error(`旧补丁文件名推不出版本段：${oldPatch}`)
+    const newVersion = oldSegment === report.from ? to : oldSegment
 
     const stage = join(projectRoot, '.merge-migrate-tmp', 'diff')
     rmSync(stage, { recursive: true, force: true })
@@ -214,7 +230,12 @@ async function modeRegen(args) {
       continue
     }
     const patchText = normalizePatchText(raw)
-    const destFile = join(patchDir, `${pkg.replaceAll('/', '+')}+${to}.patch`)
+    // 文件名版本段：DSH 家族包跟随 --to；独立版本号的包（cordis-plugin-loader）
+    // 保留自己的版本段（check-patch-applicability 的 targetPackageVersion 同一约定）。
+    // 误用 --to 会给同一包生成**两个**补丁文件（一个旧版本段 + 一个新版本段），
+    // patch-package 会两个都打——而 verify:patches 对独立包的版本段判据是循环的
+    // （期望值来自文件名自身），抓不到这种重复。
+    const destFile = join(patchDir, `${pkg.replaceAll('/', '+')}+${newVersion}.patch`)
     if (write) {
       writeFileSync(destFile, patchText)
       console.log(`✅ ${destFile}（${patchText.split('\n').length} 行）`)
