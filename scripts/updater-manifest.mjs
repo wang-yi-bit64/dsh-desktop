@@ -206,7 +206,7 @@ async function verify(onlyChannel = null) {
   for (const channel of channels) {
     const targetEntry = listTargetNames().map((n) => resolveTarget(n)).find((t) => t.publishChannel === channel)
     if (targetEntry.status === 'dormant') {
-      lines.push('· 通道 ' + channel + '：目标已裁定休眠（ADR-056），跳过通道健康核对')
+      lines.push('· 通道 ' + channel + '：目标已裁定休眠（ADR-056；复役见 ADR-057），跳过通道健康核对')
       continue
     }
     examined += 1
@@ -272,9 +272,10 @@ export function selfTest() {
   eq('scope：指定通道只留自己', scopedChannels(['rc', 'alpha'], 'rc'), ['rc'])
   eq('scope：不给作用域 = 全通道', scopedChannels(['rc', 'alpha'], null), ['rc', 'alpha'])
   eq('scope：作用域写错必须扫出 0（调用方据此报错）', scopedChannels(['rc', 'alpha'], 'beta'), [])
-  // 目标状态（ADR-056）：休眠目标跳过通道健康核对——跳过必须显式出现在输出里，
-  // 且不能冒充「已核对」（verify 里 examined 计数守着这条）。
-  eq('目标状态：alpha 休眠（ADR-056）', resolveTarget('alpha').status, 'dormant')
+  // 目标状态：休眠/复役都是**有记录的裁定**（ADR-056 → ADR-057），本行把裁定钉在自测里——
+  // 休眠目标跳过通道健康核对；跳过必须显式出现在输出里，且不能冒充「已核对」
+  // （verify 里 examined 计数守着这条）。
+  eq('目标状态：alpha 已复役（ADR-057 修订 ADR-056）', resolveTarget('alpha').status, 'active')
   eq('目标状态：next 在役', resolveTarget('next').status, 'active')
   if (failed > 0) { console.error('updater-manifest self-test 失败 ' + failed + ' 项'); return 1 }
   console.log('✅ updater-manifest 自检通过（' + total + ' 项）')

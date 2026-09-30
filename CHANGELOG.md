@@ -7,6 +7,40 @@
 
 <!-- changelog-entries -->
 
+## [0.7.2-rc.1] - 2026-09-30
+
+### ✨ 新功能
+
+- **runtime**: promote both channels — next 0.2.0-rc.2, alpha 0.1.7-alpha.2 (ADR-057) ([056a636](https://github.com/wang-yi-bit64/dsh-desktop/commit/056a63629591438d204c9246d1ec74ac144fa1ef))
+- **frontend**: align shell UI with the official harness visual language ([6cf769b](https://github.com/wang-yi-bit64/dsh-desktop/commit/6cf769b1ce8c38b1c5c30c52a11f7c2d9bc63fae))
+- **supply-chain**: cargo scanning, SHA pinning and gate tiering evidence (S3-1..S3-4) ([0add8e7](https://github.com/wang-yi-bit64/dsh-desktop/commit/0add8e751e7eb284fe131bf85217dfe472d3caab))
+- **gates**: tier the verification into verify:fast and verify:full (S4-1/S4-2) ([e4cdbe1](https://github.com/wang-yi-bit64/dsh-desktop/commit/e4cdbe15e1473cf77eaf347215e78cc6dfc17acb))
+- **guards**: add verify:doc-facts — reconcile doc claims against constants (S2-3) ([3bb18d3](https://github.com/wang-yi-bit64/dsh-desktop/commit/3bb18d3731ec565823b8f359d469e782623173dd))
+- **channels**: declare the alpha line dormant (C7, ADR-056) ([ee67fcc](https://github.com/wang-yi-bit64/dsh-desktop/commit/ee67fcce6de9e66fa4ada3160031db30d39aa5b9))
+
+### 🐛 修复
+
+- **ci**: quote a step name containing a colon so the workflow parses ([a2cf031](https://github.com/wang-yi-bit64/dsh-desktop/commit/a2cf03189f1dfd4d324c397d0c29beca2cf56b77))
+- **drift**: run the updater channel sentinel as its own job ([003652d](https://github.com/wang-yi-bit64/dsh-desktop/commit/003652db3ed0b570abf1894748f94e501350e8cc))
+- **release**: scope the release-time updater check to the published channel ([8205a17](https://github.com/wang-yi-bit64/dsh-desktop/commit/8205a176787d392a63db16d790bc20523bcde1ed))
+
+### ⚡ 性能
+
+- **readiness**: replace 500ms soak window with dual-confirmation ready semantics ([070cc9d](https://github.com/wang-yi-bit64/dsh-desktop/commit/070cc9d5bf69bf7bfccf03826c1954eb5bb7a97f))
+
+### 📝 文档
+
+- sync channel tables, upgrade record and migration-tool usage ([dc8a7e2](https://github.com/wang-yi-bit64/dsh-desktop/commit/dc8a7e2acc9c327465526ea0f585edae3cc6808c))
+- **archive**: shelve superseded 0.8 plan v1.0, fix stale roadmap claim (S2-2) ([ef3b523](https://github.com/wang-yi-bit64/dsh-desktop/commit/ef3b523b686ab6b29edd0bb23202686f0322ba72))
+- **drift**: refresh the upstream drift note and cite the sentinel split ([85927b2](https://github.com/wang-yi-bit64/dsh-desktop/commit/85927b2ac5204eb9d8f0bde7f22909f189df4e82))
+- **release**: record the v0.7.1-rc.1 channelized first release and close D1 for rc ([cec2c9c](https://github.com/wang-yi-bit64/dsh-desktop/commit/cec2c9c26ace38686713be71dbda4a461575268d))
+
+### 🧹 其他
+
+- **scripts**: drop dead npm aliases and wire the orphan fault-patterns guard ([6026025](https://github.com/wang-yi-bit64/dsh-desktop/commit/602602517ec9cd728cae40ece1323b088594b91f))
+- **docs**: archive the three release-channels planning docs (S2-4) ([a5e3728](https://github.com/wang-yi-bit64/dsh-desktop/commit/a5e37280df6fde976323654d243c28f226b06026))
+- **repo**: add LICENSE and SECURITY.md, fix authors (S0-1/S0-2/S0-5, S2-2) ([48e89cb](https://github.com/wang-yi-bit64/dsh-desktop/commit/48e89cb84b15ee37f166e2c456175b8bc4f0b7c6))
+
 ## [0.7.1-rc.1] - 2026-09-30
 
 ### ✨ 新功能

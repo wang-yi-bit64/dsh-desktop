@@ -271,9 +271,10 @@ async function selfTest() {
     )
     check(`目标 ${name} 自身不落后于自己`, judgeDrift(t.dshVersion, t.dshVersion).ok, true)
   }
-  // 目标状态（ADR-056）：alpha 休眠是有记录的裁定；默认目标必须在役，
-  // 否则本哨兵对「该规划升级了吗」永远无可核对的东西。
-  check('目标状态：alpha 休眠（ADR-056）', resolveTarget('alpha').status, 'dormant')
+  // 目标状态：休眠/复役都是**有记录的裁定**（ADR-056 → ADR-057），本行把裁定钉在自测里——
+  // 若有人改 status 却没走 ADR，这里会红。默认目标必须在役，否则本哨兵对
+  // 「该规划升级了吗」永远无可核对的东西。
+  check('目标状态：alpha 已复役（ADR-057 修订 ADR-056）', resolveTarget('alpha').status, 'active')
   check('默认目标必须在役', resolveTarget('next').status, 'active')
   // 可伪证性：把 publishChannel 改成上游不存在的值仍应能反查（它不过是本仓命名），
   // 但把 channel 改成不存在的 dist-tag 必须判红——这两条一起守住解耦的两侧。
@@ -335,7 +336,7 @@ async function main() {
   let examined = 0
   for (const target of targets) {
     if (target.status === 'dormant') {
-      console.log(`  [${target.name} → npm ${target.channel}] 🗄️ 已裁定休眠（ADR-056）——不对照上游漂移`)
+      console.log(`  [${target.name} → npm ${target.channel}] 🗄️ 已裁定休眠（ADR-056；复役见 ADR-057）——不对照上游漂移`)
       continue
     }
     examined += 1
