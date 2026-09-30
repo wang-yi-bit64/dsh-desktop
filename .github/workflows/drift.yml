@@ -38,7 +38,7 @@ permissions:
 jobs:
   drift:
     name: upstream DSH drift
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
 
@@ -64,7 +64,7 @@ jobs:
   # 绿 = 在役通道的更新链路活着；红 = 某条在役通道断了，不是「这个提交有问题」。
   updater-channel:
     name: updater channel health
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
         with:

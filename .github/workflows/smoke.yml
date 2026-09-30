@@ -64,9 +64,10 @@ on:
 jobs:
   # 把 `os` 选择解析成矩阵。集中在一处产出，免得每个 job 各写一遍同样的映射
   # （那必然出现某一处漏改）。`bundles` 只在 full 范围用得上，其余范围带着无害。
+  # Linux 目标是 `ubuntu-24.04` 而非 `ubuntu-latest`：后者 2026-10-19 起迁 Ubuntu 26.04。
   resolve:
     name: resolve targets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # 钉死：不跟 ubuntu-latest 迁往 Ubuntu 26.04（runner-images#14748）
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
     steps:
@@ -77,8 +78,8 @@ jobs:
           case "${OS_INPUT}" in
             windows) echo 'matrix=[{"os":"windows-latest","bundles":"nsis"}]' ;;
             macos)   echo 'matrix=[{"os":"macos-latest","bundles":"app,dmg"}]' ;;
-            linux)   echo 'matrix=[{"os":"ubuntu-latest","bundles":"deb,appimage"}]' ;;
-            *)       echo 'matrix=[{"os":"windows-latest","bundles":"nsis"},{"os":"macos-latest","bundles":"app,dmg"},{"os":"ubuntu-latest","bundles":"deb,appimage"}]' ;;
+            linux)   echo 'matrix=[{"os":"ubuntu-24.04","bundles":"deb,appimage"}]' ;;
+            *)       echo 'matrix=[{"os":"windows-latest","bundles":"nsis"},{"os":"macos-latest","bundles":"app,dmg"},{"os":"ubuntu-24.04","bundles":"deb,appimage"}]' ;;
           esac >> "$GITHUB_OUTPUT"
         env:
           # 用 env 传值：把 ${{ inputs.* }} 直接插进 run 字符串时，一旦值里含

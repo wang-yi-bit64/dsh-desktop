@@ -55,10 +55,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu-24.04 是显式钉死：ubuntu-latest 自 2026-10-19 起滚动迁往
+        # Ubuntu 26.04（actions/runner-images#14748），CI 先稳在 24.04。
         os:
           - windows-latest
           - macos-latest
-          - ubuntu-latest
+          - ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
 
