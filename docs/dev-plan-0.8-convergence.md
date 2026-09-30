@@ -4,7 +4,7 @@
 
 > 项目:`wang-yi-bit64/dsh-desktop`
 > 计划版本:`0.8.0` · 文档版本:**v1.1**(2026-09-29;v1.0 原始草案存于
-> [`docs/dev-plan-0.8.md`](dev-plan-0.8.md),2026-09-28)
+> [`docs/archive/dev-plan-0.8.md`](archive/dev-plan-0.8.md),2026-09-28)
 > 基础路线:Rust + Tauri 2 + 独立 DSH Runtime
 > 核心原则:**不再扩大 Desktop 的业务边界,优先把现有架构做稳、把上游跟上、把发布做可靠。**
 
