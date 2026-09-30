@@ -120,7 +120,7 @@
 | `env` | 子进程环境组装 | C2 | 增量：新增 `harness_env_with_overrides`（3 参 `harness_env` 保留委托） |
 | `logs` | 环形缓冲 / 滚动落盘 / 失败归因 / **新增日志级别** | C7 | 增量：`LogLevel`、`push_with`、`latest_attempt` 改用 `LOG_STARTING_MARKER` |
 | `token` | stdout URL 与 token 解析 | C3 / C5 | **不变** |
-| `readiness` | HTTP/1.0 探测与稳定窗 | C4 | 增量：新增端口不一致 warning 辅助函数 |
+| `readiness` | HTTP/1.0 探测（上游自报 + HTTP 双确认，稳定窗已废除） | C4 | 增量：新增端口不一致 warning 辅助函数 |
 | `process` | 派生 / 平台孤儿防护 / 清扫 | C1、INV-3 | 增量：`build_harness_arguments` 委托到 `args`；新增 `spawn_with_args` |
 | `stop` | SIGTERM → 4s → SIGKILL | C6 | 增量：魔数抽到 `contracts` |
 | `launch` | 编排 spawn → 日志泵 → token → 就绪 → 停止 | C1–C7 | **重写** |

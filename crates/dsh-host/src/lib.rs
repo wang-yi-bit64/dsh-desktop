@@ -13,7 +13,7 @@
 //! | [`paths`] | 资源目录 / userData 目录布局 | C8 |
 //! | [`env`] | 子进程环境变量（PATH 合并、注册表 / login shell 捕获、覆盖） | C2 |
 //! | [`token`] | stdout 中 `dsh web:` URL 与 token 解析 | C3 |
-//! | [`readiness`] | HTTP/1.0 就绪探测与稳定窗 | C4 |
+//! | [`readiness`] | HTTP/1.0 就绪探测（上游自报 + HTTP 双确认） | C4 |
 //! | [`process`] | 子进程派生、平台孤儿防护、陈旧进程清扫、控制台清洗 | C1、INV-3 |
 //! | [`stop`] | SIGTERM → 4s → SIGKILL 停止语义 | C6 |
 //! | [`logs`] | 日志环形缓冲、滚动落盘、失败归因、级别前缀 | C7 |

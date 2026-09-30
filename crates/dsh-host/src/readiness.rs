@@ -3,12 +3,17 @@
 //! 手写 HTTP/1.0 探测（`tokio::net::TcpStream`），不引入 reqwest / hyper：
 //! 这里只需要「一个状态码」，依赖越少越好（INV-5 离线可用 + 编译时间）。
 //!
-//! 就绪语义（对齐原仓库 `harness-runtime.ts`）：
+//! 就绪语义（对齐原仓库 `harness-runtime.ts`；2026-09-30 修订稳定窗条款）：
 //!
 //! * 健康 = **token 已知** 且 `200 ≤ status < 500`（`GET /` 不带 token 返回 401
 //!   属正常，所以区间下界不能是 200 的「成功」语义，而是「服务已起」）；
-//! * 需要连续 **500ms 稳定窗**，避免瞬时通过后又崩；
-//! * 轮询间隔 100ms；总超时 Windows 120s、其它平台 45s。
+//! * token 只会出现在上游自报的 URL 行上（`dsh web: http://…/?token=…`），而上游
+//!   只有真正开始监听并完成鉴权初始化才会打印该行。因此「一次探测健康 + token 已知」
+//!   已经是**两次独立确认**（上游自报 + 本端 HTTP 确认），不再额外要求稳定窗。
+//!   取代旧条款「连续 500ms 稳定窗」的理由：它让**每一次**启动都固定多等 500ms，
+//!   却防不住「第 501ms 才崩」——真崩了由 Supervisor 与错误页兜底，不该让全体用户
+//!   为一个低频尾部风险买单（2026-09-30 启动耗时优化的实测结论）。
+//! * 轮询间隔 50ms；总超时 Windows 120s、其它平台 45s。
 
 use std::future::Future;
 use std::time::Duration;
@@ -22,10 +27,8 @@ use crate::contracts::{HEALTHY_STATUS_MAX, HEALTHY_STATUS_MIN, PROBE_TIMEOUT};
 /// 就绪探测参数。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProbeConfig {
-    /// 轮询间隔（默认 100ms）。
+    /// 轮询间隔（默认 50ms；回环上 connect-refused 几乎零成本）。
     pub interval: Duration,
-    /// 稳定窗：连续健康多久才算就绪（默认 500ms）。
-    pub stable_window: Duration,
     /// 单次探测超时（默认取 [`crate::contracts::PROBE_TIMEOUT`]，800ms）。
     pub probe_timeout: Duration,
     /// 总超时（默认取 [`crate::contracts::startup_timeout`]）。
@@ -35,8 +38,7 @@ pub struct ProbeConfig {
 impl Default for ProbeConfig {
     fn default() -> Self {
         Self {
-            interval: Duration::from_millis(100),
-            stable_window: Duration::from_millis(500),
+            interval: Duration::from_millis(50),
             probe_timeout: PROBE_TIMEOUT,
             total_timeout: crate::contracts::startup_timeout(),
         }
@@ -44,11 +46,10 @@ impl Default for ProbeConfig {
 }
 
 impl ProbeConfig {
-    /// 测试用：把间隔与稳定窗压到毫秒级，总超时显式给定。
+    /// 测试用：把间隔压到毫秒级，总超时显式给定。
     pub fn fast(total_timeout: Duration) -> Self {
         Self {
             interval: Duration::from_millis(1),
-            stable_window: Duration::from_millis(5),
             probe_timeout: Duration::from_millis(50),
             total_timeout,
         }
@@ -78,7 +79,7 @@ pub fn describe_port_mismatch(reserved: u16, reported: u16) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadinessOutcome {
-    /// 已就绪（连续稳定窗内健康）。
+    /// 已就绪（探测健康且 token 已知——上游自报 + HTTP 双确认）。
     Ready,
     /// 超过总超时。
     Timeout,
@@ -186,6 +187,10 @@ pub fn parse_status_line(response: &[u8]) -> Option<u16> {
 /// 探测与「token 是否已知 / 进程是否存活 / 是否端口冲突」全部由调用方以闭包
 /// 注入，因此单测无需网络、无需真实子进程。
 ///
+/// 就绪判据是**双确认**：探测健康（`200 ≤ status < 500`）且 token 已知。token
+/// 只会出现在上游自报的 URL 行上（见模块文档），所以健康本身已隐含「上游自报」
+/// ——首次双确认即刻就绪，不再叠加稳定窗。
+///
 /// # 参数
 ///
 /// * `config` — 轮询参数。
@@ -228,7 +233,6 @@ where
 {
     let started = tokio::time::Instant::now();
     let deadline = started + config.total_timeout;
-    let mut healthy_since: Option<tokio::time::Instant> = None;
 
     while tokio::time::Instant::now() < deadline {
         if !alive() {
@@ -239,15 +243,9 @@ where
         }
 
         let status = probe().await;
-        let now = tokio::time::Instant::now();
 
         if is_healthy(status, token_known()) {
-            let since = *healthy_since.get_or_insert(now);
-            if now.duration_since(since) >= config.stable_window {
-                return ReadinessOutcome::Ready;
-            }
-        } else {
-            healthy_since = None;
+            return ReadinessOutcome::Ready;
         }
 
         tokio::time::sleep(config.interval).await;
@@ -292,8 +290,7 @@ mod tests {
     #[test]
     fn default_config_matches_contract_c4() {
         let config = ProbeConfig::default();
-        assert_eq!(config.interval, Duration::from_millis(100));
-        assert_eq!(config.stable_window, Duration::from_millis(500));
+        assert_eq!(config.interval, Duration::from_millis(50));
         assert_eq!(config.total_timeout, crate::contracts::startup_timeout());
     }
 
@@ -363,16 +360,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stable_window_requires_persistence() {
-        // 健康一拍、不健康一拍 → 稳定窗永远凑不满 → 超时。
+    async fn announced_single_healthy_probe_is_ready() {
+        // 旧「稳定窗」语义下这个场景会超时（健康一拍、不健康一拍凑不满窗）；
+        // 新语义下「上游已自报 + 一次 HTTP 确认」即可就绪。此测试钉住该语义变化：
+        // 稳定窗已废除，若有人把它加回来（针对已自报的上游），本测试会变红。
+        // 第一次探测返回健康，之后全部失败——就绪判定不再依赖持续采样。
         let tick = Arc::new(AtomicUsize::new(0));
         let outcome = wait_for_ready(
-            &ProbeConfig::fast(Duration::from_millis(120)),
+            &ProbeConfig::fast(Duration::from_secs(2)),
             || {
                 let tick = Arc::clone(&tick);
                 async move {
-                    if tick.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
-                        Some(200)
+                    if tick.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Some(401)
                     } else {
                         None
                     }
@@ -383,7 +383,7 @@ mod tests {
             || false,
         )
         .await;
-        assert_eq!(outcome, ReadinessOutcome::Timeout);
+        assert_eq!(outcome, ReadinessOutcome::Ready);
     }
 
     #[tokio::test]
