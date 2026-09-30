@@ -14,8 +14,6 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
  				};
  			} };
  		}
--		/** The single supplied path whose basename is exactly `value`, else undefined. */
--		function onlyPathWithBasename(paths, value) {
 +		/**
 +		* Resolve Codex-style local path references that were not produced by a tool
 +		* in the current turn. Keep bare identifiers inert: without a slash, an
@@ -31,19 +29,18 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
 +			if (/^[^\\/]+\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(path)) return path;
 +			return void 0;
 +		}
-+		/** The single produced path whose basename is exactly `value`, else undefined. */
-+		/** The single supplied path whose basename is exactly `value`, else undefined. */		function onlyPathWithBasename(paths, value) {
+ 		/** The single supplied path whose basename is exactly `value`, else undefined. */
+ 		function onlyPathWithBasename(paths, value) {
  			const matches = paths.filter((path) => basename(path) === value);
  			return matches.length === 1 ? matches[0] : void 0;
  		}
-@@ -2320,9 +2335,7 @@ window.__ModuleLoader__.load({
+@@ -2320,9 +2335,8 @@ window.__ModuleLoader__.load({
  			ctx.provide("chatFileMentions", { forClosing(owner) {
  				const paths = selectProducedFiles(owner);
  				const presented = presentedForClosing(owner);
 -				if (paths === null && presented.length === 0) return void 0;
--				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }));
--			} });
-+				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }));			} });
+ 				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }));
+ 			} });
  		}
  		//#endregion
  		exports.apply = apply;

@@ -221,11 +221,23 @@ export function auditPatchLayers(target = DEFAULT_TARGET) {
     problems.push(`目标 ${target} 下没有任何补丁（${patchesDirFor(target)}）`)
   }
 
+  // 一个包只允许一个补丁文件：`prepare-harness.mjs` 的 `overrides` 按文件名推导后
+  // 以包名为键，重复文件名会让结果取决于 readdir 顺序（同一包的两个版本号互相覆盖），
+  // 并让 `harness-locks/*/inputs.json` 的锁定值对不上。此类重复曾在 2026-09-30 的
+  // next 线移植中出现（`cordis-plugin-loader` 同时留下 `+1.0.3` 与 `+<DSH 版本>`）。
+  const seenPackages = new Map()
+
   for (const file of files) {
     const pkg = packageNameFromPatchFile(file)
     if (pkg === null) {
       problems.push(`${file}：无法推导包名`)
       continue
+    }
+    const previous = seenPackages.get(pkg)
+    if (previous !== undefined) {
+      problems.push(`包 ${pkg} 有多个补丁文件（${previous}、${file}）——每个包只允许一个，否则 overrides 解析随文件顺序漂移`)
+    } else {
+      seenPackages.set(pkg, file)
     }
     const entry = PATCH_LAYERS[pkg]
     if (entry === undefined) {

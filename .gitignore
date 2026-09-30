@@ -46,5 +46,8 @@ Thumbs.db
 .recount-tmp/
 .port-alpha2/
 
+# 三路合并移植脚本（merge-migrate-patches.mjs）的临时树
+.merge-migrate-tmp/
+
 # 构建期生成的 updater 端点覆盖配置（release.yml 的注入步生成，不入库）
 .updater-config.json

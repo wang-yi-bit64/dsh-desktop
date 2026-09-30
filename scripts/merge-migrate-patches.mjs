@@ -47,7 +47,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, 
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fetchPackageFiles, parsePatch } from './check-patch-applicability.mjs'
+import { fetchPackageFiles, parsePatch, targetPackageVersion } from './check-patch-applicability.mjs'
 import { packageNameFromPatchFile, versionFromPatchFile } from './patch-layers.mjs'
 import { patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
@@ -126,7 +126,6 @@ async function modeMerge(args) {
   const target = resolveTarget(resolveDshTargetArg(args))
   const to = requiredValue(args, '--to=')
   const out = requiredValue(args, '--out=')
-  const oldVersion = target.dshVersion
 
   const patchDir = patchesDirFor(target.name)
   const patchFiles = readdirSync(patchDir).filter((f) => f.endsWith('.patch'))
