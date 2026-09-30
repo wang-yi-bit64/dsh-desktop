@@ -4,7 +4,8 @@
 |---|---|
 | 状态 | 已接受 |
 | 日期 | 2026-09-30 |
-| 唯一产地 | .github/workflows/pr-agent.yml 与 .github/workflows/pullfrog.yml 的文件头注释 |
+| 唯一产地 | .github/workflows/pr-agent.yml 的文件头注释（pullfrog.yml 已于 2026-09-30 删除，见「修订」行） |
+| 修订 | ~~决策 2（pullfrog.yml 保留在 workflows/、一并接上）~~（已被 [ADR-058](058-retire-pullfrog-agent.md) 修订：pullfrog.yml 删除、停用，AI 评审只保留 pr-agent.yml；本 ADR 其余决策继续有效） |
 | 关联 | ADR-005（配置/命令面准入纪律）；docs/dev-plan-defect-remediation.md S0-3、S3-3 |
 
 ## 背景

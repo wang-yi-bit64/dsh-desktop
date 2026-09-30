@@ -83,6 +83,7 @@
 **S0-3 把两份游离的 AI 评审配置接上（治 D7；C1 已裁决为「接上」）**
 - 动作：把 `.github/pr-agent.yml` 挪进 `.github/workflows/pr-agent.yml`；两个 action 钉到 40 位 commit SHA（pr-agent = 10bbd9a4…、pullfrog = 9d9014df…）；收紧触发面（issue_comment 只接受来自 PR 且 author_association ∈ OWNER/MEMBER/COLLABORATOR 的评论）；权限取最小并加 concurrency；两个文件加文件头注释说明存在理由与删除判据。
 - 判据：仓库内不存在「有 on:/jobs: 但不在 .github/workflows/ 下」的 YAML；两个 AI 工作流的 uses 均为 40 位 SHA；外部用户无法用维护者的 key 触发运行。
+- **2026-09-30 增补（第三批，ADR-058）**：维护者裁定停用 pullfrog——`.github/workflows/pullfrog.yml` 已删除，「文件缺席」即停用（GitHub 只从 `.github/workflows/` 加载，UI 的 Disable 开关是服务器端状态、不进仓库）。pr-agent.yml 零改动即在役。本条的「两个 AI 工作流」判据现存标的只剩 pr-agent.yml 一个；pullfrog 的 action SHA 同步义务随之消失，13 个 provider key 从 SECURITY.md 暴露面表移除。
 - 守卫：新增 verify:github-config（错放目录 + 浮动 ref，两条规则 + 可证伪夹具）。
 - 发现：`.github/pr-agent.yml` 从来不会被 GitHub 加载（工作流只从 `.github/workflows/` 读取），而 commit e9f8dc5 的标题已把它记成已交付——这是「宣称号实」在配置层的一次失守，也是本条的由来。
 
@@ -164,6 +165,7 @@
 **S3-4 读一遍 secrets 暴露面（治 D6/D7）**
 - 动作：清点每个工作流拿到的 secrets，确认发布签名私钥只出现在 release 路径上；把结论写进 SECURITY.md。
 - 判据：SECURITY.md 有一张「工作流 → secrets」表，且 pullfrog 类模板不再存在或已被收敛。
+- 2026-09-30 复核（ADR-058）：「pullfrog 类模板不再存在」已以**删除文件**的形态达成（不是「收敛」）；表内相应行已删。
 
 **S3 退出判据**：cargo 扫描在役且可证伪；所有 action 钉 SHA；secrets 暴露面成文。
 
@@ -279,7 +281,7 @@
 
 | # | 问题 | 裁决（2026-09-30 维护者） | 落地 |
 |---|------|------------------------|------|
-| C1 | 两份 AI 评审配置：删，还是接上并钉 SHA？ | ✅ **接上**：pr-agent.yml 挪进 `.github/workflows/` 并与 pullfrog.yml 一并接线 | ADR-054；S0-3（含 verify:github-config） |
+| C1 | 两份 AI 评审配置：删，还是接上并钉 SHA？ | ✅ **接上**：pr-agent.yml 挪进 `.github/workflows/` 并与 pullfrog.yml 一并接线（**2026-09-30 同日修订**：pullfrog 半场由 ADR-058 裁定停用并删除文件，AI 评审只保留 pr-agent.yml） | ADR-054（pr-agent 侧仍有效）；ADR-058（pullfrog 侧修订）；S0-3（含 verify:github-config） |
 | C2 | 更新链：通道化 manifest，还是诚实降级？ | ✅ **通道化 manifest** | ADR-053；S1-2 / S1-3 |
 | C3 | patches/alpha 与 harness-deps/alpha：删还是留？ | ✅ **留并在役**（C5 选双通道 ⇒ alpha 线必须维护） | ADR-052；S5 |
 | C4 | dsh-host 是否发到 crates.io？ | ✅ **不发**（可复用性用仓内证据证明，不用包管理器分发） | ADR-044 清单追加；S6-5 收尾 |
@@ -357,6 +359,7 @@
 | S2-2 文档预算纪律 | 🟡 部分 | 本轮未把「新增计划文档必须同时归档旧文档 / 计划无权延期 ADR」写成 AGENTS.md 条文——**仍是欠账** |
 | S2-3 verify:doc-facts | ⏳ 未做 | 本轮以**人工**修正了 MSRV（AGENTS/README×2 由 1.85 → 1.90）与 ADR 计数（36 → 40）；派生守卫仍未写，同一类漂移下次还会发生 |
 | S3-3 action 全量钉 SHA | ⏳ 未做 | 新守卫以基线表容纳 7 个预先存在的浮动 ref（守卫每次运行都会打印提示）；空表才是目标状态 |
+| Pullfrog 停用（ADR-058，修订 ADR-054 决策 2） | ✅ 已落地（第三批） | 维护者指令「停用 pullfrog、启用 pr-agent」。先回答语义问题：**删除 pullfrog.yml 即停用**——GitHub Actions 只从 `.github/workflows/` 加载，UI 的 Disable 开关是服务器端状态、不进仓库也不可被门禁看见。`.github/workflows/pullfrog.yml` 已删除；pr-agent.yml **零改动即在役**（不是又一处待接线）：actionlint 1.7.7（SHA256 与官方 checksums 核对一致）对删除后的 5 个工作流 exit 0；verify:github-config 实跑「9 YAML / 5 工作流 / 31 uses / 错放 0」、自检 12 项过；SECURITY.md 密钥暴露面表删去 pullfrog 的 13 key 行并加退役注记；ADR-058 入库，索引 / ADR-054 修订段 / AGENTS.md ADR 计数（43→44）同步 |
 
 **本轮端到端验证**：23 个既有门禁全部 exit 0（含 verify:claims / verify:plan-facts / verify:release-workflow / verify:release-assets / verify:harness-entry）；actionlint 1.7.7（SHA256 与官方 checksums 核对通过）对 6 个工作流 **exit 0**；`updater-manifest --self-test` 16 项通过。
 
@@ -372,6 +375,6 @@
 | S5-1~S5-4 补丁 retireWhen 减法 / UI 补丁专项 / 补丁数趋势 | ❌ 未做 | 27 个补丁仍两套并存（C3 留、C7 冻结：alpha 休眠不再恢复维护，减法只针对 next 线） |
 | S6-1~S6-5 dsh-host 零 Tauri 承诺 / CLI recover / 性质测试 / 可证伪承诺（S6-5 crate 发布已裁决：不发） | ❌ 未做 | C4 已裁决不发 crates.io（ADR-044 清单追加），S6-5 仅剩收尾记录 |
 
-**合计**：本计划约 30 个条目。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档。**S 阶段剩余：S4-3、S4-4、S5 全部、S6 全部。**
+**合计**：本计划约 30 个条目。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档；**第三批再落地 1 个**（Pullfrog 停用，ADR-058）。**S 阶段剩余：S4-3、S4-4、S5 全部、S6 全部。**
 
 > **口径（2026-09-30 发布后更新）**：D1 在 **rc 通道已闭环**——v0.7.1-rc.1 发布后端点实测返回 `0.7.1-rc.1`，13/13 资产完整、`prerelease: true`。两条诚实边界：① **alpha 通道零投递是裁定结果**（C7 休眠，ADR-056），不再是待办；② **存量安装不会自愈**——端点是构建期注入的，v0.7.1-rc.1 之前的所有构建仍指向旧端点（`releases/latest` 排除预发布，停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。同一口径适用于所有依赖真实发布的条目。

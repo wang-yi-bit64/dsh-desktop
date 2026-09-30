@@ -40,6 +40,7 @@
 |--------|--------|-----------|
 | `TAURI_SIGNING_PRIVATE_KEY`（+ `_PASSWORD`） | `release.yml`（build / portable / updater-channel）、`smoke.yml`（仅 `scope=full` 的打包步） | `bundle.createUpdaterArtifacts` 开启后，任何真实打包都需要签名私钥——smoke full 要复现发布形态，因此同样需要。私钥**不在** PR CI（ci.yml）与 drift 路径上 |
 | `STEPFUN_API_KEY` | `pr-agent.yml` | PR AI 评审的模型调用；触发面已收紧为「PR + 本仓成员」（ADR-054） |
-| `ANTHROPIC_API_KEY` 等 13 个模型 key | `pullfrog.yml` | 同上（模板声明的 provider 白名单） |
 
 原则：每个工作流的 `permissions` 取最小（`contents: read` 为基线，发布路径才 `contents: write`）；所有第三方 action 钉 40 位 commit SHA（`verify:github-config` 守着，基线表已于 2026-09-30 S3-3 清空——此后任何浮动 ref 一律报红）。
+
+> 2026-09-30：`pullfrog.yml` 已按 [ADR-058](docs/adr/058-retire-pullfrog-agent.md) 删除（停用），其上表曾有的一行（`ANTHROPIC_API_KEY` 等 13 个模型 key）随之移除——这些 key 在仓库内已无消费方。仓库 Settings 里的同名 secret 建议维护者择期删除：不删也不会被任何工作流读取，属卫生而非风险；删除它们的操作在 GitHub 侧，本仓不代理。
