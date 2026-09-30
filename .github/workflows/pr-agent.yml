@@ -11,9 +11,24 @@
 # 防回归的判据在 scripts/verify-github-config.mjs（规则 A），它以这段历史为可证伪夹具。
 #
 # ## 两条硬约束（ADR-054）
-# 1. action 钉 40 位 commit SHA —— 浮动 ref 会在上游改动时静默换代码，而本仓持有发布签名私钥；
-# 2. issue_comment 触发必须同时满足「来自 PR」+「评论者是本仓成员」—— 否则公开仓库上任何
-#    外部用户都能用维护者的模型 key 触发一次运行（额度由维护者付）。
+# 1. action 钉 40 位 commit SHA —— 浮动 ref 会在上游改动时静默换代码，而本仓持有发布签名私钥
+#    （⚠️ 边界：SHA 只钉住 action.yaml 与 Dockerfile，真正跑的镜像代码不在范围内，见下方事故记录）；
+# 2. issue_comment 触发必须同时满足「来自 PR」+「评论者是本仓成员」+「评论以 pr-agent 命令开头」
+#    —— 否则公开仓库上任何外部用户都能用维护者的模型 key 触发一次运行（额度由维护者付）。
+#
+# ## 🔴 2026-09-30 线上事故：非命令评论把 action 打成红叉（这段是判据，不是感慨）
+# 首次真跑（PR #2，run #9，评论者=OWNER）失败于「PR Agent action step」，日志最后一行是
+# Unknown command: | 。评论正文是发布门禁证据表、以 ## 开头：旧镜像按 shell 规则做词法分析，
+# # 被当作注释起点，标题行整行被吃掉，第一个 token 变成 Markdown 表格的 | → 未知命令
+# → handle_request 返回 False → action 退出 1 → 红叉。而钉死的 commit 10bbd9a4 里本来就有
+# 两道修法（runner.py「注释不以 / 开头就忽略」、pr_agent.py「# 按普通字符处理」）。
+# 镜像落后的行号证据：Unknown command 日志在 363 行、同 commit 源码在 381 行（runner 差 24 行）。
+#
+# ⚠️ 由此确立一条边界（ADR-059）：「action 钉 40 位 SHA」钉不住 Dockerfile 里的浮动镜像标签
+# （FROM pragent/pr-agent:github_action）——真正执行的 pr-agent 版本由 Docker Hub 那个 tag
+# 决定，不在本仓任何钉死机制范围内。本仓的补偿控制就是触发面第③条：评论必须以命令开头，
+# 让非命令评论根本不启动 runner。它与上游自己的 webhook 守卫（runner.py:386-393）同形，
+# 只是提前到 workflow 层执行——镜像追上来之前，这道门是唯一的防线。
 #
 # ## 删除判据
 # 不再需要 AI 评审时**删除本文件**，而不是留着当摆设；不要把它移出 workflows/。
@@ -34,9 +49,14 @@ permissions:
 
 jobs:
   pr_agent_job:
-    # 触发面收紧（ADR-054）：机器人不跑；issue_comment 只接受 PR 上来自本仓成员的评论。
-    # 整条表达式用双引号包住：内含 # 或冒号时，未加引号的标量会被 YAML 当成注释/映射而截断。
-    if: "${{ github.event.sender.type != 'Bot' && (github.event_name != 'issue_comment' || (github.event.issue.pull_request != null && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR'))) }}"
+    # 触发面收紧（ADR-054 + 2026-09-30 第③条）：机器人不跑；issue_comment 只接受「PR 上来自
+    # 本仓成员、且以 pr-agent 命令开头」的评论。整条表达式用双引号包住：内含 # 或冒号时，未加引号的
+    # 标量会被 YAML 当成注释/映射而截断。
+    #
+    # 为什么第③条用 startsWith 而不是 contains：旧镜像按第一个 token 解析评论，
+    # 「please /review this」的 action 是 please → 未知命令 → action 失败（与事故同一根因）。
+    # contains 会放进这类评论、startsWith 不会——误放是红叉，误拦只是「没触发」，取误拦。
+    if: "${{ github.event.sender.type != 'Bot' && (github.event_name != 'issue_comment' || (github.event.issue.pull_request != null && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR') && (startsWith(github.event.comment.body, '/review') || startsWith(github.event.comment.body, '/improve') || startsWith(github.event.comment.body, '/describe') || startsWith(github.event.comment.body, '/ask')))) }}"
     runs-on: ubuntu-latest
     permissions:
       issues: write

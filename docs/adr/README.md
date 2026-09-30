@@ -98,6 +98,7 @@
 | [056](056-alpha-channel-dormant.md) | alpha 线休眠：不发布、不追漂移，补丁冻结保留（部分修订 ADR-052；**同日内被 ADR-057 修订**） | 已接受 |
 | [057](057-alpha-channel-restored-and-dual-promotion.md) | alpha 复役 + 双通道同步推进至 0.2.0-rc.2 / 0.1.7-alpha.2（修订 ADR-056 决策 1） | 已接受 |
 | [058](058-retire-pullfrog-agent.md) | 停用 Pullfrog：删除工作流文件，AI 评审收敛到 PR Agent（修订 ADR-054 决策 2） | 已接受 |
+| [059](059-pr-agent-image-floating-and-command-gate.md) | action SHA 钉不死 Docker 镜像：触发面增补「评论以命令开头」（ADR-054 决策 3 的边界） | 已接受 |
 
 ## 新增一条 ADR 的规则
 
