@@ -250,6 +250,59 @@ export function readCommits(options = {}) {
  * @param {string} [options.rev] - 起始 revision，默认 `HEAD`。
  * @returns {string|null} 最近 tag 名；范围内无 tag 时返回 `null`（**首次发布**的情形）。
  */
+/**
+ * 比较两个 semver（含预发布优先级）。**共享实现**：version.mjs 与 updater-manifest.mjs 都用它。
+ *
+ * 为什么放在这里：同一件事（semver 比较）在两处各写一份，迟早对同一个版本给出两种说法；
+ * 本文件存在的理由正是消除这类分叉（见文件头「共享库」定位）。
+ *
+ * 顺序：1.0.0-alpha.1 < 1.0.0-beta.1 < 1.0.0-rc.1 < 1.0.0；数字段按数值、字母段按字典序，
+ * 段数少者在前。允许前导 v（tag 形态）。
+ *
+ * @param {string} a - 版本或 tag。
+ * @param {string} b - 版本或 tag。
+ * @returns {number} 负数 / 0 / 正数。
+ * @throws {Error} 任一侧不是合法 semver——**不得静默按相等处理**，那会让调用方的守卫恒真。
+ */
+export function compareSemver(a, b) {
+  const pa = parseAnySemver(a);
+  const pb = parseAnySemver(b);
+  if (!pa || !pb) throw new Error(`无法解析的版本号：${a} / ${b}`);
+  for (const key of ['major', 'minor', 'patch']) {
+    if (pa[key] !== pb[key]) return pa[key] < pb[key] ? -1 : 1;
+  }
+  if (!pa.prerelease && !pb.prerelease) return 0;
+  if (!pa.prerelease) return 1;
+  if (!pb.prerelease) return -1;
+  return comparePrereleaseParts(pa.prerelease, pb.prerelease);
+}
+
+/** semver 的宽松解析（允许前导 v）；不合法返回 null。 */
+function parseAnySemver(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(value).trim());
+  if (!match) return null;
+  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), prerelease: match[4] ?? null };
+}
+
+/** 预发布段比较（SemVer 2.0.0 §11）。 */
+function comparePrereleaseParts(a, b) {
+  const left = a.split('.');
+  const right = b.split('.');
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const x = left[i];
+    const y = right[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    if (xNum && yNum) {
+      if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
 export function latestTag(options = {}) {
   const { cwd = process.cwd(), pattern = 'v*', rev } = options;
   const args = ['describe', '--tags', '--abbrev=0', `--match=${pattern}`];

@@ -53,7 +53,7 @@ import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { latestTag, readCommits, suggestBump } from './conventional-commits.mjs';
+import { compareSemver, latestTag, readCommits, suggestBump } from './conventional-commits.mjs';
 import { insertSection, renderSection, repoUrl } from './changelog.mjs';
 
 /** 需要保持同步的 Cargo 工作区成员（Cargo.lock 里的校验对象）。 */
@@ -278,6 +278,60 @@ export function writeChangelogSection(version, root = process.cwd()) {
  * @param {string} [options.root] - 仓库根路径。
  * @returns {{ errors: string[], warnings: string[], version: string|null }} 校验结果。
  */
+/**
+ * 读取本仓所有 `v*` tag。
+ *
+ * 为什么是 `--list 'v*'` 而不是 `git describe`：describe 给的是「最近」而非「最高」，
+ * 而本仓版本线曾经非单调（先 v0.7.0-rc.1、后 v0.7.0-alpha.8），两者不等价。
+ * 更新通道的滚动 tag（`updater-rc`，ADR-053）不是发布版本，靠 `v*` 前缀天然排除。
+ *
+ * ⚠️ **浅克隆上返回 `null`**：`actions/checkout` 默认 fetch-depth=1 时 tag 不全会让
+ * 「没有 tag」与「没有取到 tag」混淆，而后者会让判据静默恒真。权威执行点是
+ * release.yml 的 preflight（fetch-depth: 0）。
+ *
+ * @param {string} [root] - 仓库路径。
+ * @returns {string[]|null} tag 列表；浅克隆或 git 不可用时 `null`（调用方据此**跳过并告警**）。
+ */
+export function readPublishedTags(root = process.cwd()) {
+  const run = (args) =>
+    execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  try {
+    if (run(['rev-parse', '--is-shallow-repository']) === 'true') return null;
+    const output = run(['tag', '--list', 'v*']);
+    return output ? output.split(/\r?\n/).map((tag) => tag.trim()).filter(Boolean) : [];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 版本线单调性判据（纯函数）。
+ *
+ * 规则：候选版本**不得低于**任何已发布 `v*` tag。允许相等——发布时本版 tag 已在检出里，
+ * 用严格大于会把这次发布自己判失败。
+ *
+ * @param {{ version: string, tags: string[] }} input
+ * @returns {string[]} problems（空数组 = 通过）
+ */
+export function checkVersionMonotonic({ version, tags }) {
+  const problems = [];
+  if (!parseSemver(version)) return problems;
+  let highest = null;
+  for (const tag of tags) {
+    const candidate = String(tag).replace(/^v/, '');
+    if (!parseSemver(candidate)) continue;
+    if (highest === null || compareSemver(candidate, highest) > 0) highest = candidate;
+  }
+  if (highest === null) return problems;
+  if (compareSemver(version, highest) < 0) {
+    problems.push(
+      `版本号 ${version} 低于已发布的最高 tag v${highest}：发布一个比线上更低的版本，` +
+        `updater 的版本比较会让它永远推不出去（本仓真实形态：先发 v0.7.0-rc.1、后发 0.7.0-alpha.8）。` +
+        `改法：在更高的 patch/minor 上推进（如 v0.7.1-rc.1），不要在同一核心版本里换通道后缀。`,
+    );
+  }
+  return problems;
+}
 export function checkVersions(options = {}) {
   const { tag = null, root = process.cwd() } = options;
   const errors = [];
@@ -335,6 +389,20 @@ export function checkVersions(options = {}) {
     }
   } catch {
     warnings.push('读不到 Cargo.lock，跳过其一致性检查');
+  }
+
+  // 版本线单调性（S1-4 / 缺陷 D2）：候选版本不得低于任何已发布的 v* tag。
+  // 为什么必须查：本仓真的发过「先 v0.7.0-rc.1、后 v0.7.0-alpha.8」，后者更小 ——
+  // 于是线上存在比当前版本更高的 tag，updater 的版本比较会让新版本永远推不出去。
+  const publishedTags =
+    options.publishedTags === undefined ? readPublishedTags(root) : options.publishedTags;
+  if (publishedTags === null) {
+    warnings.push(
+      '读不到 git tag（浅克隆或 git 不可用）——已跳过「版本线单调性」检查。' +
+        '权威执行点是 release.yml preflight（fetch-depth: 0）',
+    );
+  } else if (pkgVersion) {
+    errors.push(...checkVersionMonotonic({ version: pkgVersion, tags: publishedTags }));
   }
 
   return { errors, warnings, version: pkgVersion };
@@ -408,6 +476,18 @@ export function selfTest() {
   eq('auto：feat → minor', bumpFrom(['feat: x']), 'minor');
   eq('auto：fix → patch', bumpFrom(['fix: x']), 'patch');
   eq('auto：docs → none', bumpFrom(['docs: x']), 'none');
+
+  // 版本线单调性（S1-4）：判据必须能用**真实历史**证伪，否则它只是装饰。
+  // 🔴 可伪证夹具：本仓 2026-09-25 先发 v0.7.0-rc.1、后发 v0.7.0-alpha.8，而后者更小。
+  eq('单调性：修复前的真实历史必须报错', checkVersionMonotonic({ version: '0.7.0-alpha.8', tags: ['v0.7.0-rc.1', 'v0.7.0-alpha.7'] }).length > 0, true);
+  eq('单调性：候选 0.7.1-rc.1 越过 rc.1（本次选定的下一版）', checkVersionMonotonic({ version: '0.7.1-rc.1', tags: ['v0.7.0-rc.1', 'v0.7.0-alpha.8'] }).length, 0);
+  eq('单调性：发布时自身 tag 已存在也不得误报', checkVersionMonotonic({ version: '0.7.1-rc.1', tags: ['v0.7.1-rc.1', 'v0.7.0-rc.1'] }).length, 0);
+  eq('单调性：滚动 tag 不参与（非 v* 形态）', checkVersionMonotonic({ version: '0.7.1-rc.1', tags: ['updater-rc', 'v0.7.0-rc.1'] }).length, 0);
+  eq('单调性：无 tag 时不报错（首次发布）', checkVersionMonotonic({ version: '0.1.0', tags: [] }).length, 0);
+  eq('semver：alpha.8 < rc.1', compareSemver('0.7.0-alpha.8', '0.7.0-rc.1') < 0, true);
+  eq('semver：rc.1 < 正式版', compareSemver('0.7.0-rc.1', '0.7.0') < 0, true);
+  eq('semver：接受 tag 前导 v', compareSemver('v0.7.1-rc.1', '0.7.0-rc.1') > 0, true);
+  throws('semver：非法输入必须抛错而不是按相等处理', () => compareSemver('vNext', '0.7.0'));
 
   if (failures.length > 0) {
     throw new Error(`version 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
