@@ -46,7 +46,7 @@ This project is a from-scratch Rust/Tauri port of the Electron-based `dataelemen
 
 ## Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (stable, `>= 1.85` recommended)
+- [Rust toolchain](https://rustup.rs/) (stable, `>= 1.90` — the single source of truth is `Cargo.toml` → `rust-version`)
 - [Node.js](https://nodejs.org/) (v24 — see [`.nvmrc`](.nvmrc); used for build scripts and packaging tooling)
 - Platform build prerequisites for [Tauri v2](https://v2.tauri.app/start/prerequisites/) (WebView2 / WebKit / WebKitGTK as appropriate).
 
@@ -178,7 +178,7 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 
 ## Auto-update and the signing key
 
-The updater endpoint is `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`, and `tauri.conf.json` → `bundle.createUpdaterArtifacts` is `true`, so `npm run build` emits the signed artifacts **and** the `latest.json` manifest that this endpoint serves.
+The updater endpoint is **per runtime channel**: each channel owns a rolling release (`updater-rc`, `updater-alpha`) that carries a single `latest.json`, and `tauri.conf.json` → `bundle.createUpdaterArtifacts` is `true`, so `npm run build` emits the signed artifacts **and** that manifest. The URL baked into a build is injected at build time by [`scripts/updater-manifest.mjs`](scripts/updater-manifest.mjs) — the only place the endpoint is ever constructed — so the update source and the bundled runtime line cannot disagree. The default in `tauri.conf.json` is the `rc` channel.
 
 > `latest.json` has to be among the release assets — **without it, auto-update is broken**. The release workflow (below) has `tauri-action`'s `uploadUpdaterJson` produce and upload it; if you build with `npm run build` and upload manually, do not forget this file.
 

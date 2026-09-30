@@ -46,7 +46,7 @@
 
 ## 环境要求
 
-- [Rust 工具链](https://rustup.rs/)（stable，建议 `>= 1.85`）
+- [Rust 工具链](https://rustup.rs/)（stable，`>= 1.90` —— 唯一产地是 `Cargo.toml` 的 `rust-version`）
 - [Node.js](https://nodejs.org/)（v24 —— 见 [`.nvmrc`](.nvmrc)，用于构建工具链）
 - [Tauri v2](https://v2.tauri.app/start/prerequisites/) 对应的平台构建依赖（WebView2 / WebKit / WebKitGTK）
 
@@ -179,7 +179,7 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 
 ## 自动更新与签名密钥
 
-更新端点为 `https://github.com/wang-yi-bit64/dsh-desktop/releases/latest/download/latest.json`，且 `tauri.conf.json` → `bundle.createUpdaterArtifacts` 已置 `true`，因此 `npm run build` 会同时产出**已签名的安装包**与该端点所服务的 `latest.json` 清单。
+更新端点**按运行时通道各有一条**：每个通道拥有一个滚动 Release（`updater-rc`、`updater-alpha`），各自只承载一个 `latest.json`。`tauri.conf.json` → `bundle.createUpdaterArtifacts` 已置 `true`，因此 `npm run build` 会同时产出**已签名的安装包**与该清单。二进制里的 URL 由 [`scripts/updater-manifest.mjs`](scripts/updater-manifest.mjs) 在**构建期注入**——它是端点 URL 的唯一产地，所以「更新源」与「内置的运行时线」不可能各说各话。`tauri.conf.json` 里的默认值指向 `rc` 通道。
 
 > `latest.json` 必须出现在 Release 资产里——**它不在，自动更新就是断的**。发布工作流（见下）由 `tauri-action` 的 `uploadUpdaterJson` 负责生成上传；手工 `npm run build` 后自行上传产物时，别忘了这个文件。
 
@@ -253,7 +253,7 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 npm run prepare:harness -- --dsh-target=alpha
 ```
 
-> 预发布版本**不进入** stable 更新链路：updater 端点读的是 `releases/latest/download/latest.json`，而 GitHub 的「latest release」按定义不含 prerelease。因此 `-next.N` / `-alpha.N` 只会到达显式安装它的用户。
+> 每条运行时通道读**自己的**滚动清单，因此一个构建会到达**本通道**的用户。旧的单一端点 `releases/latest/download/latest.json` 之所以废弃：GitHub 的「latest」按定义不含 prerelease，而本仓版本全是预发布——它返回的版本号比任何 0.6/0.7 构建都低，**2026-09-15 到本次改动之间自动更新一次都没送出去**。⚠️ 该改动**之前**发布的构建把旧端点烧进了二进制，它们无法自动更新，需要手动装一次新构建；`updater-rc` / `updater-alpha` 是**更新通道载体，不是可安装版本**。
 
 ### 发布工作流
 

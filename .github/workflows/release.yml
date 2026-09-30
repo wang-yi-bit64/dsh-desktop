@@ -262,7 +262,10 @@ jobs:
           DSH_VERSION: ${{ needs.preflight.outputs.dsh_version }}
         run: |
           set -euo pipefail
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          # ⚠️ --match 'v*' 不能省（ADR-053）：更新通道的滚动 tag（updater-rc / updater-alpha）
+          # 也是 tag。不限定前缀时，git describe 会在下个发布周期把上一次的滚动 tag 当成
+          # 「上一个发布」，于是变更区间算错、Release 正文少一段——而它不会报任何错。
+          PREV="$(git describe --tags --match 'v*' --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           {
             echo 'body<<RELEASE_NOTES_EOF'
             # 运行时基线横幅：双通道下，「这一版内置哪个 DSH」是用户选版本时最先看的
@@ -297,10 +300,21 @@ jobs:
             https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
           chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
 
+      # 更新端点由**构建期注入**（ADR-053）：通道由 tag 推导，与运行时通道同源，
+      # 因此「二进制里的更新源」与「它内置的运行时线」不可能各说各话。
+      # 端点 URL 的唯一产地是 scripts/updater-manifest.mjs —— 这里不手拼 URL。
+      - name: Generate updater endpoint config
+        shell: bash
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: node scripts/updater-manifest.mjs --write-config "$TAG" .updater-config.json
+
       # tauri-action 负责：跑 `tauri build`、创建/更新 Release、上传安装包与
       # `.sig` 签名、并生成 updater 的 `latest.json`（uploadUpdaterJson 默认开）。
-      # `latest.json` 是自动更新的关键——updater 端点指向
-      # `releases/latest/download/latest.json`，缺了它更新链路就断。
+      # `latest.json` 必须在本版本 Release 的资产里——缺了它更新链路就断。
+      # ⚠️ 端点**不再**是 `releases/latest/...`：GitHub 的 latest 排除预发布，而本仓版本
+      # 全是预发布 ⇒ 那条路径自 2026-09-15 起零投递（实测返回 0.5.0-next.1，而已发布到
+      # 0.7.x）。现在每个通道有自己的滚动 Release，见下面的 updater-channel job。
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -329,7 +343,9 @@ jobs:
           # `unexpected argument 'build' found`。正确展开应为
           # `npm run tauri build -- --bundles …`。
           tauriScript: npm run tauri
-          args: --bundles ${{ matrix.bundles }} -v
+          # `--config` 覆盖 plugins.updater.endpoints（通道相关），由上一步生成；
+          # 其余配置仍来自 tauri.conf.json。
+          args: --bundles ${{ matrix.bundles }} -v --config .updater-config.json
           # ⚠️ 这里**不要**写 `uploadWorkflowArtifacts`：tauri-action（`@v0`）没有这个
           # 输入，GitHub 只会打一条 "Unexpected input(s)" 警告并**静默忽略**它
           # （2026-09-22 核对其 action.yml：与工件相关的输入只有 `uploadPlainBinary`，
@@ -349,6 +365,39 @@ jobs:
       - name: Report patch health
         if: always()
         run: npm run report:patches -- --markdown
+
+  # ---------------------------------------------------------------------------
+  # 更新通道的滚动 manifest（ADR-053）
+  # ---------------------------------------------------------------------------
+  # 为什么单独成 job：它是**单写者**。若把上传挂在 build matrix 里，三个平台会同时往
+  # 同一个滚动 Release 覆盖同一个资产（竞态），而这件事只需要做一次。
+  # 它同时是发布后的第一道更新链自检：verify:update-channel 断言端点 version 不低于
+  # 该通道最新 tag —— 判据是**实测端点的返回值**，不是「我以为传上去了」。
+  #
+  # 本 job 的 action 全部钉 SHA：它是新增代码，不受 S3-3 基线表的豁免（ADR-054）。
+  updater-channel:
+    name: publish rolling updater manifest
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803   # v6
+        with:
+          # verify 要读全部 v* tag 才能算出「该通道最新已发布版本」；
+          # 浅克隆拿不到 tag，判据会退化成「永远通过」。
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
+        with:
+          node-version-file: .nvmrc
+      - name: Publish rolling manifest and verify the channel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          node scripts/updater-manifest.mjs --publish "$TAG"
+          node scripts/updater-manifest.mjs --verify
 
   # ---------------------------------------------------------------------------
   # 便携版（Windows zip）：与 NSIS 安装版并行构建，互不干扰。
