@@ -1,0 +1,59 @@
+# PR Agent（Qodo）— AI 评审。**已接线**（ADR-054）。
+#
+# ## 为什么存在
+# 给 PR 提供自动描述与评审。维护者 2026-09-30 裁定「接上」而非删除（可用的 PR 辅助值得保留）。
+#
+# 🔴 ## 它曾经是一条死配置（这段历史必须留着）
+# 本文件原先放在 .github/pr-agent.yml —— 不是 .github/workflows/ —— 而 GitHub Actions
+# **只从 .github/workflows/ 加载**。于是它是「看得见、从不运行」：YAML 合法、编辑器有高亮、
+# 提交 e9f8dc5 的标题（Add Qodo AI PR Agent workflow）也把它记成已交付，而它一次都没跑过。
+# 按 ADR-005 的准入纪律，死配置要么接上要么删掉；本文件是「接上」的结果。
+# 防回归的判据在 scripts/verify-github-config.mjs（规则 A），它以这段历史为可证伪夹具。
+#
+# ## 两条硬约束（ADR-054）
+# 1. action 钉 40 位 commit SHA —— 浮动 ref 会在上游改动时静默换代码，而本仓持有发布签名私钥；
+# 2. issue_comment 触发必须同时满足「来自 PR」+「评论者是本仓成员」—— 否则公开仓库上任何
+#    外部用户都能用维护者的模型 key 触发一次运行（额度由维护者付）。
+#
+# ## 删除判据
+# 不再需要 AI 评审时**删除本文件**，而不是留着当摆设；不要把它移出 workflows/。
+name: PR Agent
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]   # 在 PR 里手动 /review、/improve
+
+concurrency:
+  group: "pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr_agent_job:
+    # 触发面收紧（ADR-054）：机器人不跑；issue_comment 只接受 PR 上来自本仓成员的评论。
+    # 整条表达式用双引号包住：内含 # 或冒号时，未加引号的标量会被 YAML 当成注释/映射而截断。
+    if: "${{ github.event.sender.type != 'Bot' && (github.event_name != 'issue_comment' || (github.event.issue.pull_request != null && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR'))) }}"
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: PR Agent action step
+        id: pragent
+        # 钉 SHA：main@2026-09-29（10bbd9a4）。升级时同步改 SHA 并更新这里的日期注释。
+        uses: qodo-ai/pr-agent@10bbd9a41061605e18ac8bab94d49a2d12a1f3a5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI.KEY: ${{ secrets.STEPFUN_API_KEY }}
+          OPENAI.API_BASE: "https://api.stepfun.com/step_plan/v1"
+          config.model: "step-5-preview"
+          config.fallback_models: '["step-5-preview"]'
+          config.custom_model_max_tokens: "1000000"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "false"   # 需要时在 PR 里手动 /improve
