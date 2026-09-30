@@ -17,6 +17,13 @@ npm run tauri build
 
 ### 快速测试与校验门禁
 ```bash
+# 0. 门禁分档编排（S4-1/S4-2）：fast = 全部 :self-test + 快速静态门禁 +
+#    cargo test --tests（无 doc-test，目标 ≤60s 温编译）；full = fast + doc-test。
+#    :self-test 从 package.json 自动发现（断言扫出数 > 0）；真检查（drift /
+#    update-channel 的联网哨兵）刻意不在档内——它们会因外部状态红，属哨兵非快反馈。
+npm run verify:fast
+npm run verify:full
+
 # 1. 快速无头测试门禁（无需 GUI，无需组装资源包 - INV-6）
 cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 

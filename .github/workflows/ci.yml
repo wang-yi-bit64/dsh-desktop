@@ -2,9 +2,11 @@ name: CI
 
 # 阶段 0 任务 0.4：三平台兜底。
 #
-# 职责（2026-09-11 收敛）：**只跑静态门禁 + 单测**，不组装资源、不打包、不跑烟雾。
-#   · PR            → 三平台 `test`（静态门禁 + clippy + 单测），快反馈
-#   · 手动 dispatch → 同上，用于在分支上主动验证
+# 职责（2026-09-11 收敛；2026-09-30 起分档——S4-1/S4-2）：**只跑静态门禁 + 单测**，
+# 不组装资源、不打包、不跑烟雾。
+#   · PR / dispatch → 三平台 `test`（静态门禁 + clippy + 单测 + 集成），**fast 档**：
+#     `cargo test --workspace --tests`，不含 doc-test（44 项 ≥258s 归入 full 档）
+#   · 每日 schedule → 同上 **+ doc-test**（full 档；ADR-055 的「最后一道网」语义）
 #
 # 其余两件事已有各自唯一的产地，别在这里重复实现：
 #   · 冒烟测试（L1 会话烟雾 / L2 GUI 烟雾）→ `.github/workflows/smoke.yml`，**手动触发**。
@@ -299,9 +301,7 @@ jobs:
       # T05：先跑无 GUI 两个 crate 的独立快门禁（快反馈；GUI 的 workspace
       # 测试依赖 tauri-build / 资源 glob，慢且偶发环境问题）。
       - name: "cargo test (headless fast gate: dsh-host + dsh-host-cli)"
-        run: cargo test -p dsh-host -p dsh-host-cli
-
-      # 🗄️ 2026-09-24：此处原有「Build CLI and dry-run the publish steps」步骤
+        run: cargo test -p dsh-host -p dsh-host-cli      # 🗄️ 2026-09-24：此处原有「Build CLI and dry-run the publish steps」步骤
       # （`cargo build --release -p dsh-host-cli` + `npm run verify:cli-publish`）。
       # CLI 发布通道已退役（理由见 `release.yml` 的退役说明与
       # `docs/dev-plan-cli-distribution.md` §5），而 `verify:cli-publish` 的**唯一标的**
@@ -313,5 +313,13 @@ jobs:
       # 任何有效覆盖（它当初存在的理由只是为演练准备一个 release 二进制）。
       # 打包器的判据仍由上面的 `verify:cli-package`（纯逻辑、秒级）守着。
 
-      - name: cargo test
-        run: cargo test --workspace
+      # S4-2 门禁分档：PR / dispatch 路径只跑 fast 档——`--tests` = 单测 + 集成测试，
+      # **不含 doc-test**（44 项 doc-test 单轮 ≥258s，是快反馈的最大单项成本）。
+      # doc-test 归入 full 档，由下面的 schedule-only 步骤承接（每日一次的
+      # 「最后一道网」语义，与 ADR-055 一致）；发布前也可本地 `npm run verify:full`。
+      - name: cargo test (fast tier: unit + integration, no doc-tests)
+        run: cargo test --workspace --tests
+
+      - name: cargo doc-test (full tier, schedule only)
+        if: github.event_name == 'schedule'
+        run: cargo test --workspace --doc
