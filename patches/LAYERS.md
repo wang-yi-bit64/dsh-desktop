@@ -278,6 +278,12 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
 
 **退役后的净结果**：next 14 → 10 条、alpha 13 → 11 条。
 
+**体积（清单 Step 6，如实记录）**：本轮推进的资源树实测 **464.1 MB**（`harness/` 377.8 MB +
+内置 Node 85.5 MB，`npm run size:report` 口径三）。**开工时未采集 0.1.5-rc.3 的基线体积**
+（本批次由用户指令在中途启动，Step 1 的基线四项只完成了 git 提交记录一项），因此无法给出
+增量对比——0.2.0 线新增的文档预览依赖（libreoffice-kit 等）在 alpha.2 时期已引入过同类项，
+但 next 线从 rc.3 到 0.2.0-rc.2 的具体增量未测。**后续升级仍应按 Step 1 先落体积基线。**
+
 **组装期抓到的第五个退役（本批次唯一由门禁而非预检发现的）**：`dsh-desktop-preset-transfer`
 插件无法在两条新线上解析导入——上游把它依赖的 `@deepseek-ai/dsh-agent-presets`
 （preset roots / scanRoot 文件模型）**重命名并重铸**为 `@deepseek-ai/dsh-agent-preset`

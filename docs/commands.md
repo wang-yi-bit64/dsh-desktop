@@ -150,7 +150,13 @@ npm run report:patches
 
 # 22. 上游升级预检：补丁在新版本上的适用性（~4MB，不必组装 300MB）
 #     `--dsh-target` 选**哪一套补丁**，`--target` 是**待检的上游版本**，两者不同
-npm run check:patch-applicability -- --dsh-target=next --target=0.1.6-alpha.2
+npm run check:patch-applicability -- --dsh-target=next --target=0.2.0-rc.2
+
+# 22a. 三路合并移植补丁（2026-09-30 新增）：merge 产出「新版纯净 ↔ 已解决」两棵树与
+#      冲突清单，人工逐条解冲突后 regen 重新生成补丁。冲突必须人判语义——
+#      它只保证文本合并与行号正确，判据是 patches/LAYERS.md 的 why/retireWhen
+node scripts/merge-migrate-patches.mjs merge --dsh-target=next --to=<新版本> --out=<工作目录>
+node scripts/merge-migrate-patches.mjs regen --dsh-target=next --to=<新版本> --out=<工作目录> --write
 
 # 22b. 移植补丁后**重算行号**（patch-package 按行号定位，偏移超 ±20 行即失败；
 #      只按内容搜索的预检会漏报这类失败，真实组装才炸——见 §8.6）

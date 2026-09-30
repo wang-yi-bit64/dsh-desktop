@@ -162,6 +162,33 @@ boot / config-dump / 插件管理。
 > 历史记录（仅供参考）：对中间版本 `0.1.2-rc.1` 的预检结果是 15 干净 / 3 冲突
 > （`agent-preset` / `settings-models` / `workspace`，均为 UI 层的上下文漂移）。
 
+> ### ✅ 双通道同步推进：next → 0.2.0-rc.2、alpha → 0.1.7-alpha.2（2026-09-30；ADR-057）
+>
+> **做法上的新增**：把 0.1.2-alpha.4 → rc.1 的先例（三路合并移植）工具化为
+> `scripts/merge-migrate-patches.mjs`（merge 产出两棵树 + 冲突清单、regen 从两棵树重生成补丁）。
+> 预检 next clean 2 / conflict 12、alpha clean 4 / conflict 9；三路合并自动消解 7/10 与 9/11 后，
+> 只剩 5 个包 55 处冲突需人工裁定——**但工具只保证文本与行号，语义裁定仍逐条人判**。
+>
+> **四个整线退役 + 一条插件链退役**（概观见 `patches/LAYERS.md` 的 2026-09-30 裁定记录）：
+> `ui-layout` / `ui-workspace` / `ui-agent-preset` 双线退役、`ui-model-selection` 仅 next；
+> `dsh-desktop-preset-transfer` 插件随 UI 退役整链退役（上游 preset roots 文件模型被重铸为
+> agentPresets 注册模型，四个导入符号消失）。
+>
+> ⚠️ **本批次抓到的两个「只在真跑时现形」的缺陷，都新增了对应守卫认知**：
+> ① 组装后的**树健全性门禁**（`prepare-harness.mjs` 规则 2）抓到 preset-transfer 插件 import
+> 不进新包——此前预检只覆盖 `patches/`，不覆盖 `vendor/` 插件，这正是该门禁的存在理由；
+> ② **L1 冒烟**抓到 next 线启动即 `SyntaxError`——我自己的迁移脚本 splice 把冲突块里 theirs
+> 侧的类声明两行误删（`await import(loader entry)` 编译期炸）。事后用
+> `node --check` 全量过了一遍组装树 982 个依赖 `.js` 文件（仅此一处），并重跑双线 L1 5/5。
+> **教训**：regen 出的补丁必须做「应用后语法自检」，不能只看预检 clean——
+> `check:patch-applicability` 明确不判语义，而这正是它注释里写的那类缺口。
+>
+> 另如实记录：本轮推进**早于**现役计划（`docs/dev-plan-0.8-convergence.md` §6）的四项放行
+> 条件中的前两项（上游 0.2.0-rc.2 仅发布 1 天；六个相关讨论未关闭，其中 #8166 peer gate
+> 静默禁用 storage 与 #8140 工作区被清属数据丢失类）。推进由用户明确指令驱动，例外放行的
+> 理由记录在 ADR-057「已知代价」段；发布前已用干净 profile 验证工作区/会话列表非空
+> （即 #8166 判据的组装期检查），冒烟覆盖启动/停止/会话可见性。
+
 > ### ✅ alpha 通道推进：0.1.6-alpha.1 → alpha.2（2026-09-16；**补丁净减少 14 → 13**）
 >
 > 首次出现**补丁数下降**的一次推进，也是首次出现「上游追上我们」：
