@@ -16,8 +16,8 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | ⚠️ 目标对应上游 `next` 线，但**当前锚在上游 `latest`（`0.1.5-rc.3`）**——上游 `next` 已前进到 `0.1.7-rc.1`，跨两个 minor 的移植另立批次（见下） | `patches/next/`（14 条） | `packages/next/`（**已清空**，2026-09-24） | `0.5.0-next.1` |
-| `alpha` | npm `alpha` dist-tag（当前 `0.1.6-alpha.2`） | `patches/alpha/`（13 条） | `packages/alpha/`（已清空） | `0.6.0-alpha.2` |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（10 条） | `packages/next/`（**已清空**，2026-09-24） | `0.7.2-rc.1`（0.7.1 之后的下一个 rc；实际版本以 package.json 为准） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.1.7-alpha.2`） | `patches/alpha/`（11 条） | `packages/alpha/`（已清空） | `0.7.2-alpha.x`（必须大于最高 rc tag） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -82,7 +82,7 @@
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
-| `@deepseek-ai/dsh` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` / `dsh-desktop-preset-transfer` 声明为 dsh 依赖。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
+| `@deepseek-ai/dsh` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` 三个桌面插件包声明为 dsh 依赖（第四个 `dsh-desktop-preset-transfer` 已于 2026-09-30 整链退役）。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
 | `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 
@@ -90,11 +90,11 @@
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
-| ~~`dsh-client-ui-layout`~~ | 🗄️ **已退役（2026-09-16，alpha 线）**：折叠侧栏宽度按平台区分（macOS 80 / 其他 56）。上游 alpha.2 把宽度参数化并由 `data-platform` 推导，实现更完整（macOS 折叠收到 0、含 Windows 标题栏），本仓补丁删除。**next 线仍在用**，待该线跟进到同版本时一并退役 | 官方区分平台宽度 ← **已满足** |
+| ~~`dsh-client-ui-layout`~~ | 🗄️ **已全线退役**：alpha 线 2026-09-16、next 线 2026-09-30（上游 0.2.0 的 `computeColumns(…, collapsedWidth)` + `data-platform` 推导覆盖本补丁全部意图，两线判据均已满足）。补丁文件两线均已删除 | 官方区分平台宽度 ← **已满足（两线）** |
 | `dsh-client-ui-sidebar` | 注入壳层锚点属性（`data-dsh-sidebar-root` / `-wide` / `-settings`），供 Harness 页注入脚本挂载手机状态指示器。**自定义 padding 已于 2026-09-16 移除**（上游原生适配 macOS，叠加会成双份留白） | 官方侧栏暴露等效锚点（本仓注入脚本可挂到官方标记上）时 |
 | `dsh-client-ui-workspace` | 工作区/会话行样式、未读标记、搜索行渲染 | 官方列表补齐未读与行样式 |
 | `dsh-client-ui-settings-models` | 模型设置页 Provider 选择器、模态切换、目录 UX | 官方设置页提供等价能力 |
-| `dsh-client-ui-model-selection` | 模型选择弹层搜索框与样式 | 官方自带搜索 |
+| `dsh-client-ui-model-selection` | 模型选择弹层搜索框与样式。（**next 线已于 2026-09-30 随 0.2.0-rc.2 退役**：上游自带模糊搜索 + 键盘选择，判据满足；alpha 线上游尚无搜索，补丁保留） | 官方自带搜索 |
 | `dsh-client-ui-agent-preset` | 预设导入/导出与 Awesome Preset 浏览界面 | 官方提供预设包导入导出（可同时撤掉 `dsh-desktop-preset-transfer` 插件） |
 | `dsh-client-ui-chat` | 会话内 `QUOTA` / `FORBIDDEN` 错误文案 | 官方补齐这两种错误码文案 |
 | `dsh-client-ui-trajectory` | 轨迹页 `QUOTA` / `FORBIDDEN` 错误文案 | 同上 |
@@ -229,6 +229,64 @@ registry 内容做应用判定，13 个补丁全部干净可用（vendoring 的�
 >
 > 三者均为 `prerelease: true`，且实测确认 `releases/latest` 仍指向 `v0.4.0`——
 > 预发布**不会**进入 stable 更新链路。
+
+### next 线（0.2.0-rc.2）与 alpha 线（0.1.7-alpha.2）的移植裁定（2026-09-30）
+
+本轮推进的**做法**是把升级清单 §2 的三路合并移植**工具化**：新增
+[`scripts/merge-migrate-patches.mjs`](../scripts/merge-migrate-patches.mjs)（`merge` 模式产出
+「新版纯净 ↔ 已解决」两棵树与冲突清单，`regen` 模式从两棵树 `git diff --no-index` 重生成补丁）。
+它把「摆三棵树、跑 git merge-file、再重生成补丁」这段此前纯手工的工序变成可复跑的命令，
+24 个 hunk 级冲突逐条可审。**语义裁定仍由人做**，工具只保证文本合并与行号正确。
+
+**预检基线**（本轮开始时）：next 对 0.2.0-rc.2 clean 2 / conflict 12；alpha 对 0.1.7-alpha.2
+clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁定的只剩 **5 个包 55 处冲突**
+（workspace 29 / settings-models 13 / agent-preset 7 / chat 3 / deliverables 2 / llm-deepseek 1）。
+裁定的最终结果：**四个包整体退役**（上游已完整覆盖我们的意图或锚点结构性失效），
+三个包按语义重做，其余七个零冲突接受。
+
+**四个整线退役（按 retireWhen 逐条核实上游实现后裁定）**：
+
+| 补丁 | 退役判据的核实结果 | 结论 |
+|------|--------------------|------|
+| `dsh-client-ui-layout` | next 0.2.0-rc.2 与 alpha 0.1.7-alpha.2 均有 `computeColumns(…, collapsedWidth)` + `data-platform` 推导（`lib/client.js` 实测命中三关键词） | **两线退役**（next 线原「待跟进」的预言兑现） |
+| `dsh-client-ui-workspace` | 两线上游均原生 `completionUnread` → `SessionStatusDots`/`StateDot` 未读完成态 + 完整会话行样式（含 hover 卡片） | **两线退役**；「手动标记未读」如需在新结构上恢复，另立批次 |
+| `dsh-client-ui-model-selection` | next 上游自带模糊搜索 + 键盘选择（`search`/`fuzzy`/`moveFocus` 实测命中）；alpha 上游仅有 `moveFocus`，**无搜索** | **仅 next 退役**；alpha 保留（同包两通道不同命，正是分级表按包名登记的代价与价值） |
+| `dsh-client-ui-agent-preset` | 上游重写为**卡片式**预设管理 UI（`cardBroken`/`guideTitle` 键域；2089 → 1702 行），旧菜单/对话框锚点整体消失——`copyTitle` 等 9 个 locale 键归零 | **两线退役**（「上游重构使补丁前提失效」）；**整条预设传递链路同轮退役**：插件 `dsh-desktop-preset-transfer` 依赖的 `@deepseek-ai/dsh-agent-presets`（roots/scanRoot 文件模型）被上游重命名并重铸为 `@deepseek-ai/dsh-agent-preset` + agentPresets 注册模型，四个导入符号（`COMPOSITION_FILE`/`SETTINGS_NAMESPACE`/`scanRoot`/`writableRoot`）整体消失，插件无法移植。vendor 源码已删，`@deepseek-ai/dsh` 补丁的依赖声明与 `build/dsh-desktop.patch.yml` 的 insert 行同步移除。**恢复前提**：上游重新暴露文件系统预设根，或有新 UI 消费方重建导入/导出 |
+
+**三个包的语义重做（上游新结构 + 保留我们的增强）**：
+
+- **`dsh-client-ui-chat`**：取上游新增的 `ACCOUNT_*` 错误码与「额度已用尽」文案，
+  重放我们的 `FORBIDDEN` 分支（`code === "FORBIDDEN"` → zh/en 词条）——上游尚无此码。
+- **`dsh-client-ui-deliverables`**：延续 alpha 线先例——取上游新路由
+  （`owner.openFile` + `presented.previewButton`），**只保留本仓增强** `localPathReference`
+  （Codex 风格本地路径解析；上游无等价物），并再次移除 `paths === null` 的提前返回
+  （否则无产物回合里本地路径引用永不出现）。
+- **`dsh-llm-deepseek`**：上游把 `httpErrorCode`（status if 链）重构为 type-based
+  `providerError`，403 并入 AUTH。**在两处映射点**（`providerError` 主链 + FILES API
+  上传链）重放「403 → FORBIDDEN」拆分——这是本补丁的全部意图，缺任一处的后果都是
+  上传失败仍显示为鉴权错误。
+- **`dsh-client-ui-settings-models`**：Provider 选择器/搜索**整体退役**（上游新增
+  「目录 / 自定义」SegmentedControl 添加流，`addMode`/`addCatalog` + 候选搜索 `fetchSearch`，
+  官方提供等价能力）；**每模型推理等级保留并重接**——上游源码两处明确注释
+  「There is deliberately no reasoning-effort control… it is a per-MODEL capability」，
+  而恰是我们的 `ModelReasoningEffortsField` 走的 per-model 层：经上游 `ModelRow` 的
+  `advancedExtra` 插槽注入（alpha 线先例在新基线上的延续），locale 三键（en+zh）随之重放。
+
+**顺带的正确性发现**：上游 `settings-models` 的 `providerError` 主链里 403 已并入
+`AUTH`，但 FILES API 仍单列 403；两处不一致——我们的 FORBIDDEN 拆分**必须两边都改**，
+只改主链会让上传类 403 走新码而消息报旧文案（这正是补丁预检「上下文对上 ≠ 语义成立」的实例）。
+
+**退役后的净结果**：next 14 → 10 条、alpha 13 → 11 条。
+
+**组装期抓到的第五个退役（本批次唯一由门禁而非预检发现的）**：`dsh-desktop-preset-transfer`
+插件无法在两条新线上解析导入——上游把它依赖的 `@deepseek-ai/dsh-agent-presets`
+（preset roots / scanRoot 文件模型）**重命名并重铸**为 `@deepseek-ai/dsh-agent-preset`
++ `agentPresets` 服务（register/activate 注册模型，`acquireScope`/`mount`/`recompose` 一套
+新方法），插件入口的四个符号整体消失。`check:patch-applicability` 只查补丁不查 vendor 插件，
+因此它是**组装后的树健全性门禁（规则 2：桌面插件入口裸导入必须可解析）**抓到的——
+这正是该门禁存在的理由（「装得上、起不来」）。裁定：整条预设传递链路退役
+（UI 消费方已同轮退役，无第二个消费方；文件系统预设根模型在上游已不存在，
+照旧 API「移植」= 在已消失的语义上造假）。三处联动移除 + vendor 源码删除。
 
 ---
 

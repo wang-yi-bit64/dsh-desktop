@@ -5,7 +5,7 @@
 | 状态 | 已接受 |
 | 日期 | 2026-09-30 |
 | 唯一产地 | scripts/dsh-targets.mjs（目标表 `status` 字段） |
-| 修订 | ADR-052 决策 1（「两个目标均为活跃维护项」→ 仅 next 在役，alpha 休眠） |
+| 修订 | ~~ADR-052 决策 1~~（本 ADR 已被 [ADR-057](057-alpha-channel-restored-and-dual-promotion.md) 修订：alpha 线于同日应维护者指令复役并推进至上游 0.1.7-alpha.2；下文表述为历史记录，现行为 ADR-057） |
 
 ## 背景
 

@@ -1,8 +1,8 @@
 diff --git a/node_modules/@deepseek-ai/dsh/package.json b/node_modules/@deepseek-ai/dsh/package.json
 --- a/node_modules/@deepseek-ai/dsh/package.json
 +++ b/node_modules/@deepseek-ai/dsh/package.json
-@@ -29,6 +29,10 @@
-   },
+@@ -20,6 +20,10 @@
+   ],
    "license": "MIT",
    "dependencies": {
 +    "dsh-desktop-client-ui": "0.1.0",

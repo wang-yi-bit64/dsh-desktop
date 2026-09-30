@@ -82,15 +82,17 @@ export const DSH_TARGETS = {
     channel: 'next',
     publishChannel: 'rc',
     status: 'active',
-    dshVersion: '0.1.5-rc.3',
-    summary: '上游 rc 线——默认发布的运行时基线（当前锚在上游 npm `latest`；上游 `next` 已前进到 0.2.0-rc.2，移植批次排在缺陷治理之后——决策点 C8）'
+    dshVersion: '0.2.0-rc.2',
+    summary:
+      '上游 rc 线（当前 0.2.0-rc.2，2026-09-30 从 0.1.5-rc.3 跨两个 minor 推进；补丁按 retireWhen 退役 4 个、语义重做 3 个，10 个落盘——见 patches/LAYERS.md「next 线（0.2.0-rc.2）的移植裁定」）'
   },
   alpha: {
     channel: 'alpha',
     publishChannel: 'alpha',
-    status: 'dormant',
-    dshVersion: '0.1.6-alpha.2',
-    summary: '上游 alpha 线——🗄️ 2026-09-30 起休眠（ADR-056）：不发布、不追漂移，补丁与 vendored 冻结保留；恢复前提见该 ADR'
+    status: 'active',
+    dshVersion: '0.1.7-alpha.2',
+    summary:
+      '上游 alpha 线（2026-09-30 复役并推进到 0.1.7-alpha.2：修订 ADR-056 见 ADR-057；补丁退役 2 个，11 个落盘）'
   }
 }
 
@@ -311,9 +313,9 @@ export function selfTest() {
       name
     )
   }
-  // 目标状态（ADR-056）：alpha 休眠是有记录的裁定，不是「忘了维护」；
-  // 默认目标必须在役——全部休眠时所有哨兵都无事可做，属配置矛盾。
-  eq('目标状态：alpha 休眠（ADR-056）', resolveTarget('alpha').status, 'dormant')
+  // 目标状态（ADR-056 → ADR-057）：alpha 休眠于 2026-09-30 当日即因用户指令复役
+  // （修订见 ADR-057），两线均在役；默认目标必须在役（全部休眠时哨兵无事可做，属配置矛盾）。
+  eq('目标状态：alpha 已复役（ADR-057 修订 ADR-056）', resolveTarget('alpha').status, 'active')
   eq('目标状态：next 在役', resolveTarget('next').status, 'active')
   eq('默认目标必须在役', resolveTarget(DEFAULT_TARGET).status, 'active')
 

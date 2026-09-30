@@ -63,7 +63,7 @@ export const PATCH_LAYERS = {
   // ---- functional：缺失即无法加载桌面插件 / 启动不了 -------------------------
   '@deepseek-ai/dsh': {
     layer: 'functional',
-    why: '把 dsh-desktop-client-ui / hmr-fallback / market-installer / preset-transfer 四个桌面插件包声明为 dsh 的依赖。缺失则 build/dsh-desktop.patch.yml 的 `insert: name` 解析不到包，profile 启动即失败。',
+    why: '把 dsh-desktop-client-ui / hmr-fallback / market-installer 三个桌面插件包声明为 dsh 的依赖（第四个 preset-transfer 已于 2026-09-30 整链退役）。缺失则 build/dsh-desktop.patch.yml 的 `insert: name` 解析不到包，profile 启动即失败。',
     retireWhen: '官方 dsh 提供声明式扩展点（无需改 package.json 即可挂载外部插件）时。'
   },
   '@deepseek-ai/cordis-plugin-loader': {
@@ -78,35 +78,33 @@ export const PATCH_LAYERS = {
   },
 
   // ---- ui-behavior：视觉 / 文案 / 产品增强，缺失可用 -------------------------
-  '@deepseek-ai/dsh-client-ui-layout': {
-    layer: 'ui-behavior',
-    why: '折叠侧栏宽度按平台区分（macOS 80 / 其他 56），纯几何。',
-    retireWhen: '官方区分平台侧栏宽度时。'
-  },
+  // `dsh-client-ui-layout` 已于 2026-09-30 在 next 线退役（上游 0.2.0 的
+  // computeColumns(…, collapsedWidth) + data-platform 推导覆盖了本补丁的全部意图；
+  // alpha 线已于 2026-09-16 退役）——两线均无该补丁，分级表条目随之删除。
   '@deepseek-ai/dsh-client-ui-sidebar': {
     layer: 'ui-behavior',
     why: '侧栏 padding 与 data-dsh-sidebar-* 标记，纯样式。',
     retireWhen: '官方侧栏自带等效留白时。'
   },
-  '@deepseek-ai/dsh-client-ui-workspace': {
-    layer: 'ui-behavior',
-    why: '工作区/会话行的样式、未读标记与搜索行渲染增强（会话永久删除 UI 已随 0.1.5-rc.1 升级移除；「在 Finder 中打开」菜单项在 0.1.6-alpha.1 线未再移植，理由见 patches/LAYERS.md）。',
-    retireWhen: '官方工作区列表补齐未读与会话行样式时。'
-  },
+  // `dsh-client-ui-workspace` 已于 2026-09-30 双线退役（上游 0.2.0/0.1.7 线原生
+  // completionUnread + SessionStatusDots/StateDot 未读指示与完整会话行样式，
+  // retireWhen 满足）；「手动标记未读」如需恢复须在新行结构上另立批次。
+  // `dsh-client-ui-agent-preset` 已于 2026-09-30 双线退役（上游重写为卡片式
+  // 预设管理 UI，旧菜单/对话框锚点整体消失——「上游重构使补丁前提失效」）；**整条预设
+  // 传递链路同轮退役**：插件 dsh-desktop-preset-transfer 依赖的
+  // `@deepseek-ai/dsh-agent-presets`（roots/scanRoot 文件模型）被上游重命名并重铸为
+  // `@deepseek-ai/dsh-agent-preset` + agentPresets 注册模型，四个导入符号整体消失，
+  // 插件无法移植；vendor 源码已删、dsh 补丁的依赖声明与 patch.yml 的 insert 行同步移除。
+  // 恢复前提：上游重新暴露文件系统预设根，或有新 UI 消费方重建导入/导出。
   '@deepseek-ai/dsh-client-ui-settings-models': {
     layer: 'ui-behavior',
-    why: '模型设置页的 Provider 选择器、模态切换与目录 UX（含内联 CSS 注入）。',
-    retireWhen: '官方设置页提供 Provider 选择与模态切换时。'
+    why: '模型设置页的每模型推理等级（advancedExtra 插槽 + reasoningEfforts 字段）。（Provider 选择器与搜索已于 2026-09-30 随上游目录/自定义添加流退役——官方提供等价能力。）',
+    retireWhen: '官方提供 per-model 推理等级控件时（当前上游源码明确注释「刻意不做」）。'
   },
   '@deepseek-ai/dsh-client-ui-model-selection': {
     layer: 'ui-behavior',
-    why: '模型选择弹层的搜索框与样式。',
+    why: '模型选择弹层的搜索框与样式。（next 线已于 2026-09-30 随 0.2.0-rc.2 退役：上游自带模糊搜索 + 键盘选择；alpha 线上游尚无搜索，补丁保留。）',
     retireWhen: '官方模型选择器自带搜索时。'
-  },
-  '@deepseek-ai/dsh-client-ui-agent-preset': {
-    layer: 'ui-behavior',
-    why: '预设导入/导出与 Awesome Preset 浏览的文案与界面。',
-    retireWhen: '官方提供预设包导入导出时（可同时撤掉 dsh-desktop-preset-transfer 插件）。'
   },
   '@deepseek-ai/dsh-client-ui-chat': {
     layer: 'ui-behavior',

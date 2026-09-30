@@ -81,7 +81,7 @@
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点 D1~D11 与裁决记录；「插件禁用语义」证据链在此。
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
 - `docs/dev-plan-defect-remediation.md`：**缺陷治理专项**（批次 S0~S7，2026-09-30 起）——D1~D12 缺陷清单、可证伪判据、C1~C8 裁决与执行台账；动 S 批次任何条目前先读它。
-- `docs/adr/`：架构决策记录库（42 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
+- `docs/adr/`：架构决策记录库（43 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
 - `crates/dsh-contracts/src/constants.rs`（契约常量）、`errors.rs`（错误码 + `AppError`）、`ipc.rs`（`IpcEnvelope<T>` + 形状测试）、`rpc.rs`（JSON-RPC 唯一契约源，⚠️ 无运行时消费者）。
@@ -185,17 +185,19 @@
 
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | 目标对应 npm `next` dist-tag，⚠️ **但当前锚在上游 `latest`** | `0.1.5-rc.3` | `patches/next/`（14 个）、`packages/next/`（已清空） | `rc` | `0.7.0-rc.1` |
-| `alpha` | npm `alpha` dist-tag（🗄️ **2026-09-30 起休眠**，[ADR-056](docs/adr/056-alpha-channel-dormant.md)：不发布、不追漂移，补丁冻结保留） | `0.1.6-alpha.2` | `patches/alpha/`（13 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.0-alpha.2` |
+| `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2` | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.2-alpha.x`（须大于最高 rc tag） |
 
-> ⚠️ **`next` 目标的锚点当前低于它对应的上游线**（2026-09-30 复核）：上游 `next` 已前进到
-> **`0.2.0-rc.2`**（drift 哨兵实测），而本仓锚在 `latest` 的 **`0.1.5-rc.3`**。原因是移植含
-> **上游重构**（预检 clean 5 / conflict 9，**79 个 hunk 需重新撰写**），已另立批次；
-> 本批次先锚 `latest` 以取得可用基线。**`verify:drift` 对此会告警，属已知且已记录的状态**。
-> 详见 [`patches/LAYERS.md`](patches/LAYERS.md) 的「next 线（0.1.5-rc.3）的移植裁定」。
+> ✅ **next 线于 2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`**（ADR-057 同批
+> 恢复 alpha 在役并推进到 `0.1.7-alpha.2`）：预检 clean 2 / conflict 12，经
+> `scripts/merge-migrate-patches.mjs` 三路合并 + 逐补丁语义裁定后，退役 6 个（两线合计：
+> `ui-layout` / `ui-workspace` / `ui-agent-preset` 双线 + `ui-model-selection` 仅 next）、
+> 语义重做 4 个；预设传递插件 `dsh-desktop-preset-transfer` 整链退役（上游把 preset roots
+> 文件模型重铸为注册模型）。双线锚点现已各自对齐上游 dist-tag，`verify:drift` 不再告警。
+> 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-09-30 记录。
 
-> **两条线的补丁数可以不同，这是正常的**：`alpha` 线上游已补齐平台化侧栏宽度，
-> 本仓那条补丁按 `retireWhen` 退役（14 → 13）；`next` 线尚未跟进到同版本，因此仍保留。
+> **两条线的补丁数可以不同，这是正常的**：本轮退役后 next 10 个 / alpha 11 个——
+> `ui-model-selection` 仅 next 退役（上游 0.2.0 自带搜索而 alpha 线尚无）。
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
 > 📖 通道解耦（`channel` vs `publishChannel`）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6。

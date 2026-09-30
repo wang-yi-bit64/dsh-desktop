@@ -1,0 +1,22 @@
+diff --git a/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js b/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js
+@@ -581,7 +581,7 @@ var DeepSeekFilesError = class extends LlmError {
+ 	* @param detail - provider error fields joined for classification.
+ 	*/
+ 	constructor(message, status, detail) {
+-		super(message, status === 401 || status === 403 ? "AUTH" : status === 429 ? "RATE_LIMIT" : status >= 500 ? "SERVER" : "FILES_API", { status });
++		super(message, status === 401 ? "AUTH" : status === 403 ? "FORBIDDEN" : status === 429 ? "RATE_LIMIT" : status >= 500 ? "SERVER" : "FILES_API", { status });
+ 		this.name = "DeepSeekFilesError";
+ 		this.detail = detail;
+ 	}
+@@ -1747,7 +1747,8 @@ function providerError(raw, status, headers) {
+ 	const type = typeof error.type === "string" ? error.type : "";
+ 	const detail = `${type} ${typeof error.code === "string" ? error.code : ""} ${message}`;
+ 	let code;
+-	if (status === 401 || status === 403 || ["authentication_error", "permission_error"].includes(type)) code = "AUTH";
++	if (status === 401 || ["authentication_error"].includes(type)) code = "AUTH";
++	else if (status === 403 || type === "permission_error") code = "FORBIDDEN";
+ 	else if (isQuotaExceededError(detail) || status === 402) code = "QUOTA";
+ 	else if (status === 429 || type === "rate_limit_error") code = "RATE_LIMIT";
+ 	else if (isContextWindowExceededError(detail)) code = "CONTEXT_WINDOW_EXCEEDED";

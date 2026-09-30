@@ -233,11 +233,17 @@ if (targetArg) {
 //    幂等检查必须先于任何删除操作执行：连续两次运行时，第二次要因
 //    「输入未变」直接跳过（任务 0.3），不能先毁掉 staging 产物。
 // ---------------------------------------------------------------------------
+// 本地定制包（vendor/）里安装进运行时的那几个。
+// ⚠️ dsh-desktop-preset-transfer 已于 2026-09-30 双线退役（不再安装）：上游在两线的
+// 新锚点上把 `@deepseek-ai/dsh-agent-presets`（roots/scanRoot 文件模型）重命名并重铸为
+// `@deepseek-ai/dsh-agent-preset` + agentPresets 注册模型，插件的四个导入符号整体消失；
+// 同轮它的 UI 消费方（客户端预设管理补丁）也已退役。带一份 import 不进的插件组装，
+// 健全性门禁（规则 2）会拦下——「装得上、起不来」正是它要防的。vendor 源码已删除，
+// 裁定记录见 patches/LAYERS.md。
 const vendorPackages = [
   'dsh-desktop-client-ui',
   'dsh-desktop-hmr-fallback',
   'dsh-desktop-market-installer',
-  'dsh-desktop-preset-transfer',
   'dshmarket'
 ]
 

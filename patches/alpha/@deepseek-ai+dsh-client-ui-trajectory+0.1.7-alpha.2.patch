@@ -19,7 +19,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-trajectory/lib/client.js b/
  			"details.retry": "Retry",
  			"details.scheduled": "Scheduled",
  			"details.retryDelay": "Retry delay",
-@@ -4387,6 +4391,8 @@ window.__ModuleLoader__.load({
+@@ -4385,6 +4389,8 @@ window.__ModuleLoader__.load({
  		}
  		function requestErrorMessage(request, t) {
  			if (request.errorCode === "AUTH") return t("details.failure.auth");

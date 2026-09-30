@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js
-@@ -64,6 +64,38 @@
+@@ -64,6 +64,38 @@ window.__ModuleLoader__.load({
  			tag.textContent = css$3;
  			document.head.appendChild(tag);
  		}
@@ -40,7 +40,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		var ModelsSection_module_css_default = {
  			"addActions": "zGbnIq_addActions",
  			"addBlock": "zGbnIq_addBlock",
-@@ -129,7 +161,13 @@
+@@ -133,7 +165,13 @@ window.__ModuleLoader__.load({
  			"selectInput": "zGbnIq_selectInput",
  			"setupCard": "zGbnIq_setupCard",
  			"switchThumb": "zGbnIq_switchThumb",
@@ -55,47 +55,16 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		};
  		//#endregion
  		//#region lib/types/client/EditorFooter.js
-@@ -158,6 +196,186 @@
+@@ -273,11 +311,154 @@ window.__ModuleLoader__.load({
+ 						disabled: disabled || props.inputLoading === true,
+ 						t,
+ 						onChange: props.onChange
+-					})]
++					}), props.advancedExtra ?? null]
+ 				}) : null]
  			});
  		}
  		//#endregion
-+		//#region lib/types/client/ModelImageInputToggle.js
-+		/** Whether one model explicitly declares image input in the adapter-owned field. */
-+		function imageInputEnabled(model, field) {
-+			const modalities = model[field];
-+			return Array.isArray(modalities) && modalities.includes("image");
-+		}
-+		/** The explicit modality list written by the binary image-input control. */
-+		function imageInputModalities(enabled) {
-+			return enabled ? ["text", "image"] : ["text"];
-+		}
-+		/** Render the shared per-model image-input declaration control. */
-+		function ModelImageInputToggle(props) {
-+			return (0, react_jsx_runtime.jsxs)("label", {
-+				className: props.compact ? "dshModelModalityToggle dshModelModalityToggleCompact" : "dshModelModalityToggle",
-+				"aria-disabled": props.disabled,
-+				"data-tooltip": props.compact ? `${props.t("modelImageInput")}: ${props.t("modelImageInputHint")}` : void 0,
-+				children: [(0, react_jsx_runtime.jsx)("input", {
-+					type: "checkbox",
-+					checked: imageInputEnabled(props.model, props.field),
-+					"aria-label": `${props.t("modelImageInput")} ${String(props.index + 1)}`,
-+					disabled: props.disabled,
-+					onChange: (event) => {
-+						props.onChange(event.target.checked);
-+					}
-+				}), (0, react_jsx_runtime.jsxs)("span", {
-+					className: "dshModelModalityCopy",
-+					children: [(0, react_jsx_runtime.jsx)("span", {
-+						className: "dshModelModalityTitle",
-+						children: props.t(props.compact ? "modelImageInputShort" : "modelImageInput")
-+					}), props.compact ? null : (0, react_jsx_runtime.jsx)("span", {
-+						className: "dshModelModalityHint",
-+						children: props.t("modelImageInputHint")
-+					})]
-+				})]
-+			});
-+		}
-+		//#endregion
 +		//#region lib/types/client/ModelCatalogSearch.js
 +		/** Filter a model catalog without losing the source index used by edit actions. */
 +		function searchableModelEntries(models, query) {
@@ -242,7 +211,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		//#region lib/types/client/DeepSeekModelsEditor.js
  		/**
  		* Curated editor for the direct DeepSeek adapter's advisory model catalog.
-@@ -259,6 +477,7 @@
+@@ -379,6 +560,7 @@ window.__ModuleLoader__.load({
  		function DeepSeekModelsEditor(props) {
  			const [editing, setEditing] = (0, react.useState)(() => /* @__PURE__ */ new Map());
  			const [expanded, setExpanded] = (0, react.useState)(() => /* @__PURE__ */ new Set());
@@ -250,7 +219,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			const update = (index, key, value) => {
  				const next = props.models.map((model, at) => {
  					const copy = { ...model };
-@@ -367,12 +586,20 @@
+@@ -474,12 +656,20 @@ window.__ModuleLoader__.load({
  							children: props.t("resetModels")
  						}) : null]
  					}),
@@ -267,62 +236,12 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +						children: props.t("modelSearchEmpty")
  					}) : (0, react_jsx_runtime.jsx)("div", {
  						className: ModelsSection_module_css_default["modelList"],
--						children: props.models.map((model, index) => (0, react_jsx_runtime.jsxs)("div", {
-+						children: visibleModels.map(({ model, index }) => (0, react_jsx_runtime.jsxs)("div", {
- 							className: ModelsSection_module_css_default["modelEntry"],
- 							children: [(0, react_jsx_runtime.jsxs)("div", {
- 								className: ModelsSection_module_css_default["modelRow"],
-@@ -398,12 +625,23 @@
- 										value: typeof model["name"] === "string" ? model["name"] : "",
- 										placeholder: props.t("modelName"),
- 										"aria-label": `${props.t("modelName")} ${String(index + 1)}`,
--										disabled: props.disabled,
--										onChange: (event) => {
--											update(index, "name", event.target.value === "" ? void 0 : event.target.value);
--										}
--									}),
--									(0, react_jsx_runtime.jsx)("button", {
-+						disabled: props.disabled,
-+						onChange: (event) => {
-+							update(index, "name", event.target.value === "" ? void 0 : event.target.value);
-+						}
-+					}),
-+					(0, react_jsx_runtime.jsx)(ModelImageInputToggle, {
-+						model,
-+						field: "inputModalities",
-+						index,
-+						t: props.t,
-+						disabled: props.disabled,
-+						compact: true,
-+						onChange: (enabled) => {
-+							update(index, "inputModalities", imageInputModalities(enabled));
-+						}
-+					}),
-+					(0, react_jsx_runtime.jsx)("button", {
- 										type: "button",
- 										className: ModelsSection_module_css_default["iconButton"],
- 										"aria-label": `${props.t("modelAdvanced")} ${String(index + 1)}`,
-@@ -428,18 +666,9 @@
- 								]
- 							}), expanded.has(index) ? (0, react_jsx_runtime.jsxs)("div", {
- 								className: ModelsSection_module_css_default["modelAdvanced"],
--								children: [capacityField(model, index, "contextWindow", props.defaultContextWindow), capacityField(model, index, "maxTokens", props.defaultMaxTokens)]
-+				children: [capacityField(model, index, "contextWindow", props.defaultContextWindow), capacityField(model, index, "maxTokens", props.defaultMaxTokens)]
- 							}) : null]
- 						}, index))
--					}),
--					(0, react_jsx_runtime.jsxs)("button", {
--						type: "button",
--						className: ModelsSection_module_css_default["addModelButton"],
--						disabled: props.disabled,
--						onClick: () => {
--							props.onChange([...props.models.map((model) => ({ ...model })), { id: "" }]);
--						},
--						children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 14 }), props.t("addModel")]
- 					})
- 				]
- 			});
-@@ -557,6 +786,7 @@
+-						children: props.models.map((model, index) => (0, react_jsx_runtime.jsx)(ModelRow, {
++						children: visibleModels.map(({ model, index }) => (0, react_jsx_runtime.jsx)(ModelRow, {
+ 							model,
+ 							position: index + 1,
+ 							inputField: "inputModalities",
+@@ -620,6 +810,7 @@ window.__ModuleLoader__.load({
  			const [candidateQuery, setCandidateQuery] = (0, react.useState)("");
  			const [expanded, setExpanded] = (0, react.useState)(/* @__PURE__ */ new Set());
  			const [editing, setEditing] = (0, react.useState)(/* @__PURE__ */ new Map());
@@ -330,7 +249,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			/** Buffer key for one capacity field; the row half moves when rows do. */
  			const bufferKey = (index, field) => `${String(index)}:${field}`;
  			const editCapacity = (index, field, text) => {
-@@ -691,11 +921,19 @@
+@@ -758,13 +949,21 @@ window.__ModuleLoader__.load({
  							})
  						]
  					}),
@@ -346,46 +265,20 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +						className: ModelsSection_module_css_default["modelEmpty"],
 +						children: t("modelSearchEmpty")
  					}) : null,
--					models.map((model, index) => (0, react_jsx_runtime.jsxs)("div", {
-+					visibleModels.map(({ model, index }) => (0, react_jsx_runtime.jsxs)("div", {
- 						className: ModelsSection_module_css_default["modelEntry"],
- 						children: [(0, react_jsx_runtime.jsxs)("div", {
- 							className: ModelsSection_module_css_default["modelRow"],
-@@ -717,12 +955,23 @@
- 									value: textOf(model, "name"),
- 									placeholder: t("modelName"),
- 									"aria-label": `${t("modelName")} ${index + 1}`,
--									disabled,
--									onChange: (event) => {
--										patch(index, { name: event.target.value === "" ? void 0 : event.target.value });
--									}
--								}),
--								(0, react_jsx_runtime.jsx)("button", {
-+						disabled,
-+						onChange: (event) => {
-+							patch(index, { name: event.target.value === "" ? void 0 : event.target.value });
-+						}
-+					}),
-+					(0, react_jsx_runtime.jsx)(ModelImageInputToggle, {
-+						model,
-+						field: "input",
-+						index,
-+						t,
-+						disabled,
-+						compact: true,
-+						onChange: (enabled) => {
-+							patch(index, { input: imageInputModalities(enabled) });
-+						}
-+					}),
-+					(0, react_jsx_runtime.jsx)("button", {
- 									type: "button",
- 									className: ModelsSection_module_css_default["iconButton"],
- 									"aria-label": `${t("modelAdvanced")} ${index + 1}`,
-@@ -788,18 +1037,17 @@
- 										editCapacity(index, "maxTokens", event.target.value);
- 									}
- 								})]
-+							}), (0, react_jsx_runtime.jsx)(ModelReasoningEffortsField, {
+ 					(0, react_jsx_runtime.jsx)("div", {
+ 						className: ModelsSection_module_css_default["modelList"],
+-						children: models.map((model, index) => (0, react_jsx_runtime.jsx)(ModelRow, {
++						children: visibleModels.map(({ model, index }) => (0, react_jsx_runtime.jsx)(ModelRow, {
+ 							model,
+ 							position: index + 1,
+ 							inputField: "input",
+@@ -805,7 +1004,16 @@ window.__ModuleLoader__.load({
+ 									return next;
+ 								});
+ 								setEditing((current) => reindexOnRemove(current, index));
+-							}
++							},
++							advancedExtra: (0, react_jsx_runtime.jsx)(ModelReasoningEffortsField, {
 +								model,
 +								index,
 +								t,
@@ -393,30 +286,19 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +								onChange: (next) => {
 +									patch(index, { reasoning: next });
 +								}
- 							})]
- 						}) : null]
- 					}, index)),
--					(0, react_jsx_runtime.jsx)("button", {
--						type: "button",
--						className: ModelsSection_module_css_default["addModelButton"],
--						disabled,
--						onClick: () => {
--							onChange([...models, { id: "" }]);
--						},
--						children: t("addModel")
--					}),
- 					failure !== void 0 ? (0, react_jsx_runtime.jsx)("p", {
- 						className: ModelsSection_module_css_default["error"],
- 						children: failure
-@@ -1164,6 +1412,7 @@
++							})
+ 						}, index))
+ 					}),
+ 					(0, react_jsx_runtime.jsxs)("button", {
+@@ -1210,6 +1418,7 @@ window.__ModuleLoader__.load({
  			const [protocol, setProtocol] = (0, react.useState)(protocols[0] ?? "");
  			const [keyDraft, setKeyDraft] = (0, react.useState)("");
  			const [models, setModels] = (0, react.useState)([]);
 +			const [modelQuery, setModelQuery] = (0, react.useState)("");
  			const [busy, setBusy] = (0, react.useState)(false);
- 			const [failure, setFailure] = (0, react.useState)(void 0);
- 			/**
-@@ -1223,6 +1472,11 @@
+ 			const [listBusy, setListBusy] = (0, react.useState)(false);
+ 			(0, react.useEffect)(() => {
+@@ -1277,6 +1486,11 @@ window.__ModuleLoader__.load({
  					setBusy(false);
  				}
  			};
@@ -428,7 +310,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			return (0, react_jsx_runtime.jsxs)("div", {
  				className: ModelsSection_module_css_default["editor"],
  				children: [
-@@ -1343,6 +1597,8 @@
+@@ -1390,6 +1604,8 @@ window.__ModuleLoader__.load({
  					(0, react_jsx_runtime.jsx)(ModelListEditor, {
  						models,
  						onChange: setModels,
@@ -437,7 +319,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  						probe: {
  							settingsNs: NS$1,
  							baseURL: normalizedBaseURL,
-@@ -1362,18 +1618,27 @@
+@@ -1410,18 +1626,27 @@ window.__ModuleLoader__.load({
  						className: ModelsSection_module_css_default["advancedHint"],
  						children: hint
  					}),
@@ -477,16 +359,16 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					})
  				]
  			});
-@@ -1461,6 +1726,8 @@
- 			const [keyState, setKeyState] = (0, react.useState)(void 0);
- 			const [busy, setBusy] = (0, react.useState)(false);
+@@ -1516,6 +1741,8 @@ window.__ModuleLoader__.load({
+ 				onBusyChange
+ 			]);
  			const [failure, setFailure] = (0, react.useState)(void 0);
 +			const [modelQuery, setModelQuery] = (0, react.useState)("");
 +			const [customizedOpen, setCustomizedOpen] = (0, react.useState)(false);
  			const [committedOriginal, setCommittedOriginal] = (0, react.useState)(() => schema.getPath(namespace.user, settingsPath));
  			const [expectedRevision, setExpectedRevision] = (0, react.useState)(() => namespace.revision);
  			const root = (0, react.useMemo)(() => schema.rehydrate(namespace.schema), [namespace.schema, schema]);
-@@ -1581,6 +1848,15 @@
+@@ -1636,6 +1863,15 @@ window.__ModuleLoader__.load({
  			const inheritedModels = () => {
  				return schema.getPath(namespace.base, [...settingsPath, "models"]) ?? schema.nodeAtPath(root, [...settingsPath, "models"])?.meta.default;
  			};
@@ -502,7 +384,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			/**
  			* The curated fields of one known adapter family. The family arrives
  			* narrowed so the per-family branches below are total: an unknown namespace
-@@ -1598,6 +1874,8 @@
+@@ -1654,6 +1890,8 @@ window.__ModuleLoader__.load({
  				const catalogProps = {
  					models,
  					overridden: modelsOverridden,
@@ -511,7 +393,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					t,
  					disabled,
  					onChange: (next) => {
-@@ -1636,6 +1914,10 @@
+@@ -1692,6 +1930,10 @@ window.__ModuleLoader__.load({
  					]
  				}), props.credentialOnly === true ? null : (0, react_jsx_runtime.jsxs)("details", {
  					className: ModelsSection_module_css_default["customized"],
@@ -522,7 +404,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					children: [(0, react_jsx_runtime.jsx)("summary", {
  						className: ModelsSection_module_css_default["customizedSummary"],
  						children: t("customized")
-@@ -1712,8 +1994,22 @@
+@@ -1780,8 +2022,22 @@ window.__ModuleLoader__.load({
  					})]
  				})] });
  			};
@@ -546,7 +428,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  				children: [
  					props.hideTitle === true ? null : (0, react_jsx_runtime.jsxs)("div", {
  						className: ModelsSection_module_css_default["editorHeader"],
-@@ -1737,19 +2033,15 @@
+@@ -1805,19 +2061,15 @@ window.__ModuleLoader__.load({
  						className: ModelsSection_module_css_default["advancedHint"],
  						children: `${t("model")} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}`
  					}),
@@ -575,7 +457,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  					})
  				]
  			});
-@@ -1846,6 +2138,26 @@
+@@ -1922,6 +2174,26 @@ window.__ModuleLoader__.load({
  		function providerCopy(template, target) {
  			return template.replace("{provider}", () => providerTargetLabel(target));
  		}
@@ -602,121 +484,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		/**
  		* Render the Models section content column.
  		* @param props - slot-delivered injected dependencies.
-@@ -1875,6 +2187,8 @@
- 			const [deleteFailure, setDeleteFailure] = (0, react.useState)(void 0);
- 			const [savedTarget, setSavedTarget] = (0, react.useState)(void 0);
- 			const [declaring, setDeclaring] = (0, react.useState)(false);
-+			const [providerPickerOpen, setProviderPickerOpen] = (0, react.useState)(false);
-+			const [providerQuery, setProviderQuery] = (0, react.useState)("");
- 			const [dismissedSetup, setDismissedSetup] = (0, react.useState)(() => /* @__PURE__ */ new Set());
- 			const announceSaved = (target) => {
- 				controller.load().then(() => {
-@@ -1945,11 +2259,17 @@
- 			const anyUsable = state.rows.some(providerUsable);
- 			const configured = state.rows.filter((row) => row.configured);
- 			const configurable = state.rows.filter((row) => state.namespaces.has(row.entry.settingsNs));
--			const addable = configurable.filter((row) => !row.configured);
-+			const addable = configurable.filter((row) => !row.configured).sort((left, right) => {
-+				const leftRank = SETTINGS_PROVIDER_RANK.get(left.entry.provider) ?? Number.MAX_SAFE_INTEGER;
-+				const rightRank = SETTINGS_PROVIDER_RANK.get(right.entry.provider) ?? Number.MAX_SAFE_INTEGER;
-+				return leftRank - rightRank || left.entry.displayName.localeCompare(right.entry.displayName);
-+			});
- 			const addTarget = adding ? editing : void 0;
- 			const addNamespace = addTarget === void 0 ? void 0 : state.namespaces.get(addTarget.settingsNs);
- 			const addRow = addTarget === void 0 ? void 0 : state.rows.find((row) => row.entry.provider === addTarget.provider);
- 			const protocols = protocolChoices(state.namespaces.get("llm-pi-ai"), schema);
-+			const normalizedProviderQuery = providerQuery.trim().toLowerCase();
-+			const visibleAddable = normalizedProviderQuery.length === 0 ? addable : addable.filter((row) => `${row.entry.displayName} ${row.entry.provider}`.toLowerCase().includes(normalizedProviderQuery));
- 			return (0, react_jsx_runtime.jsxs)("div", {
- 				className: ModelsSection_module_css_default["section"],
- 				children: [
-@@ -2094,20 +2414,62 @@
- 									children: [(0, react_jsx_runtime.jsx)("span", {
- 										className: ModelsSection_module_css_default["fieldLabel"],
- 										children: t("provider")
--									}), (0, react_jsx_runtime.jsx)("select", {
--										className: `${ModelsSection_module_css_default["input"]} ${ModelsSection_module_css_default["selectInput"]}`,
--										value: addTarget.provider,
--										"aria-label": t("provider"),
--										onChange: (event) => {
--											const row = addable.find((candidate) => candidate.entry.provider === event.target.value);
--											/* v8 ignore next -- the select only lists addable rows */
--											if (row === void 0) return;
--											setEditing(targetOf(row));
--										},
--										children: addable.map((row) => (0, react_jsx_runtime.jsx)("option", {
--											value: row.entry.provider,
--											children: row.entry.displayName
--										}, row.entry.provider))
-+									}), providerPickerOpen ? (0, react_jsx_runtime.jsxs)("div", {
-+										className: "dshProviderPicker",
-+										children: [(0, react_jsx_runtime.jsx)("input", {
-+											className: "dshProviderSearch",
-+											type: "search",
-+											value: providerQuery,
-+											placeholder: t("providerSearch"),
-+											"aria-label": t("providerSearch"),
-+											autoFocus: true,
-+											onChange: (event) => {
-+												setProviderQuery(event.target.value);
-+											}
-+										}), (0, react_jsx_runtime.jsx)("div", {
-+											className: "dshProviderGrid",
-+											role: "group",
-+											"aria-label": t("provider"),
-+											children: visibleAddable.map((row) => {
-+												const active = row.entry.provider === addTarget.provider;
-+												return (0, react_jsx_runtime.jsxs)("button", {
-+													type: "button",
-+													className: "dshProviderCard",
-+													"aria-pressed": active,
-+													onClick: () => {
-+														setEditing(targetOf(row));
-+														setProviderPickerOpen(false);
-+														setProviderQuery("");
-+													},
-+													children: [(0, react_jsx_runtime.jsx)("span", {
-+														className: "dshProviderName",
-+														children: row.entry.displayName
-+													}), (0, react_jsx_runtime.jsx)("span", {
-+														className: "dshProviderRoute",
-+														children: row.entry.provider
-+													})]
-+												}, row.entry.provider);
-+											})
-+										})]
-+									}) : (0, react_jsx_runtime.jsxs)("div", {
-+										className: "dshProviderSummary",
-+										children: [(0, react_jsx_runtime.jsxs)("span", {
-+											className: "dshProviderSummaryText",
-+											children: [(0, react_jsx_runtime.jsx)("span", {
-+												className: "dshProviderName",
-+												children: addTarget.displayName
-+											}), (0, react_jsx_runtime.jsx)("span", {
-+												className: "dshProviderRoute",
-+												children: addTarget.provider
-+											})]
-+										}), (0, react_jsx_runtime.jsx)("button", {
-+											type: "button",
-+											className: "dshProviderChange",
-+											onClick: () => {
-+												setProviderPickerOpen(true);
-+											},
-+											children: t("changeProvider")
-+										})]
- 									})]
- 								}),
- 								(0, react_jsx_runtime.jsx)(ProviderEditor, {
-@@ -2159,6 +2521,8 @@
- 									setDeclaring(false);
- 									setAdding(true);
- 									setEditing(targetOf(first));
-+									setProviderPickerOpen(true);
-+									setProviderQuery("");
- 								},
- 								children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 14 }), t("add")]
- 							}), state.namespaces.has("llm-pi-ai") && (0, react_jsx_runtime.jsxs)("button", {
-@@ -2268,7 +2632,7 @@
+@@ -2429,7 +2701,7 @@ window.__ModuleLoader__.load({
  		}
  		//#endregion
  		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-settings-models/src/client/DeepSeekOnboardingDialog.module.css.mjs
@@ -725,7 +493,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		const tagId$1 = "@deepseek-ai/dsh-client-ui-settings-models/DeepSeekOnboardingDialog.module.css";
  		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
  			const tag = document.createElement("style");
-@@ -2294,35 +2658,50 @@
+@@ -2455,9 +2727,24 @@ window.__ModuleLoader__.load({
  		function assertNever$1(_value) {
  			throw new Error("unexpected DeepSeek onboarding state");
  		}
@@ -752,8 +520,9 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  		* @param props - settings-shell owner state and Models feature dependencies.
  		* @returns the onboarding modal or null when onboarding needs no intervention.
  		*/
- 		function DeepSeekOnboardingDialog(props) {
- 			const { complete, controller, useModels, operations, schema, t } = props;
+@@ -2465,7 +2752,16 @@ window.__ModuleLoader__.load({
+ 			const { complete, controller, useModels, operations, schema, t, renderSlot, automatic, explicit = false } = props;
+ 			const [apiKey, setApiKey] = (0, react.useState)(explicit);
  			const state = useModels((snapshot) => snapshot);
 -			const readiness = onboardingReadiness(state);
 +			const [selectedProvider, setSelectedProvider] = (0, react.useState)("deepseek-official");
@@ -767,51 +536,21 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
 +			const selected = choices.find((choice) => choice.provider === selectedProvider) ?? choices[0];
 +			const anyUsable = state.rows.some(providerUsable);
  			(0, react.useEffect)(() => {
- 				if (state.status === "idle") controller.load();
- 			}, [controller, state.status]);
- 			(0, react.useEffect)(() => {
--				if (readiness.kind === "adapter-absent" || readiness.kind === "provider-ready" || readiness.kind === "unavailable") complete();
--			}, [complete, readiness.kind]);
--			switch (readiness.kind) {
--				case "loading":
--				case "adapter-absent":
--				case "provider-ready":
--				case "unavailable": return null;
--				case "credential-missing": break;
--				/* v8 ignore next -- every current readiness variant is handled above */
--				default: return assertNever$1(readiness);
--			}
--			const row = state.rows.find((candidate) => candidate.entry.provider === "deepseek-official" && candidate.entry.settingsNs === "llm-deepseek" && candidate.entry.settingsPath.length === 0);
--			const namespace = state.namespaces.get("llm-deepseek");
--			/* v8 ignore next 2 -- credential-missing is derived only from this exact joined row. */
--			if (row === void 0 || namespace === void 0) return null;
-+				if (anyUsable || state.status === "error" || state.status === "ready" && (!state.writable || choices.length === 0)) complete();
-+			}, [anyUsable, choices.length, complete, state.status, state.writable]);
-+			if (state.status === "idle" || state.status === "loading" || anyUsable || selected === void 0 || !state.writable) return null;
-+			const row = selected.row;
-+			const namespace = state.namespaces.get(row.entry.settingsNs);
-+			if (namespace === void 0) return null;
- 			const finishCredential = (changed) => {
- 				if (!changed) {
- 					complete();
-@@ -2660,6 +3039,8 @@
- 			deleting: "Deleting {provider}…",
- 			add: "Add provider",
+ 				if ((automatic || explicit) && state.status === "idle") controller.load();
+ 			}, [
+@@ -2838,6 +3134,8 @@ window.__ModuleLoader__.load({
+ 			addCatalogExhausted: "Every catalog provider is already configured.",
+ 			addCustomUnavailable: "No API protocol is available to declare.",
  			provider: "Provider",
 +			providerSearch: "Search providers",
 +			changeProvider: "Change",
  			close: "Close",
  			cancel: "Cancel",
  			apply: "Apply",
-@@ -2691,7 +3072,16 @@
- 			contextWindowPlaceholder: "Uses the provider default",
- 			maxTokens: "Max output tokens",
- 			maxTokensPlaceholder: "Uses the provider default",
--			modelAdvanced: "Capacities",
-+			modelAdvanced: "Model settings",
-+			modelImageInput: "Image input",
-+			modelImageInputShort: "Vision",
-+			modelImageInputHint: "Declare that this model accepts images; the endpoint must support them.",
+@@ -2875,6 +3173,12 @@ window.__ModuleLoader__.load({
+ 			modelInputTypes: "Input types",
+ 			modelInputText: "Text",
+ 			modelInputImage: "Image",
 +			modelSearch: "Search models",
 +			modelSearchEmpty: "No matching models.",
 +			modelReasoningLevels: "Reasoning effort levels",
@@ -821,7 +560,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			addModel: "Add model",
  			removeModel: "Delete model",
  			modelsEmpty: "No models will be shown in the selector. Unlisted IDs can still be sent directly.",
-@@ -2740,10 +3130,14 @@
+@@ -2923,10 +3227,14 @@ window.__ModuleLoader__.load({
  			welcomeBody: "DeepSeek Harness 0.1 remains in testing for Harness developers. Many areas need further improvement, and we welcome feedback from the developer community. DeepSeek Harness's core plugins and foundational APIs will continue to evolve rapidly over the coming months.\n\nWe look forward to exploring the limits of intelligence with developers around the world, building on open-source, open, reusable, and composable infrastructure. We welcome Harness developers everywhere to join the DSH plugin ecosystem.",
  			welcomeContinue: "Continue",
  			welcomeError: "The acknowledgement could not be saved. Please try again.",
@@ -839,24 +578,10 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			onboardingSaving: "Saving…",
  			keyRequired: "Enter an API key to continue."
  		};
-@@ -2763,6 +3157,8 @@
- 			deleting: "正在删除 {provider}…",
- 			add: "添加提供方",
- 			provider: "提供方",
-+			providerSearch: "搜索提供方",
-+			changeProvider: "更换",
- 			close: "关闭",
- 			cancel: "取消",
- 			apply: "保存",
-@@ -2794,7 +3190,16 @@
- 			contextWindowPlaceholder: "使用提供方默认值",
- 			maxTokens: "最大输出 token 数",
- 			maxTokensPlaceholder: "使用提供方默认值",
--			modelAdvanced: "容量",
-+			modelAdvanced: "模型设置",
-+			modelImageInput: "支持图片输入",
-+			modelImageInputShort: "视觉",
-+			modelImageInputHint: "声明该模型可接收图片；请确认接口实际支持。",
+@@ -2990,6 +3298,12 @@ window.__ModuleLoader__.load({
+ 			modelInputTypes: "输入类型",
+ 			modelInputText: "文本",
+ 			modelInputImage: "图片",
 +			modelSearch: "搜索模型",
 +			modelSearchEmpty: "没有找到匹配的模型。",
 +			modelReasoningLevels: "推理等级",
@@ -866,7 +591,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.
  			addModel: "添加模型",
  			removeModel: "删除模型",
  			modelsEmpty: "模型选择器中将不显示任何模型；目录外 ID 仍可直接发送。",
-@@ -2843,10 +3248,14 @@
+@@ -3038,10 +3352,14 @@ window.__ModuleLoader__.load({
  			welcomeBody: "DeepSeek Harness 目前的 0.1 版本仍处在面向 Harness 开发者进行测试的阶段，还有许多地方需要持续改进和打磨，希望听取广大开发者的反馈建议。预计 DeepSeek Harness 的核心插件以及基础 API 都会在接下来的一段时间内快速迭代、持续演化。\n\n我们期待与全球开发者一起，在开源、开放、可复用、可组合的基础设施之上，共同探索智能上限。欢迎全球 Harness 开发者加入 DSH 插件生态。",
  			welcomeContinue: "继续",
  			welcomeError: "暂时无法保存确认状态，请重试。",

@@ -24,12 +24,16 @@ const indexPath = path.join(destinationDirectory, 'index.html')
 const manifestPath = path.join(destinationDirectory, 'manifest.webmanifest')
 
 /**
- * Swap the Harness favicon link for the desktop's own.
+ * Swap the Harness favicon links for the desktop's own.
  *
  * The href is matched rather than pinned: 0.1.2-alpha.1 moved it from
- * `/favicon.svg` to `./favicon.svg`, and either is the same link. The tag
- * itself still has to be there exactly once — a frontend that stopped
- * declaring one is a change worth failing on, not one to paper over.
+ * `/favicon.svg` to `./favicon.svg`, and either is the same link. Upstream
+ * 0.2.0 split it into two scheme-gated links (`favicon-dark.svg` /
+ * `favicon.svg` with `media=`), so the rule is "exactly one icon target",
+ * not "exactly one tag": every icon link is replaced by the single desktop
+ * link, which always wins for both schemes because the desktop icon is
+ * scheme-independent. *Zero* icon links is still a failure — a frontend that
+ * stopped declaring one is a change worth failing on, not one to paper over.
  * @param contents - index.html source.
  * @param file - path shown in the failure message.
  * @returns index.html with the desktop icon link.
@@ -37,13 +41,15 @@ const manifestPath = path.join(destinationDirectory, 'manifest.webmanifest')
 function replaceIconLink(contents, file) {
   const desktop = '<link rel="icon" type="image/png" href="/dsh-desktop-logo.png" />'
   if (contents.includes(desktop)) return contents
-  const matches = contents.match(/<link rel="icon"[^>]*>/gu) ?? []
-  if (matches.length !== 1) {
+  const links = [...contents.matchAll(/<link rel="icon"[^>]*\/?>(?:<\/link>)?/gu)].map((m) => m[0])
+  if (links.length === 0) {
     throw new Error(
-      `Could not update DSH Desktop branding in ${file}: expected one icon link, found ${String(matches.length)}`
+      `Could not update DSH Desktop branding in ${file}: expected at least one icon link, found none`
     )
   }
-  return contents.replace(matches[0], desktop)
+  let replaced = contents
+  for (const link of links) replaced = replaced.replace(link, desktop)
+  return replaced
 }
 
 /**
