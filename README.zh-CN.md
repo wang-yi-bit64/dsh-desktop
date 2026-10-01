@@ -38,7 +38,7 @@
 - **应用内日志查看器** ✅ —— `frontend/logs.html` 读取 `harness.log` / `desktop.log` / `app.log` 的尾部（经 `logs_read`），显示文件大小，**在只显示尾部时明确标记**，并提供诊断导出与打开日志目录的入口。
 - **无头 CLI（`dsh-host-cli`）—— 仓库内使用，不作为发布产物** ✅ —— 与桌面壳驱动的是同一份生命周期逻辑，但作为独立命令行二进制存在：`start` / `stop` / `status` / `tail` / `probe` / `doctor`，无 GUI、不依赖 Tauri。它是 **INV-6**（「主链路必须能在命令行里独立复现」）的兑现载体，也是 `scripts/smoke-launch.mjs`（L1/L2 冒烟）与 `scripts/fault-inject.mjs`（三平台孤儿清理硬门禁）的执行对象，两者都从 `target/debug/` 取二进制。**它不作为 Release 资产发布。** 发布通道自 v0.4.0 存在，已于 2026-09-24 退役：本仓之外**零消费者**，且归档**从来就不自足**——它不含 runtime，没有已组装的资源树时 `start` 必然退出码 `3`（用 `--resource <RES>` 指过去）。退役**未触动** crate 本体、打包脚本及其可证伪的打包判据，只归档了上传步骤与它的演练。理由与恢复触发条件见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §5。
 
-### 已归档 / 计划中（勿对外宣称可用）
+### 已归档（曾实现，现已删除——勿宣称可用）
 
 - **插件分级隔离 2.0 (Tier 0/1/2)** 🗄️ **已归档（2026-09-10）** —— Tier 0/1/2 分级沙箱宿主（`plugin-worker-host.mjs`）、其 JSON-RPC 2.0 双向通信与熔断断路器（`plugin_worker.rs`）**曾经实现且有单测**，但**从来没有任何调用方**：Node 侧 `PluginWorkerClient` 无消费者，Rust 侧返回的是可辨识的 `ISOLATION_NOT_WIRED` 错误而非伪造成功。更关键的是它**根本不在插件挂载路径上**（真实挂载发生在 Harness 进程内的官方 Cordis 体系）。现已整体删除而非保留：一个既不被编译、不被测试、又够不着它所声称守护的加载器的模块，只会静默腐烂。因此**当前生效的插件防护仅为上文的进程内守护**——同进程崩溃仍可能带走 Harness，本仓库不得作相反表述。设计文档归档于 [`docs/archive/plugin_isolation_architecture.md`](docs/archive/plugin_isolation_architecture.md)。
 - **多模型工具网关 2.0 (`dsh-model-gateway`)** 🗄️ **已归档（2026-09-10）** —— Schema 校验、`anyOf`/`oneOf` 降级净化、多厂商（OpenAI/DeepSeek/Gemini/Claude）方言适配曾实现并测试通过，但无任何运行时消费者。该 crate 已**从 workspace 整体移除**（目录 + members + `[workspace.dependencies]`），设计文档归档于 [`docs/archive/model_gateway_design.md`](docs/archive/model_gateway_design.md)，其中仍保留恢复它的判据。
@@ -66,6 +66,29 @@ npm run build
 # 或直接调用
 npm run tauri build
 ```
+
+## npm 脚本
+
+所有动作都经 `npm run` 驱动。下表是**入口地图**，不是完整清单；逐脚本的权威清单与每道门禁「到底在守什么」见 [`docs/commands.md`](docs/commands.md)。
+
+| 命令 | 作用 | 何时使用 |
+|---|---|---|
+| `npm run dev` / `npm run build` | 先把 Harness 运行时组装进 `src-tauri/resources/`，再启动开发调试环境 / 产出安装包 | 日常开发 · 出正式产物 |
+| `npm run tauri` | Tauri CLI 原样透传（`npm run tauri -- build --bundles nsis`） | 需要 `build` 未暴露的参数时 |
+| `npm run verify:fast` / `npm run verify:full` | 本地门禁编排：从本文件**自动发现**的全部 `*:self-test` + 秒级静态门禁 + 无头 `cargo test`；`full` 额外含 doc-test | 每次提交前；打 tag 前用 `verify:full` |
+| `npm run verify:sentinels` | 两条**需联网**的真检查（`verify:drift`、`verify:update-channel`）成组。它们因**外部状态**而非你的代码变红，这正是它们被排除在 `verify:fast` 之外的原因 | 每周例行，或规划上游升级时 |
+| `npm run verify:all` | `verify:full` + `verify:sentinels`：本仓本地能验的全部 | 发布前最后一次本地核验 |
+| `npm run verify:version` | 版本号在 `package.json` / `tauri.conf.json` / `Cargo.toml` 三处一致（tag 构建时另校验 tag ↔ 版本） | 打 tag 前——不一致会让所有已安装用户收到错误版本 |
+| `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L1 + L2（L2 需已构建的壳二进制，缺失时自行 SKIP） | 任意机器跑 `smoke:headless`；`npm run build` 之后跑 `smoke` |
+| `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因 | 改动进程 / 生命周期相关代码后 |
+| `npm run size:report` | 壳二进制、安装包与资源树三口径体积 | 构建后需要对外给出体积数字时 |
+| `npm run prepare:harness` | 只组装运行时（`-- --dsh-target=alpha` 选通道，`-- --check` 只校验树） | 需要真实资源树才能跑 `cargo build` / `cargo test` 时 |
+| `npm run harness:lockfile` | 重新生成某目标的提交式 lockfile 与 inputs 对（`-- --dsh-target=next`） | 版本锚点 / 补丁集 / vendored 包变更后 |
+| `npm run check:patch-applicability` / `npm run report:patches` | 上游升级预检（哪些补丁仍适用，约 4 MB 下载）与补丁健康度报告 | 升级上游期间；产出 `MANIFEST.json` 的构建之后 |
+| `npm run package:cli` / `npm run verify:cli-package` | CLI 打包链路：产物命名、`.sha256` 边车、回读校验、真执行一次 | 需要本地 `dsh-host-cli` 归档时（它**不是**发布产物） |
+| `npm run version:show` / `version:bump` / `changelog:notes` / `changelog:write` | 版本查看与推进（依 Conventional Commits 判定）以及变更日志生成 | 发版流程中 |
+
+> **脚本名是对外契约——只新增，不改义。** `.github/workflows/*`、`src-tauri/tauri.conf.json`（`beforeDevCommand` / `beforeBuildCommand`）、`AGENTS.md`、`docs/` 与 `scripts/verify-fast.mjs` 都**按名字**引用脚本，且 `verify:fast` 还会**自动收集所有以 `:self-test` 结尾的脚本**。因此改名从不只是本地改动：它要么让某道门禁从 fast 档里静默消失，要么直接打断某个工作流。新能力请用新名字。
 
 ## 仓库与 Workspace 结构
 
@@ -127,9 +150,8 @@ docs/                   # 架构设计、契约定义与技术方案
 
 ### 后续计划（尚未开工）
 
-- **插件卸载 / 禁用** 🕓 **刻意后置** —— 见上方功能表。这一项在等**上游的停用（disable）语义**，不是等壳层开发：眼下只有「冷启动被静默还原」与「不可逆删除」两种行为可选。
 - **安全模式界面指示器** 🕓 **刻意后置** —— 安全模式生效时，壳层目前**不给用户任何可见提示**。上游的做法是往 Harness 页注入一条横幅（带「卸载插件」/「退出安全模式」两个动作）。这项能力**不是遗漏**：它刻意推迟到壳层其余部分稳定之后再做，好让注入机制在已定型的地基上一次性建好，而不是事后回补。安全模式本身当前工作正常（见「已接线能力」），待补的只是它的「可见性」。
-- **诊断包落地**：在 `dsh-host-cli doctor` 现有归因能力之上补齐脱敏打包（日志 + 归因结论 + 环境快照 + `MANIFEST.json`）。
+- **插件卸载 / 禁用** 🕓 **刻意后置** —— 见上方功能表。这一项在等**上游的停用（disable）语义**，不是等壳层开发：眼下只有「冷启动被静默还原」与「不可逆删除」两种行为可选。
 
 ## 测试
 
@@ -168,6 +190,8 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 | `npm run check:patch-applicability` / `--target=<v>` | 上游升级预检：仓库内补丁在目标版本上哪些仍可用、在哪一段 hunk 断裂。约 4MB 下载，不必组装 300MB。零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器）。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L2 GUI 启动。 |
+| `npm run verify:fast` / `npm run verify:full` | 编排器自身：它从 `package.json` **自动发现**全部 `*:self-test`（不手抄清单），并在**扫出 0 项时判红**——本仓已两次出现「扫描器被静默清空却一路绿灯」。`fast` = 全部自检 + 秒级静态门禁 + `cargo test --tests`；`full` 额外含 doc-test。 |
+| `npm run verify:sentinels` / `npm run verify:all` | 两条**联网**哨兵（`verify:drift`、`verify:update-channel`）成组；它们会因外部状态红，故刻意不在 `verify:fast` 档内。`verify:all` = `verify:full` + `verify:sentinels`，即发布前本仓本地能查的全部。 |
 
 `verify:shell-pages` **不**替代肉眼看页面：它不渲染、不布局、不跑 CSS。它只回答一个很窄的问题——页面脚本加载完之后，该挂的监听是不是都挂上了。
 

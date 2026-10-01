@@ -67,6 +67,29 @@ npm run build
 npm run tauri build
 ```
 
+## npm Scripts
+
+Everything is driven through `npm run`. The table below is the **entry-point map**, not an exhaustive list; the authoritative per-script list, with the reasoning behind each gate, is [`docs/commands.md`](docs/commands.md).
+
+| Command | What it does | When to run it |
+|---|---|---|
+| `npm run dev` / `npm run build` | Assemble the Harness runtime into `src-tauri/resources/`, then start the app in dev mode / produce an installer | Daily development · producing a release artifact |
+| `npm run tauri` | Raw Tauri CLI passthrough (`npm run tauri -- build --bundles nsis`) | When you need a flag that `build` does not expose |
+| `npm run verify:fast` / `npm run verify:full` | The local gate orchestrator: every `*:self-test` discovered from this file, the seconds-scale static gates, and the headless `cargo test` run. `full` adds doc-tests | Before every commit; `verify:full` before tagging |
+| `npm run verify:sentinels` | The two **live network** checks (`verify:drift`, `verify:update-channel`), grouped because they go red on *external* state rather than on your code — which is exactly why they are kept out of `verify:fast` | Weekly, or while planning an upstream bump |
+| `npm run verify:all` | `verify:full` + `verify:sentinels`: everything this repository can verify locally | Immediately before a release |
+| `npm run verify:version` | Version consistency across `package.json` / `tauri.conf.json` / `Cargo.toml` (plus tag ↔ version on a tag build) | Before tagging — a mismatch ships a wrong version to every installed user |
+| `npm run smoke:headless` / `npm run smoke` | Layered smoke: L1 headless (spawn → ready → serving → clean exit, no orphans) and L1 + L2 (L2 launches the GUI and skips itself when no built binary exists) | `smoke:headless` on any machine; `smoke` after `npm run build` |
+| `npm run fault-inject` | Orphan-process cleanup and exit-code attribution against a real `dsh-host-cli` binary | After touching process / lifecycle code |
+| `npm run size:report` | Shell binary, installer and resource-tree size — three distinct measurements | After a build, whenever size numbers are quoted |
+| `npm run prepare:harness` | Assembles the bundled runtime only (`-- --dsh-target=alpha` picks a channel, `-- --check` merely validates the tree) | Before `cargo build` / `cargo test` when you need the real resource tree |
+| `npm run harness:lockfile` | Regenerates the committed lockfile + inputs pair for a target (`-- --dsh-target=next`) | After changing the pinned DSH version, the patch set or the vendored packages |
+| `npm run check:patch-applicability` / `npm run report:patches` | Upstream-bump pre-flight (which patches still apply; ~4 MB download) and the patch health report | During an upstream upgrade; after a build that produced `MANIFEST.json` |
+| `npm run package:cli` / `npm run verify:cli-package` | CLI packaging lane: artifact naming, `.sha256` sidecar, read-back verification, one real execution | When you need a local `dsh-host-cli` archive (it is **not** a published release asset) |
+| `npm run version:show` / `version:bump` / `changelog:notes` / `changelog:write` | Version inspection and bumping (Conventional-Commits driven) plus changelog generation | During a release |
+
+> **Script names are an external contract — add new ones, do not repurpose existing ones.** `.github/workflows/*`, `src-tauri/tauri.conf.json` (`beforeDevCommand` / `beforeBuildCommand`), `AGENTS.md`, `docs/` and `scripts/verify-fast.mjs` all reference scripts **by name**, and `verify:fast` additionally **auto-discovers every script whose name ends in `:self-test`**. Renaming an existing script is therefore never a local change: it either drops a gate out of the fast tier silently or breaks a workflow. New capabilities get a new name.
+
 ## Repository & Workspace Layout
 
 ```text
@@ -167,6 +190,8 @@ Some of the claims in this file cannot be checked by the compiler, because the t
 | `npm run check:patch-applicability` / `--target=<v>` | Pre-flight for an upstream bump: which tracked patches still apply to a target version, and at which hunk they break. ~4 MB download, no 300 MB assembly. Zero external binaries (Node `fetch` + `zlib` + bundled tar reader). |
 | `npm run fault-inject` | Orphan-process cleanup and exit-code attribution against a real `dsh-host-cli` binary (10 assertions). |
 | `npm run smoke:headless` / `npm run smoke` | Layered smoke: L1 headless (spawn → ready → serving → clean exit, no orphans) and L2 GUI launch. |
+| `npm run verify:fast` / `npm run verify:full` | The orchestrator itself: it **discovers** every `*:self-test` from `package.json` instead of hand-copying a list, and **fails when it finds none** — a scanner that silently empties itself has twice passed for green in this repository. `fast` = every self-test + the seconds-scale static gates + `cargo test --tests`; `full` adds doc-tests. |
+| `npm run verify:sentinels` / `npm run verify:all` | The two live network sentinels (`verify:drift`, `verify:update-channel`) grouped, deliberately outside `verify:fast` because they go red on external state; `verify:all` = `verify:full` + `verify:sentinels`, i.e. everything this repository can check locally before a release. |
 
 `verify:shell-pages` does not replace looking at the pages: it does not render, lay out, or run CSS. It answers one narrow question — after a page's script finishes loading, is every listener actually attached.
 

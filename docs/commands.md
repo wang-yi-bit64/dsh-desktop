@@ -24,6 +24,14 @@ npm run tauri build
 npm run verify:fast
 npm run verify:full
 
+# 0b. 组合入口（复用既有单项，不新增清单产地）：
+#     verify:sentinels = 两条**真检查**（upstream drift / update channel）成组。
+#       它们刻意不在 fast 档内——会因外部状态红，属哨兵而非快反馈（见上）。
+#     verify:all = verify:full + verify:sentinels，即「本仓本地能查的全部」，
+#       用于发布前一次性核验。
+npm run verify:sentinels
+npm run verify:all
+
 # 1. 快速无头测试门禁（无需 GUI，无需组装资源包 - INV-6）
 cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 
