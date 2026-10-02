@@ -187,6 +187,7 @@
 - 动作：state.rs 的 15 处按「能否恢复」分类——可恢复的转成 IpcEnvelope 的稳定错误码（锁中毒不再 panic 掉整个壳）；确不可恢复的用带归因的 expect。
 - 判据：src-tauri 生产路径 unwrap 计数为 0，或每一处都有就地注释说明为何不可能失败。
 - 守卫：verify:ipc-surface 或新守卫断言计数不回升。
+- **✅ 已落地（2026-10-02，第四批）**：`src-tauri/src/poison.rs` 新建（`lock_or_recover` / `try_lock_or_recover`，3 项单元测试含「恢复后数据仍可读」「中毒不被误判成忙」）；`state.rs` 15 处 `lock().unwrap()` 与 3 处 `try_lock()` 全部改走它，顺带修掉「中毒被误判成 WouldBlock → 静默丢掉全部后续 launch 事件」的同族缺陷（§7.1 规则 3）；`mobile_bridge.rs` bind 地址改带归因 expect、目标 URL 的 query 改 match 取 Option、listener 两处中毒静默降级改恢复；`crates/dsh-host/src/safe_mode.rs` 的 manifest 序列化 unwrap 改 io::Error 传播。**与原动作的偏差（判据层面的诚实说明）**：锁中毒没有转成 IpcEnvelope 错误码——`snapshot` / `logs_tail` / `harness_port` 这类方法是同步访问器、不在命令返回值上，且中毒是内部不变量破损而非用户可处置的领域错误；正确处置是恢复 guard + error 日志（与托盘 / 菜单降级日志同口径）。判据由新守卫 `verify:unwrap-hygiene`（U1 生产段零 unwrap / U2 扫出数>0，16 项可证伪自测含「以修复前真实形态为夹具必须报红」）钉住，npm script 与 docs/commands.md §6b 一并登记，随 `:self-test` 自动发现进 verify:fast。
 
 **S4 退出判据**：fast 档 ≤60s；审计清单为 0 遗漏；state.rs 无裸 unwrap。
 
@@ -301,7 +302,7 @@
 | AGENTS.md 体积 | 160,148 B | ✅ **已达成 32.7 KB**（原定 ≤32,768 B；因后续仍需修正 MSRV/端点两行事实，判据放宽为 **≤40 KB**——真正的硬约束是「小于 64 KB 指令预算且规则全可读」，40 KB 留 24 KB 余量） |
 | 无守卫覆盖的层（文档常量 / 游离配置） | 文档常量层已由 verify:doc-facts 覆盖（2026-09-30）；游离配置层基线已清空（S3-3） | 0 类 |
 | 门禁快档时长 | ✅ verify:fast 温热实测 43s（S4-1/S4-2） | verify:fast ≤60s |
-| src-tauri 生产 unwrap | 29（其中 state.rs 15） | 0 或逐条有理由 |
+| src-tauri 生产 unwrap | 29（其中 state.rs 15）；**2026-10-02 实测 0**（src-tauri 与 dsh-\* 的 src 生产段共 12,704 行，逐行由 verify:unwrap-hygiene 盯着） | 0 或逐条有理由 ✅ **已达成** |
 | dsh-host 外部消费者 | 0 | ≥1 |
 
 **完成线（照 ADR-047，写进 README 顶部）**：每个重大决策都有 ADR；每层都有陌生人可跑的验证；诚实复盘存在。三条都满足即项目完成，不再追加目标——**本计划本身也不得成为追加目标的借口**。
@@ -361,6 +362,7 @@
 | S3-3 action 全量钉 SHA | ⏳ 未做 | 新守卫以基线表容纳 7 个预先存在的浮动 ref（守卫每次运行都会打印提示）；空表才是目标状态 |
 | PR Agent 触发面第③条（ADR-059） | ✅ 已落地（第四批） | 线上事故后增补：run #9（PR #2，OWNER 的非命令评论）失败于「PR Agent action step」，日志 `Unknown command: |`。根因：钉死的 action SHA 只钉住 action.yaml + Dockerfile，Dockerfile 是 `FROM pragent/pr-agent:github_action` **浮动镜像标签**，镜像是旧版（行号证据：`Unknown command` 日志 363 / 源码 381；`Applying repo settings` 217 / 241）。旧镜像把 `## …` 开头的评论按 shell 规则词法分析、`#` 当注释起点，第一个 token 变成表格的 `|` → 未知命令 → 退出 1。修法：`issue_comment` 增加「评论以 `/review` `/improve` `/describe` `/ask` 开头」条件（`startsWith`，**不能用 contains**——镜像按第一个 token 解析，`please /review this` 也会失败）。actionlint exit 0 + 14/14 触发矩阵通过。**仍未验证**：`/review` 与 `pull_request` 路径能否真出评审（模型配置在线才能验） |
 | Pullfrog 停用（ADR-058，修订 ADR-054 决策 2） | ✅ 已落地（第三批） | 维护者指令「停用 pullfrog、启用 pr-agent」。先回答语义问题：**删除 pullfrog.yml 即停用**——GitHub Actions 只从 `.github/workflows/` 加载，UI 的 Disable 开关是服务器端状态、不进仓库也不可被门禁看见。`.github/workflows/pullfrog.yml` 已删除；pr-agent.yml **零改动即在役**（不是又一处待接线）：actionlint 1.7.7（SHA256 与官方 checksums 核对一致）对删除后的 5 个工作流 exit 0；verify:github-config 实跑「9 YAML / 5 工作流 / 31 uses / 错放 0」、自检 12 项过；SECURITY.md 密钥暴露面表删去 pullfrog 的 13 key 行并加退役注记；ADR-058 入库，索引 / ADR-054 修订段 / AGENTS.md ADR 计数（43→44）同步 |
+| S4-4 收敛 src-tauri 生产 unwrap（治 D10） | ✅ 已落地（第四批，2026-10-02） | `src-tauri/src/poison.rs` 新建：`lock_or_recover` / `try_lock_or_recover` 两个中毒恢复原语 + 3 项单元测试（先制造真实 poison 再断言恢复，避免装饰性绿）；`state.rs` 15 处 `lock().unwrap()` 与 3 处 `try_lock()` 全改走它（同步访问器不转错误码的理由记在 S4-4 条目内）；`mobile_bridge.rs` bind 地址改带归因 expect、query 构造改 match、listener 两处「中毒静默降级」改恢复；`crates/dsh-host/src/safe_mode.rs` 序列化 unwrap 改 io::Error 传播。新守卫 `verify:unwrap-hygiene`：U1 生产段零 `.unwrap()`（src-tauri/src 与 crates 各 crate 的 src；测试段 / 注释 / 字符串不计）、U2 扫出数>0，16 项自测（含「修复前的 `self.inner.lock().unwrap()` 必须报红」「同一处改 expect 必须转绿」「CRLF 与 LF 一致」）；npm script 与 docs/commands.md §6b 登记，随 `:self-test` 自动发现进 verify:fast（快档 27 → 28 步） |
 
 **本轮端到端验证**：23 个既有门禁全部 exit 0（含 verify:claims / verify:plan-facts / verify:release-workflow / verify:release-assets / verify:harness-entry）；actionlint 1.7.7（SHA256 与官方 checksums 核对通过）对 6 个工作流 **exit 0**；`updater-manifest --self-test` 16 项通过。
 
@@ -372,10 +374,10 @@
 
 | 条目 | 状态 | 现场证据（2026-09-30） |
 |------|------|----------------------|
-| S4-3「扫出数为 0」断言普查 / S4-4 state.rs 的 15 处生产 unwrap | ❌ 未做 | 快档已分档（S4-1/S4-2 ✅）；普查与 unwrap 收敛未开工 |
+| S4-3「扫出数为 0」断言普查 | ❌ 未做 | 快档已分档（S4-1/S4-2 ✅）；**S4-4 已于 2026-10-02 销账**（见 §11 第四批），普查仍未开工：新守卫 verify:unwrap-hygiene 自带 U2「扫出数>0」断言，但守卫全集（package.json 里的 verify 脚本）尚未逐条过一遍「匹配模式变更后是否静默归零」 |
 | S5-1~S5-4 补丁 retireWhen 减法 / UI 补丁专项 / 补丁数趋势 | ❌ 未做 | 27 个补丁仍两套并存（C3 留、C7 冻结：alpha 休眠不再恢复维护，减法只针对 next 线） |
 | S6-1~S6-5 dsh-host 零 Tauri 承诺 / CLI recover / 性质测试 / 可证伪承诺（S6-5 crate 发布已裁决：不发） | ❌ 未做 | C4 已裁决不发 crates.io（ADR-044 清单追加），S6-5 仅剩收尾记录 |
 
-**合计**：本计划约 30 个条目。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档；**第三批再落地 1 个**（Pullfrog 停用，ADR-058）。**S 阶段剩余：S4-3、S4-4、S5 全部、S6 全部。**
+**合计**：本计划约 30 个条目。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档；**第三批再落地 1 个**（Pullfrog 停用，ADR-058）；**第四批再落地 1 个**（S4-4，2026-10-02：state.rs 15 处锁 unwrap 收敛为中毒恢复 + verify:unwrap-hygiene 守卫）。**S 阶段剩余：S4-3、S5 全部、S6 全部。**
 
 > **口径（2026-09-30 发布后更新）**：D1 在 **rc 通道已闭环**——v0.7.1-rc.1 发布后端点实测返回 `0.7.1-rc.1`，13/13 资产完整、`prerelease: true`。两条诚实边界：① **alpha 通道零投递是裁定结果**（C7 休眠，ADR-056），不再是待办；② **存量安装不会自愈**——端点是构建期注入的，v0.7.1-rc.1 之前的所有构建仍指向旧端点（`releases/latest` 排除预发布，停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。同一口径适用于所有依赖真实发布的条目。

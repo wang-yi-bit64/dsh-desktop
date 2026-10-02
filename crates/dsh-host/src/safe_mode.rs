@@ -98,7 +98,14 @@ impl SafeModeManager {
                 }
             }
         });
-        let manifest_str = format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap());
+        // `manifest` 是本函数刚用 json! 构造的 Value，序列化不可能失败；一旦
+        // 将来改坏了形状，按 io::Error 如实上报而不是 panic（S4-4：确不可恢复
+        // 才用带归因的 expect，其余走错误传播）。
+        let manifest_str = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?
+        );
 
         write_if_changed(&directory.join("package.json"), &manifest_str)?;
         if options.isolate_patch_layer {

@@ -18,6 +18,7 @@ mod logging;
 mod menu;
 mod mobile_bridge;
 mod navigation;
+mod poison;
 mod safe_mode;
 mod state;
 mod tray;

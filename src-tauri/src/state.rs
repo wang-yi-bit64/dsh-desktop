@@ -16,7 +16,7 @@
 //! 每次状态变化都会 `app.emit("harness://status", snapshot)`——只有本地
 //! 静态页能收到（远程 harness 页没有 remote capability，任务 1.4）。
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -27,6 +27,7 @@ use dsh_host::logs::{FailureCause, LogLine, LogRing, LogSource};
 use dsh_host::paths::Layout;
 use dsh_host::token::LaunchEndpoint;
 
+use crate::poison;
 use crate::window;
 
 /// 状态变化事件名（前端 `listen` 用）。
@@ -129,9 +130,22 @@ impl HarnessSupervisor {
         }
     }
 
+    /// 加锁；锁中毒时恢复 guard 而不是 panic（D10 / S4-4，见 [`crate::poison`]）。
+    ///
+    /// 这里**不能**用 `lock().unwrap()`：poison 会让本结构此后每一次加锁都
+    /// panic，而每个 IPC 命令都要经过这些方法——一次事故会升级成整个壳瘫痪。
+    fn lock_inner(&self) -> MutexGuard<'_, SupervisorInner> {
+        poison::lock_or_recover(&self.inner)
+    }
+
+    /// [`Self::lock_inner`] 的非阻塞版本：忙则放弃本次事件，中毒则恢复后照常处理。
+    fn try_lock_inner(&self) -> Option<MutexGuard<'_, SupervisorInner>> {
+        poison::try_lock_or_recover(&self.inner)
+    }
+
     /// 当前快照。
     pub fn snapshot(&self) -> HarnessSnapshot {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         HarnessSnapshot {
             phase: inner.phase.clone(),
             message: inner.message.clone(),
@@ -143,7 +157,7 @@ impl HarnessSupervisor {
     ///
     /// 只有 `Ready` 相位才返回端口——旧实例的 URL 不能靠残留状态放行。
     pub fn harness_port(&self) -> Option<u16> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         match &inner.phase {
             HarnessPhase::Ready { url } => {
                 url::Url::parse(url).ok().and_then(|parsed| parsed.port())
@@ -163,7 +177,7 @@ impl HarnessSupervisor {
     /// `dsh-auth-*` cookie，因此正常情况下重放可用；若 Harness 侧已使该
     /// token 失效，本方法不负责补救——用户仍可通过原生菜单重启或退出。
     pub fn ready_url(&self) -> Option<String> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.lock_inner();
         match &inner.phase {
             HarnessPhase::Ready { url } => Some(url.clone()),
             _ => None,
@@ -208,7 +222,7 @@ impl HarnessSupervisor {
                 // exit watcher：Ready 之后子进程退出 → Failed → 错误页。
                 let exit = running.take_exit();
                 {
-                    let mut inner = self.inner.lock().unwrap();
+                    let mut inner = self.lock_inner();
                     inner.running = Some(running);
                 }
                 if let Some(exit) = exit {
@@ -228,7 +242,7 @@ impl HarnessSupervisor {
     /// 停止 Harness（SIGTERM → 4s → SIGKILL，Windows 走 taskkill /T /F）。
     pub async fn stop(&self) {
         let mut running = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock_inner();
             inner.running.take()
         };
         let Some(mut running) = running.take() else {
@@ -236,7 +250,7 @@ impl HarnessSupervisor {
             // guard 的作用域收进块内先释放，否则同线程二次加锁 = 永久死锁，
             // supervisor.start() 首次调用（running 必为 None）就会挂死。
             {
-                let mut inner = self.inner.lock().unwrap();
+                let mut inner = self.lock_inner();
                 if matches!(inner.phase, HarnessPhase::Failed { .. }) {
                     inner.message = "Harness is not running.".to_string();
                 } else {
@@ -249,7 +263,7 @@ impl HarnessSupervisor {
         };
 
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock_inner();
             inner.phase = HarnessPhase::Stopping;
             inner.message = "Stopping Harness…".to_string();
             inner.push_desktop("stopping harness".to_string());
@@ -259,7 +273,7 @@ impl HarnessSupervisor {
         running.terminate();
         let exit = running.wait_exit().await;
 
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.lock_inner();
         inner.phase = HarnessPhase::Stopped;
         inner.message = "Harness stopped.".to_string();
         match exit {
@@ -290,7 +304,7 @@ impl HarnessSupervisor {
 
     /// 取最近 `count` 行日志。
     pub fn logs_tail(&self, count: usize) -> Vec<String> {
-        self.inner.lock().unwrap().logs.tail(count)
+        self.lock_inner().logs.tail(count)
     }
 
     // 原 `clear_logs()` 已移除（2026-09-10）：重启路径由状态机内部完成清理，
@@ -305,9 +319,10 @@ impl HarnessSupervisor {
     fn apply_launch_event(&self, event: LaunchEvent) {
         match event {
             LaunchEvent::Log(line) => {
-                let mut inner = match self.inner.try_lock() {
-                    Ok(inner) => inner,
-                    Err(_) => return,
+                // try_lock：忙则放弃（同步回调不阻塞启动链路），中毒则恢复——
+                // 把中毒误判成「忙」会让状态机静默丢掉全部后续事件（§7.1 规则 3）。
+                let Some(mut inner) = self.try_lock_inner() else {
+                    return;
                 };
                 inner.logs.push(line);
                 return;
@@ -321,9 +336,8 @@ impl HarnessSupervisor {
                 &format!("Harness process spawned (pid {pid}, port {port})"),
             ),
             LaunchEvent::TokenFound { .. } => {
-                let mut inner = match self.inner.try_lock() {
-                    Ok(inner) => inner,
-                    Err(_) => return,
+                let Some(mut inner) = self.try_lock_inner() else {
+                    return;
                 };
                 inner.message = "Launch token acquired.".to_string();
                 inner.push_desktop("launch token acquired".to_string());
@@ -349,7 +363,7 @@ impl HarnessSupervisor {
         let url = endpoint.navigate_url(extra);
 
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock_inner();
             inner.phase = HarnessPhase::Ready {
                 url: url.to_string(),
             };
@@ -362,7 +376,7 @@ impl HarnessSupervisor {
             let removed = crate::cookies::clear_auth_cookies(&webview, AUTH_COOKIE_PREFIX);
             if let Ok(removed) = removed {
                 if removed.removed > 0 {
-                    self.inner.lock().unwrap().push_desktop(format!(
+                    self.lock_inner().push_desktop(format!(
                         "cleared {} stale {AUTH_COOKIE_PREFIX}* cookies",
                         removed.removed
                     ));
@@ -381,7 +395,7 @@ impl HarnessSupervisor {
         // Harness 已不可用：清空桥的目标，避免把手机请求转发到死端口。
         self.sync_mobile_target(None);
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock_inner();
             inner.phase = HarnessPhase::Failed {
                 cause_kind: cause.kind().to_string(),
                 cause: cause.to_string(),
@@ -415,7 +429,7 @@ impl HarnessSupervisor {
     /// exit watcher 兑现：Ready 之后子进程退出（无论码值）→ Failed。
     fn handle_post_ready_exit(&self, status: Option<std::io::Result<std::process::ExitStatus>>) {
         let is_ready = {
-            let inner = self.inner.lock().unwrap();
+            let inner = self.lock_inner();
             matches!(inner.phase, HarnessPhase::Ready { .. })
         };
         if !is_ready {
@@ -428,7 +442,7 @@ impl HarnessSupervisor {
             .and_then(|result| result.as_ref().ok())
             .and_then(|exit| exit.code());
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.lock_inner();
             inner.running = None;
             inner.push_desktop(match code {
                 Some(code) => format!("harness exited after ready (exit code {code})"),
@@ -437,7 +451,7 @@ impl HarnessSupervisor {
         }
         let fallback = FailureCause::UnexpectedExit { code };
         let cause = {
-            let inner = self.inner.lock().unwrap();
+            let inner = self.lock_inner();
             let attempt: Vec<LogLine> = inner.logs.latest_attempt().into_iter().cloned().collect();
             dsh_host::logs::extract_failure_cause(&attempt).unwrap_or(fallback)
         };
@@ -446,9 +460,8 @@ impl HarnessSupervisor {
     }
 
     fn transition(&self, phase: HarnessPhase, message: &str) {
-        let mut inner = match self.inner.try_lock() {
-            Ok(inner) => inner,
-            Err(_) => return,
+        let Some(mut inner) = self.try_lock_inner() else {
+            return;
         };
         inner.phase = phase;
         inner.message = message.to_string();

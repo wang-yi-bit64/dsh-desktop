@@ -158,12 +158,10 @@ impl BridgeState {
         if !changed {
             return;
         }
-        let listener = match self.listener.lock() {
-            Ok(listener) => listener,
-            // 锁中毒（某个回调 panic 过）时静默降级：状态已经翻转过，只是
-            // 没人被通知——不能因此让配对请求本身失败。
-            Err(_) => return,
-        };
+        // 锁中毒时恢复 guard 而不是静默放弃：状态翻转已发生，若因为一次历史
+        // panic 让此后所有配对状态变化都失联，就是 §7.1 规则 3 禁的无声降级
+        // （D10 同族缺陷，见 crate::poison）。
+        let listener = crate::poison::lock_or_recover(&self.listener);
         if let Some(listener) = listener.as_ref() {
             listener(connected);
         }
@@ -212,9 +210,9 @@ impl MobileBridge {
     /// // 值未变时不回调（判重见 BridgeState::set_connected）。
     /// ```
     pub fn on_connected_change(&self, listener: impl Fn(bool) + Send + Sync + 'static) {
-        if let Ok(mut slot) = self.state.listener.lock() {
-            *slot = Some(Box::new(listener));
-        }
+        // 同理：中毒时照常注册（恢复 guard），不让监听器因一次历史 panic 永久缺席。
+        let mut slot = crate::poison::lock_or_recover(&self.state.listener);
+        *slot = Some(Box::new(listener));
     }
 
     /// 注入 Harness 目标（就绪时调用；传 `None` 表示 Harness 已退出）。
@@ -291,9 +289,12 @@ impl MobileBridge {
             });
         }
 
+        // `0.0.0.0:<port>` 由本行自己拼出、端口是 u16 字面量，解析不可能失败。
+        // 用带归因的 expect 而不是裸 unwrap（S4-4 判据：生产 unwrap 计数为 0，
+        // 或每一处都有就地注释说明为何不可能失败）。
         let bind_addr: SocketAddr = format!("0.0.0.0:{}", preferred_port.unwrap_or(0))
             .parse()
-            .unwrap();
+            .expect("bind address is always a valid `0.0.0.0:<u16 port>` socket address");
         let listener = tokio::net::TcpListener::bind(bind_addr).await?;
         let port = listener.local_addr()?.port();
         *self.state.port.lock().await = Some(port);
@@ -786,10 +787,12 @@ async fn forward_request(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let host = url.host_str().unwrap_or("127.0.0.1").to_string();
     let port = url.port().unwrap_or(80);
-    let path = if url.query().is_some() {
-        format!("{}?{}", url.path(), url.query().unwrap())
-    } else {
-        url.path().to_string()
+    // query 可选（目标 URL 由 Harness 端点拼出，通常带 token 查询参数）：
+    // 用 match 直接取，而不是「先 is_some() 再 unwrap()」——后者把保证拆成
+    // 两步写，unwrap 仍留在生产路径上（S4-4）。
+    let path = match url.query() {
+        Some(query) => format!("{}?{}", url.path(), query),
+        None => url.path().to_string(),
     };
 
     let body = serde_json::to_vec(payload).unwrap_or_default();

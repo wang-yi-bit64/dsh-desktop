@@ -29,6 +29,8 @@
     "verify:version": "node scripts/version.mjs check",
     "verify:ipc-surface": "node scripts/verify-ipc-surface.mjs",
     "verify:ipc-surface:self-test": "node scripts/verify-ipc-surface.mjs --self-test",
+    "verify:unwrap-hygiene": "node scripts/verify-unwrap-hygiene.mjs",
+    "verify:unwrap-hygiene:self-test": "node scripts/verify-unwrap-hygiene.mjs --self-test",
     "verify:shell-pages": "node scripts/verify-shell-pages.mjs",
     "verify:harness-inject": "node scripts/verify-harness-inject.mjs",
     "verify:harness-entry": "node scripts/verify-harness-entry.mjs",

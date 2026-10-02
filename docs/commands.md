@@ -52,6 +52,15 @@ npm run verify:patches
 #    这是唯一能捕获「写了但没人调用」类断线的门禁——见 §7.3
 npm run verify:ipc-surface
 
+# 6b. 生产路径 unwrap 清零（S4-4，治 D10）：src-tauri/src 与 crates 下每个 crate
+#     的 src 生产段（首个 #[cfg(test)] 之前；行注释/块注释/字符串字面量不计）
+#     不得出现 .unwrap()——锁中毒曾让 state.rs 15 处 unwrap 成为「一次 panic
+#     瘫痪整个壳」的崩溃面。.expect("归因") 是允许形态；无允许清单。
+#     含可证伪夹具的自测（修复前的真实形态必须报红），并随 :self-test 自动发现
+#     机制进入 verify:fast
+npm run verify:unwrap-hygiene
+npm run verify:unwrap-hygiene:self-test
+
 # 7. 壳内页面运行时冒烟（DOM 桩执行内联脚本 + 点一遍所有按钮）
 npm run verify:shell-pages
 
