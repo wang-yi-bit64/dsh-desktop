@@ -8,7 +8,7 @@
 > 两份文档若有冲突，定位/裁决以 `roadmap.md` §8 为准，施工细节以本文件为准。
 >
 > 状态词表沿用 [`AGENTS.md` §7.3](../AGENTS.md)：✅ 已接线 / ⚠️ 未接线 / ❌ 未实现 / 🕓 计划中 / 🗄️ 已归档。
-> **本计划目前处于「计划中」——下表所有批次均未开工，无任何代码改动。**
+> **本计划状态（2026-10-03 复核）**：批次 **H / J / K / I 已完成**（2026-09-12～13，逐批交付与证据见 §5「当前状态」）；批次 **L / M / N 未开工**（N 阻塞于 [`roadmap.md`](roadmap.md) §8 决策点 1）。下一阶段的施工主线是 [`dev-plan-defect-remediation.md`](dev-plan-defect-remediation.md)（S 批次）。
 >
 > ⚠️ 本计划含**外部事实**（上游 / 竞品），已标注核实时间与来源；外部事实会过期，执行前请复核。
 
@@ -29,6 +29,8 @@
 | **R7** | 构建可达性与配置卫生：提交了 rsproxy.cn 镜像给所有 checkout；README Node 口径 `v18+` 与实际 `MIN_NODE_MAJOR=20` 不一致；全新 checkout 无一行 bootstrap；`build/` 与 `resources/` 存在重复资产 | 🟡 低 | `src-tauri/.cargo/config.toml`（已入库）；`README.md:46`；`build/plugin-recovery.html` 469 行 vs `src-tauri/frontend/plugin-recovery.html` 628 行 |
 | **R8** | 产品缺口（相对社区基线）：无系统托盘、安全模式生效时界面**无任何提示**、无插件市场 UI、无 `.dshpreset` 导入导出、无 CLI shim | 🟡 低（体验） | `AGENTS.md` §7.2「计划中」两行；`README.md:28` 自述「无系统托盘」 |
 | **R9** | 定位/差异化：本质是 `dataelement/dsh-desktop` 的再实现，无独立主张；社区红海，采纳度接近零 | 🟠 中（战略） | `README.md:7`；外部竞品调研（见附录 A） |
+
+> **〔2026-10-03 现状更正〕**：上表是 **2026-09-12 评估当时**的基线，不是现状清单。其中若干行已被后续批次处置或部分处置：R3 由批次 K 修正、R4/R5 由批次 J 收紧、R7 的「README Node 口径 `v18+`」已不再出现（README 现在写的是构建工具链 v24，宿主最低 Node 由 `MIN_NODE_MAJOR=20` 单独定义）、R8 的「无系统托盘」已由批次 0.2-B1 交付（见 [`dev-plan-0.2-hardening.md`](dev-plan-0.2-hardening.md) 与 `AGENTS.md` §7.2）。**R2 / R6 / R9 以及 R7 / R8 的其余项仍是未解风险**；逐批交付见 §5「当前状态」。
 
 > **重复资产的一处实测结论（可直接执行）**：`local_page()` 经 `frontendDist: ./frontend` 解析，
 > `window.rs:56` 导航的是 `frontend/plugin-recovery.html`（628 行）；而 `build/plugin-recovery.html`（469 行）
@@ -67,7 +69,7 @@
   - 新增 `scripts/verify-upstream-drift.mjs`：读 `DSH_VERSION`（单一产地 `scripts/prepare-harness.mjs`），
     对比 npm `@deepseek-ai/dsh` 的 `latest` / `next` dist-tag。判据：落后 ≥1 个 minor 或出现新 rc 线时非零退出；
     网络不可达时按「跳过而非静默通过」处理（打印 SKIP 并退出 0，与集成测试的 Node 缺失同策略）。
-  - 入口 `npm run verify:drift`；`--self-test` 覆盖「落后 / 持平 / 领先 / 无网络」四态；
+  - 入口 `npm run gate -- drift`；`--self-test` 覆盖「落后 / 持平 / 领先 / 无网络」四态；
     可选接入一个 `schedule:` nightly job。
   - 现状（2026-09-12 复核）：基线已推进到 `0.1.5-rc.1`，与 npm `latest` 持平 → 哨兵**通过**；
     `next` 已到 `0.1.5-rc.2`，后续会再次报落后，属预期行为（它就是要提醒升级）。
@@ -83,7 +85,7 @@
     作为升级清单的**强制核对项**。
 
 **验收判据**
-- `npm run verify:drift` 在落后时非零退出；`verify:drift --self-test` 通过。
+- `npm run gate -- drift` 在落后时非零退出；`verify:drift --self-test` 通过。
 - profile 保留名守卫有可证伪性检查（改回 `desktop` 必红）。
 - 升级清单含官方桌面约束节。
 
@@ -120,7 +122,7 @@
 且属 `ui-behavior` 层允许的降级。完整记录见 [`patches/LAYERS.md`](../patches/LAYERS.md)。
 
 **验收判据**
-- `npm run verify:patches` 通过（14 个全部分级）；`check:patch-applicability --target=0.1.5-rc.1` 报全部干净。✅
+- `npm run gate -- patches` 通过（14 个全部分级）；`check:patch-applicability --target=0.1.5-rc.1` 报全部干净。✅
 - ✅ **脚本组装**：`prepare:harness --force` 真实组装 `14/14 applied` + `verify:harness-tree` 通过；
   `MANIFEST.json:patches[]` 无 `failed`。
 - ✅ **三平台运行证据**：CI（三平台 test）与 Smoke `scope=full`（组装真实资源 + 打包 + L2 GUI +
@@ -169,7 +171,7 @@
 
 - **K1 — 修 `README.md:24`**：删除/改写「one plugin cannot take down the whole Harness」，
   与 `README.md:39` 及 `AGENTS.md` §7.3 的「同进程插件崩溃仍可能带走 Harness」对齐。
-- **K2 — 新增 `npm run verify:claims`**：交叉检查 README 状态图例与 `AGENTS.md` §7.2 表——
+- **K2 — 新增 `npm run gate -- claims`**：交叉检查 README 状态图例与 `AGENTS.md` §7.2 表——
   同一能力在两侧必须状态词一致；并禁止 README 出现 §7.2 明令禁止的表述
   （如「插件崩溃不拖垮主程序」）。带可证伪性检查（注入旧 README 文本必须变红）。
 - **K3 — 把 §7.3 的自查命令自动化**：`grep -rn "⚠️ 未接线\|未实现" AGENTS.md README.md docs/`

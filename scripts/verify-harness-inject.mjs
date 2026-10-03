@@ -31,7 +31,7 @@
  * ## 用法
  *
  * ```bash
- * npm run verify:harness-inject
+ * npm run gate -- harness-inject
  * ```
  *
  * 退出码：`0` 全部通过 · `1` 有失败。

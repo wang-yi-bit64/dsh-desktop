@@ -23,12 +23,33 @@
  *   4. license 三处一致      package.json `license` == Cargo.toml `license` ==
  *                            LICENSE 首个非空行（且含 MIT 授权正文；删 LICENSE 即红——S0-1）。
  *   5. ADR 计数              `docs/adr/NNN-*.md` 文件数 → AGENTS.md「（N 篇）」。
+ *   6. 通道在役/休眠状态     `scripts/dsh-targets.mjs` 的 `status` 字段 → AGENTS.md §7.2
+ *                            「双上游运行时通道」行与 runbook Drift 行里的槽位
+ *                            「在役通道：`a` / `b`；休眠通道：无|`c`」。两份文档
+ *                            都必须有槽位（缺失即红），集合必须与目标表逐一相等。
+ *                            由来：2026-09-30 ADR-057 已让 alpha 复役，AGENTS §7.2 /
+ *                            runbook / SECURITY 仍写「alpha 休眠」到 2026-10-03 才被发现。
+ *                            ⚠️ 只对账槽位；槽位之外的散文（历史记录里大量合法的
+ *                            「休眠」）不扫——那会误伤历史，换来的是一个没人敢碰的守卫。
+ *   7. 命令速查表覆盖        `package.json` 的每个 npm script 名都必须在 `docs/commands.md`
+ *                            里以 `npm run <name>` 出现（该文件自称「含全部 npm script 名」）。
+ *                            由来：2026-10-03 实测漏了 `prepare:harness` / `verify:harness-tree` /
+ *                            `verify:relocate-hunks` / `verify:ipc-surface:self-test` 四个。
+ *   8. IPC 命令数            `src-tauri/src/commands.rs` 的 `#[tauri::command]` 条数 → AGENTS §7.2
+ *                            「N 个命令」槽位与两份 README 的命令面宣称。由来：2026-10-03 实测
+ *                            已增至 21（新增 `portable_mode`）而七份文档仍写 20。
  *
  * ## 可证伪性（自检夹具）
  *   · 以 2026-09-30 的真实漂移为夹具：文档写 1.85 / 产地 1.90 必须报红；
  *     ADR 宣称 36 / 实际 41 必须报红。
+ *   · 以 2026-10-03 的真实漂移为夹具：目标表两线在役、文档槽位写「休眠通道：`alpha`」
+ *     必须报红。
  *   · 以「宣称槽位消失」为夹具：喂入不含该宣称的文档必须报红——宣称被悄悄删掉
  *     同样是漂移（E5-空 的教训：扫出 0 时先怀疑被测对象，再怀疑扫描器）。
+ *   · 以 2026-10-03 的真实漂移为夹具：commands.md 漏登一个 script 名必须报红；
+ *     宣称句被删、package.json 零 script 同样必须报红（否则守卫两头都能静默变绿）。
+ *   · 以 2026-10-03 的真实漂移为夹具：命令数宣称 20、实际 21 必须报红；槽位被删与
+ *     实际扫出 0 条命令同样报红。
  *
  * ## 用法
  *   node scripts/verify-doc-facts.mjs              # 对账（CI + 本地）
@@ -41,6 +62,7 @@ import { argv, exit } from 'node:process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DSH_TARGETS } from './dsh-targets.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -97,6 +119,104 @@ export function checkAdrCount({ claimed, actual }) {
   return []
 }
 
+const CHANNEL_SLOT_RE = /在役通道：([^；|\n]*)；休眠通道：([^）|\n—；]*)/g
+
+function parseChannelList(cell) {
+  const names = [...cell.matchAll(/`([\w-]+)`/g)].map((m) => m[1])
+  if (names.length === 0 && cell.trim() !== '无') return null
+  return names.sort()
+}
+
+/**
+ * 通道状态槽位对账：文档里每个「在役通道：…；休眠通道：…」槽位的两个集合
+ * 必须与目标表的 status 逐一相等。没有槽位即红（宣称被删也是漂移）。
+ *
+ * @param {{doc: string, text: string, targets: Record<string, {status: string}>}} args
+ * @returns {string[]}
+ */
+export function checkChannelStatus({ doc, text, targets }) {
+  const want = { active: [], dormant: [] }
+  for (const [name, t] of Object.entries(targets)) (t.status === 'dormant' ? want.dormant : want.active).push(name)
+  want.active.sort()
+  want.dormant.sort()
+  const slots = [...text.matchAll(CHANNEL_SLOT_RE)]
+  if (slots.length === 0) {
+    return [`${doc}：未找到「在役通道：…；休眠通道：…」槽位——宣称被改写或删除也是一种漂移`]
+  }
+  const problems = []
+  for (const m of slots) {
+    const active = parseChannelList(m[1])
+    const dormant = parseChannelList(m[2])
+    if (active === null || dormant === null) {
+      problems.push(`${doc}：槽位「${m[0]}」无法解析（通道名须用反引号，空集写「无」）`)
+      continue
+    }
+    const fmt = (xs) => (xs.length ? xs.join(' / ') : '无')
+    if (JSON.stringify(active) !== JSON.stringify(want.active) || JSON.stringify(dormant) !== JSON.stringify(want.dormant)) {
+      problems.push(
+        `${doc}：宣称 在役=${fmt(active)}、休眠=${fmt(dormant)} ≠ 目标表 在役=${fmt(want.active)}、休眠=${fmt(want.dormant)}（产地 scripts/dsh-targets.mjs 的 status）`
+      )
+    }
+  }
+  return problems
+}
+
+const SCRIPT_MAP_DOC = 'docs/commands.md'
+
+/**
+ * 命令速查表覆盖对账：`docs/commands.md` 自称「含全部 npm script 名」，
+ * 因此 `package.json` 的每个 script 都必须以 `npm run <name>` 的形式出现在其中。
+ *
+ * 两头都要防静默变绿：宣称句被删（无可测对象）与 scripts 为空（读取端坏了）都判红——
+ * 这正是文件头 E5-空 纪律要求的「扫出数 > 0」断言。
+ *
+ * @param {{doc: string, text: string, scripts: string[]}} args
+ * @returns {string[]}
+ */
+export function checkScriptMap({ doc, text, scripts }) {
+  if (!/全部 npm script 名/.test(text)) {
+    return [`${doc}：找不到「全部 npm script 名」宣称——宣称被删除或改写也是一种漂移`]
+  }
+  if (scripts.length === 0) {
+    return [`${doc}：package.json 里一个 npm script 都没读到——先怀疑读取端，再怀疑源文件`]
+  }
+  const mentioned = new Set([...text.matchAll(/npm run ([A-Za-z0-9:_-]+)/g)].map((m) => m[1]))
+  return [...scripts]
+    .sort()
+    .filter((s) => !mentioned.has(s))
+    .map((s) => `${doc}：npm script \`${s}\` 未登记——该文件头部声明「含全部 npm script 名」（package.json 共 ${scripts.length} 个）`)
+}
+
+const COMMAND_CLAIMS = [
+  { doc: 'AGENTS.md', re: /的 \*\*(\d+) 个命令\*\*中/ },
+  { doc: 'README.md', re: /20 of the (\d+) Tauri commands/ },
+  { doc: 'README.zh-CN.md', re: /\*\*(\d+) 个命令中 20 个\*\*/ }
+]
+
+/**
+ * IPC 命令数对账：`commands.rs` 的 `#[tauri::command]` 条数是产地，
+ * 文档里的「N 个命令」是宣称。text 由调用方传入，自检不碰文件系统。
+ * 空扫描同样判红（E5-空 纪律）。
+ *
+ * @param {{actual: number, claims: {doc: string, text: string, re: RegExp}[]}} args
+ * @returns {string[]}
+ */
+export function checkCommandCount({ actual, claims }) {
+  if (!Number.isInteger(actual) || actual <= 0) {
+    return ['commands.rs：扫出 0 个 `#[tauri::command]`——先怀疑扫描器，再怀疑源文件']
+  }
+  const problems = []
+  for (const { doc, text, re } of claims) {
+    const m = re.exec(text)
+    if (!m) {
+      problems.push(`${doc}：未找到命令数宣称槽位——宣称被改写或删除也是一种漂移（实际 ${actual}）`)
+      continue
+    }
+    if (m[1] !== String(actual)) problems.push(`${doc}：宣称 ${m[1]} 个命令 ≠ 实际 ${actual} 个`)
+  }
+  return problems
+}
+
 export function selfTest() {
   let failed = 0
   let passed = 0
@@ -137,6 +257,34 @@ export function selfTest() {
   hasProblem('min-node：宣称 18、产地 20 必须报红', [checkMention({ expected: 20, doc: 'AGENTS.md', text: '宿主最低 Node：MIN_NODE_MAJOR = 18', re: /MIN_NODE_MAJOR[^\d]{0,20}(\d+)/ })]
     .filter(Boolean))
   eq('min-node：宣称 20 与产地一致', checkMention({ expected: 20, doc: 'AGENTS.md', text: '宿主最低 Node：MIN_NODE_MAJOR = 20', re: /MIN_NODE_MAJOR[^\d]{0,20}(\d+)/ }), null)
+
+  // 🔴 可伪证夹具 5：2026-10-03 的真实漂移——目标表两线在役，文档仍写 alpha 休眠。
+  const bothActive = { next: { status: 'active' }, alpha: { status: 'active' } }
+  const slot = (a, d) => `| ✅ 已接线（2026-09-15；在役通道：${a}；休眠通道：${d}——见 ADR） |`
+  eq('channel：槽位与目标表一致', checkChannelStatus({ doc: 'AGENTS.md', text: slot('`next` / `alpha`', '无'), targets: bothActive }), [])
+  eq('channel：顺序无关', checkChannelStatus({ doc: 'AGENTS.md', text: slot('`alpha` / `next`', '无'), targets: bothActive }), [])
+  hasProblem('channel：真实历史漂移（目标在役、文档写休眠）必须报红', checkChannelStatus({ doc: 'AGENTS.md', text: slot('`next`', '`alpha`'), targets: bothActive }))
+  hasProblem('channel：反向漂移（目标休眠、文档写在役）必须报红', checkChannelStatus({ doc: 'AGENTS.md', text: slot('`next` / `alpha`', '无'), targets: { next: { status: 'active' }, alpha: { status: 'dormant' } } }))
+  eq('channel：休眠集合非空且一致', checkChannelStatus({ doc: 'AGENTS.md', text: slot('`next`', '`alpha`'), targets: { next: { status: 'active' }, alpha: { status: 'dormant' } } }), [])
+  hasProblem('channel：槽位消失必须报红（E5-空 教训）', checkChannelStatus({ doc: 'AGENTS.md', text: '| ✅ 已接线（alpha 线 2026-09-30 起休眠） |', targets: bothActive }))
+  hasProblem('channel：漏写反引号的槽位必须报红而非静默为空', checkChannelStatus({ doc: 'AGENTS.md', text: slot('next / alpha', '无'), targets: bothActive }))
+  eq('channel：CRLF 与 LF 一致', checkChannelStatus({ doc: 'AGENTS.md', text: `x\r\n${slot('`next` / `alpha`', '无')}\r\n`, targets: bothActive }), [])
+
+  // 🔴 可伪证夹具 6：2026-10-03 的真实漂移——commands.md 漏登四个 script 名。
+  const mapText = (names) => `> 含全部 npm script 名\n${names.map((n) => `npm run ${n}`).join('\n')}`
+  eq('script-map：全覆盖', checkScriptMap({ doc: 'docs/commands.md', text: mapText(['dev', 'build', 'verify:fast']), scripts: ['dev', 'build', 'verify:fast'] }), [])
+  eq('script-map：顺序无关', checkScriptMap({ doc: 'docs/commands.md', text: mapText(['verify:fast', 'dev']), scripts: ['dev', 'verify:fast'] }), [])
+  hasProblem('script-map：真实历史漂移（漏登 prepare:harness）必须报红', checkScriptMap({ doc: 'docs/commands.md', text: mapText(['dev', 'build']), scripts: ['dev', 'build', 'prepare:harness'] }))
+  hasProblem('script-map：宣称句被删必须报红（E5-空 教训）', checkScriptMap({ doc: 'docs/commands.md', text: 'npm run dev', scripts: ['dev'] }))
+  hasProblem('script-map：scripts 为空必须报红（读取端静默归零）', checkScriptMap({ doc: 'docs/commands.md', text: mapText(['dev']), scripts: [] }))
+  eq('script-map：CRLF 与 LF 一致', checkScriptMap({ doc: 'docs/commands.md', text: `含全部 npm script 名\r\nnpm run dev\r\n`, scripts: ['dev'] }), [])
+
+  // 🔴 可伪证夹具 7：2026-10-03 的真实漂移——命令数已 21，文档仍写 20。
+  const cmdClaim = (doc, text, re) => [{ doc, text, re }]
+  eq('command-count：一致', checkCommandCount({ actual: 21, claims: cmdClaim('AGENTS.md', '的 **21 个命令**中 20 个', /的 \*\*(\d+) 个命令\*\*中/) }), [])
+  hasProblem('command-count：真实历史漂移（宣称 20、实际 21）必须报红', checkCommandCount({ actual: 21, claims: cmdClaim('README.md', '20 of the 20 Tauri commands', /20 of the (\d+) Tauri commands/) }))
+  hasProblem('command-count：槽位被删必须报红（E5-空 教训）', checkCommandCount({ actual: 21, claims: cmdClaim('AGENTS.md', '命令面见 commands.rs', /的 \*\*(\d+) 个命令\*\*中/) }))
+  hasProblem('command-count：扫出 0 条命令必须报红', checkCommandCount({ actual: 0, claims: cmdClaim('AGENTS.md', '的 **21 个命令**中', /的 \*\*(\d+) 个命令\*\*中/) }))
 
   if (failed > 0) {
     console.error(`verify-doc-facts 自检失败 ${failed} 项`)
@@ -218,6 +366,24 @@ async function main() {
   mentions += 1
   problems.push(...checkAdrCount({ claimed: adrClaim, actual: adrFiles }).map((p) => `ADR 计数：${p}`))
 
+  // ── 6. 通道在役/休眠状态 ────────────────────────────────────────
+  for (const rel of ['AGENTS.md', 'docs/release-runbook.md']) {
+    mentions += 1
+    problems.push(...checkChannelStatus({ doc: rel, text: read(rel), targets: DSH_TARGETS }).map((p) => `通道状态：${p}`))
+  }
+
+  // ── 7. 命令速查表覆盖全部 npm script ────────────────────────────
+  const pkgScripts = Object.keys(JSON.parse(read('package.json')).scripts ?? {})
+  mentions += 1
+  problems.push(...checkScriptMap({ doc: SCRIPT_MAP_DOC, text: read(SCRIPT_MAP_DOC), scripts: pkgScripts }).map((p) => `script map：${p}`))
+
+  // ── 8. IPC 命令数 ───────────────────────────────────────────────
+  const commandCount = read('src-tauri/src/commands.rs')
+    .split(/\r?\n/)
+    .filter((line) => /^\s*#\[tauri::command\]\s*$/.test(line)).length
+  mentions += 1
+  problems.push(...checkCommandCount({ actual: commandCount, claims: COMMAND_CLAIMS.map(({ doc, re }) => ({ doc, text: read(doc), re })) }).map((p) => `命令数：${p}`))
+
   // ── 收尾：守卫自身的「扫出数 > 0」断言 ─────────────────────────
   if (mentions === 0) {
     console.error('❌ 一条事实都没对账（mentions=0）——守卫自身失效，先怀疑本脚本再怀疑源文件')
@@ -228,7 +394,7 @@ async function main() {
     for (const p of problems) console.error(`❌ ${p}`)
     return 1
   }
-  console.log(`✅ doc-facts 对账一致：rust-version / node 大版本 / license 三处 / ADR 计数（${mentions} 个对账点）`)
+  console.log(`✅ doc-facts 对账一致：rust-version / node 大版本 / license 三处 / ADR 计数 / 通道状态 / script 覆盖 / 命令数（${mentions} 个对账点）`)
   return 0
 }
 

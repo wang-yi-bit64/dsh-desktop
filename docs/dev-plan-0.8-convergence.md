@@ -13,6 +13,20 @@
 > 不扫描本文件——锚点变更(§6 门禁放行)后,本文 §2 / §4 / §5 / §15 必须人工同步。
 > 这条声明的理由见 `scripts/verify-plan-facts.mjs` 文档注释:文档里的版本号零守卫,
 > 只能靠"快照声明 + 人工同步纪律"防漂。
+>
+> 🔴 **2026-10-03 事实更正(锚点已于 2026-09-30 变更)**:上文要求的「§2 / §4 / §5 / §15
+> 人工同步」在锚点变更时**未执行**,以下是按 2026-09-30 实际结果(ADR-057)补的更正。
+> 原数字一律保留为当日快照,不再逐行改写:
+>
+> | target | `status` | `dshVersion`(现行,产地 `scripts/dsh-targets.mjs`) | 本文件快照(2026-09-29) |
+> |---|---|---|---|
+> | `next` | `active` | `0.2.0-rc.2`(2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进) | `0.1.5-rc.3` |
+> | `alpha` | `active`(**同日复役**——ADR-056 的休眠裁定同日被 [ADR-057](adr/057-alpha-channel-restored-and-dual-promotion.md) 修订) | `0.1.7-alpha.2` | `0.1.6-alpha.2` |
+>
+> 连带变更:补丁数 next 14 → **10**、alpha 13 → **11**(按 `retireWhen` 净退役 6 个);
+> §6 的四项切线放行条件中**前两项未满足即已切锚**(ADR-057 后果段如实记为已知代价);
+> 桌面版本快照 `0.7.0-alpha.8` 现为 `0.7.2-rc.1`。现行事实以 `scripts/dsh-targets.mjs`
+> 与 [AGENTS.md](../AGENTS.md) §8.6 为准。
 
 **与其他计划文档的关系**:
 
@@ -70,6 +84,9 @@ runtime target / patch / vendored 管理、提交式 lockfile(`npm ci` 零解析
 |---|---|---|---|
 | `next`(默认) | `next` | `rc` | `0.1.5-rc.3` |
 | `alpha` | `alpha` | `alpha` | `0.1.6-alpha.2` |
+
+> 〔2026-10-03 更正:上表是 2026-09-29 快照。2026-09-30 起 `next` = `0.2.0-rc.2`、
+> `alpha` = `0.1.7-alpha.2` 且**已复役**;见文首更正块。〕
 
 上游(DeepSeek Harness,`deepseek-ai/deepseek-harness`):
 
@@ -183,6 +200,8 @@ Desktop Version → Runtime Manifest → Compatibility Check → Start / Block /
 
 - **next 线**:0.1.5-rc.3 → 0.2.0-rc.x(唯一活跃升级路径);
 - **alpha 线**:0.1.6-alpha.2 保持不动,待上游 `alpha` dist-tag 前移至 0.2.0-alpha.x 后另行评估。
+  **〔2026-10-03 更正:本条未执行——alpha 已于 2026-09-30 复役并推进到 `0.1.7-alpha.2`
+  (ADR-057 修订 ADR-056),"保持不动"不再成立;两线同为主张维护的通道。〕**
 
 每一步都保存:lockfile / package tree / patch result / runtime manifest / smoke result。
 
@@ -224,7 +243,7 @@ Safe Mode、Diagnostics。
 | 上游漂移 | `verify:drift` |
 | 资源树 / 组装清单 / 入口契约 | `verify:harness-tree` / `verify:harness-entry` |
 | 发布资产 / 便携版 | `verify:release-assets`(13 项)/ `verify:portable-package` |
-| 补丁分级登记 | `verify:patches` / `verify:patch-layers` |
+| 补丁分级登记 | `verify:patches`（脚本 `scripts/verify-patch-layers.mjs`） |
 
 真正新增的只有三件:profile migration fixtures(§5)、peer-gate×冻结树检查(§5)、
 以及启动后功能冒烟的编排。
@@ -335,7 +354,7 @@ Provider schema adaptation。
 security boundary。
 
 **v1.1 注记**:命令面的机器判据是 `verify:ipc-surface`(唯一真源
-`src-tauri/src/commands.rs`,当前 20 个命令、`ALLOW_UNUSED_COMMANDS` 为空表)。
+`src-tauri/src/commands.rs`,当前 21 个命令、`ALLOW_UNUSED_COMMANDS` 为空表)。
 文档必须与其**同源**——不要手抄第二份清单;本仓"手抄清单与真实依赖脱节"已有三例
 (资源清单四处手抄、看门狗候选清单、演练镜像清单)。
 
@@ -404,6 +423,10 @@ provider / model / tool / schema path / request id / runtime version,并在 Diag
 | `alpha` | `alpha`(现为 0.1.7-alpha.2) | 保持不动,至上游 alpha dist-tag 前移;publishChannel = `alpha` |
 | ~~latest~~ | **不建目标** | 0.1.7 线已弃。若上游做维护 backport(参照 0.1.5-rc.3 先例:rc.2 后 12 天、与后继线首号同日),是否跟进由升级专项另行裁定 |
 
+> 〔2026-10-03 更正:上表两行的锚点已于 2026-09-30 切换——`next` = `0.2.0-rc.2`、
+> `alpha` = `0.1.7-alpha.2`;alpha 的"保持不动"被 ADR-057 废止(复役)。"只保留两个
+> target"与 `channel`/`publishChannel` 解耦的结论不变。〕
+
 `channel`(上游客观事实,不可改)≠ `publishChannel`(本仓命名,可改)的解耦设计保留;
 `targetForVersion` 查 `publishChannel`,漂移哨兵用 `channel`(`upstreamTagFor`)。
 
@@ -442,6 +465,8 @@ Windows / Linux / macOS 全 PASS。
 **v1.1 预期管理**:切锚点前,`next` 通道对照 0.2.0-rc.1 **必然非绿**(跨 minor)——
 这是"升级未做"的如实反映,**不得用 OVERRIDE 掩盖欠账**;豁免只用于"已裁定等待"的情形,
 且必须写明等待的 §6 门禁条件。
+**〔2026-10-03 更正:切锚点已于 2026-09-30 发生(`next` → `0.2.0-rc.2`),且 §6 的门禁
+条件 1/2 未满足——ADR-057 后果段已把这次越闸记为已知代价。本节其余规则不变。〕**
 
 ---
 

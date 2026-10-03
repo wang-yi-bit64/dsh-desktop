@@ -54,7 +54,7 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 
 `version:bump --commit` 在**提交之前**生成段落，区间是「上一个 tag .. 当前 HEAD」。若此后到真正打 tag
 之间还有提交，它们就落在区间之外：**提交在 tag 里、却不属于任何 CHANGELOG 段落**。而
-`verify:changelog` 只是纯逻辑自测（`--self-test`），**不与 git 交叉核对**，所以这种遗漏**不会报红**——
+`npm run gate -- changelog` 只是渲染器的纯逻辑自测（`--self-test`），**不与 git 交叉核对**，所以这种遗漏**不会报红**——
 它属于本仓库反复出现的那类「静默失效」。实测两例：`0.7.0-alpha.5` 段缺 5 条
 （`ecde5e0` / `3f3c46c` / `eca0612` / `8ed0a9e` / `992aa75`，占该版本全部改动的大半），
 `0.7.0-alpha.3` 段缺 1 条（`9560459`，二次重跑版本切换留下的重复提交）。
@@ -87,7 +87,7 @@ alpha.6 的准备期正是这样跑掉了三轮：推 `9e112e2`（CI 三平台�
 |--------|------|------|--------|
 | CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，四个输入：`scope` / `os` / `fault_injection` / `dsh_target`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。`dsh_target` 选组装哪条上游通道（`next` / `alpha`）。**不发布任何东西** |
-| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`verify:drift` **逐通道**对照各自的 npm dist-tag（`next` 对 `next`、`alpha` 对 `alpha`），落后即红；**休眠目标显式跳过**（alpha，ADR-056）。另有独立 job 跑 `verify:update-channel`（全通道更新端点健康，同样跳过休眠目标）。**不构建任何东西**——只回答「该规划升级了吗」 |
+| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`npm run gate -- drift` **逐通道**对照各自的 npm dist-tag（`next` 对 `next`、`alpha` 对 `alpha`），落后即红；**休眠目标显式跳过**（机制见 ADR-056；在役通道：`next` / `alpha`；休眠通道：无——alpha 已由 ADR-057 复役）。另有独立 job 跑 `verify:update-channel`（全通道更新端点健康，同样跳过休眠目标）。**不构建任何东西**——只回答「该规划升级了吗」 |
 | Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + **从 tag 的预发布通道名推导 `dsh_target`** + 秒级静态门禁）→ 三平台并行出包（`build`）并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；Windows 的 `portable` job 出便携 zip → `publish-assets` 把便携版三件挂到 Release（**F13 修复，2026-09-24 新增**：此前它们只停在 Actions artifacts 里，Release 上永远只有 10 项而非期望的 13）。🗄️ 原 `cli` / `cli-publish` 两个 job 已于 2026-09-24 退役（见 §8.4 末条） |
 
 - **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
@@ -135,7 +135,7 @@ alpha.6 的准备期正是这样跑掉了三轮：推 `9e112e2`（CI 三平台�
   `resources/`、第三方又跑不起来，故「可引用」名不副实；
   · **定位不依赖产物**——INV-6 靠「存在一个能跑二进制的入口」，不靠「挂在 Release 上」。
   ⚠️ **退役的是发布，不是能力**：`crates/dsh-host-cli`、`scripts/package-cli.mjs`（约 40 项
-  可证伪打包判据）与 `preflight` 的 `verify:cli-package` **全部保留**。
+  可证伪打包判据）与 `preflight` 的 release 档（门禁 `cli-package`）**全部保留**。
   「取消发布」与「删掉 crate」是两件不同的事——`verify-release-workflow.mjs` 的
   `checkCliCrateRetained` 专门守着后者（防止退役时顺手把 INV-6 的兑现载体删掉）。
   ⚠️ **归档**：`scripts/dry-run-cli-publish.mjs` → `docs/archive/`（它 100% 服务于上传步骤）。
@@ -215,14 +215,14 @@ gh release view "$TAG" --json assets --jq '.assets[]|"\(.size)\t\(.name)"' | sor
 ```
 
 **发布后核对（自动化，2026-09-24 起）**：上面那个「数资产个数」的人工步骤现在有脚本了——
-`npm run verify:release-assets -- --check-release <tag>` 会**逐项比对资产名字**，而不只是数个数：
+`npm run gate -- release-assets -- --check-release <tag>` 会**逐项比对资产名字**，而不只是数个数：
 
 ```bash
 TAG=v0.7.0-alpha.7
-npm run verify:release-assets -- --check-release "$TAG"
+npm run gate -- release-assets -- --check-release "$TAG"
 # 通过 → ✅ Release <tag> 的资产清单完整（13 项）
 # 失败 → 逐条列出缺了哪一项（含 kind / platform），并单独报「出现了 CLI 资产」
-npm run verify:release-assets -- --print-expected   # 打印期望清单，供人工比对
+npm run gate -- release-assets -- --print-expected   # 打印期望清单，供人工比对
 ```
 
 ⚠️ **为什么必须有脚本而不是照旧人工数个数**：F13（2026-09-24 发现）的形态是
@@ -233,9 +233,9 @@ npm run verify:release-assets -- --print-expected   # 打印期望清单，供�
 
 | 判据 | 守什么 | 跑在哪 |
 |---|---|---|
-| `verify:release-assets`（默认） | `release.yml` **形状上能不能**产出 13 项 | 静态，进 `ci.yml` 与 release `preflight` |
-| `verify:release-assets -- --check-release <tag>` | 某次发布**实际**产出几项 | 发布后手动（需 `gh` + 联网） |
-| `verify:release-workflow` | 上传动作的**宾语**是 `dist/portable/*` 而非 `dist/cli/*` | 静态，进 `ci.yml` 与 `preflight` |
+| `npm run gate -- release-assets`（默认） | `release.yml` **形状上能不能**产出 13 项 | 静态，进 `ci.yml` 与 release `preflight` |
+| `node scripts/verify-release-assets.mjs --check-release <tag>` | 某次发布**实际**产出几项 | 发布后手动（需 `gh` + 联网） |
+| `npm run gate -- release-workflow` | 上传动作的**宾语**是 `dist/portable/*` 而非 `dist/cli/*` | 静态，进 `ci.yml` 与 `preflight` |
 
 🔴 **命名模式取自实测，不得从 `tauri.conf.json` 反推**。`productName` 是 `DSH Desktop`（带空格），
 tauri-bundler 把它渲染成 `DSH.Desktop_<ver>_x64-setup.exe`（**点号分隔产品名、下划线分隔版本**），
@@ -303,9 +303,9 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2`（2026-09-30 推进） | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2`（2026-09-30 推进） | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.2-alpha.x` |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2`（2026-09-30 推进） | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
 
-> ✅ **双线锚点已各自对齐上游 dist-tag**（2026-09-30，ADR-057）：`verify:drift` 不再告警。
+> ✅ **双线锚点已各自对齐上游 dist-tag**（2026-09-30，ADR-057）：`npm run gate -- drift` 不再告警。
 > next 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`（预检 clean 2 / conflict 12，
 > 三路合并后重做 4 个、退役 4 个补丁）；alpha 复役并推进到 `0.1.7-alpha.2`。
 > 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-09-30 记录。
@@ -354,10 +354,10 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 - **滚动 tag 不得污染 tag 发现路径**（ADR-053）：`updater-rc` 这类非 `v*` tag 会让
   `git describe --tags` 在下个发布周期把上一次的滚动 tag 当成「上一个发布」。
   release.yml 的 `PREV` 取值已加 `--match 'v*'`；`conventional-commits.mjs::latestTag` 本就有。
-- **prerelease 标记仍必须从版本号派生**（`verify:release-workflow` 守着）：标记一旦硬编码，
+- **prerelease 标记仍必须从版本号派生**（`npm run gate -- release-workflow` 守着）：标记一旦硬编码，
   预发布会被标成正式版并劫持仓库的 Latest 徽标。
 - **发布前两条线各自都要有证据**：`smoke.yml` 的 `dsh_target` 输入分别跑一次
-  `scope=full`；`verify:patches` 已在 CI 里逐目标检查。若只验默认目标，
+  `scope=full`；`npm run gate -- patches` 已在 CI 里逐目标检查。若只验默认目标，
   另一条线的补丁可以整目录漏登记而无人发现——而它同样会发布给用户。
 
 > ✅ **首发记录（2026-09-15）**：两条通道同日发出，各自 8/8 release job 绿、19 个资产、
@@ -482,7 +482,7 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > | Smoke `next`（`2a0b04c`） | run `36662000823` ✅ ——日志里 `DSH_TARGET: next` |
 > | Smoke `alpha`（`2a0b04c`） | run `36662006140` ✅ ——日志里 `DSH_TARGET: alpha` |
 > | `release.yml` | run `36663389288`：preflight / 3×build / portable / publish-assets ✅；`updater-channel` ❌（见下） |
-> | 资产 | 9 平台 + `latest.json` + 3 便携版 = **13**（`verify:release-assets --check-release` 逐项通过，`prerelease: true`） |
+> | 资产 | 9 平台 + `latest.json` + 3 便携版 = **13**（`node scripts/verify-release-assets.mjs --check-release` 逐项通过，`prerelease: true`） |
 > | 端点 | `updater-rc/latest.json` 实测返回 `0.7.1-rc.1` = 该通道最新 tag ✅ |
 > | 内置运行时 | DSH `0.1.5-rc.3`（`next` 目标，rc 后缀） |
 >
@@ -496,7 +496,7 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 >
 > **两条诚实边界**：① alpha 通道零投递是**裁定结果**——2026-09-30 起休眠（C7 /
 > [ADR-056](056-alpha-channel-dormant.md)：不发布、不追漂移，补丁冻结保留；`updater-alpha`
-> 不再等待引导，`--channel-of` 拒绝休眠通道发布）；② 存量安装不自愈——端点是构建期注入的，
+> 不再等待引导，`--channel-of` 拒绝休眠通道发布）**〔2026-10-03 更正：该裁定同日即被 [ADR-057](057-alpha-channel-restored-and-dual-promotion.md) 修订——alpha 已复役，`updater-alpha` 的 404 重新是真实缺口，要等 alpha 通道第一次通道化发布才会消失〕**；② 存量安装不自愈——端点是构建期注入的，
 > `v0.7.1-rc.1` 之前的构建仍指向旧端点 `releases/latest/...`（GitHub latest 排除预发布，
 > 停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。
 

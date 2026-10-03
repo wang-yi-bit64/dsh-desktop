@@ -33,7 +33,7 @@
 **曲线 A — 上游是快速迭代的预发布版。** 官方 DSH 明确标注 developer preview，并声明会有破坏性
 变更。本仓的补丁基线（`DSH_VERSION`，`scripts/dsh-targets.mjs`，唯一产地）截至本文快照
 （2026-09-16）锚在 `0.1.5-rc.1`。**上游持续在推进**（快照时 `npm next` 在 `0.1.5-rc.2`；当前
-实际位置以 `npm run verify:drift` 实测为准），**只要项目还靠 `patch-package` 改上游文件，这条
+实际位置以 `npm run gate -- drift` 实测为准），**只要项目还靠 `patch-package` 改上游文件，这条
 曲线就会持续收税**：
 `上游变更数 × 补丁数 × 运行时变体数`（见 `harness-packaging-and-compatibility.md`）。
 
@@ -154,13 +154,13 @@ clean startup → workspace open → session create → tool call → tool failu
 | 项 | 内容 | 依据 |
 |----|------|------|
 | H0-a | **风险哨兵**：上游漂移哨兵 + profile 保留名守卫 + 官方桌面约束文档 | 加固计划批次 H |
-| H0-b | **宣称纪律回归**：修 README 过度宣称、`verify:claims`、§7.3 自查自动化 | 批次 K |
+| H0-b | **宣称纪律回归**：修 README 过度宣称、`npm run gate -- claims`、§7.3 自查自动化 | 批次 K |
 | H0-c | **门禁可信度**：GUI 冒烟与 POSIX fault-inject 转硬门禁；preflight 加秒级运行时防线 | 批次 J |
 | H0-d | **构建卫生**：区域镜像去隐式、Node 口径统一、一行 bootstrap、清理重复资产 | 批次 L |
 | H0-e | **运维韧性**：签名密钥 runbook、更新源故障演练、bus-factor runbook | 批次 M |
 | **H0-f** | **边界契约文档**（§4）：逐条写死"归 DSH vs 归 Desktop" | 外部评审建议 10 |
 
-**退出判据**：`verify:drift` / `verify:claims` 可用且带回退检查；三平台门禁全硬；边界契约文档入库。
+**退出判据**：`npm run gate -- drift` / `npm run gate -- claims` 可用且带回退检查；三平台门禁全硬；边界契约文档入库。
 
 ### H1 — 资产化 `dsh-host`（第 2 个月）
 

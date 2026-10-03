@@ -4,9 +4,9 @@
  *
  * ## 为什么存在
  *
- * 本仓库把 `@deepseek-ai/dsh` 的版本钉在 `scripts/prepare-harness.mjs` 的
- * `DSH_VERSION`，并在其上叠加 18 个 `patch-package` 行级补丁（见
- * [`docs/dsh-upgrade-checklist.md`](../docs/dsh-upgrade-checklist.md)）。
+ * 本仓库把 `@deepseek-ai/dsh` 的目标版本钉在 `scripts/dsh-targets.mjs`（**唯一产地**；
+ * `prepare-harness.mjs` 只是消费方），并在其上按通道叠加 `patch-package` 行级补丁
+ * （当前 next 10 个 / alpha 11 个；见 [`docs/dsh-upgrade-checklist.md`](../docs/dsh-upgrade-checklist.md)）。
  * 上游 DSH 处于灰度迭代期，**明确声明会有破坏性变更**——落后越多，
  * 补丁冲突就越会集中到某一次升级里一起爆发。
  *
@@ -37,7 +37,7 @@
  * DSH_REGISTRY=https://registry.npmmirror.com node scripts/verify-upstream-drift.mjs
  * ```
  *
- * 退出码：`0` 通过 / 仅提示 / SKIP · `1` 落后到阈值 或 读不到 `DSH_VERSION`。
+ * 退出码：`0` 通过 / 仅提示 / SKIP · `1` 落后到阈值（或读不到目标表）。
  */
 
 import { readFileSync } from 'node:fs'
@@ -155,7 +155,9 @@ export function judgeDrift(currentRaw, latestRaw) {
 }
 
 /**
- * 从 `prepare-harness.mjs` 源码里读 `DSH_VERSION`（版本锚点的唯一产地）。
+ * 从源码文本里读 `const DSH_VERSION = '…'` 字面量。
+ * ⚠️ **遗留助手**：锚点唯一产地已迁到 `scripts/dsh-targets.mjs`，主流程不再调用它
+ * （只由自检夹具覆盖）；新代码请用 `resolveTarget(name).dshVersion`。
  * @param {string} text 文件内容
  * @returns {string|null}
  */

@@ -70,6 +70,10 @@
 | 0.2-D | D2 应用内反馈入口 | ✅ **已完成（2026-09-18）** | `src-tauri/src/feedback.rs` + `frontend/feedback.html` + 3 条命令（`feedback_context` / `feedback_open` / `feedback_channel_open`）+ CX-13 四个渠道常量 + `crates/dsh-host/src/runtime_manifest.rs`；入口在「DSH Desktop」菜单、托盘菜单与错误页三处。**比原计划（纯 `open_url` 链接）多做了一步**，理由见 D2 执行记录 |
 | 0.2-D | D3 README 社区入口 | ❌ 未开工 | 无 |
 
+> **〔2026-10-03 证据更正〕**：上表「最后更新 2026-09-18」；两处**证据句**已被后续工作证伪，状态判定不变——
+> ① A3 的「更新端点仅 `releases/latest/download/latest.json` 单条」：端点已于 2026-09-30 按**运行时通道**通道化（[ADR-053](adr/053-channelized-updater-manifest.md)，`releases/download/updater-<channel>/latest.json`）；A3 仍未开工指的是「用户可见的 stable / preview 通道」，与端点数量无关；
+> ② C1 的「`patches/` 现存 13 个（alpha 线；next 线 14 个）」：2026-09-30 双线推进后为 **next 10 / alpha 11**（见 `patches/LAYERS.md`）。
+
 ---
 
 ## 批次 0.2-B1 执行记录（2026-09-18）
@@ -300,7 +304,7 @@
 - **与路线图的衔接**：路线图 §5.3 / §7 已把「补丁退役」绑定到定位收缩（3 个 functional
   补丁的 `retireWhen`）；C1 的「上游化候选」列与「retireWhen」是两个正交维度
   （前者=谁该维护，后者=何时不需要），都写进 LAYERS.md，互不替代。
-- **验收**：`npm run verify:patches` 仍绿（新列不破坏既有校验）；每条补丁有归类结论。
+- **验收**：`npm run gate -- patches` 仍绿（新列不破坏既有校验）；每条补丁有归类结论。
 
 ### C2 首个上游 PR
 

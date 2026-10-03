@@ -36,6 +36,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveTier } from './gate-manifest.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const WORKFLOW_DIR = join(projectRoot, '.github', 'workflows')
 const RELEASE_YML = join(WORKFLOW_DIR, 'release.yml')
@@ -53,6 +55,14 @@ const CARGO_TOML = join(projectRoot, 'Cargo.toml')
  * （它们恰好都带 `if: runner.os == 'Linux'`），谁把门禁一改就会变成同一类故障。
  */
 const WORKFLOW_FILES = ['ci.yml', 'release.yml', 'smoke.yml']
+
+/**
+ * 发布 preflight 必须包含的门禁（从总表**派生**，不手抄）。
+ *
+ * 2026-10-03（治理 G1）：preflight 的门禁清单已收敛到 scripts/gate-manifest.mjs，
+ * 这里读它的 release 档而不是在 YAML 里找字符串——判据与清单同源，清单改了判据自动跟上。
+ */
+const RELEASE_TIER_GATES = resolveTier('release').map((step) => step.gate.name)
 
 /**
  * CLI 产物的上传路径——**退役通道的核心断言**。
@@ -311,7 +321,7 @@ export function missingCheckoutJobs(text) {
  *
  * 这里刻意**不再**去解析/执行 heredoc 内联脚本：那段逻辑曾搬进
  * `scripts/package-cli.mjs`（`--release-notes`），其渲染与幂等性由
- * `npm run verify:cli-package` 的自测覆盖。留在 YAML 里的内联脚本是**不可测**的
+ * `npm run gate -- cli-package` 的自测覆盖。留在 YAML 里的内联脚本是**不可测**的
  * ——YAML 解析器不碰 `run: |` 的内容，语法错 / argv 下标错只有真发布才炸，
  * 而发布不可逆。因此本守卫判「有没有内联脚本残留」。
  *
@@ -407,9 +417,11 @@ export function stripYamlComments(text) {
  * 否则退役说明里引用的 `gh release upload` 会让守卫恒红（实测踩到）。
  *
  * @param {string} text release.yml 全文
+ * @param {{releaseGates?: string[]}} [options] 门禁总表 release 档的成员（默认取真实总表）
  * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
  */
-export function checkCliArtifactShape(text) {
+export function checkCliArtifactShape(text, options = {}) {
+  const { releaseGates = RELEASE_TIER_GATES } = options
   const problems = []
   const code = stripYamlComments(text)
 
@@ -465,12 +477,24 @@ export function checkCliArtifactShape(text) {
   // 3) 打包器必须仍在被 preflight 调用。取消的是**上传**，不是**打包能力**：
   //    `package-cli.mjs` 的判据（归档丢可执行位、边车格式、篡改可证伪）与上传无关，
   //    属于 ADR-031「可证伪守卫」这一项目核心资产，删掉等于削掉可跑的能力证据。
+  //
+  //    ⚠️ 2026-10-03（治理 G1）判据改了形态：preflight 不再逐条手抄 `npm run verify:*`
+  //    （三份手抄清单曾漂移出「守卫写了却没有任何流程会跑」），改为调门禁编排器的
+  //    release 档。因此这里判**两件事**，缺一不可：
+  //      · preflight 里确实调了 `npm run gate -- --tier=release`；
+  //      · **总表的 release 档里确实有 cli-package**。
+  //    只判前者会退化成「有一行文字就算过」——那正是原判据想防的静默丢失。
   const preflight = jobBlock(code, 'preflight')
   if (!preflight) {
     problems.push('没有 `preflight` job——退役后它仍须跑静态门禁')
-  } else if (!/npm run verify:cli-package/.test(preflight)) {
+  } else if (!/npm run gate -- --tier=release/.test(preflight)) {
     problems.push(
-      '`preflight` 里没有 `npm run verify:cli-package`——打包器的判据与上传无关，' +
+      '`preflight` 里没有 `npm run gate -- --tier=release`——静态门禁清单的唯一产地是 ' +
+        'scripts/gate-manifest.mjs，逐条手抄清单正是「守卫写了却没人跑」的根因'
+    )
+  } else if (!releaseGates.includes('cli-package')) {
+    problems.push(
+      '门禁总表的 release 档里没有 cli-package——打包器的判据与上传无关，' +
         '退役的是上传通道，不是打包能力的验证（取消它等于静默丢掉一批可证伪断言）'
     )
   }
@@ -893,9 +917,20 @@ export function selfTest() {
     '可伪证性：上传宾语不是 dist/portable/* 必须判红（传了，但传的不是便携版）'
   )
   // 打包器必须仍在 preflight 里：退役的是上传，不是打包能力的验证。
+  // 2026-10-03（G1）后 preflight 调的是编排器的 release 档，因此夹具也改判这一行。
   check(
-    !checkCliArtifactShape(text.replace(/npm run verify:cli-package/g, 'echo skipped')).ok,
-    '可伪证性：从 preflight 摘掉 verify:cli-package 必须判红（打包判据与上传无关，不该一起丢）'
+    !checkCliArtifactShape(text.replace(/npm run gate -- --tier=release/g, 'echo skipped')).ok,
+    '可伪证性：从 preflight 摘掉 release 档调用必须判红（打包判据与上传无关，不该一起丢）'
+  )
+  // 反向：工作流照旧调 release 档，但**总表里把 cli-package 摘了** → 仍必须判红。
+  // 这条钉住「判据不得退化成只看一行文字」。
+  check(
+    !checkCliArtifactShape(text, { releaseGates: [] }).ok,
+    '可伪证性：release 档里没有 cli-package 必须判红（不能只看 preflight 有没有那行文字）'
+  )
+  check(
+    checkCliArtifactShape(text).ok,
+    '正向：真实 release.yml + 真实总表的 release 档必须通过'
   )
   // 内联脚本判据与发布通道无关，保留有效。
   const withInline = `${text}\n          node - x <<'NODE'\n          console.log(1)\n          NODE\n`

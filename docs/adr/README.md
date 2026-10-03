@@ -48,7 +48,7 @@
 |---|------|------|
 | [020](020-patch-package-apply-mode.md) | `patch-package` 必须「应用模式 + 相对 `--patch-dir`」+ 显式 `--error-on-fail` | 已接受 |
 | [021](021-patch-recount-line-numbers.md) | 补丁移植后必须重算行号（±20 窗口判据） | 已接受 |
-| [022](022-dual-upstream-channels.md) | 双上游通道 `next`/`alpha`，`dsh-targets.mjs` 唯一事实源 | 已被 ADR-048 取代 |
+| [022](022-dual-upstream-channels.md) | 双上游通道 `next`/`alpha`，`dsh-targets.mjs` 唯一事实源 | 已被 ADR-048 取代；**后由 [ADR-052](052-dual-upstream-channels-restored.md) 恢复在役**（2026-09-30） |
 | [023](023-tauri-hooks-check-only.md) | `beforeBuildCommand` / `beforeDevCommand` 只校验（`--check`）不组装 | 已接受 |
 | [024](024-prune-by-content-not-name.md) | 依赖树瘦身判据是「内容」（含运行时模块）不是目录名 | 已接受 |
 | [025](025-prune-platform-variants.md) | 剪枝外来平台原生变体，判据有界（linuxdeploy 杀手） | 已接受 |
@@ -74,7 +74,7 @@
 | [042](042-recovery-non-destructive-actions.md) | 恢复页只接非破坏性动作；插件卸载/禁用记为计划中 | 已接受 |
 | [043](043-delete-safe-mode-page.md) | 删除 `safe-mode.html`（接上只会交出读空气的页面） | 已归档 |
 | [044](044-explicitly-out-of-scope.md) | 明确不做清单：遥测、公网隧道、oRPC/tRPC、重写 UI…… | 已接受 |
-| [045](045-cli-distributable-artifact.md) | CLI 可引用产物 Phase 1；产物不含 runtime，Phase 2 计划中 | 已接受 |
+| [045](045-cli-distributable-artifact.md) | CLI 可引用产物 Phase 1；产物不含 runtime，Phase 2 计划中 | 已接受（**2026-09-24 部分取代**：发布通道退役，打包能力保留） |
 | [046](046-no-code-signing.md) | 不买 OS 层代码签名证书；保留免费的 minisign 更新链校验 | 已接受 |
 | [047](047-zero-budget-roadmap-recast.md) | 零预算路线图重裁：从「发布产品」到「能力证明资产」 | 已接受（删除清单第 2 项由 ADR-055 修订；双通道收敂由 ADR-052 推翻） |
 | [048](048-single-upstream-channel.md) | 收敂为单一上游通道 | **已被 ADR-052 取代**（2026-09-30） |

@@ -3,6 +3,10 @@
 > 架构师：高见远。仓库 `D:\works\github\dsh-desktop`，基线 HEAD `440d8b0`，工作区干净。
 > 范围：`crates/dsh-host` + `crates/dsh-host-cli`；**不触碰 `src-tauri`**，但保证其调用点兼容。
 > 配套图：`docs/class-diagram.mermaid`、`docs/sequence-diagram.mermaid`
+>
+> ⚠️ **时点文档提示（2026-10-03 核对）**：本文的工具链结论（MSRV 1.85）是当时的判断；
+> MSRV 后经 Tauri 2.12 上调，现行唯一产地是 `Cargo.toml` 的 `rust-version`（**1.90**）。
+> 文中所有 `1.85` 保留为当时记录，**不要当作当前要求**；现行口径见 `AGENTS.md` §4。
 
 ## 0. 三条先行结论
 

@@ -1,8 +1,61 @@
 # 命令速查
 
-> 从 `AGENTS.md` 原 §2「常用命令速查」原样迁入（含 `### 开发与构建`、`### 快速测试与校验门禁` 与全部 npm script 名）。
+> 从 `AGENTS.md` 原 §2「常用命令速查」原样迁入（含 `### 开发与构建`、`### 快速测试与校验门禁`）。
+>
+> **2026-10-03 起命令面分两层**（治理 G1/G2，见 `docs/dev-plan-defect-remediation.md` §11 的 S4-5）：
+>
+> | 层 | 在哪 | 说明 |
+> |----|------|------|
+> | **门禁清单** | `scripts/gate-manifest.mjs` | **唯一产地**：33 条门禁的脚本 / 参数 / 分档 / 「为什么有它」。CI 与 release preflight 都从这里派生，不再手抄 |
+> | **编排器** | `npm run gate`（`scripts/gates.mjs`） | 按分档或按名跑门禁 |
+> | **package.json 入口** | 22 条 | 只留给人用的入口（`dev`/`build`/`gate`/`verify:*`/`version:*`/…）。**门禁不再各占一条 script**——此前 62 条里 41 条是门禁入口 |
+>
+> **旧名仍然可用**（兼容层，不是遗漏）：`npm run gate -- verify:claims`、
+> `npm run gate -- claims:self-test`、`npm run gate -- verify:doc-facts --self-test`
+> 都能解析。`CHANGELOG.md`、`docs/adr/`、`docs/archive/`、`docs/incidents/` 与计划台账里
+> 的历史命令**刻意不改**（它们是当时的记录），需要重放时用上面的旧名形态即可。
+>
+> 本文件自称**含全部 npm script 名**：`package.json` 的每个 script 都必须在这里以
+> `npm run <name>` 的形式出现，这条由 `npm run gate -- doc-facts` 断言
+> （2026-10-03 前正是该守卫漏在 CI 之外，才让漏登四个名字的漂移无人发现）。
 
 ## 2. 常用命令速查
+
+### 门禁：一个入口 + 一份清单
+```bash
+# 列出全部门禁与它们各自的分档（清单的唯一产地是 scripts/gate-manifest.mjs）
+npm run gate -- --list
+
+# 按分档跑（分档语义见下表）
+npm run gate -- --tier=fast        # 等价于 npm run verify:fast（末尾追加 cargo test --tests）
+npm run gate -- --tier=full        # fast + doc-test
+npm run gate -- --tier=ci          # ci.yml 三平台静态门禁档
+npm run gate -- --tier=release     # release.yml preflight 档
+npm run gate -- --tier=sentinel    # 联网哨兵（drift / update-channel）
+
+# 按名跑单条门禁（旧名 verify:<name> / <name>:self-test 同样可解析）
+npm run gate -- claims
+npm run gate -- claims --self-test
+npm run gate -- --only=claims,plan-facts,doc-facts
+
+# 只看要跑什么、不真跑
+npm run gate -- --tier=ci --dry-run
+```
+
+| 分档 | 谁在跑 | 内容 |
+|------|--------|------|
+| `fast` | 本地 `npm run verify:fast` | 秒级、离线、无需组装产物的门禁（含自检）+ `cargo test --tests`。**2026-10-03 实测 44 步 / 22.4s 温编译**（预算 ≤60s） |
+| `full` | 本地 `npm run verify:full` | `fast` + doc-test（44 项 ≥258s，是快反馈的最大单项成本，故分档） |
+| `ci` | `ci.yml`（三平台） | 契约 / 壳面 / 补丁 / 发布链路的静态判据 + 打包器自检 |
+| `release` | `release.yml` preflight | `ci` 档 + 需要组装树的真检查（`target` / `harness-tree`） |
+| `sentinel` | `drift.yml`（每日）| **联网**真检查：上游漂移 / 更新通道。刻意不进 `fast`/`ci`——它们会因**外部状态**红，属哨兵而非快反馈（ADR-030 / S1-3） |
+
+- 平台受限的门禁（`portable-package` 仅 Windows）由编排器**打印 skip 与理由**，不静默略过（§7.1 规则 3）。
+- **清单自己的守卫**：`npm run gate -- gates` —— scripts/ 下每个支持 `--self-test` 的脚本都必须在总表里登记或带理由豁免，且每个分档的步数必须 > 0（扫出数为 0 即报错，不打印绿色）。
+- **需要额外参数的一次性核验**直接调脚本，不经编排器：
+  `node scripts/verify-release-assets.mjs --check-release <tag>`、
+  `node scripts/version.mjs check --tag <tag>`、
+  `npm run check:patch-applicability -- --pristine=… --target=…`。
 
 ### 开发与构建
 ```bash
@@ -13,24 +66,18 @@ npm run dev
 npm run build
 # 或直接调用
 npm run tauri build
+
+# 只组装内置运行时资源树（`--check` 仅校验树；`--dsh-target` 选上游通道）
+npm run prepare:harness -- --dsh-target=<next|alpha>
 ```
 
 ### 快速测试与校验门禁
 ```bash
-# 0. 门禁分档编排（S4-1/S4-2）：fast = 全部 :self-test + 快速静态门禁 +
-#    cargo test --tests（无 doc-test，目标 ≤60s 温编译）；full = fast + doc-test。
-#    :self-test 从 package.json 自动发现（断言扫出数 > 0）；真检查（drift /
-#    update-channel 的联网哨兵）刻意不在档内——它们会因外部状态红，属哨兵非快反馈。
-npm run verify:fast
-npm run verify:full
-
-# 0b. 组合入口（复用既有单项，不新增清单产地）：
-#     verify:sentinels = 两条**真检查**（upstream drift / update channel）成组。
-#       它们刻意不在 fast 档内——会因外部状态红，属哨兵而非快反馈（见上）。
-#     verify:all = verify:full + verify:sentinels，即「本仓本地能查的全部」，
-#       用于发布前一次性核验。
-npm run verify:sentinels
-npm run verify:all
+# 0. 门禁分档入口（清单唯一产地 scripts/gate-manifest.mjs；详见上面「门禁」一节）
+npm run verify:fast        # = npm run gate -- --tier=fast
+npm run verify:full        # = …--tier=full（多 doc-test）
+npm run verify:sentinels   # = …--tier=sentinel（两条联网哨兵）
+npm run verify:all         # = verify:full + verify:sentinels（发布前一次性核验）
 
 # 1. 快速无头测试门禁（无需 GUI，无需组装资源包 - INV-6）
 cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
@@ -46,34 +93,39 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo check --workspace
 
 # 5. 补丁分级自检（patches/ 与 patch-layers.mjs 登记表一致性）
-npm run verify:patches
+npm run gate -- patches
 
 # 6. 壳接口面一致性（命令定义 ↔ 注册 ↔ 前端 invoke/listen ↔ 页面可达性）
 #    这是唯一能捕获「写了但没人调用」类断线的门禁——见 §7.3
-npm run verify:ipc-surface
+npm run gate -- ipc-surface
+npm run gate -- ipc-surface --self-test
 
 # 6b. 生产路径 unwrap 清零（S4-4，治 D10）：src-tauri/src 与 crates 下每个 crate
 #     的 src 生产段（首个 #[cfg(test)] 之前；行注释/块注释/字符串字面量不计）
 #     不得出现 .unwrap()——锁中毒曾让 state.rs 15 处 unwrap 成为「一次 panic
 #     瘫痪整个壳」的崩溃面。.expect("归因") 是允许形态；无允许清单。
-#     含可证伪夹具的自测（修复前的真实形态必须报红），并随 :self-test 自动发现
-#     机制进入 verify:fast
-npm run verify:unwrap-hygiene
-npm run verify:unwrap-hygiene:self-test
+#     含可证伪夹具的自测（修复前的真实形态必须报红）；真检查与自检都在 fast 档
+npm run gate -- unwrap-hygiene
+npm run gate -- unwrap-hygiene --self-test
+
+# 6c. 组装后的 Harness 依赖树健全性（需先 `prepare:harness`；npm 解包 warn 与误删
+#     判据都会**静默**留下缺文件的树，只有启动时才暴露）
+npm run gate -- harness-tree
 
 # 7. 壳内页面运行时冒烟（DOM 桩执行内联脚本 + 点一遍所有按钮）
-npm run verify:shell-pages
+npm run gate -- shell-pages
 
 # 8. Harness 页注入脚本行为自测（19 项断言 + 可证伪性检查）
-npm run verify:harness-inject
+npm run gate -- harness-inject
 
 # 8b. 插件故障归因模式守卫（F1~F6；夹具逐字抄自 2026-09-22 装机日志）。
-#     2026-09-30 前它是零消费者的孤儿守卫，现已接进 verify:fast 的快速静态门禁
-npm run verify:fault-patterns
+#     2026-09-30 前它是零消费者的孤儿守卫；2026-10-03 起真检查进了 fast/ci/release 三档
+#     （此前只在本地的快速静态清单里，CI 完全不跑它）
+npm run gate -- fault-patterns
 
-# 9. 打包目标守卫（构建主机 vs 目标平台；自动推断，亦可 `-- self-test` 自检）
-npm run verify:target
-npm run verify:target -- --self-test
+# 9. 打包目标守卫（构建主机 vs 目标平台；自动推断，亦可自检）
+npm run gate -- target
+npm run gate -- target --self-test
 
 # 10. 故障注入（孤儿进程清理 + 退出码归因，10 项断言）
 #    前置：cargo build -p dsh-host-cli
@@ -88,61 +140,62 @@ npm run size:report
 
 # 13. 版本号一致性（package.json 唯一真源 ↔ tauri.conf.json ↔ Cargo.toml；
 #     tag 构建时额外校验 tag 与版本号匹配）——发布前的关键防线
-npm run verify:version
+npm run gate -- version
 # 本地查看各处版本、最近 tag、以及「上个 tag 以来的提交建议升哪一位」
 npm run version:show
 
 # 14. 变更日志/版本推进生成器自测（纯逻辑，无 git 依赖）
-npm run verify:commits
-npm run verify:changelog
+npm run gate -- commits
+npm run gate -- changelog
 
 # 15. 依赖树瘦身自测（删目录判据是「内容」不是「名字」，含可证伪性检查）
-npm run verify:prune
+npm run gate -- prune
 
 # 16. 原生平台变体剪枝自测（删 musl / 非目标架构 prebuilds；
 #     Linux AppImage 打包的必要前置——见「linuxdeploy 撞上外来变体」一节）
-npm run verify:variants
+npm run gate -- variants
 
 # 17. 发布工作流守卫（tauri-action 参数拼装 + shell 变量终止；含自测）
 #     守两类「只有真跑 release 才炸」的缺陷——见「发布工作流的两个静默缺陷」一节
-npm run verify:release-workflow
-npm run verify:release-workflow:self-test
+npm run gate -- release-workflow
+npm run gate -- release-workflow --self-test
 
 # 17b. 发布资产清单守卫（期望 13 项，按名字逐一枚举；含自测）
 #      F13 的真守卫：此前「13」只活在文档里，全仓零判据 ⇒ 实际产出 10 而门禁全绿。
-#      另可核对真实 Release：npm run verify:release-assets -- --check-release <tag>
-npm run verify:release-assets
-npm run verify:release-assets:self-test
+#      另可核对真实 Release（需参数，直接调脚本）：
+#        node scripts/verify-release-assets.mjs --check-release <tag>
+npm run gate -- release-assets
+npm run gate -- release-assets --self-test
 
 # 18. 官方 profile 保留名守卫（`desktop` 大小写变体）+ 契约锚点；含自测
-npm run verify:profile-names
-npm run verify:profile-names:self-test
+npm run gate -- profile-names
+npm run gate -- profile-names --self-test
 
 # 19. 宣称纪律守卫（README ↔ AGENTS：禁止表述 / 状态词表 / §7.2 欠债登记）；含自测
-npm run verify:claims
-npm run verify:claims:self-test
+npm run gate -- claims
+npm run gate -- claims --self-test
 
 # 19b. 计划事实守卫（文档里的「钉住的 DSH 版本」必须等于锚点；
 #      计划文档的批次状态词在「头部摘要 / §5 标题 / §10.1 表行」三处必须自洽）；含自测
-npm run verify:plan-facts
-npm run verify:plan-facts:self-test
+npm run gate -- plan-facts
+npm run gate -- plan-facts --self-test
 
 # 19c. 文档↔常量派生事实对账（S2-3）：rust-version / .nvmrc / license 三处 /
 #      ADR 计数——文档是被测方，常量是产地；含真实漂移夹具的自测
-npm run verify:doc-facts
-npm run verify:doc-facts:self-test
+npm run gate -- doc-facts
+npm run gate -- doc-facts --self-test
 
 # 20. 上游版本漂移哨兵（**逐通道**对照各自的 dist-tag；真检查会因上游领先而红，
 #     跑在 nightly；CI 只跑自测）
-npm run verify:drift
-npm run verify:drift:self-test
+npm run gate -- drift
+npm run gate -- drift --self-test
 
 # 20b. 双上游通道：目标表自检（目标名 ↔ 通道 ↔ 版本；未知通道必须失败不得回退）
-npm run verify:targets
+npm run gate -- targets
 
 # 20c. 提交式 lockfile 纯逻辑自检（inputs 一致性三规则 + 家族钉死推导 +
 #      闭包字段抽取 + 安装位置推导）
-npm run verify:harness-lockfile
+npm run gate -- harness-lockfile
 
 # 20d. 重新生成某目标的提交式 lockfile（版本锚点/补丁集/vendored 变更后必跑；
 #      需联网——先直连 registry 并发算家族传递闭包，再 npm install --package-lock-only；
@@ -150,16 +203,16 @@ npm run verify:harness-lockfile
 npm run harness:lockfile -- --dsh-target=<next|alpha>
 
 # 20e. 临时目录清理判据自测（三级降级 / 永不抛错 / 不跟随符号链接）
-npm run verify:remove-tree
+npm run gate -- remove-tree
 
 # 20f. 更新通道（ADR-053）：纯逻辑自检（含可证伪夹具）+ 真检查
 #      真检查核对「端点 version ≥ 该通道最新 tag」——它正是 2026-09-15~09-30 零投递的判据
-npm run verify:update-channel:self-test
-npm run verify:update-channel
+npm run gate -- update-channel --self-test
+npm run gate -- update-channel
 
 # 20g. .github 配置准入（ADR-054）：工作流必须在 workflows/ 下；第三方 action 必须钉 40 位 SHA
-npm run verify:github-config
-npm run verify:github-config:self-test
+npm run gate -- github-config
+npm run gate -- github-config --self-test
 
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
 #     默认按 MANIFEST 里记录的 target 取补丁表，也可 --dsh-target=<name> 指定
@@ -182,20 +235,25 @@ node scripts/merge-migrate-patches.mjs regen --dsh-target=next --to=<新版本> 
 #      或改用 relocate-patch-hunks.mjs（它有版本判据，本脚本没有）。
 node scripts/recount-patches.mjs --dsh-target=<next|alpha> --pristine=<未打补丁的包根>
 
+# 22c. 行号重算的**另一条路径**（只改 `@@` 行、原文保真、无外部进程）：与 22b 的
+#      recount-patches **二选一**——同一份补丁只用一条路径（见 AGENTS §7.2）
+npm run gate -- relocate-hunks          # 该工具的自检
+node scripts/relocate-patch-hunks.mjs --dsh-target=<next|alpha> --pristine=<纯净包根> [--write]
+
 # 23. 壳入口 ↔ 上游 CLI 调用约定 + macOS 父死看门狗 + **打包资源清单推导**（含自测）
 #     守三类静默失效：上游改自执行方式、看门狗装错进程/unref、
 #     入口依赖的模块或 Rust 资源常量漏登记进 bundle.resources
 #     （漏登记的后果只有安装包坏：本地目录齐全、门禁全绿——见 §4）
-npm run verify:harness-entry
-npm run verify:harness-entry:self-test
+npm run gate -- harness-entry
+npm run gate -- harness-entry --self-test
 
 # 24. CLI 打包能力：打包 / 命名 / sha256 边车 / 回读校验 / 产物执行自检（含自测）
 #     产物名由 package.json + 目标三元组推导；归档解包回读并真的执行一次
 #     ⚠️ 2026-09-24 起这是**本地能力**，不再有 Release 上传通道（见 §8.4）
-npm run verify:cli-package
+npm run gate -- cli-package
 #     便携版同一条链路（命名 / 边车 / 「解 zip 按平台选命令」）。真打包与可伪证
 #     夹具依赖 PowerShell，故本步只在本机为 Windows 时有意义
-npm run verify:portable-package
+npm run gate -- portable-package
 #     真打一份产物（先 cargo build --release -p dsh-host-cli）
 npm run package:cli -- --bin target/release/dsh-host-cli --out dist/cli
 #     核验下载回来的那份（manifest 由打包步骤落盘；上传通道退役后用于人工分发核对）

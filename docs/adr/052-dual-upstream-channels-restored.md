@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| 状态 | 已接受（决策 1 的 alpha 部分经 [ADR-056](056-alpha-channel-dormant.md) 修订为休眠） |
+| 状态 | 已接受（决策 1 的 alpha 部分经 [ADR-056](056-alpha-channel-dormant.md) 修订为休眠，同日又经 [ADR-057](057-alpha-channel-restored-and-dual-promotion.md) 修订为复役——**现行：两线均在役**） |
 | 日期 | 2026-09-30 |
 | 唯一产地 | scripts/dsh-targets.mjs（目标表）；本 ADR 与 docs/dev-plan-0.8-convergence.md §15 同源 |
 | 取代 | ADR-048（单通道收敂） |
@@ -53,3 +53,5 @@
 决定不变。直接诱因是通道化首发（v0.7.1-rc.1）实测「在役的 alpha 零投递」——守卫每天红、维护动作
 永远不会来，属于用红噪音训练人无视红灯。恢复在役的条件与版本约束（须严格大于当时最高 rc tag）
 见 ADR-056。
+
+**再修订（2026-09-30 同日）**：[ADR-057](057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056 决策 1——alpha 应维护者指令复役并推进至上游 `0.1.7-alpha.2`。本 ADR 决策 1「两个目标均为活跃维护项」因此重新成立；上一段是历史记录。

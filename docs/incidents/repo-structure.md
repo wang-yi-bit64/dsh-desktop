@@ -19,8 +19,8 @@
   - **严格保持无 GUI / Headless 状态（不变量 INV-6）**。
 - **`crates/dsh-host-cli`**：`dsh-host` 的命令行工具前端（支持 `dsh-host start | status | stop | tail | probe | doctor`）。它是 **INV-6 的兑现载体**——「主链路必须能在命令行独立复现」靠的就是这个二进制，排障时先跑它就能区分「宿主逻辑问题」与「窗口/权限问题」。**发布形态：仓库内使用，不作为发布产物（2026-09-24 起）。** 三个消费者（`smoke-launch.mjs` / `fault-inject.mjs` / `cli_blackbox.rs`）全部从 `target/debug/` 取二进制，与上传产物零交集；打包能力（`scripts/package-cli.mjs`：命名 / `.sha256` 边车 / manifest / 回读校验 / 产物执行自检）保留在本地。退役理由与恢复条件见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §5——**注意该打包产物不含 runtime**，本就不是「下载即用」。
 - **`src-tauri`**：Tauri 2.0 桌面应用层（负责窗口管理、生命周期、Webview IPC 对接、自动更新、页面导航、安全模式引导、LAN 手机桥、壳层结构化日志、一键脱敏诊断包导出、应用内日志查看器、**系统托盘（批次 0.2-B1）**、**应用内反馈入口（批次 0.2-D2）**）。
-  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 20 个，**全部有前端调用方**）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`（其 `ALLOW_UNUSED_COMMANDS` 现在是**空表**，这是目标状态），理由与例外清单见 `commands.rs` 模块文档。
-  - **命令返回形态**：所有命令返回 `CommandResult<T>` = `Result<IpcEnvelope<T>, String>`；**外层 `Result` 恒为 `Ok`**（仅为满足 Tauri 对 async 命令的编译要求），成败与错误码全在内层封套。**不要返回 `Err`**——那会让封套连同错误码一起丢失。细节见 `commands.rs` 模块文档。
+  - **IPC 命令面准入纪律**：每个 `#[tauri::command]` 都是对本地页开放的攻击面，**只保留有真实调用方**的命令（当前 21 个，**全部有前端调用方**）。死命令要么接上、要么删掉——不要为「可能有用的未来 UI」预留。判定靠 `npm run verify:ipc-surface`（其 `ALLOW_UNUSED_COMMANDS` 现在是**空表**，这是目标状态），理由与例外清单见 `commands.rs` 模块文档。
+  - **命令返回形态**：除 `portable_mode`（便携版判定，返回裸 `bool`）外，命令返回 `CommandResult<T>` = `Result<IpcEnvelope<T>, String>`；**外层 `Result` 恒为 `Ok`**（仅为满足 Tauri 对 async 命令的编译要求），成败与错误码全在内层封套。**不要返回 `Err`**——那会让封套连同错误码一起丢失。细节见 `commands.rs` 模块文档。
   - **`src-tauri/frontend/`**：本地静态页共 6 个——`index.html`（启动屏）、`error.html`（结构化错误页 + 插件故障归因 + 诊断包导出 + 恢复页 / 反馈页入口）、`plugin-recovery.html`（恢复页）、`updates.html`（更新页）、`logs.html`（日志查看器）、`feedback.html`（反馈页）。**均已接线、均可达**（`safe-mode.html` 已于 2026-09-10 删除，理由见批次 C）。
 > 🗄️ **已归档并删除（2026-09-10，批次 F）**：`crates/dsh-model-gateway`（多模型工具调用网关）
 > 与 `crates/dsh-host` 的插件隔离模块。两者均无运行时消费者，按 §7.3 的裁定「冻结并归档」处理——

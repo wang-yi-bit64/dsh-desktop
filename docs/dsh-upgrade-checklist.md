@@ -2,7 +2,7 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`channel` 字段是**上游 npm dist-tag 名**（通道定义），而 `dshVersion` 是**本仓实际钉住的版本**（客观事实），二者**历史上**可以不一致。2026-09-30 双线同步推进后，`next` 锚 `0.2.0-rc.2`、`alpha` 锚 `0.1.7-alpha.2`，两条线已各自对齐上游对应 dist-tag（实测一致，`verify:drift` 不告警）。升级前先跑 `node scripts/dsh-targets.mjs` 读**实际值**，不要按通道名推断版本。
+> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`channel` 字段是**上游 npm dist-tag 名**（通道定义），而 `dshVersion` 是**本仓实际钉住的版本**（客观事实），二者**历史上**可以不一致。2026-09-30 双线同步推进后，`next` 锚 `0.2.0-rc.2`、`alpha` 锚 `0.1.7-alpha.2`，两条线已各自对齐上游对应 dist-tag（实测一致，`npm run gate -- drift` 不告警）。升级前先跑 `node scripts/dsh-targets.mjs` 读**实际值**，不要按通道名推断版本。
 > **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.0-rc.2`、alpha 线 `0.1.7-alpha.2`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
@@ -17,7 +17,7 @@
 | 1 | `DSH_TARGETS[<target>].dshVersion` | `scripts/dsh-targets.mjs`（目标总表） | 该目标钉住的 Harness 版本，**唯一产地**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取。决定 `dependencies` 里所有 `@deepseek-ai/*` 的取值（每个目标一条） |
 | 2 | `NODE_VERSION` | `scripts/prepare-harness.mjs` | 内置 Node 运行时版本；与 DSH 无关，除非上游提升 Node 要求 |
 | 3 | `PNPM_VERSION` | `scripts/prepare-harness.mjs` | 仅用于组装期工具链，通常不动 |
-| 4 | `patches/<target>/*.patch` **文件名** | `patches/<target>/` | 形如 `@deepseek-ai+dsh-client-ui-chat+<版本>.patch`，版本段必须跟**该目标**的 `dshVersion` 一致（仅 DSH 家族包跟随；`cordis-plugin-loader` 这类独立版本号的包不跟）。两个目标各持一套，`npm run verify:patches` 逐目标校验 |
+| 4 | `patches/<target>/*.patch` **文件名** | `patches/<target>/` | 形如 `@deepseek-ai+dsh-client-ui-chat+<版本>.patch`，版本段必须跟**该目标**的 `dshVersion` 一致（仅 DSH 家族包跟随；`cordis-plugin-loader` 这类独立版本号的包不跟）。两个目标各持一套，`npm run gate -- patches` 逐目标校验 |
 | 5 | `PATCH_LAYERS` 表 | `scripts/patch-layers.mjs` | 每条补丁的 `layer` / `why` / `retireWhen`；补丁增删必须同步。表**按包名索引**——新增一条上游通道**不需要**动它，只有引入新包才要补 |
 | 6 | `patches/LAYERS.md` | `patches/LAYERS.md` | 分级判据说明文档，需与 #5 保持一致（同样按包名列：同一个包在两条通道下做的是同一件事） |
 | 7 | vendored 覆盖包 | `packages/<target>/*.tgz` | 被打补丁包的 tgz 覆盖，**按目标分目录**；版本号在文件名里，须对应该目标的 DSH 版本。⚠️ **两条线当前均为空**（alpha 于 2026-09-16、next 于 2026-09-24 退役——退役判据是与 registry 同版本 tarball 逐字节一致 ⇒ vendoring 前提不成立）。空目录**不报错**：`prepare-harness.mjs` 以 `readdirSafe` + `existsSync` 容忍该目录整体缺失 |
@@ -52,7 +52,7 @@
 boot / config-dump / 插件管理。
 
 - [ ] 确认本仓**没有**任何 profile 字面量等于 `desktop`（大小写不敏感）。
-      自动化判据：`npm run verify:profile-names`（P1/P2/P3；改动 `SAFE_MODE_PROFILE` /
+      自动化判据：`npm run gate -- profile-names`（P1/P2/P3；改动 `SAFE_MODE_PROFILE` /
       `HARNESS_CLI` 会让它变红）。
 - [ ] 本仓当前使用 `desktop-safe-mode`（安全模式）与裸子命令 `web`（默认）——**不要**改成 `desktop`。
 
@@ -76,7 +76,7 @@ boot / config-dump / 插件管理。
 
 ### 约束三：上游版本漂移要主动监测，不要等升级时才发现
 
-- [ ] 跑 `npm run verify:drift`：把**两条通道各自**钉住的版本与它对应的 npm dist-tag 比一次
+- [ ] 跑 `npm run gate -- drift`：把**两条通道各自**钉住的版本与它对应的 npm dist-tag 比一次
       （`next` 对 `next` tag、`alpha` 对 `alpha` tag；上游没有对应 tag 时退回 `latest`）。
       落后 ≥1 个 minor 或出现更晚的预发布阶段（如 alpha → rc）即非零退出；
       网络不可用时打印 SKIP（**不等于「已核对」**）。
@@ -266,7 +266,7 @@ boot / config-dump / 插件管理。
 对 `patches/<target>/` 下每个补丁，逐个处理：
 
 - [ ] **2.1 重命名文件名**：把版本段改为该目标的新版本（`DSH_TARGETS[<target>].dshVersion`；仅 DSH 家族包跟随，`cordis-plugin-loader` 这类独立版本号的包不改）。
-      > 漏改的后果是 `patch-package` 在全新 `npm install` 后找不到目标包，该补丁静默不生效——而它的 `status` 会显示什么取决于失败模式，恰好是最难发现的一类事故。`npm run verify:patches` 会逐目标校验版本段是否与该目标的 `dshVersion` 一致。
+      > 漏改的后果是 `patch-package` 在全新 `npm install` 后找不到目标包，该补丁静默不生效——而它的 `status` 会显示什么取决于失败模式，恰好是最难发现的一类事故。`npm run gate -- patches` 会逐目标校验版本段是否与该目标的 `dshVersion` 一致。
 - [ ] **2.2 重算行号**（移植补丁的必需步骤，从另一条上游线复制补丁时尤其关键）：
       ```bash
       node scripts/recount-patches.mjs --dsh-target=<target> --pristine=<未打补丁的包根>
@@ -299,7 +299,7 @@ boot / config-dump / 插件管理。
 - [ ] **2.5 同步登记**：`scripts/patch-layers.mjs` 的 `PATCH_LAYERS` 与 `patches/LAYERS.md`——两者都**按包名**索引，所以新增/推进一条通道本身**不需要**动它们，只有新增或删除**包**才要改（同一包在两条通道下是同一件事，只是行号随上游版本变化）。
 - [ ] **2.6 自检**：
       ```bash
-      npm run verify:patches        # 逐目标（next / alpha）检查：包名可推导、已登记、文件名版本段与目标版本一致
+      npm run gate -- patches        # 逐目标（next / alpha）检查：包名可推导、已登记、文件名版本段与目标版本一致
       ```
 
 > **补丁退役优先于补丁修复。** 每个 `ui-behavior` / `brand` 补丁都是长期的升级成本。若能推动需求进入上游，退役是净收益。`PATCH_LAYERS` 的 `retireWhen` 字段就是为此准备的判据记录。
@@ -382,7 +382,7 @@ grep -n '"dependencies"\|"optionalDependencies"' -A 10 <该包>/package.json
 全部满足才合并：
 
 - [ ] `MANIFEST.json` 的 `patches[]` 逐条 `applied`，或 `skipped` 项均为 `ui-behavior` / `brand` 层且有明确记录
-- [ ] `npm run verify:patches` 通过
+- [ ] `npm run gate -- patches` 通过
 - [ ] Step 4 四项全绿
 - [ ] L1 烟雾全绿
 - [ ] 体积变化已记录，无未解释的异常增量
@@ -411,7 +411,7 @@ npm run smoke:headless
 
 | 脆弱点 | 为什么存在 | 缓解 |
 |--------|-----------|------|
-| `patch-package` 行级 diff（当前每条通道 14 个，曾 18 个） | 上游未开放的能力扩展点（品牌、UI 行为、插件加载） | 分层降级（`ui-behavior` 失败不阻构建）+ `retireWhen` 记录退役判据 + **移植后重算行号**（Step 2.2，`recount-patches.mjs`——±20 行窗口外必失败）；长期方案见 [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) |
-| 补丁文件名内嵌版本号 | `patch-package` 的命名约定 | 本文 Step 2.1 强制项；`verify:patches` **逐目标**校验包名可推导性与版本段一致 |
+| `patch-package` 行级 diff（2026-10-03 实测 next 10 个 / alpha 11 个；曾 18 → 14 → 13） | 上游未开放的能力扩展点（品牌、UI 行为、插件加载） | 分层降级（`ui-behavior` 失败不阻构建）+ `retireWhen` 记录退役判据 + **移植后重算行号**（Step 2.2，`recount-patches.mjs`——±20 行窗口外必失败）；长期方案见 [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) |
+| 补丁文件名内嵌版本号 | `patch-package` 的命名约定 | 本文 Step 2.1 强制项；`npm run gate -- patches` **逐目标**校验包名可推导性与版本段一致 |
 | 无头门禁覆盖不到 Harness 行为变更 | 壳把 Harness 当黑盒派生 | Step 5 的 L1/L2 烟雾是**唯一**能发现此类回归的门禁 |
 | 体积随上游增长 | 内置完整依赖树以换取宿主机零依赖 | Step 6 的体积对比 + [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) 的瘦身方案 |

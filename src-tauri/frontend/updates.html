@@ -155,7 +155,8 @@
        * 成功路径没有导航副作用（更新流程都在本页内推进），因此**恢复按钮**：
        * 用户可能想重试，把按钮永久禁用在成功路径上是错的。
        *
-       * **必须解包封套**：命令面现在一律返回 `{success, data, error}`，业务失败
+       * **必须解包封套**：命令面（`portable_mode` 这类裸值探测命令除外）一律返回
+       * `{success, data, error}`，业务失败
        * 也是成功返回（`success=false`）而不是 reject。只看 promise 有没有 reject，
        * 会把「下载失败 / 无可用版本」当成成功——按钮亮着，什么都没发生。
        * @param {string} command 已注册的 Tauri 命令名

@@ -262,7 +262,7 @@ function main() {
     console.log('  本次组装：未找到 MANIFEST.json（未组装），结果列不可用')
   }
   console.log('')
-  console.log('  注：本报告只陈述事实，不作门禁。补丁健康断言见 `npm run verify:patches`。')
+  console.log('  注：本报告只陈述事实，不作门禁。补丁健康断言见 `npm run gate -- patches`。')
 }
 
 // ESM「主模块」判定：仅当被直接执行（而非 import）时跑 CLI。

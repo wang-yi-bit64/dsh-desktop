@@ -11,13 +11,13 @@
 > **状态标记约定**：✅ 已接线（在运行时路径上）· ⚠️ 未接线（代码已实现并测试，但无运行时调用方）· 🟡 部分 · ❌ 未实现 · 🗄️ 已归档（曾实现，现已删除并正式裁定不做）· 🕓 计划中（无代码，且刻意不现在做）。
 > 每项的代码证据与调用方见 [`AGENTS.md` §7 宣称纪律](AGENTS.md#7-宣称纪律claim-discipline)。本文件与 AGENTS.md 的状态必须一致，改一处须同步另一处。
 >
-> 截至 2026-09-10 批次 A~G 收尾，表中**已无「未接线」条目**：能接的都接了，其余都正式归档并删除；剩下两条「计划中」是写明理由的决策，不是欠债。
+> 截至 2026-09-10 批次 A~G 收尾，表中**已无「未接线」条目**：能接的都接了，其余都正式归档并删除；剩下的「计划中」条目——安全模式界面指示器、插件卸载/禁用、runtime bundle 独立发布（Phase 2）——都是写明理由的决策，不是欠债。
 
 ### 已接线能力
 
 - **内置运行时** ✅ —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
 - **独立契约库 (`dsh-contracts`)** ✅ —— 彻底剥离 UI 依赖，提炼统一常量、**标准错误码总表 (`E1xxx`~`E7xxx`)**、前后端 IPC 封套 (`IpcEnvelope<T>`，其 `error` 载荷为类型化的 `AppError`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
-- **全命令面统一 IPC 封套** ✅ —— **20 个命令全部**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
+- **全命令面统一 IPC 封套** ✅ —— **21 个命令中 20 个**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套；唯一刻意的例外是 `portable_mode`（便携版判定，直接返回裸 `bool`）。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
 - **Harness 核心生命周期** ✅ —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
@@ -75,20 +75,22 @@ npm run tauri build
 |---|---|---|
 | `npm run dev` / `npm run build` | 先把 Harness 运行时组装进 `src-tauri/resources/`，再启动开发调试环境 / 产出安装包 | 日常开发 · 出正式产物 |
 | `npm run tauri` | Tauri CLI 原样透传（`npm run tauri -- build --bundles nsis`） | 需要 `build` 未暴露的参数时 |
-| `npm run verify:fast` / `npm run verify:full` | 本地门禁编排：从本文件**自动发现**的全部 `*:self-test` + 秒级静态门禁 + 无头 `cargo test`；`full` 额外含 doc-test | 每次提交前；打 tag 前用 `verify:full` |
-| `npm run verify:sentinels` | 两条**需联网**的真检查（`verify:drift`、`verify:update-channel`）成组。它们因**外部状态**而非你的代码变红，这正是它们被排除在 `verify:fast` 之外的原因 | 每周例行，或规划上游升级时 |
+| `npm run verify:fast` / `npm run verify:full` | 本地门禁编排：跑总表里分档为 `fast` 的全部门禁 + 无头 `cargo test`；`full` 额外含 doc-test | 每次提交前；打 tag 前用 `verify:full` |
+| `npm run verify:sentinels` | 两条**需联网**的真检查（`npm run gate -- drift`、`npm run gate -- update-channel`）成组。它们因**外部状态**而非你的代码变红，这正是它们被排除在 `verify:fast` 之外的原因 | 每周例行，或规划上游升级时 |
 | `npm run verify:all` | `verify:full` + `verify:sentinels`：本仓本地能验的全部 | 发布前最后一次本地核验 |
-| `npm run verify:version` | 版本号在 `package.json` / `tauri.conf.json` / `Cargo.toml` 三处一致（tag 构建时另校验 tag ↔ 版本） | 打 tag 前——不一致会让所有已安装用户收到错误版本 |
+| `npm run gate -- version` | 版本号在 `package.json` / `tauri.conf.json` / `Cargo.toml` 三处一致（tag 构建时另校验 tag ↔ 版本） | 打 tag 前——不一致会让所有已安装用户收到错误版本 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L1 + L2（L2 需已构建的壳二进制，缺失时自行 SKIP） | 任意机器跑 `smoke:headless`；`npm run build` 之后跑 `smoke` |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因 | 改动进程 / 生命周期相关代码后 |
 | `npm run size:report` | 壳二进制、安装包与资源树三口径体积 | 构建后需要对外给出体积数字时 |
 | `npm run prepare:harness` | 只组装运行时（`-- --dsh-target=alpha` 选通道，`-- --check` 只校验树） | 需要真实资源树才能跑 `cargo build` / `cargo test` 时 |
 | `npm run harness:lockfile` | 重新生成某目标的提交式 lockfile 与 inputs 对（`-- --dsh-target=next`） | 版本锚点 / 补丁集 / vendored 包变更后 |
 | `npm run check:patch-applicability` / `npm run report:patches` | 上游升级预检（哪些补丁仍适用，约 4 MB 下载）与补丁健康度报告 | 升级上游期间；产出 `MANIFEST.json` 的构建之后 |
-| `npm run package:cli` / `npm run verify:cli-package` | CLI 打包链路：产物命名、`.sha256` 边车、回读校验、真执行一次 | 需要本地 `dsh-host-cli` 归档时（它**不是**发布产物） |
+| `npm run package:cli` / `npm run gate -- cli-package` | CLI 打包链路：产物命名、`.sha256` 边车、回读校验、真执行一次 | 需要本地 `dsh-host-cli` 归档时（它**不是**发布产物） |
 | `npm run version:show` / `version:bump` / `changelog:notes` / `changelog:write` | 版本查看与推进（依 Conventional Commits 判定）以及变更日志生成 | 发版流程中 |
 
-> **脚本名是对外契约——只新增，不改义。** `.github/workflows/*`、`src-tauri/tauri.conf.json`（`beforeDevCommand` / `beforeBuildCommand`）、`AGENTS.md`、`docs/` 与 `scripts/verify-fast.mjs` 都**按名字**引用脚本，且 `verify:fast` 还会**自动收集所有以 `:self-test` 结尾的脚本**。因此改名从不只是本地改动：它要么让某道门禁从 fast 档里静默消失，要么直接打断某个工作流。新能力请用新名字。
+> **2026-10-03 起，门禁清单只有一处产地：`scripts/gate-manifest.mjs`。** 每条门禁在那里登记一次（脚本 / 参数 / 分档 / **为什么有它**），`ci.yml`、`release.yml` 与本地 fast 档都从它派生，不再各抄一份。跑门禁用 `npm run gate -- <name>`；旧写法 `npm run verify:<name>` 仍能经门禁 CLI 解析（`npm run gate -- verify:<name>`），历史文档与 ADR 因此不必改写。
+>
+> **入口脚本名是对外契约——只新增，不改义。** `.github/workflows/*`、`src-tauri/tauri.conf.json`（`beforeDevCommand` / `beforeBuildCommand`）、`AGENTS.md` 与 `docs/` 都**按名字**引用它们。改名从不只是本地改动：它要么打断某个工作流，要么让某道门禁静默消失。新能力请用新名字——**新门禁登记进总表，不要在 workflow 里另抄一行**。
 
 ## 仓库与 Workspace 结构
 
@@ -101,7 +103,7 @@ src-tauri/
   frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、插件恢复页、更新页、日志查看器、反馈页）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
   src/                  # Tauri 桌面应用层（窗口管理、应用菜单、IPC 命令、安全模式切换、LAN 手机桥、壳层日志、自动更新）
-    commands.rs             # 完整 IPC 命令面：20 个命令，全部返回 IpcEnvelope<T>
+    commands.rs             # 完整 IPC 命令面：21 个命令（20 个返回 IpcEnvelope<T>，portable_mode 返回裸 bool）
     logging.rs              # 壳层结构化日志（desktop.log，5MB × 2 轮转）
     mobile_bridge.rs        # 局域网手机桥（配对页 + dsh-auth-* cookie 握手 + RPC 转发）
 build/                  # 运行时组装与辅助注入脚本
@@ -146,12 +148,13 @@ docs/                   # 架构设计、契约定义与技术方案
 | P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
 | P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | 🗄️ **已归档（2026-09-10）**：从未有调用方，且根本不在插件挂载路径上；整体删除而非留着腐烂。只剩进程内故障归因 |
 | P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | 🗄️ **已归档（2026-09-10）**：已从 workspace 整体移除；归档文档保留恢复判据 |
-| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：20 个命令全部返回 `IpcEnvelope<T>`；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：21 个命令中 20 个返回 `IpcEnvelope<T>`（`portable_mode` 刻意返回 `bool`）；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
 
 ### 后续计划（尚未开工）
 
 - **安全模式界面指示器** 🕓 **刻意后置** —— 安全模式生效时，壳层目前**不给用户任何可见提示**。上游的做法是往 Harness 页注入一条横幅（带「卸载插件」/「退出安全模式」两个动作）。这项能力**不是遗漏**：它刻意推迟到壳层其余部分稳定之后再做，好让注入机制在已定型的地基上一次性建好，而不是事后回补。安全模式本身当前工作正常（见「已接线能力」），待补的只是它的「可见性」。
 - **插件卸载 / 禁用** 🕓 **刻意后置** —— 见上方功能表。这一项在等**上游的停用（disable）语义**，不是等壳层开发：眼下只有「冷启动被静默还原」与「不可逆删除」两种行为可选。
+- **runtime bundle 独立发布（Phase 2）** 🕓 **带触发条件，刻意后置** —— 无代码。门槛与前置改造写在 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §4：出现第一个本仓之外的消费者，或开工 H3-a 运行时更新事务 / H2-a 兼容矩阵时才做。
 
 ## 测试
 
@@ -169,31 +172,31 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 
 | 命令 | 它到底在守什么 |
 |------|--------------|
-| `npm run verify:ipc-surface` | 命令定义 ↔ `generate_handler!` 注册 ↔ 页面 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记。`src-tauri` 是 rlib，没人调用的 `pub` 命令**不会**触发 `dead_code`——这是唯一能抓到「写了但没接线」的东西。 |
-| `npm run verify:shell-pages` | 把每个壳页面的内联脚本放进 DOM 桩里真跑一遍，并**逐个点一遍按钮**。抓 `getElementById` 返回 `null`（脚本会就此中断，**该页所有监听全部失效**），以及 HTML 留了按钮却没挂监听。 |
-| `npm run verify:harness-inject` | Harness 页注入脚本的 DOM 行为，含**可证伪性检查**：把脚本回退成上游行为，断言必须变红。 |
-| `npm run verify:patches` | `patches/<target>/` 与 `scripts/patch-layers.mjs` 的分级清单一致——**逐目标**各查一遍（`next` 与 `alpha`）：只验默认目标会让另一条线的补丁整目录漏登记、或版本段停在旧值而无人发现。每个补丁文件名仍须能推导出包名；分级表按**包名**索引，因此新增一条通道不需要动它。 |
-| `npm run verify:targets` | 构建目标总表本身（`scripts/dsh-targets.mjs`，别与 `verify:target` 混淆）：通道 ↔ 目标 ↔ 钉住的上游版本、版本号 → 目标的解析规则，以及「未知预发布通道不得回退默认目标」这条硬约束（静默回退会产出「版本号说一条线、运行时却是另一条线」的包）。纯逻辑，不联网。 |
-| `npm run verify:prune` / `npm run verify:variants` | 决定出厂 `node_modules` 形状的两条剪枝规则：哪些开发产物目录可安全删除（看**内容**不看名字——`yaml/dist/doc` 是运行时路径），以及哪些外来平台原生变体必须在 linuxdeploy 扫描 AppDir 前清掉。两条都带针对旧判据的可伪证性检查。 |
-| `npm run verify:version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
-| `npm run verify:commits` / `npm run verify:changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
-| `npm run verify:target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
-| `npm run verify:release-workflow` | 发布工作流自身的静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。自 2026-09-24 起，对**已退役**的 CLI 发布通道判据方向反转：`cli` / `cli-publish` 两个 job **必须缺席**，而 `gh release upload` **按宾语判**——上传 `dist/portable/*` 放行（3 个便携版是期望 13 项的一部分），上传 `dist/cli/*` 判红。同时 `dsh-host-cli` crate、打包守卫、以及走 `target/debug/` 的消费者都必须仍在——「取消发布」与「删掉 crate」是两件事，两个方向都有夹具证明。 |
-| `npm run verify:release-assets` | **期望的发布资产清单（13 项）**。按**名字模式逐项枚举**而不是数个数：10 项来自 `tauri-action`（安装包、`.sig` 边车、macOS updater 包、`latest.json`），另 3 项是便携版。之所以要它：13 这个数字此前只活在文字里，是一句**承诺**而非**断言**，而 F13 就是在全部门禁绿灯下产出 10 项。发布后跑 `-- --check-release <tag>` 可把真实 Release 与期望清单逐项比对。⚠️ 模式取自**实测**的 Release 输出，不是从 `tauri.conf.json` 反推：bundler 把 `DSH Desktop` 渲染成 `DSH.Desktop_<版本>_x64-setup.exe`（点号分隔产品名、下划线分隔版本），而 macOS 的 updater 包**不含版本段**。喂入连字符写法的夹具必须判红。 |
-| `npm run verify:cli-package` | CLI 打包链路（`scripts/package-cli.mjs`）：产物名由 `package.json` 与目标三元组推导（**不接受手写**）、`.sha256` 边车是 `sha256sum -c` 真能读的格式、归档解包回读逐字节一致且可执行位完好。同一脚本幂等地渲染 Release 正文表格，并带可伪证夹具——被篡改的解包内容、丢掉的可执行位、不匹配的边车、缺失的归档，全都必须判红。 |
-| `npm run verify:portable-package` | 便携版打包链路（`scripts/package-portable.mjs`）：产物命名、`.sha256` 边车形状、以及「解 zip 按平台选命令」——发布 job 跑在 ubuntu 上而要核验的是 Windows 产出的 `.zip`，无条件 `spawn powershell` 会让核验必然失败。真打包与输入缺 `WebView2Loader.dll` / 体积不达标必须拒绝打包等可伪证夹具依赖 PowerShell，因此这一步只在 Windows 上跑；解包命令那条是纯逻辑（平台是入参），跑一次等于两个分支都验到。 |
-| `npm run verify:harness-entry` | 壳入口 ↔ 上游 `dsh` CLI 的调用约定兼容性：上游 0.1.5-rc.1 把 CLI 改成 `if (import.meta.main) runCli()`，因此**import** 它的包装器必须显式调用导出的 `runCli()`，否则进程以退出码 0 静默结束。同时钉住 macOS 父死看门狗——由入口**与 `mock-harness.mjs`** 共同安装（故障注入的 mock 模式会把入口整体替换掉）。带可证伪性自检。 |
-| `npm run verify:profile-names` | 任何 profile 字面量都不得等于官方保留名 `desktop`（大小写不敏感）——官方桌面版独占该 profile。同时钉住两个契约锚点（`SAFE_MODE_PROFILE` 保持 `desktop-safe-mode`、`HARNESS_CLI` 保持裸子命令 `web`）。带可证伪性自检。 |
-| `npm run verify:claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |
-| `npm run verify:drift` / `verify:drift:self-test` | 两条通道是否各自落后于**自己的** npm dist-tag——`next` 对照 `next` tag、`alpha` 对照 `alpha` tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
+| `npm run gate -- ipc-surface` | 命令定义 ↔ `generate_handler!` 注册 ↔ 页面 `invoke`/`listen` ↔ `local_page` 目标 ↔ `#[allow(dead_code)]` 登记。`src-tauri` 是 rlib，没人调用的 `pub` 命令**不会**触发 `dead_code`——这是唯一能抓到「写了但没接线」的东西。 |
+| `npm run gate -- shell-pages` | 把每个壳页面的内联脚本放进 DOM 桩里真跑一遍，并**逐个点一遍按钮**。抓 `getElementById` 返回 `null`（脚本会就此中断，**该页所有监听全部失效**），以及 HTML 留了按钮却没挂监听。 |
+| `npm run gate -- harness-inject` | Harness 页注入脚本的 DOM 行为，含**可证伪性检查**：把脚本回退成上游行为，断言必须变红。 |
+| `npm run gate -- patches` | `patches/<target>/` 与 `scripts/patch-layers.mjs` 的分级清单一致——**逐目标**各查一遍（`next` 与 `alpha`）：只验默认目标会让另一条线的补丁整目录漏登记、或版本段停在旧值而无人发现。每个补丁文件名仍须能推导出包名；分级表按**包名**索引，因此新增一条通道不需要动它。 |
+| `npm run gate -- targets` | 构建目标总表本身（`scripts/dsh-targets.mjs`，别与 `target` 门禁混淆）：通道 ↔ 目标 ↔ 钉住的上游版本、版本号 → 目标的解析规则，以及「未知预发布通道不得回退默认目标」这条硬约束（静默回退会产出「版本号说一条线、运行时却是另一条线」的包）。纯逻辑，不联网。 |
+| `npm run gate -- prune` / `npm run gate -- variants` | 决定出厂 `node_modules` 形状的两条剪枝规则：哪些开发产物目录可安全删除（看**内容**不看名字——`yaml/dist/doc` 是运行时路径），以及哪些外来平台原生变体必须在 linuxdeploy 扫描 AppDir 前清掉。两条都带针对旧判据的可伪证性检查。 |
+| `npm run gate -- version` | 版本号在 `package.json`（唯一真源）/ `tauri.conf.json`（继承真源）/ `Cargo.toml`（脚本同步）三处一致；tag 构建时额外校验 **tag 与版本号匹配**。不一致会让安装包自称另一个版本，updater 据此决定推不推更新——错一次影响所有已安装用户。 |
+| `npm run gate -- commits` / `npm run gate -- changelog` | 变更日志生成器与其解析器的自测。一个写坏了却**静默产出空变更日志**的脚本，比没有脚本更危险——Release 页会显示「没有任何改动」。 |
+| `npm run gate -- target` | 构建主机与打包目标是同一平台/架构——在 300MB 运行时被组装进产物**之前**就拦住。 |
+| `npm run gate -- release-workflow` | 发布工作流自身的静默失败模式：`tauri-action` 会自插 `build` 与 `--`（故 `tauriScript` 不能带这两者），以及 shell 变量后接非 ASCII 标点时须写 `${花括号}`（否则 macOS bash 3.2 会把标点并进变量名）。这两条曾让首个 `v0.1.0` 发布三平台全红，而本地门禁全绿。自 2026-09-24 起，对**已退役**的 CLI 发布通道判据方向反转：`cli` / `cli-publish` 两个 job **必须缺席**，而 `gh release upload` **按宾语判**——上传 `dist/portable/*` 放行（3 个便携版是期望 13 项的一部分），上传 `dist/cli/*` 判红。同时 `dsh-host-cli` crate、打包守卫、以及走 `target/debug/` 的消费者都必须仍在——「取消发布」与「删掉 crate」是两件事，两个方向都有夹具证明。 |
+| `npm run gate -- release-assets` | **期望的发布资产清单（13 项）**。按**名字模式逐项枚举**而不是数个数：10 项来自 `tauri-action`（安装包、`.sig` 边车、macOS updater 包、`latest.json`），另 3 项是便携版。之所以要它：13 这个数字此前只活在文字里，是一句**承诺**而非**断言**，而 F13 就是在全部门禁绿灯下产出 10 项。发布后跑 `node scripts/verify-release-assets.mjs --check-release <tag>` 可把真实 Release 与期望清单逐项比对。⚠️ 模式取自**实测**的 Release 输出，不是从 `tauri.conf.json` 反推：bundler 把 `DSH Desktop` 渲染成 `DSH.Desktop_<版本>_x64-setup.exe`（点号分隔产品名、下划线分隔版本），而 macOS 的 updater 包**不含版本段**。喂入连字符写法的夹具必须判红。 |
+| `npm run gate -- cli-package` | CLI 打包链路（`scripts/package-cli.mjs`）：产物名由 `package.json` 与目标三元组推导（**不接受手写**）、`.sha256` 边车是 `sha256sum -c` 真能读的格式、归档解包回读逐字节一致且可执行位完好。同一脚本幂等地渲染 Release 正文表格，并带可伪证夹具——被篡改的解包内容、丢掉的可执行位、不匹配的边车、缺失的归档，全都必须判红。 |
+| `npm run gate -- portable-package` | 便携版打包链路（`scripts/package-portable.mjs`）：产物命名、`.sha256` 边车形状、以及「解 zip 按平台选命令」——发布 job 跑在 ubuntu 上而要核验的是 Windows 产出的 `.zip`，无条件 `spawn powershell` 会让核验必然失败。真打包与输入缺 `WebView2Loader.dll` / 体积不达标必须拒绝打包等可伪证夹具依赖 PowerShell，因此这一步只在 Windows 上跑；解包命令那条是纯逻辑（平台是入参），跑一次等于两个分支都验到。 |
+| `npm run gate -- harness-entry` | 壳入口 ↔ 上游 `dsh` CLI 的调用约定兼容性：上游 0.1.5-rc.1 把 CLI 改成 `if (import.meta.main) runCli()`，因此**import** 它的包装器必须显式调用导出的 `runCli()`，否则进程以退出码 0 静默结束。同时钉住 macOS 父死看门狗——由入口**与 `mock-harness.mjs`** 共同安装（故障注入的 mock 模式会把入口整体替换掉）。带可证伪性自检。 |
+| `npm run gate -- profile-names` | 任何 profile 字面量都不得等于官方保留名 `desktop`（大小写不敏感）——官方桌面版独占该 profile。同时钉住两个契约锚点（`SAFE_MODE_PROFILE` 保持 `desktop-safe-mode`、`HARNESS_CLI` 保持裸子命令 `web`）。带可证伪性自检。 |
+| `npm run gate -- claims` | README ↔ `AGENTS.md` 的宣称纪律：`AGENTS.md` §7 明令禁止的表述不得出现在两份 README；五种状态词须三处俱全；§7.2 表里每一条欠债行都必须登记。带以修复前原文为夹具的可证伪性自检。 |
+| `npm run gate -- drift` / `npm run gate -- drift --self-test` | 两条通道是否各自落后于**自己的** npm dist-tag——`next` 对照 `next` tag、`alpha` 对照 `alpha` tag。落后一个 minor 位或预发布阶段即失败；同阶段内只落后补丁位仅提示；registry 不可达时打印 `SKIP`（**不等于**「已核对」）。真检查跑在 nightly 定时任务；CI 只跑自检。 |
 | `npm run report:patches` | 补丁健康度报告：把层 / 退役条件表与 `MANIFEST.json` 里逐条真实的 `applied/skipped/failed` 合并成一张表。manifest 缺失时如实标为不可用——**不伪造 applied**。 |
 | `npm run check:patch-applicability` / `--target=<v>` | 上游升级预检：仓库内补丁在目标版本上哪些仍可用、在哪一段 hunk 断裂。约 4MB 下载，不必组装 300MB。零外部二进制（Node `fetch` + `zlib` + 自带 tar 读取器）。 |
 | `npm run fault-inject` | 针对真实 `dsh-host-cli` 验证孤儿进程清理与退出码归因（10 项断言）。 |
 | `npm run smoke:headless` / `npm run smoke` | 分层烟雾：L1 无头（派生 → 就绪 → 真的在服务页面 → 干净退出、无孤儿）与 L2 GUI 启动。 |
-| `npm run verify:fast` / `npm run verify:full` | 编排器自身：它从 `package.json` **自动发现**全部 `*:self-test`（不手抄清单），并在**扫出 0 项时判红**——本仓已两次出现「扫描器被静默清空却一路绿灯」。`fast` = 全部自检 + 秒级静态门禁 + `cargo test --tests`；`full` 额外含 doc-test。 |
-| `npm run verify:sentinels` / `npm run verify:all` | 两条**联网**哨兵（`verify:drift`、`verify:update-channel`）成组；它们会因外部状态红，故刻意不在 `verify:fast` 档内。`verify:all` = `verify:full` + `verify:sentinels`，即发布前本仓本地能查的全部。 |
+| `npm run verify:fast` / `npm run verify:full` | 编排器（`scripts/gates.mjs`）跑 `scripts/gate-manifest.mjs` 这一份清单。某个分档**解析出 0 步即判红**——本仓已两次出现「清单被静默清空却一路绿灯」；`npm run gate -- gates` 另守着「每个支持 `--self-test` 的脚本要么登记、要么带理由豁免」。`fast` = `fast` 档 + `cargo test --tests`；`full` 额外含 doc-test。 |
+| `npm run verify:sentinels` / `npm run verify:all` | 两条**联网**哨兵（`npm run gate -- drift`、`npm run gate -- update-channel`）成组；它们会因外部状态红，故刻意不在 `verify:fast` 档内。`verify:all` = `verify:full` + `verify:sentinels`，即发布前本仓本地能查的全部。 |
 
-`verify:shell-pages` **不**替代肉眼看页面：它不渲染、不布局、不跑 CSS。它只回答一个很窄的问题——页面脚本加载完之后，该挂的监听是不是都挂上了。
+`npm run gate -- shell-pages` **不**替代肉眼看页面：它不渲染、不布局、不跑 CSS。它只回答一个很窄的问题——页面脚本加载完之后，该挂的监听是不是都挂上了。
 
 ## 说明
 
@@ -263,7 +266,7 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 | 目标 | 上游线（`channel`） | 固定的 DSH | 桌面后缀（`publishChannel`） | 桌面版本示例 |
 |---------|---------------|-----------|-------------------------|-------------------------|
 | `next`（默认） | npm `next` dist-tag（rc 阶段） | `0.2.0-rc.2` | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.1.7-alpha.2` | `alpha` | `0.7.2-alpha.x` |
+| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.1.7-alpha.2` | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
 
 **两个「通道名」不是一回事，别混用。** 每个目标带两个字段：`channel` 是**组装时拉哪条上游 npm dist-tag**（上游客观事实，改不了名），`publishChannel` 是**桌面 tag 的预发布后缀**（本仓自己的命名）。上游 `next` dist-tag 当下指向一个 `rc` 阶段版本，所以桌面后缀是 `rc` 而目标键仍是 `next`。**若把两者强行同名**，一改桌面后缀就会让漂移哨兵去查一个上游不存在的 `rc` tag，静默退回 `latest`。
 
@@ -305,7 +308,7 @@ npm run prepare:harness -- --dsh-target=alpha
 当前消费方是手机状态指示器（`src-tauri/frontend/harness-ui-inject.js`，由 `src-tauri/src/harness_ui.rs` 推送）。它的 DOM 侧行为由一套基于最小 DOM 桩的无头自测覆盖：
 
 ```sh
-npm run verify:harness-inject
+npm run gate -- harness-inject
 ```
 
 该套件还带一项**可证伪性检查**：它把脚本回退成上游的行为（会把指示器以未渲染状态漏进侧边栏），并要求断言**必须变红**；若不变红则门禁失败。一个不可能失败的测试是装饰，不是防线。

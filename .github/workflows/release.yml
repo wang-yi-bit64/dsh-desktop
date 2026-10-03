@@ -113,37 +113,19 @@ jobs:
           TAG: ${{ steps.resolve.outputs.tag }}
         run: node scripts/version.mjs check --tag "$TAG"
 
-      # 秒级静态门禁：确认这个 commit 的契约面是自洽的（命令面、页面按钮接线、
-      # 补丁分级）。与 ci.yml 用同一套脚本，不是另一套判断标准。
-      - name: Fast static gates
-        run: |
-          npm run verify:patches
-          npm run verify:prune
-          npm run verify:variants
-          npm run verify:harness-lockfile
-          npm run verify:remove-tree
-          npm run verify:release-workflow
-          npm run verify:release-assets
-          npm run verify:release-assets:self-test
-          npm run verify:cli-package
-          npm run verify:profile-names
-          npm run verify:drift:self-test
-          npm run verify:claims
-          npm run verify:plan-facts
-          npm run verify:ipc-surface
-          npm run verify:ipc-surface:self-test
-          npm run verify:shell-pages
-          npm run verify:harness-inject
-          npm run verify:harness-entry
-          npm run verify:commits
-          npm run verify:changelog
+      # 静态门禁：清单的唯一产地是 scripts/gate-manifest.mjs（2026-10-03 治理 G1）。
+      # 分档 release = 契约/壳面/补丁/发布链路的静态判据 + 打包器自检 + 需要组装树的
+      # 真检查（harness-tree / target 另在下面单独跑）。逐条 rationale 见总表的 why 字段。
+      # ⚠️ 新增门禁只登记总表——手抄清单曾漂移出「守卫写了却没有任何流程会跑」。
+      - name: Static gates (single source of truth: scripts/gate-manifest.mjs)
+        run: npm run gate -- --tier=release
 
       # 发布前**必须**知道自己在发布哪个上游基线。这里跑真检查（联网）但**不阻断**
       # 发布：落后上游是「该规划升级了」，不是「这次发布有问题」——把提醒打在日志里，
       # 由人判断是否在本次发布前推进（推进流程见 docs/dsh-upgrade-checklist.md）。
       - name: Upstream drift check (informational)
         continue-on-error: true
-        run: npm run verify:drift
+        run: npm run gate -- drift
 
   build:
     name: ${{ matrix.os }} / release
@@ -214,7 +196,7 @@ jobs:
       # 资源树；架构不一致的包在目标机上表现为「Harness 起不来」，根因在构建期。
       # 放在组装 300MB 之前失败。
       - name: Verify packaging target
-        run: npm run verify:target
+        run: npm run gate -- target
 
       # 预检签名密钥：默认配置的 `createUpdaterArtifacts: true` 要求签名密钥，缺了会在
       # **打包末尾**才失败。⚠️ 必须放在组装之前——它原先紧挨着 build 步骤，于是
@@ -245,7 +227,7 @@ jobs:
 
       # 组装树健全性（与 ci.yml 的 bundle job 同一套规则，发布前再拦一次）。
       - name: Verify assembled harness tree
-        run: npm run verify:harness-tree
+        run: npm run gate -- harness-tree
 
       - name: Verify bundled Node.js version
         shell: bash
@@ -404,7 +386,7 @@ jobs:
           node scripts/updater-manifest.mjs --publish "$TAG"
           # --tag 把自检作用域限定在本次发布的通道（2026-09-30 v0.7.1-rc.1 首发实测：
           # 无作用域的全通道断言会把其他通道的引导期 404 误判成本次发布失败）。
-          # 全通道健康归每周 drift / 手动 `npm run verify:update-channel`。
+          # 全通道健康归每周 drift / 手动 `npm run gate -- update-channel`。
           node scripts/updater-manifest.mjs --verify --tag "$TAG"
 
   # ---------------------------------------------------------------------------
@@ -476,7 +458,7 @@ jobs:
         run: npm run prepare:harness
 
       - name: Verify assembled harness tree
-        run: npm run verify:harness-tree
+        run: npm run gate -- harness-tree
 
       - name: Build portable app bundle
         # 用默认配置构建（产出可运行的原始 app 目录 + NSIS installer）。便携版只取
@@ -500,7 +482,7 @@ jobs:
         #   所有 CLI 产物白构建（三个平台的成功产物一个都没上传）。
         #   之前一直没暴露，是因为更早的失败（缺签名私钥）总在编译前/中就拦住了，
         #   这一步**从未被执行过**。本仓其余多行 bash 步骤都写了 `shell: bash`，
-        #   只有此处漏了；`npm run verify:release-workflow` 已加静态守卫防止复发。
+        #   只有此处漏了；`npm run gate -- release-workflow` 已加静态守卫防止复发。
         env:
           DSH_VERSION: ${{ needs.preflight.outputs.dsh_version }}
         shell: bash
@@ -639,7 +621,7 @@ jobs:
   # · `scripts/package-cli.mjs`（857 行）—— 其约 40 项判据（归档丢可执行位、
   #   边车格式 `sha256sum -c` 读不读得动、篡改能否判红）与「要不要上传」无关，
   #   属于 ADR-031 的可证伪守卫资产。仍由 `preflight` 的
-  #   `npm run verify:cli-package` 在每次发布前跑（秒级，早于组装 300MB）。
+  #   `npm run gate -- cli-package` 在每次发布前跑（秒级，早于组装 300MB）。
   # · 归档格式：`dist/cli/` 的**本地**打包能力，供需要时手动产出。
   #
   # ## 什么被归档了

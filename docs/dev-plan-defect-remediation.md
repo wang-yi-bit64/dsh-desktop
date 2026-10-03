@@ -189,6 +189,11 @@
 - 守卫：verify:ipc-surface 或新守卫断言计数不回升。
 - **✅ 已落地（2026-10-02，第四批）**：`src-tauri/src/poison.rs` 新建（`lock_or_recover` / `try_lock_or_recover`，3 项单元测试含「恢复后数据仍可读」「中毒不被误判成忙」）；`state.rs` 15 处 `lock().unwrap()` 与 3 处 `try_lock()` 全部改走它，顺带修掉「中毒被误判成 WouldBlock → 静默丢掉全部后续 launch 事件」的同族缺陷（§7.1 规则 3）；`mobile_bridge.rs` bind 地址改带归因 expect、目标 URL 的 query 改 match 取 Option、listener 两处中毒静默降级改恢复；`crates/dsh-host/src/safe_mode.rs` 的 manifest 序列化 unwrap 改 io::Error 传播。**与原动作的偏差（判据层面的诚实说明）**：锁中毒没有转成 IpcEnvelope 错误码——`snapshot` / `logs_tail` / `harness_port` 这类方法是同步访问器、不在命令返回值上，且中毒是内部不变量破损而非用户可处置的领域错误；正确处置是恢复 guard + error 日志（与托盘 / 菜单降级日志同口径）。判据由新守卫 `verify:unwrap-hygiene`（U1 生产段零 unwrap / U2 扫出数>0，16 项可证伪自测含「以修复前真实形态为夹具必须报红」）钉住，npm script 与 docs/commands.md §6b 一并登记，随 `:self-test` 自动发现进 verify:fast。
 
+**S4-5 门禁清单单一产地 + 「有守卫没人跑」根因治理（治 D8；2026-10-03 新增）**
+- 动作：把**三份手抄清单**（`verify-fast.mjs` 的 QUICK_STATIC、`ci.yml` 的逐行 `npm run`、`release.yml` preflight 的逐行 `npm run`）合并成一份总表 `scripts/gate-manifest.mjs`（33 条门禁 × real/self-test × 分档 fast/ci/release/sentinel，逐条带「为什么有它」的 why）；编排器 `scripts/gates.mjs` 取代 `verify-fast.mjs`（`--tier` / `--only` / 门禁名 / `--list`）；`package.json` 的门禁入口从 41 条收敛为 1 条 `gate`（scripts 总数 62 → 22，**旧名经 `npm run gate -- verify:<name>` 仍可解析**，历史文书因此不必改写）；新增元守卫 `scripts/verify-gates.mjs`。
+- 判据：① `release.yml` 的 preflight 与总表的 release 档**同源**——`verify-release-workflow` 改为「YAML 里必须调 `npm run gate -- --tier=release`」**且**「总表的 release 档里必须有 `cli-package`」（两面都判，防止判据退化成只认一行文字）；② scripts/ 下每个支持 `--self-test` 的脚本要么在总表登记、要么在 `EXEMPT_SELF_TEST_SCRIPTS` 带理由豁免，**扫出数为 0 判红**；③ 每个分档解析出的步数 > 0（清空即红，不打印绿色）；④ 旧名兼容可断言（`verify:<name>` 与 `<name>:self-test` 都必须解析回同一条）。
+- 为什么它同时治「有守卫没人跑」：逐条核实到四个守卫**写了却不在任何自动流程里**——`unwrap-hygiene` 的**真检查**（而本文 S4-4 条目写着「逐行由 verify:unwrap-hygiene 盯着」）、`doc-facts`、`github-config`、`fault-patterns`。它们现在都在 fast / ci / release 三档内；平台受限的门禁打印 skip 与理由，不静默略过（§7.1 规则 3）。
+
 **S4 退出判据**：fast 档 ≤60s；审计清单为 0 遗漏；state.rs 无裸 unwrap。
 
 ### S5 — 补丁收缩与单通道收尾（1~2 周）
@@ -201,7 +206,8 @@
 - 动作：settings-models（886 行）/ agent-preset（640）/ workspace（477）逐条论证「没有它会怎样」；能移出补丁层的改用上游配置或注入脚本（shell → page 单向下发，INV-2 不变）。
 - 判据：每个补丁有一句「它守的用户可感知行为」；答不出来的即退役候选。
 
-**S5-3 patches/alpha 与 harness-deps/alpha 的处置（C3 留、C7 休眠）**
+**S5-3 patches/alpha 与 harness-deps/alpha 的处置（C3 留、C7 休眠 → 已由 ADR-057 复役）**
+- **2026-10-03 更正（ADR-057）**：下文「休眠 / 冻结」是 2026-09-30 上午的裁定，同日已被 ADR-057 修订——alpha 复役并推进到上游 alpha dist-tag，补丁按 retireWhen 退役到 11 个。现行为：两线同等维护；drift 与通道健康重新逐通道对照 alpha；`--channel-of` 接受 alpha 后缀。现行判据：两线 verify:patches 均绿，`status` 字段仍是唯一产地。以下两条保留为历史记录。
 - 动作：不删（ADR-052 的机制保留不变），也**不再恢复维护**——C7 已裁定 alpha 休眠（ADR-056）：补丁与 vendored 冻结，`verify:patches` 仍逐目标检查一致性（防烂在盘上），drift 与通道健康对 alpha 显式跳过；`--channel-of` 拒绝休眠通道发布。
 - 判据：verify:patches 对 alpha 仍绿（冻结 ≠ 失配）；代码中不存在第二份休眠名单（`status` 字段是唯一产地）。
 
@@ -288,7 +294,7 @@
 | C4 | dsh-host 是否发到 crates.io？ | ✅ **不发**（可复用性用仓内证据证明，不用包管理器分发） | ADR-044 清单追加；S6-5 收尾 |
 | C5 | ADR-048：坚持单通道，还是接受 0.8 计划的双通道？ | ✅ **按 0.8 计划的双通道**：ADR-048 由 ADR-052 取代 | ADR-052；0.8 计划修订 #9 已收尾 |
 | C6 | ADR-047 说删的每日 CI / drift：删还是留？ | ✅ **保留在役**；发布前仍须手动 dispatch `ci` + `smoke full` | ADR-055；S0-4 收尾 |
-| C7 | alpha 线：引导 updater-alpha，还是宣布休眠？ | ✅ **休眠**（2026-09-30 维护者）：不发布、不追漂移，补丁与 vendored 冻结保留；恢复前提与版本约束（须 > 当时最高 rc tag）见 ADR-056 | ADR-056（部分修订 ADR-052）；S5-3（改为「保留但冻结」）；目标表 `status` 字段为唯一产地 |
+| C7 | alpha 线：引导 updater-alpha，还是宣布休眠？ | ✅ **休眠**（2026-09-30 维护者）：不发布、不追漂移，补丁与 vendored 冻结保留；恢复前提与版本约束（须 > 当时最高 rc tag）见 ADR-056。**→ 同日由 ADR-057 修订为复役**（维护者指令；两线均在役） | ADR-056（部分修订 ADR-052）→ ADR-057（修订 ADR-056 决策 1）；S5-3（改为「保留但冻结」）；目标表 `status` 字段为唯一产地 |
 | C8 | next 线移植批次（上游已到 0.2.0-rc.2，79+ hunk）何时启动？ | ✅ **缺陷治理计划（S0~S6）全部退出后启动**；在那之前 verify:drift 的红灯是已排期的信号，不另立批次 | patches/LAYERS.md「next 线的移植裁定」；§6 |
 
 ---
@@ -297,8 +303,8 @@
 
 | 指标 | 现状（2026-09-30 实测） | S 阶段目标 |
 |------|------------------------|-----------|
-| 更新端点投递的版本 | rc = `0.7.1-rc.1` ✅（2026-09-30 实测）；alpha 休眠，不投递（C7/ADR-056） | = 该通道最新发布版本 |
-| 补丁数 × 通道数 | 27 × 2 | next 线下降 ≥30%；alpha 线冻结（休眠，不增不减——C7/ADR-056） |
+| 更新端点投递的版本 | rc = `0.7.2-rc.1` ✅（2026-10-03 实测 = 该通道最新 tag）；alpha ❌ **端点 404**——已由 ADR-057 复役，但通道化后尚未发布过（最新 alpha tag 仍是 `v0.7.0-alpha.8`），要等第一次通道化 alpha 发布（须 ≥ `0.7.3-alpha.1`）才闭环 | = 该通道最新发布版本 |
+| 补丁数（逐通道） | 基线（本计划入库时）next 14 / alpha 13，合计 27（原文「27 × 2」把合计误当单线）；**2026-10-03 实测 next 10 / alpha 11**（ADR-057 推进时按 retireWhen 净退役 6 个） | next 线下降 ≥30%（实测 −28.6%，**差 1 个未达标**）；alpha 线已复役（ADR-057），同样按 retireWhen 收缩 |
 | AGENTS.md 体积 | 160,148 B | ✅ **已达成 32.7 KB**（原定 ≤32,768 B；因后续仍需修正 MSRV/端点两行事实，判据放宽为 **≤40 KB**——真正的硬约束是「小于 64 KB 指令预算且规则全可读」，40 KB 留 24 KB 余量） |
 | 无守卫覆盖的层（文档常量 / 游离配置） | 文档常量层已由 verify:doc-facts 覆盖（2026-09-30）；游离配置层基线已清空（S3-3） | 0 类 |
 | 门禁快档时长 | ✅ verify:fast 温热实测 43s（S4-1/S4-2） | verify:fast ≤60s |
@@ -344,7 +350,7 @@
 | 版本号落地 | ✅ 已定 `0.7.1-rc.1` | `version:set` 改 `package.json` + `Cargo.toml` + `Cargo.lock`；CHANGELOG 生成 0.7.1-rc.1 段（7 条提交）；`--channel-of 0.7.1-rc.1` → `next`（DSH `0.1.5-rc.3`）；`verify:version` 由红转绿 |
 | C6 决策（S0-4 收尾） | ✅ 已裁决并落地 | ADR-055（保留每日 CI + drift，修订 ADR-047 删除清单第 2 项）；ADR-047 状态与新增「修订」段、ADR 索引同步 |
 | C4 决策（S6-5 收尾） | ✅ 已裁决并落地 | 追加进 ADR-044 的「明确不做」清单，附理由与恢复条件 |
-| C7/C8 决策（alpha 休眠；next 移植排期） | ✅ 已裁决并落地 | ADR-056（部分修订 ADR-052）+ ADR-052 修订段 + 索引；目标表新增 `status` 字段（唯一产地）；verify:update-channel / verify:drift 对休眠目标显式跳过、零在役目标报错；release preflight `--channel-of` 拒绝休眠通道（实测 exit 1）；AGENTS §7.2/§8.6 与 runbook §8.6 同步 |
+| C7/C8 决策（alpha 休眠；next 移植排期） | ✅ 已裁决并落地（**C7 同日由 ADR-057 修订为复役；C8 的 next 移植随 ADR-057 提前完成**） | ADR-056（部分修订 ADR-052）+ ADR-052 修订段 + 索引；目标表新增 `status` 字段（唯一产地）；verify:update-channel / verify:drift 对休眠目标显式跳过、零在役目标报错；release preflight `--channel-of` 拒绝休眠通道（实测 exit 1）；AGENTS §7.2/§8.6 与 runbook §8.6 同步 |
 | S0-1 补 LICENSE / 修 authors | ✅ 已落地（第二批） | LICENSE（MIT，wang-yi-bit64）；package.json / Cargo.toml authors 改本仓作者；「来源与致谢」节进两份 README；三处一致性断言由 verify:doc-facts 承接 |
 | S0-2 补 SECURITY.md（含 S3-4） | ✅ 已落地（第二批） | 威胁模型（loopback / LAN 桥显式开启 / minisign 更新链 / 无遥测）+ 明示边界（同进程插件崩溃、无 OS 签名）+ 报告渠道 + 支持范围 + **CI 密钥暴露面表**（S3-4 一并完成；签名私钥实际出现在 release 与 smoke full 两处——按实情记载） |
 | S0-5 计划登记进 AGENTS §6 | ✅ 已落地（第二批） | AGENTS.md §6 可检索本文件名 |
@@ -357,16 +363,29 @@
 | S4-1/S4-2 门禁分档 | ✅ 已落地（第二批） | `verify:fast`（26 步，**温热实测 43s ≤60s**）：全部 :self-test 自动发现 + 快速静态门禁 + `cargo test --tests`；`verify:full` = fast + doc-test（44 项 ≥258s）；ci.yml PR 路径改 `--tests`，doc-test 由 schedule-only 步骤承接（ADR-055 语义不变） |
 | ADR-052（C5：双通道恢复在役） | ✅ 已落地 | ADR-048 状态改为「已被 ADR-052 取代」并补后续段；ADR-022 标注「由 ADR-052 恢复在役」；ADR 索引新增 G 组（052–054）；0.8 计划修订 #9 与 §15 已收尾 |
 | S2-1 AGENTS.md 打薄 | ✅ 已达成 | 160,148 B → **33,144 B**；32 个 `###` + 9 个 `####` **零丢失**（逐个比对新家）；新增 `docs/commands.md`、`docs/release-runbook.md`、`docs/incidents/`（10 篇）+ 原文快照 |
-| S2-2 文档预算纪律 | 🟡 部分 | 本轮未把「新增计划文档必须同时归档旧文档 / 计划无权延期 ADR」写成 AGENTS.md 条文——**仍是欠账** |
-| S2-3 verify:doc-facts | ⏳ 未做 | 本轮以**人工**修正了 MSRV（AGENTS/README×2 由 1.85 → 1.90）与 ADR 计数（36 → 40）；派生守卫仍未写，同一类漂移下次还会发生 |
-| S3-3 action 全量钉 SHA | ⏳ 未做 | 新守卫以基线表容纳 7 个预先存在的浮动 ref（守卫每次运行都会打印提示）；空表才是目标状态 |
+| S2-2 文档预算纪律 | ↪ 已由第二批销账（见上方同名行；本行为第一批当时的快照） | 第一批时未把「新增计划文档必须同时归档旧文档 / 计划无权延期 ADR」写成 AGENTS.md 条文——**仍是欠账** |
+| S2-3 verify:doc-facts | ↪ 已由第二批销账（见上方同名行；本行为第一批当时的快照） | 第一批时以**人工**修正了 MSRV（AGENTS/README×2 由 1.85 → 1.90）与 ADR 计数（36 → 40）；派生守卫仍未写，同一类漂移下次还会发生 |
+| S3-3 action 全量钉 SHA | ↪ 已由第二批销账（见上方同名行；本行为第一批当时的快照） | 第一批时新守卫以基线表容纳 7 个预先存在的浮动 ref（守卫每次运行都会打印提示）；空表才是目标状态 |
 | PR Agent 触发面第③条（ADR-059） | ✅ 已落地（第四批） | 线上事故后增补：run #9（PR #2，OWNER 的非命令评论）失败于「PR Agent action step」，日志 `Unknown command: |`。根因：钉死的 action SHA 只钉住 action.yaml + Dockerfile，Dockerfile 是 `FROM pragent/pr-agent:github_action` **浮动镜像标签**，镜像是旧版（行号证据：`Unknown command` 日志 363 / 源码 381；`Applying repo settings` 217 / 241）。旧镜像把 `## …` 开头的评论按 shell 规则词法分析、`#` 当注释起点，第一个 token 变成表格的 `|` → 未知命令 → 退出 1。修法：`issue_comment` 增加「评论以 `/review` `/improve` `/describe` `/ask` 开头」条件（`startsWith`，**不能用 contains**——镜像按第一个 token 解析，`please /review this` 也会失败）。actionlint exit 0 + 14/14 触发矩阵通过。**仍未验证**：`/review` 与 `pull_request` 路径能否真出评审（模型配置在线才能验） |
 | Pullfrog 停用（ADR-058，修订 ADR-054 决策 2） | ✅ 已落地（第三批） | 维护者指令「停用 pullfrog、启用 pr-agent」。先回答语义问题：**删除 pullfrog.yml 即停用**——GitHub Actions 只从 `.github/workflows/` 加载，UI 的 Disable 开关是服务器端状态、不进仓库也不可被门禁看见。`.github/workflows/pullfrog.yml` 已删除；pr-agent.yml **零改动即在役**（不是又一处待接线）：actionlint 1.7.7（SHA256 与官方 checksums 核对一致）对删除后的 5 个工作流 exit 0；verify:github-config 实跑「9 YAML / 5 工作流 / 31 uses / 错放 0」、自检 12 项过；SECURITY.md 密钥暴露面表删去 pullfrog 的 13 key 行并加退役注记；ADR-058 入库，索引 / ADR-054 修订段 / AGENTS.md ADR 计数（43→44）同步 |
 | S4-4 收敛 src-tauri 生产 unwrap（治 D10） | ✅ 已落地（第四批，2026-10-02） | `src-tauri/src/poison.rs` 新建：`lock_or_recover` / `try_lock_or_recover` 两个中毒恢复原语 + 3 项单元测试（先制造真实 poison 再断言恢复，避免装饰性绿）；`state.rs` 15 处 `lock().unwrap()` 与 3 处 `try_lock()` 全改走它（同步访问器不转错误码的理由记在 S4-4 条目内）；`mobile_bridge.rs` bind 地址改带归因 expect、query 构造改 match、listener 两处「中毒静默降级」改恢复；`crates/dsh-host/src/safe_mode.rs` 序列化 unwrap 改 io::Error 传播。新守卫 `verify:unwrap-hygiene`：U1 生产段零 `.unwrap()`（src-tauri/src 与 crates 各 crate 的 src；测试段 / 注释 / 字符串不计）、U2 扫出数>0，16 项自测（含「修复前的 `self.inner.lock().unwrap()` 必须报红」「同一处改 expect 必须转绿」「CRLF 与 LF 一致」）；npm script 与 docs/commands.md §6b 登记，随 `:self-test` 自动发现进 verify:fast（快档 27 → 28 步） |
 
 **本轮端到端验证**：23 个既有门禁全部 exit 0（含 verify:claims / verify:plan-facts / verify:release-workflow / verify:release-assets / verify:harness-entry）；actionlint 1.7.7（SHA256 与官方 checksums 核对通过）对 6 个工作流 **exit 0**；`updater-manifest --self-test` 16 项通过。
 
-> ⚠️ **当前的预期红（2026-09-30 发布后更新）**：`verify:update-channel` 的**全通道**模式对 alpha 仍为红——`updater-alpha` 滚动 Release 要等 alpha 通道的第一次通道化发布才会创建（每日 drift 哨兵会因此报红，已在该步注释登记为预期状态）。发布时自检已改为通道作用域，不受影响。
+> ⚠️ **当前的预期红（2026-09-30 发布后更新）**：`verify:update-channel` 的**全通道**模式对 alpha 仍为红——`updater-alpha` 滚动 Release 要等 alpha 通道的第一次通道化发布才会创建（每日 drift 哨兵会因此报红，已在该步注释登记为预期状态）。发布时自检已改为通道作用域，不受影响。**〔2026-10-03 更正：alpha 已由 ADR-057 复役，这条红不再是「预期状态」而是真实缺口——alpha 在役却零投递，直到第一次通道化 alpha 发布（须严格大于最高 rc tag，即 ≥ `0.7.3-alpha.1`）为止。〕**
+
+**第五批（2026-10-03）：门禁清单单一产地 + 「有守卫没人跑」根因治理（S4-5，对应治理 G0~G3）**
+
+| 项 | 状态 | 证据 |
+|----|------|------|
+| G0 把「有守卫没人跑」补上 | ✅ 已落地 | 逐条核实到四个守卫**不在任何自动流程里**：`unwrap-hygiene` 的**真检查**（本表 S4-4 行却写着「逐行由 verify:unwrap-hygiene 盯着」）、`doc-facts`、`github-config`、`fault-patterns`。四者现已进 fast / ci / release 三档。顺带实证了这条链的代价：`doc-facts` 接进 CI 的**第一轮**就抓到真实漂移（`docs/commands.md` 漏登 4 个 script 名）——而它此前从未在 CI 跑过 |
+| G1 门禁总表 + 编排器 + 元守卫 | ✅ 已落地 | `scripts/gate-manifest.mjs`（33 条门禁 × real/self-test × 4 分档，逐条 why）+ `scripts/gates.mjs`（取代 `verify-fast.mjs`：`--tier` / `--only` / 门禁名 / `--list` / `--dry-run`）+ `scripts/verify-gates.mjs`（M1~M5：脚本存在 / 每种模式要么进分档要么写 `manual` 理由 / 支持 `--self-test` 的脚本必须登记或带理由豁免且**扫出数 > 0** / 旧名可解析 / 名字唯一；自测 27 项，含 4 组负向夹具）。`ci.yml` 与 `release.yml` preflight 各收敛成**一步** `npm run gate -- --tier=ci|release`，逐条 rationale 迁进总表 why 字段 |
+| G1 判据与清单同源（防退化成「只认一行文字」） | ✅ 已落地 | `verify-release-workflow` 的 preflight 判据改为「YAML 里必须调 `--tier=release`」**且**「总表的 release 档里必须有 `cli-package`」（后者读 `resolveTier('release')`，不手抄）；自测新增两条夹具（摘掉档调用 / 档里没有 cli-package 都必须报红），自测 63 项 |
+| G2 package.json 收敛 | ✅ 已落地 | scripts **62 → 22**（41 条门禁入口 → 1 条 `gate`）；`scripts/verify-fast.mjs` 删除；旧名经 `npm run gate -- verify:<name>` 与 `<name>:self-test` 仍可解析（兼容层，历史文书不改）；在役文档与工作流里的 `npm run verify:<name>` 机械迁移为 `npm run gate -- <name>`（AGENTS / 两份 README / commands.md / runbook / checklist / roadmap / SECURITY / LAYERS / ci / release / smoke / drift，共 20 个文件） |
+| G3 文档同步 | ✅ 已落地 | `docs/commands.md` 头部改写为「两层命令面 + 分档语义表 + 旧名兼容 + 需参数的一次性核验直接调脚本」；AGENTS §2 的「npm script 名字一个都没丢」改为如实的收敛说明（删掉 41 条入口后原句已不成立）；`verify:doc-facts` 的 script 覆盖断言全绿 |
+| 实测 | ✅ | `npm run verify:fast` **44 步 / 22.4s 全绿**（含 `cargo test --tests` 7.7s，温编译；预算 ≤60s）；分档规模 fast 43 / ci 45 / release 42 / sentinel 2；`verify:gates` 与 `verify-release-workflow` 自检分别 27 / 63 项通过 |
+
+> ⚠️ **诚实边界（三条）**：① **组装树与联网的真检查仍不在任何分档里**——`target` / `harness-tree` 需组装树（由 `release.yml` 的 build / portable job 在 `prepare:harness` 之后按名点名，总表 `manual` 字段写明理由，元守卫的 M2 强制这一解释存在），`drift` / `update-channel` 需联网（sentinel 档）。② **S4-3 的「门禁内部先扫后验」普查仍是未开工主体**：本轮只做实了编排层（脚本级登记 + 分档非空 + 扫出数 > 0）。③ **历史文书里的旧 script 名刻意保持原样**（`CHANGELOG.md` / `docs/adr/` / `docs/archive/` / `docs/incidents/` / 计划台账）——它们是当时的记录，靠 gate CLI 的旧名兼容层仍可重放。
 
 ### 11.1 未开工条目（完整台账）
 
@@ -374,10 +393,10 @@
 
 | 条目 | 状态 | 现场证据（2026-09-30） |
 |------|------|----------------------|
-| S4-3「扫出数为 0」断言普查 | ❌ 未做 | 快档已分档（S4-1/S4-2 ✅）；**S4-4 已于 2026-10-02 销账**（见 §11 第四批），普查仍未开工：新守卫 verify:unwrap-hygiene 自带 U2「扫出数>0」断言，但守卫全集（package.json 里的 verify 脚本）尚未逐条过一遍「匹配模式变更后是否静默归零」 |
-| S5-1~S5-4 补丁 retireWhen 减法 / UI 补丁专项 / 补丁数趋势 | ❌ 未做 | 27 个补丁仍两套并存（C3 留、C7 冻结：alpha 休眠不再恢复维护，减法只针对 next 线） |
+| S4-3「扫出数为 0」断言普查 | 🟡 部分（2026-10-03 推进一格） | 快档已分档（S4-1/S4-2 ✅）；**S4-4 已于 2026-10-02 销账**（见 §11 第四批）。2026-10-03 的 S4-5 把**编排层**这一类做实了：`verify-gates` 断言「支持 `--self-test` 的脚本扫出数 > 0」与「每个分档步数 > 0」，并逐条登记豁免理由（详见 §11 第五批）。**仍未做**：门禁**内部**的「先扫后验」判据尚未逐条过一遍「匹配模式变更后是否静默归零」——这是普查的剩余主体 |
+| S5-1~S5-4 补丁 retireWhen 减法 / UI 补丁专项 / 补丁数趋势 | 🟡 部分 | 补丁数已由 ADR-057 推进顺带收缩到 next 10 / alpha 11（基线 14 / 13），但**不是按 S5-1 的三分类表做的**，next 线 −28.6% 也尚未达到 ≥30%；S5-2 UI 补丁专项与 S5-4 补丁数趋势进 job summary 仍未开工。alpha 已复役（ADR-057），减法两线都适用 |
 | S6-1~S6-5 dsh-host 零 Tauri 承诺 / CLI recover / 性质测试 / 可证伪承诺（S6-5 crate 发布已裁决：不发） | ❌ 未做 | C4 已裁决不发 crates.io（ADR-044 清单追加），S6-5 仅剩收尾记录 |
 
-**合计**：本计划约 30 个条目。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档；**第三批再落地 1 个**（Pullfrog 停用，ADR-058）；**第四批再落地 1 个**（S4-4，2026-10-02：state.rs 15 处锁 unwrap 收敛为中毒恢复 + verify:unwrap-hygiene 守卫）。**S 阶段剩余：S4-3、S5 全部、S6 全部。**
+**合计**：本计划约 31 个条目（新增 S4-5）。第一批（2026-09-30 上午）落地 6 个；**第二批（2026-09-30，执行会话）再落地 11 个**（S0-1/S0-2/S0-5、S2-2/S2-3/S2-4、S3-1/S3-2/S3-3/S3-4、S4-1/S4-2，其中 S0-3 / S1 系 / S2-1 属第一批），并新增守卫 verify:doc-facts 与 verify:fast/full 分档；**第三批再落地 1 个**（Pullfrog 停用，ADR-058）；**第四批再落地 1 个**（S4-4，2026-10-02：state.rs 15 处锁 unwrap 收敛为中毒恢复 + verify:unwrap-hygiene 守卫）；**第五批再落地 1 个**（S4-5，2026-10-03：门禁清单单一产地 + 编排器 + 元守卫，package.json 62 → 22，见 §11 第五批）。**S 阶段剩余：S4-3（剩余主体：门禁内部先扫后验普查）、S5 全部、S6 全部。**
 
-> **口径（2026-09-30 发布后更新）**：D1 在 **rc 通道已闭环**——v0.7.1-rc.1 发布后端点实测返回 `0.7.1-rc.1`，13/13 资产完整、`prerelease: true`。两条诚实边界：① **alpha 通道零投递是裁定结果**（C7 休眠，ADR-056），不再是待办；② **存量安装不会自愈**——端点是构建期注入的，v0.7.1-rc.1 之前的所有构建仍指向旧端点（`releases/latest` 排除预发布，停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。同一口径适用于所有依赖真实发布的条目。
+> **口径（2026-09-30 发布后更新）**：D1 在 **rc 通道已闭环**——v0.7.1-rc.1 发布后端点实测返回 `0.7.1-rc.1`，13/13 资产完整、`prerelease: true`。两条诚实边界：① ~~alpha 通道零投递是裁定结果（C7 休眠，ADR-056），不再是待办~~ **〔2026-10-03 更正：C7 同日由 ADR-057 修订为复役，alpha 零投递重新是待办——见 §8 第一行〕**；② **存量安装不会自愈**——端点是构建期注入的，v0.7.1-rc.1 之前的所有构建仍指向旧端点（`releases/latest` 排除预发布，停在 `0.5.0-next.1`），修复只覆盖今后新装的构建。同一口径适用于所有依赖真实发布的条目。

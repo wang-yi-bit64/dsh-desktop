@@ -1,5 +1,12 @@
 # DSH Desktop 改造后架构设计与开发计划
 
+> ⚠️ **历史文档提示（2026-10-03 核对）**：本文是 2026-09-08 的改造设计（v1.0，批次 F 之前）。
+> 其中 **Tier 0/1/2 插件分级隔离**（§7、Phase 4）与 **Model Gateway 2.0**（§8、Phase 5）
+> 两条线已于 2026-09-10 归档删除（[ADR-040](adr/040-archive-plugin-isolation.md)、
+> [ADR-041](adr/041-archive-model-gateway.md)），**不得按本文把它们当作在役或待建能力**——
+> 相关章节只作设计意图追溯。冲突的裁决与现行定位见 [`roadmap.md`](roadmap.md) §8 与
+> [`AGENTS.md`](../AGENTS.md) §7.2。
+>
 > 项目：`wang-yi-bit64/dsh-desktop`
 >
 > 文档版本：v1.0

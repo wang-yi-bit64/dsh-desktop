@@ -1,10 +1,10 @@
 # patches/ 补丁分级清单
 
 > **单一事实源是 [`scripts/patch-layers.mjs`](../scripts/patch-layers.mjs)**；本文件是它的说明与判据记录。
-> 两者一致性由以下命令强制校验（`npm run verify:patches`，也跑在 CI 的 test job 中）：
+> 两者一致性由以下命令强制校验（`npm run gate -- patches`，也跑在 CI 的 test job 中）：
 >
 > ```bash
-> npm run verify:patches                                        # 逐个目标检查
+> npm run gate -- patches                                        # 逐个目标检查
 > node scripts/patch-layers.mjs --list --dsh-target=alpha        # 看某目标的分级
 > ```
 
@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（10 条） | `packages/next/`（**已清空**，2026-09-24） | `0.7.2-rc.1`（0.7.1 之后的下一个 rc；实际版本以 package.json 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.1.7-alpha.2`） | `patches/alpha/`（11 条） | `packages/alpha/`（已清空） | `0.7.2-alpha.x`（必须大于最高 rc tag） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.1.7-alpha.2`） | `patches/alpha/`（11 条） | `packages/alpha/`（已清空） | `0.7.3-alpha.x` 起（必须**严格**大于最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -68,15 +68,15 @@
 
 ---
 
-## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核）
+## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核）
 
 分类原则：**只有当缺失会导致「补丁体系失效」或「桌面插件挂不上 / 起不来」时才归 `functional`**；
 其余一律 `ui-behavior`（可降级）。产品功能增强（如会话永久删除）虽然影响功能，
 但缺失时只是该操作报错、应用整体可用，因此归入可降级层，并通过 `retireWhen` 记录其长期归属。
 
 下表按**包名**列（两个目标同名同判据）；实际文件名带各自目标的版本段，
-如 `patches/next/@deepseek-ai+dsh+0.1.5-rc.2.patch` 与
-`patches/alpha/@deepseek-ai+dsh+0.1.6-alpha.2.patch`。
+如 `patches/next/@deepseek-ai+dsh+0.2.0-rc.2.patch` 与
+`patches/alpha/@deepseek-ai+dsh+0.1.7-alpha.2.patch`。
 
 ### functional（3 个）
 
@@ -86,16 +86,16 @@
 | `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 
-### ui-behavior（next 11 个 / alpha 10 个）
+### ui-behavior（next 7 个 / alpha 8 个；**已退役项**在表内以删除线标明，半退役项在判据列内注明）
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
 | ~~`dsh-client-ui-layout`~~ | 🗄️ **已全线退役**：alpha 线 2026-09-16、next 线 2026-09-30（上游 0.2.0 的 `computeColumns(…, collapsedWidth)` + `data-platform` 推导覆盖本补丁全部意图，两线判据均已满足）。补丁文件两线均已删除 | 官方区分平台宽度 ← **已满足（两线）** |
 | `dsh-client-ui-sidebar` | 注入壳层锚点属性（`data-dsh-sidebar-root` / `-wide` / `-settings`），供 Harness 页注入脚本挂载手机状态指示器。**自定义 padding 已于 2026-09-16 移除**（上游原生适配 macOS，叠加会成双份留白） | 官方侧栏暴露等效锚点（本仓注入脚本可挂到官方标记上）时 |
-| `dsh-client-ui-workspace` | 工作区/会话行样式、未读标记、搜索行渲染 | 官方列表补齐未读与行样式 |
+| ~~`dsh-client-ui-workspace`~~ | 🗄️ **两线退役（2026-09-30）**：上游原生 `completionUnread` → `SessionStatusDots`/`StateDot` 未读完成态 + 完整会话行样式。补丁文件两线均已删除 | 官方列表补齐未读与行样式 ← **已满足（两线）** |
 | `dsh-client-ui-settings-models` | 模型设置页 Provider 选择器、模态切换、目录 UX | 官方设置页提供等价能力 |
 | `dsh-client-ui-model-selection` | 模型选择弹层搜索框与样式。（**next 线已于 2026-09-30 随 0.2.0-rc.2 退役**：上游自带模糊搜索 + 键盘选择，判据满足；alpha 线上游尚无搜索，补丁保留） | 官方自带搜索 |
-| `dsh-client-ui-agent-preset` | 预设导入/导出与 Awesome Preset 浏览界面 | 官方提供预设包导入导出（可同时撤掉 `dsh-desktop-preset-transfer` 插件） |
+| ~~`dsh-client-ui-agent-preset`~~ | 🗄️ **两线退役（2026-09-30）**：上游重写为卡片式预设管理 UI（`cardBroken`/`guideTitle` 键域），旧菜单/对话框锚点整体消失；**整条预设传递链路同轮退役**（`dsh-desktop-preset-transfer`）。补丁文件两线均已删除 | 官方提供预设包导入导出 ← **判据已转化为「上游重写」** |
 | `dsh-client-ui-chat` | 会话内 `QUOTA` / `FORBIDDEN` 错误文案 | 官方补齐这两种错误码文案 |
 | `dsh-client-ui-trajectory` | 轨迹页 `QUOTA` / `FORBIDDEN` 错误文案 | 同上 |
 | `dsh-client-ui-deliverables` | Codex 风格本地路径引用解析；`paths` 为 `null` 时的空数组兜底 | 官方支持本地路径引用解析 |
@@ -299,7 +299,7 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
 ## 4. 维护规则
 
 1. 新增补丁 → 在 `scripts/patch-layers.mjs` 的 `PATCH_LAYERS` 中登记（**包名** + layer + why +
-   retireWhen），并在本文件对应小节补一行。未登记会被 `npm run verify:patches` 报为问题。
+   retireWhen），并在本文件对应小节补一行。未登记会被 `npm run gate -- patches` 报为问题。
    该表按包名索引，因此**加一条上游通道不需要动它**；只有新包才要补。
 2. 删除补丁 → 同步删除分级表条目；`--self-test` 会检查「分级表引用了不存在的包」与
    「目录里有未登记的补丁」两侧。
@@ -310,5 +310,5 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
       看哪些干净、哪些冲突（它现在也会报「内容匹配但行号漂移超窗」）；
    2. 冲突的按语义重做（见上文 alpha 线的做法），**改完必须重算行号**：
       `node scripts/recount-patches.mjs --dsh-target=<目标> --pristine=<未打补丁的包根>`；
-   3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认 `14/14 applied`
+   3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认**本目标**全部 `applied`（当前 next 10 / alpha 11）
       ——**这一步不可省略**：预检与真实组装在行号口径上不同，只有它能证明补丁真的落盘。

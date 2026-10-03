@@ -103,198 +103,21 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
-      # 补丁分级自检：patches/<target>/ 目录与 scripts/patch-layers.mjs 的登记表必须
-      # 一致，且每个补丁文件名都能推导出包名。这是纯静态检查（不装依赖），放在最前面
-      # 快速失败——补丁登记缺失会让 prepare:harness 在打包时才报错，代价高得多。
-      # **逐目标检查**：双通道各有自己的补丁集，只验默认目标会让另一条线的补丁
-      # 整目录漏登记、或文件名版本段停在旧值而无人发现（那条线同样会发布给用户）。
-      - name: Verify patch layer manifest (all targets)
-        run: npm run verify:patches
-
-      # 补丁 hunk 重定位工具的自测（纯逻辑，不 spawn 外部进程）。`patch-package` 按
-      # `@@ -N` 行号定位、偏移超 ±20 行即放弃，而只按内容搜索的预检仍报 clean ——
-      # 两条结论**相反**，因此重定位是移植补丁的必需步骤。而它**只改 `@@` 行、其余
-      # 原文逐字节保真**，判据（`indexOfBlock` 的定位语义、delta 累积、上下文计数）
-      # 写错时不会有别的检查变红 —— 自测与被测对称失效是本仓已踩过五次的坑，
-      # 所以这里必须独立成门禁。夹具为可伪证式：无漂移必须**逐字节不变**（防工具
-      # 顺手改写）、纯漂移只动 `@@`、定位不到的 hunk 原样保留、`\ No newline` 保留、
-      # **末尾空行不得当上下文行**（这正是 `recount-patches.mjs` 曾误报 87 处的形态）。
-      - name: Verify patch hunk relocation guard
-        run: npm run verify:relocate-hunks
-
-      # 构建目标总表自检：目标名 ↔ 通道 ↔ 版本号的解析规则，以及「未知通道不得
-      # 回退默认目标」这条硬约束（通道解析决定装哪个运行时，回退 = 出错包的运行时）。
-      # 纯逻辑，不联网。
-      - name: Verify DSH build target table
-        run: npm run verify:targets
-
-      # 依赖树瘦身判据的自检。`prepare:harness` 会把 node_modules 里「像开发产物」
-      # 的目录整目录删掉以缩小安装包，而 `doc` / `docs` 这类名字在某些包里恰好是
-      # **运行时路径**（`yaml/dist/doc/directives.js`）。删错不会让任何静态检查变红：
-      # 打包、签名、安装全部成功，只有 Harness 启动时抛 `Cannot find module`，
-      # 也就是「装得上、起不来」。这里用可伪证性断言把这个判据钉住——同一条断言
-      # 必须能复现旧判据的事故形态，否则自测自己就是失效的。
-      - name: Verify dependency prune rules
-        run: npm run verify:prune
-
-      # 原生平台变体剪枝判据的自测。musl / 非目标架构的 prebuild 二进制留在树里时，
-      # linuxdeploy 会在打包阶段解析它们的动态依赖并失败（`libc.musl-x86_64.so.1` 在
-      # glibc runner 上无解）——而 tauri-bundler 默认吞掉真实报错，只留下
-      # `failed to run linuxdeploy`。这条自测把判据钉住：既断言外来变体必被删除，
-      # 也用「现有 prune 应当留下 musl」做可伪证性对照，证明缺陷逃得过旧门禁。
-      - name: Verify platform variant prune rules
-        run: npm run verify:variants
-
-      # 提交式 lockfile（harness-locks/<target>/）纯逻辑层的自检：inputs 一致性校验的
-      # 三条规则与家族钉死推导。这套校验守住「lockfile 与组装输入脱节后 CI 照样用旧树
-      # 装包」的事故——判据本身写错时任何静态检查都不会红，只有这里能钉住。
-      - name: Verify harness lockfile rules
-        run: npm run verify:harness-lockfile
-
-      # 「临时目录清理失败不得否决主结论」的判据。守的是 2026-09-23 alpha.5 的事故：
-      # `cli-publish` 的 `finally` 里 `rmSync` 报 EACCES 冒泡，把一次**通过**的 portable
-      # 核验判成了发布失败，还吞掉了 problems 的真实内容。这类缺陷只有真跑发布才炸，
-      # 静态检查全绿——所以判据必须在这里独立成门禁。
-      - name: Verify temp-dir cleanup rules
-        run: npm run verify:remove-tree
-
-      # 发布工作流自身的静态判据（自测）。它守的是两类「只有真跑发布才炸」的缺陷：
-      # tauri-action 的 tauriScript/args 拼装（重复 build → `unexpected argument`），
-      # 以及 shell 变量紧邻非 ASCII 字符（macOS bash 3.2 会并入变量名）。
-      # 两者都让 v0.1.0 首次发布三平台全红，且本地门禁全绿——因此必须在这里独立成门禁。
-      # 同一守卫现在还覆盖 CLI 可引用产物的形状判据（打包步骤 / --clobber / 边车上传 /
-      # needs: build / 下载后核验），并把 Release 正文里那段内联发布说明脚本
-      # **真跑一遍**——heredoc 在 YAML 里是纯文本，语法或 argv 写错只有真发布才炸。
-      - name: Verify release workflow guards
-        run: npm run verify:release-workflow:self-test
-
-      # Release 资产清单判据（F13 的真守卫）。它守的是 2026-09-24 的实测缺口：
-      # CLI 通道退役时只数了 `cli-publish` 的一类职责，便携版「核验 + 上传」那半截
-      # 没被搬走 ⇒ 每次发布实际只有 10 个资产，而 `AGENTS.md §8.5` 承诺 13 个。
-      # 在此之前**全仓零判据**断言资产数——数字只活在文档里，是一句承诺而非断言。
-      # ⚠️ 期望值（含 10 个平台资产的**逐项名字模式**）取自真实 Release 的实测输出，
-      # 不是从 tauri.conf.json 反推——按假设写的模式会让自测与被测**对称失效**（已踩）。
-      - name: Verify release asset manifest guard
-        run: npm run verify:release-assets:self-test
-
-      # CLI 打包链路自检（纯逻辑 + 当前平台真归档回读）。它守住三类「哈希对得上但
-      # 产物没用」的缺陷：产物名里的版本与 package.json 漂移、边车格式不是 sha256sum
-      # 能读的形状、归档丢掉可执行位。自带可伪证夹具（篡改 / 去执行位 / 边车不匹配 /
-      # 归档缺失都必须判红）。
-      - name: Verify CLI artifact packaging guard
-        run: npm run verify:cli-package
-
-      # 便携版打包器的自测。**刻意只在 Windows 上跑**：`packagePortable` 的
-      # stage 与归档两步都走 PowerShell，`portable` job 本身也是 windows-only，
-      # 换个平台跑只会得到一句「无法打包」——那不是缺陷，是平台前提。
-      # 它里面的**纯逻辑**判据（命名 / 边车 / 「解 zip 按平台选命令」）与宿主
-      # 无关，因此跑一次等于两个分支都验到了；其中那条正是 2026-09-22 修掉的
-      # 「核验步骤在 ubuntu 上 spawn powershell」缺陷的守卫。
-      - name: Verify portable packaging guard
-        if: runner.os == 'Windows'
-        run: npm run verify:portable-package
-
-      # 官方 profile 保留名守卫（纯静态，不联网）。官方桌面版独占 `desktop` 这个
-      # profile 名及其**全部大小写变体**（已实现、未发布）。本仓当前未使用保留名
-      # （安全模式是 `desktop-safe-mode`，默认是裸子命令 `web`），因此这是一道
-      # **防回归**门禁：哪天有人顺手把某个 profile 命名成 `desktop`，在这里就红。
-      # 同时校验两个契约锚点（SAFE_MODE_PROFILE / HARNESS_CLI）未被改向保留名。
-      - name: Verify DSH profile reserved-name guard
-        run: |
-          npm run verify:profile-names
-          npm run verify:profile-names:self-test
-
-      # 上游版本漂移哨兵的**自检**（纯逻辑 + 无网络分支，不联网）。它守住哨兵
-      # 自身的判定：落后 minor / 落后预发布阶段必须判失败，持平/领先必须判通过，
-      # 取不到 registry 必须落到 SKIP 而不是冒充「已核对」。
-      # ⚠️ 真检查（`npm run verify:drift`）**不放在这里**：它会因上游领先而红，
-      # 属于「提醒升级」而非「代码有问题」，挂在每次提交上会长期制造红灯噪声；
-      # 真检查跑在 `drift.yml` 的定时任务里。
-      - name: Verify upstream drift sentinel self-test
-        run: npm run verify:drift:self-test
-
-      # 宣称纪律守卫（README ↔ AGENTS）。它把 §7 的「不得过度宣称」与「欠债必须登记」
-      # 变成会失败的检查：禁止表述不得出现在 README；五种状态词表三处一致；§7.2 表里
-      # 每个 ⚠️ 未接线 / ❌ 未实现 行都必须登记销账。此前这类漂移只能靠人读 grep 输出，
-      # 2026-09-12 的评估正是这样抓到 README 一处「插件无法拖垮 Harness」的过度宣称。
-      # 自带可证伪性自检（把修复前的坏句当夹具，必须报红）。
-      - name: Verify claim discipline (README ↔ AGENTS)
-        run: |
-          npm run verify:claims
-          npm run verify:claims:self-test
-
-      # 计划文档的事实守卫。它守的是本仓已发生**四次**的一类缺陷——「不重读仓库就写现状」
-      # （锁文件存在性 / 把已完成的事写成待办 / 批次被误标完成 / F1·F4 过期且 §3.2 的字段
-      # 命名与实现反向），以及一个**零守卫的缺口**：所有读 `dshVersion` 的代码都走
-      # `resolveTarget()` 动态解析，**没有任何守卫读文档**，于是改锚点时文档里的版本号
-      # 只能手工同步 —— 2026-09-25 就漏了三处，全靠人肉发现。
-      # 这条把两件事变成会失败的检查：① 文档里的「钉住的 DSH 版本」必须等于锚点；
-      # ② 计划文档的批次状态词在「头部摘要 / §5 标题 / §10.1 表行」三处必须自洽（账本是 SSOT）。
-      # 自带可证伪自检（30 项），含三条复刻真实事故形态的负向夹具
-      # （旧锚点未同步 / 整张声明表被删 / 头部与表行状态词打架）。
-      - name: Verify plan facts (docs ↔ anchors)
-        run: |
-          npm run verify:plan-facts
-          npm run verify:plan-facts:self-test
-
-      # 壳接口面一致性：`src-tauri` 是 rlib，`pub` 项在 clippy 看来一律「可达」，
-      # 因此 `dead_code` **永远报不出**「写了但没人调用」的公开命令/页面。这类
-      # 断线跨语言（Rust ↔ HTML），编译器看不见，只能静态比对：
-      #   命令定义 ↔ generate_handler 注册 ↔ 前端 invoke / listen ↔ local_page 目标
-      # 已经借此捕获过真实事故：error.html 调用了不存在的 `harness_start_safe_mode`
-      # （注册名是 `safe_mode_action`），异常被 .catch 吞掉 → 按钮静默失效。
-      # 纯静态、不需 npm install，放最前面快速失败。
-      # E7（菜单项 ↔ handle_menu_event 分支）由托盘批次引入：同一批菜单 id 现在被
-      # 应用菜单与托盘**两个**菜单引用，「加了项忘了接处理器」不会有编译错误，
-      # 只会得到一个点了没反应的菜单项。--self-test 用三组夹具钉住该判定本身。
-      - name: Verify shell IPC surface
-        run: |
-          npm run verify:ipc-surface
-          npm run verify:ipc-surface:self-test
-
-      # 壳内页面的**运行时**冒烟。上一条只比对命令名；这一条把每个页面的内联脚本
-      # 放进 DOM 桩里真跑一遍，并逐个点一遍按钮，因此能抓到 E1~E6 看不见的两类缺陷：
-      #   ① `getElementById` 拿到 null → 脚本自上而下执行、一抛就停，**整页监听全部失效**；
-      #   ② HTML 留了按钮但脚本忘了绑监听（页面显示完全正常，按钮却是死的）。
-      # 它从「实际调用点」一侧复查命令名，与上一条形成交叉。
-      - name: Verify shell pages load and their buttons are wired
-        run: npm run verify:shell-pages
-
-      # 守卫脚本自己的自检：一个写错了却静默放行的守卫比没有守卫更危险。
-      - name: Verify target guard self-test
-        run: npm run verify:target -- --self-test
-
-      # Harness 页注入脚本的行为自测（无头 + DOM 桩）。注入脚本的工作对象是真浏览器
-      # DOM，若只靠「装进应用里手点一遍」验证，最容易被改坏的两处——可见性规则与
-      # 「元素带着未定态漏出」这个上游回归——就没有自动化防线。
-      # 脚本自带**可证伪性检查**：把上游行为打回一份变体，断言必须变红，否则报错。
-      - name: Verify Harness UI injection behaviour
-        run: npm run verify:harness-inject
-
-      # 壳入口与上游 `dsh` CLI 的调用约定兼容（纯静态）。上游 0.1.5-rc.1 把 CLI 从
-      # 「顶层自执行」改成「`if (import.meta.main) runCli()`」，而本仓入口是 **import**
-      # 它——若不显式调用导出的 `runCli()`，CLI 从不运行、进程静默以退出码 0 结束，
-      # 表现为「就绪超时但日志无报错」（2026-09-12 升级实测踩到）。此门禁把该兼容处理钉住。
-      - name: Verify Harness entry call-convention compatibility
-        run: |
-          npm run verify:harness-entry
-          npm run verify:harness-entry:self-test
-
-      # 版本号一致性 + 变更日志生成器自测。
+      # ------------------------------------------------------------------
+      # 静态门禁：**清单的唯一产地是 scripts/gate-manifest.mjs**（2026-10-03 治理 G1）。
       #
-      # 版本号散落在 package.json（唯一真源）/ tauri.conf.json（继承真源）/
-      # Cargo.toml（脚本同步）三处，任一处漂移，打出来的包就会自称另一个版本；
-      # 而 updater 的版本比较据此决定推不推更新——错一次就会让所有已安装用户
-      # 收到「版本号没变」的更新，或永远收不到更新。因此这是一条契约门禁，
-      # 不是格式美化。
+      # 这里刻意不再逐条抄 `npm run verify:*`。改版前三份手抄清单（本文件 /
+      # release.yml / scripts/verify-fast.mjs）互相漂移，而漂移**不报错**——直接后果是
+      # verify:unwrap-hygiene 的真检查、verify:doc-facts、verify:github-config、
+      # verify:fault-patterns 四个守卫**写了却没有任何流程会跑**，同时文档还在宣称
+      # 它们盯着代码（§7.3「门禁替一段不存在的检查背书」的原文形态）。
       #
-      # 后两条是生成器自身的自测：一个写错了却静默产出空变更日志的脚本，
-      # 比没有脚本更危险（Release 页会显示「没有任何改动」）。
-      - name: Verify version consistency and changelog generators
-        run: |
-          npm run verify:version
-          npm run verify:commits
-          npm run verify:changelog
+      # 每个门禁「为什么有它」现在写在 gate-manifest.mjs 的 why 字段里（原先散在这里的
+      # 步骤注释已逐条迁入），与门禁同生共死；分档 ci 的成员非空由 verify:gates 断言。
+      # 平台受限的门禁（便携版打包器自检仅 Windows）由编排器打印 skip 与理由——不静默
+      # 略过（§7.1 规则 3）。新增门禁只登记总表，不要在这里另抄一行。
+      - name: Static gates (single source of truth: scripts/gate-manifest.mjs)
+        run: npm run gate -- --tier=ci
 
       # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
       # tauri-build 的 build.rs 要求 bundle.resources 每个 glob 至少匹配一个文件，
@@ -324,7 +147,7 @@ jobs:
       # 注意这里**不再**构建 CLI：crate 本身仍由下面的 `cargo test --workspace`、
       # 以及 smoke.yml 的 `cargo build -p dsh-host-cli` 覆盖，本步骤去掉不减少
       # 任何有效覆盖（它当初存在的理由只是为演练准备一个 release 二进制）。
-      # 打包器的判据仍由上面的 `verify:cli-package`（纯逻辑、秒级）守着。
+      # 打包器的判据仍由上面的静态门禁档（`npm run gate -- cli-package`，纯逻辑、秒级）守着。
 
       # S4-2 门禁分档：PR / dispatch 路径只跑 fast 档——`--tests` = 单测 + 集成测试，
       # **不含 doc-test**（44 项 doc-test 单轮 ≥258s，是快反馈的最大单项成本）。

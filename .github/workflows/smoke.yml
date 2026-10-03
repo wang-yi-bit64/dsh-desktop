@@ -138,7 +138,7 @@ jobs:
       # 补丁分级自检：**两个目标都查**。只验默认目标意味着另一条线的补丁可以
       # 整目录漏登记而无人发现——而那条线同样会发布给用户。
       - name: Verify patch layers (all targets)
-        run: npm run verify:patches
+        run: npm run gate -- patches
 
       # L1 的前置：脚本直接使用 target/debug 下的 dsh-host-cli。
       - name: Build host CLI
@@ -159,7 +159,7 @@ jobs:
       # 之前失败，避免白跑一轮。
       - name: Verify packaging target
         if: inputs.scope != 'l1'
-        run: npm run verify:target
+        run: npm run gate -- target
 
       # 用 env 传目标名，**不要**写成 `--dsh-target="${DSH_TARGET}"`：Windows runner
       # 的默认 shell 是 PowerShell，那样会把值丢掉（参数退化成 `--dsh-target=`），
@@ -175,7 +175,7 @@ jobs:
       # 树内解析（否则 Harness 启动即 `Cannot find package '<dep>'`）。
       - name: Verify assembled harness tree
         if: inputs.scope != 'l1'
-        run: npm run verify:harness-tree
+        run: npm run gate -- harness-tree
 
       # 补丁健康度（只有组装之后 `MANIFEST.json` 才有逐条的 applied/skipped/failed
       # 证据）。写进 job summary，让「哪些补丁真的打上了」一眼可见——这正是

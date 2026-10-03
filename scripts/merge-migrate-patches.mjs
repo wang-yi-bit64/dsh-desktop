@@ -244,7 +244,7 @@ async function modeRegen(args) {
     }
   }
   if (write) {
-    console.log('\n下一步：删除旧版本段补丁文件、跑 npm run verify:patches、再跑 check:patch-applicability --target=' + to + ' 复核。')
+    console.log('\n下一步：删除旧版本段补丁文件、跑 npm run gate -- patches、再跑 check:patch-applicability --target=' + to + ' 复核。')
   }
 }
 

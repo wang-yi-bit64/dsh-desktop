@@ -29,9 +29,14 @@
 
 ## 2. 常用命令速查
 
-> 📖 **完整命令速查表见 `docs/commands.md`**——原 §2 内容原样迁入，**npm script 名字一个都没丢**。
+> 📖 **完整命令速查表见 `docs/commands.md`**——原 §2 内容原样迁入。
 >
-> 高频：`npm run dev`、`npm run build`、`cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli`（无头门禁，INV-6）、`npm run verify:claims` / `verify:plan-facts`。
+> ⚠️ **2026-10-03 起命令面收敛（治理 G1/G2，见 §7.3 与 `docs/dev-plan-defect-remediation.md` §11 的 S4-5）**：
+> 门禁清单的**唯一产地是 `scripts/gate-manifest.mjs`**（33 条，含分档与逐条理由），package.json 只留
+> 22 条**人用入口**（此前 62 条里 41 条是门禁各自的入口）。跑门禁用 `npm run gate -- <name>`，
+> **旧名 `npm run verify:<name>` 经 `npm run gate -- verify:<name>` 仍然可用**（兼容层；历史文书不改）。
+>
+> 高频：`npm run dev`、`npm run build`、`cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli`（无头门禁，INV-6）、`npm run gate -- claims` / `npm run gate -- plan-facts`、`npm run verify:fast`。
 
 ---
 
@@ -123,12 +128,12 @@
 | LAN 手机桥（扫码配对 + cookie 握手） | ✅ 已接线 | `src-tauri/src/mobile_bridge.rs`、`state.rs::sync_mobile_target`（:352）、`menu.rs` 手机子菜单 | 应用菜单 `mobile-pair` / `mobile-stop` |
 | 壳层结构化日志 `desktop.log` | ✅ 已接线 | `src-tauri/src/logging.rs::init`（:46） | `src-tauri/src/lib.rs:70` |
 | 补丁分级与失败降级 | ✅ 已接线 | `scripts/patch-layers.mjs`（分级表按**包名**索引）、`patches/LAYERS.md`、`prepare-harness.mjs` | 构建期；结果落 `MANIFEST.json:patches[]`（含 `target` 字段标明通道） |
-| **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15；**alpha 线 2026-09-30 起休眠**——[ADR-056](docs/adr/056-alpha-channel-dormant.md)：机制与目录保留，不发布、不追漂移，`status` 字段是唯一产地） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道**与休眠通道**直接失败）；`smoke.yml` 有 `dsh_target` 输入；`verify:patches` 逐目标检查、`verify:drift` 逐通道对照 dist-tag（休眠目标显式跳过）。见 §8.6 |
+| **双上游运行时通道（next / alpha）** | ✅ 已接线（2026-09-15；在役通道：`next` / `alpha`；休眠通道：无——alpha 曾经 [ADR-056](docs/adr/056-alpha-channel-dormant.md) 休眠，同日由 [ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 复役；休眠机制保留，`status` 字段是唯一产地，本句由 `npm run gate -- doc-facts` 对账） | `scripts/dsh-targets.mjs`（目标总表）+ `patches/<target>/`、`packages/<target>/`、`harness-deps/<target>/` | `prepare:harness -- --dsh-target=<name>`；`release.yml` preflight 从 tag 的预发布通道名推导目标（未知通道**与休眠通道**直接失败）；`smoke.yml` 有 `dsh_target` 输入；`npm run gate -- patches` 逐目标检查、`npm run gate -- drift` 逐通道对照 dist-tag（休眠目标显式跳过）。见 §8.6 |
 | ↳ 补丁行号重算（移植到另一条上游线时） | ✅ 已接线 | `scripts/recount-patches.mjs`（重生成，依赖 git）+ `scripts/relocate-patch-hunks.mjs`（只改 `@@` 行、原文保真、无外部进程）**二选一** + `check-patch-applicability` 的 ±20 窗口判据 | 升级/移植工序；`patch-package` 按行号定位且偏移超 ±20 行即失败，只按内容搜索的预检会漏报。**同一份补丁只用一条路径**——见 §8.6 |
-| **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **20 个命令全部**返回 `CommandResult<T>`；五个页面（error / plugin-recovery / logs / updates / feedback）均解包 `success` |
+| **统一 IPC 封套 `IpcEnvelope<T>` + 错误码总表** | ✅ **已接线（2026-09-10 批次 E）** | `crates/dsh-contracts/src/ipc.rs`（`IpcEnvelope<T>`，`error` 载荷为 `AppError`）+ `src/errors.rs` 的 `codes` 模块（`E1xxx`~`E7xxx`，族号↔类别有测试） | `src-tauri/src/commands.rs` 的 **21 个命令**中 **20 个**返回 `CommandResult<T>`；唯一例外是 `portable_mode`（便携版判定，刻意返回裸 `bool`，调用方 `updates.html`）。五个页面（error / plugin-recovery / logs / updates / feedback）均解包 `success` |
 | ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
 | **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
-| ↳ 更新源归属与签名密钥 | ✅ 已闭环（2026-09-10；**端点 2026-09-30 通道化**，见 [ADR-053](docs/adr/053-channelized-updater-manifest.md)） | 端点按通道指向滚动 Release（`releases/download/updater-<channel>/latest.json`），**URL 的唯一产地是 `scripts/updater-manifest.mjs`**，由 `tauri build --config` 在构建期注入（`tauri.conf.json` 只留默认值）；配置里的 `pubkey` 与 `~/.tauri/dsh-desktop.key.pub` **逐字节一致** | 私钥经 CI Secret `TAURI_SIGNING_PRIVATE_KEY` 注入（无口令），本地离线备份在 `~/.tauri/backup/`。发布后由 `verify:update-channel` 断言「端点 version ≥ 该通道最新 tag」 |
+| ↳ 更新源归属与签名密钥 | ✅ 已闭环（2026-09-10；**端点 2026-09-30 通道化**，见 [ADR-053](docs/adr/053-channelized-updater-manifest.md)） | 端点按通道指向滚动 Release（`releases/download/updater-<channel>/latest.json`），**URL 的唯一产地是 `scripts/updater-manifest.mjs`**，由 `tauri build --config` 在构建期注入（`tauri.conf.json` 只留默认值）；配置里的 `pubkey` 与 `~/.tauri/dsh-desktop.key.pub` **逐字节一致** | 私钥经 CI Secret `TAURI_SIGNING_PRIVATE_KEY` 注入（无口令），本地离线备份在 `~/.tauri/backup/`。发布后由 `npm run gate -- update-channel` 断言「端点 version ≥ 该通道最新 tag」 |
 | **应用内日志查看器** | ✅ **已接线（2026-09-10 批次 D）** | `frontend/logs.html` + `crates/dsh-host/src/logs_view.rs`（三来源，尾部读取，**截断如实上报 `truncated`**） | 菜单「Harness → View Logs…」→ `window::show_logs_page`；页面调 `logs_read` / `open_logs` / `diagnostics_export` / `harness_open`。「Reveal Log Folder」保留为次入口 |
 | **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复调用名；同日补完启动链路） | `src-tauri/frontend/error.html` 调 `safe_mode_action`（`action: "restart"`），失败经 `fail()` 可见上报 | 错误页按钮 → `commands::safe_mode_action` → `HarnessSupervisor::restart_in_safe_mode`（此前调 `restart()`，实际只是**普通重启**——按钮曾是谎话） |
 | **恢复页交互** | ✅ **已接线（2026-09-10 批次 C）** | `plugin-recovery.html` 调 `recovery_status` / `recovery_action`（`restart` / `safe-mode` / `show-log` / `quit`）并**检查封套 `success`**；监听 `harness://status` 反映恢复进度 | 错误页「插件恢复…」按钮 → `recovery_open` → `show_recovery_page`。数据来自 `dsh_host::diagnostics`（此前零消费者的那条链） |
@@ -136,8 +141,8 @@
 | **`safe-mode.html`** | 🗄️ **已删除（2026-09-10 批次 C）** | 页面 + 资源 + 配置项一并移除；`window::show_safe_mode_page` 同步删除 | **无**。它的每处交互都要求「插件移除」后端（上文已裁定不做），接上只会交出「其余按钮仍读空气」的页面；其独有能力（进安全模式）已由错误页 / 恢复页 / 原生菜单三处覆盖 |
 | 手机桥状态可见性 | ✅ 已接线（2026-09-10） | `src-tauri/src/menu.rs` 的 `Phone` 子菜单状态行 + `mobile_bridge::status_label`；`MobileBridge::on_connected_change`（镜像上游 `onConnectedChange`）在配对状态翻转时回调 | 菜单构建时初始化，**手机侧 `POST /pair` 成功**、菜单配对/停止时均经 `refresh_bridge_status` 刷新（`lib.rs` setup 注册监听器） |
 | ↳ 页内手机状态指示器（Harness 侧边栏） | ✅ 已接线（2026-09-10） | `harness_ui.rs::INJECT_SCRIPT`（`include_str!` 内嵌 `frontend/harness-ui-inject.js`），挂在 `[data-dsh-sidebar-settings]` 下；状态下发 `push_phone_status` 走 `webview.eval`，**不新增 IPC 命令** | 两个推送点：连接翻转（`on_connected_change`）与页面加载完成（`on_page_load`）。**只做状态指示、不可点击**——配对/停止仍只走原生 `Phone` 菜单，因此它不渲染成按钮 |
-| **Harness 页注入机制（preload 等价物）** | ✅ 已接线（2026-09-10；同期更正「无初始化脚本」的误判） | 主窗口 builder 的 `initialization_script`（`lib.rs`）+ `frontend/harness-ui-inject.js`；脚本按 origin 自我早退（本地页与子框架不注入） | 无头行为自测 `npm run verify:harness-inject`（19 项断言 + 可证伪性检查，已进 CI） |
-| **CLI 打包与核验能力（`package-cli.mjs`）** | ✅ 已接线（2026-09-13；**发布通道于 2026-09-24 退役，本能力保留**） | `scripts/package-cli.mjs`（命名 / 边车 / manifest / 回读校验 / 产物执行自检 / 已发布核验），约 40 项可证伪判据；由 `ci.yml` 与 release `preflight` 的 `verify:cli-package` 守着 | **本地手动使用**（`npm run package:cli`）。🚫 **不再上传到 Release**：原 `release.yml` 的 `cli` / `cli-publish` job 已删除。依据「本仓之外零消费者 + 产物不含 runtime 不自足」，见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §5。归档的 `scripts/dry-run-cli-publish.mjs` → `docs/archive/`。**crate 与打包脚本不得随之删除**——守卫 `checkCliCrateRetained` 守着这一点 |
+| **Harness 页注入机制（preload 等价物）** | ✅ 已接线（2026-09-10；同期更正「无初始化脚本」的误判） | 主窗口 builder 的 `initialization_script`（`lib.rs`）+ `frontend/harness-ui-inject.js`；脚本按 origin 自我早退（本地页与子框架不注入） | 无头行为自测 `npm run gate -- harness-inject`（19 项断言 + 可证伪性检查，已进 CI） |
+| **CLI 打包与核验能力（`package-cli.mjs`）** | ✅ 已接线（2026-09-13；**发布通道于 2026-09-24 退役，本能力保留**） | `scripts/package-cli.mjs`（命名 / 边车 / manifest / 回读校验 / 产物执行自检 / 已发布核验），约 40 项可证伪判据；由 `ci.yml` 与 release `preflight` 的 release 档（门禁 `cli-package`）守着 | **本地手动使用**（`npm run package:cli`）。🚫 **不再上传到 Release**：原 `release.yml` 的 `cli` / `cli-publish` job 已删除。依据「本仓之外零消费者 + 产物不含 runtime 不自足」，见 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §5。归档的 `scripts/dry-run-cli-publish.mjs` → `docs/archive/`。**crate 与打包脚本不得随之删除**——守卫 `checkCliCrateRetained` 守着这一点 |
 | ↳ runtime bundle 独立发布（Phase 2） | 🕓 **计划中**（带触发条件，刻意不做） | **无代码**。门槛与前置改造写在 [`docs/dev-plan-cli-distribution.md`](docs/dev-plan-cli-distribution.md) §4：出现第一个非本仓消费者，或开工 H3-a 运行时更新事务 / H2-a 兼容矩阵时才做；提前单独做就是为「可能有用的未来」建基础设施（同批次 F 归档 `dsh-model-gateway` 的判据） | **无** |
 | **系统托盘 + 关窗驻留** | ✅ **已接线（2026-09-18 批次 0.2-B1）** | `src-tauri/src/tray.rs`（图标 / 菜单 / 事件 / 状态行）+ `window.rs::reveal_main_window`（show → unminimize → focus 三步）；图标资产 `icons/tray-32.png` 与 `icons/tray-template.png` 由 `scripts/generate-tray-icons.mjs` 派生；`tauri` 开 `tray-icon` feature（`Cargo.toml`） | `lib.rs` setup 建托盘（失败只记日志、启动继续）；`on_window_event` 的 `CloseRequested` 改为 `prevent_close` + `hide`；菜单事件与应用菜单**共用** `menu::handle_menu_event` 与同一批 id。**无自动门禁**：托盘区在 CI 容器里不存在，验收靠三平台手工（见 §2 与 0.2-B1 记录） |
 | ↳ 驻留期的退出语义 | ✅ 已接线 | `lib.rs::shutdown`（先收手机桥、再收 Harness）；`menu.rs` / `commands.rs` 的 Quit 与 `app_quit` 均先 await 它 | 托盘 / 应用菜单 / 错误页三处 Quit。**为什么必须做**：`app.exit()` 不经过 `CloseRequested`，不先停机就只能由 JobObject / PDEATHSIG 强杀子进程 |
@@ -169,7 +174,8 @@
 - **「扫出来再校验」的门禁必须断言数量不为零**（2026-09-22，`E5-空` / ADR-051 附带发现）：凡是先从源码里扫出一组 X、再逐个校验 X 的守卫，必须同时断言**扫出的数量 > 0**。只断言「扫到的都合规」会容忍「一个都没扫到」——那等于门禁替一段**不存在的检查**背书，比漏报更危险（输出还是一行绿色）。触发条件是**写法变更**：入口加了一种新的 import 形态、表格换了一种列结构，扫描器不认了就静默归零。本仓已踩两次——`verify-claims` C3 的表格解析，与 `verify-harness-entry` E5 漏认 `specifier: './x.mjs'` 形态（后者修前在**零个受检模块**下全绿，而它守的正是「三份打包清单漏登记」这条 v0.7.0-alpha.1 真实事故）。**扫出数为 0 时，先怀疑扫描器，再怀疑源码。**
 - **计划文档的预算纪律（2026-09-30 起，S2-2）**：新增任何计划类文档，必须同时归档或改写一份旧计划文档——在役 docs 总量不得只增不减；**计划文档无权延期或改写任何 ADR**，要改 ADR 只能走 superseding / 状态修订 ADR（ADR-055 之于 ADR-047、ADR-056 之于 ADR-052 是正确形态）。违反这条即视为文档回归。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
-- **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run verify:ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
+- **门禁清单只有一个产地（2026-10-03，治理 G1/G2/S4-5）**：每条门禁（脚本 / 参数 / 分档 / **为什么有它**）登记在 `scripts/gate-manifest.mjs`，编排器是 `npm run gate`。**新增门禁只登记总表**——不要在 `ci.yml`、`release.yml` 或本地快档里另抄一行清单：改版前三份手抄清单互相漂移且漂移不报错，直接后果是 `unwrap-hygiene` 的**真检查**、`doc-facts`、`github-config`、`fault-patterns` 四个守卫**写了却不在任何自动流程里**，而文档还在宣称它们盯着代码（§7.1 规则 2 的同类形态）。判据：`npm run gate -- gates`（每个支持 `--self-test` 的脚本要么登记、要么带理由豁免且扫出数 > 0；每个分档步数 > 0；每种模式要么进分档、要么写 `manual` 理由）。旧名 `verify:<name>` 仍是可解析的别名，历史文书因此不必改写。
+- **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run gate -- ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
   - 其中 **E7（菜单项 id ↔ `handle_menu_event` 分支）** 是批次 0.2-B1 新增的：托盘与应用菜单**共用同一批 id**，而「加了菜单项忘了接处理器」的后果是一个点了完全没反应的项——没有编译错误、没有日志、没有既有守卫能看见。`--self-test` 用三组夹具（缺分支 / 守卫式早退 / 注释里的 id）钉住该判定本身，已进 CI 与 release preflight。
 
 ---
@@ -186,14 +192,14 @@
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2` | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.2-alpha.x`（须大于最高 rc tag） |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2` | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须**严格大于**最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057 后果段） |
 
 > ✅ **next 线于 2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`**（ADR-057 同批
 > 恢复 alpha 在役并推进到 `0.1.7-alpha.2`）：预检 clean 2 / conflict 12，经
 > `scripts/merge-migrate-patches.mjs` 三路合并 + 逐补丁语义裁定后，退役 6 个（两线合计：
 > `ui-layout` / `ui-workspace` / `ui-agent-preset` 双线 + `ui-model-selection` 仅 next）、
 > 语义重做 4 个；预设传递插件 `dsh-desktop-preset-transfer` 整链退役（上游把 preset roots
-> 文件模型重铸为注册模型）。双线锚点现已各自对齐上游 dist-tag，`verify:drift` 不再告警。
+> 文件模型重铸为注册模型）。双线锚点现已各自对齐上游 dist-tag，`npm run gate -- drift` 不再告警。
 > 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-09-30 记录。
 
 > **两条线的补丁数可以不同，这是正常的**：本轮退役后 next 10 个 / alpha 11 个——
