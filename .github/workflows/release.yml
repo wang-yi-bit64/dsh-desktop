@@ -117,7 +117,7 @@ jobs:
       # 分档 release = 契约/壳面/补丁/发布链路的静态判据 + 打包器自检 + 需要组装树的
       # 真检查（harness-tree / target 另在下面单独跑）。逐条 rationale 见总表的 why 字段。
       # ⚠️ 新增门禁只登记总表——手抄清单曾漂移出「守卫写了却没有任何流程会跑」。
-      - name: Static gates (single source of truth: scripts/gate-manifest.mjs)
+      - name: "Static gates (single source of truth: scripts/gate-manifest.mjs)"
         run: npm run gate -- --tier=release
 
       # 发布前**必须**知道自己在发布哪个上游基线。这里跑真检查（联网）但**不阻断**

@@ -116,7 +116,7 @@ jobs:
       # 步骤注释已逐条迁入），与门禁同生共死；分档 ci 的成员非空由 verify:gates 断言。
       # 平台受限的门禁（便携版打包器自检仅 Windows）由编排器打印 skip 与理由——不静默
       # 略过（§7.1 规则 3）。新增门禁只登记总表，不要在这里另抄一行。
-      - name: Static gates (single source of truth: scripts/gate-manifest.mjs)
+      - name: "Static gates (single source of truth: scripts/gate-manifest.mjs)"
         run: npm run gate -- --tier=ci
 
       # src-tauri 是 workspace 成员，cargo test/clippy --workspace 必然编译它；
