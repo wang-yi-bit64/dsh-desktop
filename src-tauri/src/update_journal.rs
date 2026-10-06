@@ -189,17 +189,22 @@ mod tests {
 
     #[test]
     fn record_serialises_one_line_without_urls() {
+        // ⚠️ 目录名里**不能**直接放 `utc_now()`：它产出 ISO-8601
+        // （`2026-10-06T14:34:29Z`），而 Windows 的文件名不允许 `:`——
+        // `create_dir_all` 在 Windows 上直接失败（Linux/macOS 允许，所以只有
+        // Windows job 红）。这里只把 `:` 换成 `-`，不影响被测逻辑。
+        let stamp = utc_now().replace(':', "-");
         let dir = std::env::temp_dir().join(format!(
             "dsh-update-journal-{}-{}",
             std::process::id(),
-            utc_now()
+            stamp
         ));
         // 显式判 open：它是**静默降级**路径（create_dir_all 失败只 warn 后返 None）。
         // 测试若也用 expect 一把梭， CI 上就会得到一条与真实原因无关的 panic
         // （2026-10-06 windows/ubuntu/macos 三平台同时红就是这么来的）。
         let Some(journal) = UpdateJournal::open(&dir, "rc") else {
             panic!(
-                "open failed for {} — check create_dir_all permissions",
+                "open failed for {}（create_dir_all 失败；注意 Windows 文件名不允许 `:`）",
                 dir.display()
             );
         };
