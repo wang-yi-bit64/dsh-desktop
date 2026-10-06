@@ -194,7 +194,15 @@ mod tests {
             std::process::id(),
             utc_now()
         ));
-        let journal = UpdateJournal::open(&dir, "rc").expect("journal must open");
+        // 显式判 open：它是**静默降级**路径（create_dir_all 失败只 warn 后返 None）。
+        // 测试若也用 expect 一把梭， CI 上就会得到一条与真实原因无关的 panic
+        // （2026-10-06 windows/ubuntu/macos 三平台同时红就是这么来的）。
+        let Some(journal) = UpdateJournal::open(&dir, "rc") else {
+            panic!(
+                "open failed for {} — check create_dir_all permissions",
+                dir.display()
+            );
+        };
         journal.record(
             JournalAction::CheckResult,
             Some("0.7.2-rc.2".into()),
@@ -208,7 +216,19 @@ mod tests {
             "check failed: network unreachable",
         );
 
-        let text = fs::read_to_string(&journal.path).unwrap();
+        // record() 也是静默降级（append 失败只 warn）。因此读盘后必须**先证明写进去了**，
+        // 而不是直接 unwrap 两行——否则「一行都没写」会表现成 lines.next() 的 panic，
+        // 把真实原因（磁盘/权限）掩盖成断言失败。
+        let text = match fs::read_to_string(&journal.path) {
+            Ok(text) => text,
+            Err(error) => panic!("journal {} unreadable: {error}", journal.path.display()),
+        };
+        assert!(
+            text.lines().count() >= 2,
+            "journal 应至少有 2 行，实得 {} 行（{}）——record 静默降级了",
+            text.lines().count(),
+            journal.path.display(),
+        );
         let mut lines = text.lines();
         let first = lines.next().unwrap();
         let second = lines.next().unwrap();
@@ -223,15 +243,35 @@ mod tests {
         assert!(!text.contains("https://"));
 
         // 轮转：写爆上限后 `.1` 必须存在且当前文件重新变小。
-        for index in 0..2000 {
+        //
+        // ⚠️ 循环次数必须由**上限反推**，不能拍脑袋。单条记录约 100~120 字节，
+        // 而 CX-15 的上限是 512 KiB——拍 2000 条只写 ~230 KB，永远不轮转。
+        // 2026-10-06 三平台 CI 同时红就是踩了这个：断言本身没错，是写入量不够。
+        // 这里按「上限 ÷ 单行字节」取 2 倍余量，且用足够长的 summary 保证能超限。
+        let per_line = text.lines().map(|l| l.len()).max().unwrap_or(0).max(64) + 1;
+        let needed = (UPDATE_JOURNAL_MAX_BYTES as usize / per_line + 1) * 2;
+        for index in 0..needed {
             journal.record(
                 JournalAction::Download,
                 Some("0.7.2-rc.2".into()),
                 None,
-                format!("chunk {index}"),
+                format!("chunk {index} {}", "x".repeat(per_line)),
             );
         }
-        assert!(journal.path.with_extension("jsonl.1").exists());
+        assert!(
+            journal.path.with_extension("jsonl.1").exists(),
+            "写满 {} 字节上限后应轮转出 .1（{}）；本次写入 {needed} 行、每行约 {per_line} 字节",
+            UPDATE_JOURNAL_MAX_BYTES,
+            journal.path.display(),
+        );
+        // 轮转后当前文件必须比上限小——否则「轮转」只是复制，日志会无限增长。
+        let after = fs::metadata(&journal.path).expect("轮转后的 journal 应可读");
+        assert!(
+            after.len() <= UPDATE_JOURNAL_MAX_BYTES,
+            "轮转后当前文件仍超上限：{} > {}",
+            after.len(),
+            UPDATE_JOURNAL_MAX_BYTES,
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
