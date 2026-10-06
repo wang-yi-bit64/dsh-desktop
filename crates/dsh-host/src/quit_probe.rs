@@ -127,7 +127,9 @@ fn session_list_body() -> String {
 /// `Set-Cookie`（会话 cookie 等），与 `crate::contracts::AUTH_COOKIE_PREFIX` 同一个前缀口径。
 fn auth_cookie_from_headers(head: &str) -> Option<String> {
     for line in head.split("\r\n") {
-        let Some(value) = line.strip_prefix("set-cookie:").or_else(|| line.strip_prefix("Set-Cookie:"))
+        let Some(value) = line
+            .strip_prefix("set-cookie:")
+            .or_else(|| line.strip_prefix("Set-Cookie:"))
         else {
             continue;
         };
@@ -222,7 +224,9 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let mut turns = script.into_iter();
             for _ in 0..expected {
-                let Ok((mut stream, _peer)) = listener.accept() else { break };
+                let Ok((mut stream, _peer)) = listener.accept() else {
+                    break;
+                };
                 // 等客户端把请求写出来（只读 1 字节也够：它已经发了 header）。
                 let mut probe = [0u8; 1];
                 if stream.read(&mut probe).is_err() {
@@ -263,7 +267,9 @@ mod tests {
     fn running_sessions_are_reported_as_work() {
         let (port, handle) = spawn_stub(vec![
             HANDSHAKE.to_string(),
-            ok_json("{\"sessionId\":\"s1\",\"running\":true},{\"sessionId\":\"s2\",\"running\":false}"),
+            ok_json(
+                "{\"sessionId\":\"s1\",\"running\":true},{\"sessionId\":\"s2\",\"running\":false}",
+            ),
         ]);
         let found = inspect_quit(&endpoint(port));
         assert_eq!(found, QuitInspection::Work { sessions: 1 });
@@ -295,8 +301,10 @@ mod tests {
     /// 绝不能读成「没工作」——否则一次上游字段改名就会让壳静默打断用户的工作。
     #[test]
     fn missing_running_field_is_unknown_not_idle() {
-        let (port, handle) =
-            spawn_stub(vec![HANDSHAKE.to_string(), ok_json("{\"sessionId\":\"s1\"}")]);
+        let (port, handle) = spawn_stub(vec![
+            HANDSHAKE.to_string(),
+            ok_json("{\"sessionId\":\"s1\"}"),
+        ]);
         let found = inspect_quit(&endpoint(port));
         assert_eq!(found, QuitInspection::Unknown);
         let _ = handle.join();
@@ -328,7 +336,10 @@ mod tests {
     #[test]
     fn auth_cookie_parsing_ignores_other_cookies() {
         let head = "HTTP/1.1 303 See Other\r\nset-cookie: session=zzz; Path=/\r\nset-cookie: dsh-auth-4173=abc; Path=/; HttpOnly\r\n\r\n";
-        assert_eq!(auth_cookie_from_headers(head).as_deref(), Some("dsh-auth-4173=abc"));
+        assert_eq!(
+            auth_cookie_from_headers(head).as_deref(),
+            Some("dsh-auth-4173=abc")
+        );
         assert_eq!(auth_cookie_from_headers("HTTP/1.1 200 OK\r\n\r\n"), None);
     }
 }

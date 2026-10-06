@@ -624,8 +624,11 @@ mod tests {
         let payload = res.join("runtime").join("primary-runtime");
         let deps = payload.join("dependencies");
         let office = res.join("runtime").join("office-skills");
-        std::fs::create_dir_all(deps.join("python").join(if cfg!(windows) { "." } else { "bin" }))
-            .unwrap();
+        std::fs::create_dir_all(
+            deps.join("python")
+                .join(if cfg!(windows) { "." } else { "bin" }),
+        )
+        .unwrap();
         std::fs::create_dir_all(deps.join("node").join("bin")).unwrap();
         std::fs::create_dir_all(deps.join("node").join("node_modules")).unwrap();
         std::fs::create_dir_all(deps.join("pnpm").join("bin")).unwrap();
@@ -636,10 +639,10 @@ mod tests {
             deps.join("python").join("bin").join("python3")
         };
         std::fs::write(&python_bin, b"stub").unwrap();
-        let node_bin = deps
-            .join("node")
-            .join("bin")
-            .join(if cfg!(windows) { "node.exe" } else { "node" });
+        let node_bin =
+            deps.join("node")
+                .join("bin")
+                .join(if cfg!(windows) { "node.exe" } else { "node" });
         std::fs::write(&node_bin, b"stub").unwrap();
         std::fs::write(deps.join("pnpm").join("bin").join("pnpm.mjs"), b"stub").unwrap();
         let check_script = office.join("scripts").join("check_office.py");
@@ -657,7 +660,9 @@ mod tests {
 
         // (a) 档1.5 齐备 → 注入，且指向载荷根。
         let env = harness_env(&layout, &shell, None);
-        let expected = layout.primary_runtime().map(|(root, _)| root.display().to_string());
+        let expected = layout
+            .primary_runtime()
+            .map(|(root, _)| root.display().to_string());
         assert_eq!(
             env.get(crate::contracts::ENV_BUNDLED_PRIMARY_RUNTIME)
                 .cloned(),
@@ -678,11 +683,15 @@ mod tests {
             std::fs::rename(&victim, &backup).unwrap();
             let env = harness_env(&layout, &shell, None);
             assert!(
-                env.get(crate::contracts::ENV_BUNDLED_PRIMARY_RUNTIME).is_none(),
+                env.get(crate::contracts::ENV_BUNDLED_PRIMARY_RUNTIME)
+                    .is_none(),
                 "删掉 {victim:?} 后仍注入了变量——残缺载荷会把 Harness 起不来"
             );
             // 载荷问题不影响其余契约环境。
-            assert_eq!(env.get("DSH_HOME").map(String::as_str), Some(layout.dsh_home.to_str().unwrap()));
+            assert_eq!(
+                env.get("DSH_HOME").map(String::as_str),
+                Some(layout.dsh_home.to_str().unwrap())
+            );
             std::fs::rename(&backup, &victim).unwrap();
         }
 
@@ -690,7 +699,8 @@ mod tests {
     }
 
     #[test]
-    fn overrides_win_over_contract_values() {        let layout = Layout::resolve(
+    fn overrides_win_over_contract_values() {
+        let layout = Layout::resolve(
             std::path::Path::new("/res-override"),
             std::path::Path::new("/data-override"),
         );

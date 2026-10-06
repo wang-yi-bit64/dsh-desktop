@@ -31,9 +31,9 @@ use std::path::{Path, PathBuf};
 
 use crate::contracts::{
     DSH_ENTRY_RELATIVE, DSH_HOME_DIR, ENV_DSH_RUNNER, HARNESS_LOG_FILE, HARNESS_MODULES_DIR,
-    LAUNCH_ROOT_DIR, LOG_DIR, MANIFEST_FILE, NODE_ENTRY_FILE, NODE_RESOURCE_DIR,
-    OFFICE_SKILLS_DIR, PATCH_FILE, PID_FILE, PRIMARY_RUNTIME_DIR, PRIMARY_RUNTIME_ROOT,
-    SAFE_PATCH_FILE, SIDECAR_RESOURCE_DIR, WINDOWS_HIDE_FILE,
+    LAUNCH_ROOT_DIR, LOG_DIR, MANIFEST_FILE, NODE_ENTRY_FILE, NODE_RESOURCE_DIR, OFFICE_SKILLS_DIR,
+    PATCH_FILE, PID_FILE, PRIMARY_RUNTIME_DIR, PRIMARY_RUNTIME_ROOT, SAFE_PATCH_FILE,
+    SIDECAR_RESOURCE_DIR, WINDOWS_HIDE_FILE,
 };
 
 /// 运行目标模式：支持传统的 Node + 模块树模式，或紧凑的 Sidecar 独立单二进制模式。
@@ -263,11 +263,10 @@ impl Layout {
         }
         let dependencies = root.join("dependencies");
         let windows = cfg!(windows);
-        let python = dependencies.join("python").join(if windows {
-            "python.exe"
-        } else {
-            "bin/python3"
-        });
+        let python =
+            dependencies
+                .join("python")
+                .join(if windows { "python.exe" } else { "bin/python3" });
         // site-packages 的确切目录名带次版本号（`python3.13`），无法在常量里写死；
         // 于是按"`Lib`（Windows）或 `lib/python*` 下任一目录"判定——未知次版本时
         // 不让整个载荷失效，但也不假装它存在。
@@ -289,15 +288,21 @@ impl Layout {
         // 档1.5 及格线（缺一即整个载荷不启用）。
         let authoring_ready = [
             python_interp_ok,
-            dependencies.join("node").join("bin").join(if windows {
-                "node.exe"
-            } else {
-                "node"
-            })
-            .is_file(),
+            dependencies
+                .join("node")
+                .join("bin")
+                .join(if windows { "node.exe" } else { "node" })
+                .is_file(),
             dependencies.join("node").join("node_modules").is_dir(),
-            dependencies.join("pnpm").join("bin").join("pnpm.mjs").is_file(),
-            office_skills.join("scripts").join("check_office.py").is_file(),
+            dependencies
+                .join("pnpm")
+                .join("bin")
+                .join("pnpm.mjs")
+                .is_file(),
+            office_skills
+                .join("scripts")
+                .join("check_office.py")
+                .is_file(),
         ]
         .into_iter()
         .all(|present| present);

@@ -1041,7 +1041,11 @@ mod tests {
     }
 
     fn sticky_dir(tag: &str) -> std::path::PathBuf {
-        let unique = format!("dsh-host-sticky-{tag}-{}-{}", std::process::id(), now_seconds());
+        let unique = format!(
+            "dsh-host-sticky-{tag}-{}-{}",
+            std::process::id(),
+            now_seconds()
+        );
         std::env::temp_dir().join(unique)
     }
 
@@ -1072,7 +1076,11 @@ mod tests {
 
         assert_eq!(reuse_sticky_port(&dir).await, None, "被占用的端口不得复用");
         drop(holder);
-        assert_eq!(reuse_sticky_port(&dir).await, Some(port), "空闲后应复用同一端口");
+        assert_eq!(
+            reuse_sticky_port(&dir).await,
+            Some(port),
+            "空闲后应复用同一端口"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

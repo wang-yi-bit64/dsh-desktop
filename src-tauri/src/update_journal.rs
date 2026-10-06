@@ -26,7 +26,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dsh_host::contracts::{UPDATE_JOURNAL_DIR, UPDATE_JOURNAL_MAX_BYTES, UPDATE_JOURNAL_SCHEMA_VERSION};
+use dsh_host::contracts::{
+    UPDATE_JOURNAL_DIR, UPDATE_JOURNAL_MAX_BYTES, UPDATE_JOURNAL_SCHEMA_VERSION,
+};
 use serde::Serialize;
 
 /// journal 一行记录的动作枚举。
@@ -100,7 +102,13 @@ impl UpdateJournal {
     }
 
     /// 追加一条记录。
-    pub fn record(&self, action: JournalAction, version: Option<String>, code: Option<String>, summary: impl Into<String>) {
+    pub fn record(
+        &self,
+        action: JournalAction,
+        version: Option<String>,
+        code: Option<String>,
+        summary: impl Into<String>,
+    ) {
         let line = JournalRecord {
             ts: utc_now(),
             schema: UPDATE_JOURNAL_SCHEMA_VERSION,

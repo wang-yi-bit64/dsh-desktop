@@ -27,8 +27,8 @@
 
 use std::sync::Arc;
 
-use tauri_plugin_dialog::DialogExt;
 use tauri::{AppHandle, Manager, Runtime};
+use tauri_plugin_dialog::DialogExt;
 
 use dsh_host::quit_probe::QuitInspection;
 

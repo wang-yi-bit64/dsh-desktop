@@ -229,7 +229,12 @@ fn create_inner(app: &AppHandle) -> tauri::Result<()> {
 ///
 /// 四个禁用项各一份：`Menu::get` 不跨菜单（见模块文档），因此应用菜单里的
 /// 同名状态行与托盘里的这份**互不可见**，必须逐一持有才能刷新。
-pub type TrayMenuHandles = (tauri::menu::Menu<Wry>, MenuItem<Wry>, MenuItem<Wry>, MenuItem<Wry>);
+pub type TrayMenuHandles = (
+    tauri::menu::Menu<Wry>,
+    MenuItem<Wry>,
+    MenuItem<Wry>,
+    MenuItem<Wry>,
+);
 
 /// 与应用菜单的差异都是**有意的**：
 ///

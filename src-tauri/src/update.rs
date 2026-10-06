@@ -175,10 +175,7 @@ impl UpdateManager {
         for endpoint in endpoints {
             if let Some(text) = endpoint.as_str() {
                 if let Some(tail) = text.rsplit('/').nth(1) {
-                    return tail
-                        .strip_prefix("updater-")
-                        .unwrap_or(tail)
-                        .to_owned();
+                    return tail.strip_prefix("updater-").unwrap_or(tail).to_owned();
                 }
             }
         }
@@ -196,7 +193,13 @@ impl UpdateManager {
 
     /// 记一条 journal 并同时落日志——两处的受众不同（日志给人肉眼看，
     /// journal 给将来的诊断包比对）。
-    fn journal(&self, action: JournalAction, version: Option<String>, code: Option<String>, summary: impl std::fmt::Display) {
+    fn journal(
+        &self,
+        action: JournalAction,
+        version: Option<String>,
+        code: Option<String>,
+        summary: impl std::fmt::Display,
+    ) {
         log::info!("update {action:?}: {summary}");
         if let Some(journal) = self.journal.as_ref() {
             journal.record(action, version, code, summary.to_string());
@@ -302,12 +305,7 @@ impl UpdateManager {
                 .await;
             }
             Ok(None) => {
-                self.journal(
-                    JournalAction::CheckResult,
-                    None,
-                    None,
-                    "already up to date",
-                );
+                self.journal(JournalAction::CheckResult, None, None, "already up to date");
                 self.set_status(UpdateStatus {
                     phase: UpdatePhase::UpToDate,
                     manual,
@@ -378,7 +376,12 @@ impl UpdateManager {
 
         let version = update.version.clone();
         let app = self.app.clone();
-        self.journal(JournalAction::Download, Some(version.clone()), None, "user consented");
+        self.journal(
+            JournalAction::Download,
+            Some(version.clone()),
+            None,
+            "user consented",
+        );
 
         self.set_status(UpdateStatus {
             phase: UpdatePhase::Downloading,
@@ -580,7 +583,10 @@ mod tests {
             UpdateFailure::Other,
         ] {
             let code = failure.code();
-            assert!(code.starts_with("E1"), "{failure:?} 的码 {code} 必须是 E1 族");
+            assert!(
+                code.starts_with("E1"),
+                "{failure:?} 的码 {code} 必须是 E1 族"
+            );
             assert_eq!(&code[1..2], "1");
         }
         assert_eq!(

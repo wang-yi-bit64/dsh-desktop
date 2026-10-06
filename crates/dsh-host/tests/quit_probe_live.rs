@@ -31,10 +31,11 @@ fn live_probe_reaches_a_definitive_answer() {
     let token = std::env::var("DSH_LIVE_TOKEN").unwrap_or_default();
     // 经 `parse_launch_line` 构造端点（而不是手工拼 `LaunchEndpoint`）：该函数要求的
     // `dsh web: ` 前缀同时充当文档——提醒读者 token 来自 stdout 的启动行。
-    let endpoint = match dsh_host::token::parse_launch_line(&format!("dsh web: {url}/?token={token}")) {
-        Some(endpoint) => endpoint,
-        None => panic!("cannot parse {url}/?token=<redacted>"),
-    };
+    let endpoint =
+        match dsh_host::token::parse_launch_line(&format!("dsh web: {url}/?token={token}")) {
+            Some(endpoint) => endpoint,
+            None => panic!("cannot parse {url}/?token=<redacted>"),
+        };
     let found = dsh_host::quit_probe::inspect_quit(&endpoint);
     eprintln!("[live] url={url} verdict={found:?}");
     // 唯一硬断言：必须拿到**确定性**答案。Unknown 意味着通道没打通（握手 / 围栏 /
