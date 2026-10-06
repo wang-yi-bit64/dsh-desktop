@@ -23,7 +23,7 @@
  * dependencies by walking upward from its own location.
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   copyFileSync,
   cpSync,
@@ -572,7 +572,33 @@ function buildManifest(lockfilePath) {
     overrides: Object.keys(overrides).sort(),
     patchFilesPresent: patchFiles,
     patchesStrict: strictPatches,
-    patches: patchReport
+    patches: patchReport,
+    // CX-17 — primary runtime 载荷状态。**必须如实**：装载了就说 present 并给出
+    // 摘要，没装载就写 present:false。§7.1 规则 3：用户/反馈页要能据此判断
+    // 「这台机器为什么没有 office skills」，而不是看到一个没有任何痕迹的缺失。
+    primaryRuntime: describePrimaryRuntime()
+  }
+}
+
+/** CX-17 — 读 resources/runtime 下的载荷并给出 manifest 摘要（只读，不组装）。 */
+function describePrimaryRuntime() {
+  const root = join(resources, 'runtime', 'primary-runtime')
+  if (!existsSync(root)) return { present: false }
+  const manifestPath = join(root, 'runtime.json')
+  if (!existsSync(manifestPath)) return { present: true, readable: false, reason: 'runtime.json missing' }
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    return {
+      present: true,
+      readable: true,
+      platform: parsed.platform,
+      arch: parsed.arch,
+      python: parsed.python,
+      desktopVersion: parsed.desktopVersion,
+      pythonPackages: Object.keys(parsed.pythonPackages ?? {}).length
+    }
+  } catch (error) {
+    return { present: true, readable: false, reason: error.message }
   }
 }
 
@@ -624,12 +650,29 @@ const REQUIRED_FILES = [
   'MANIFEST.json',
   'splash.html',
   'plugin-recovery.html',
-  'windows-menu.html',
   'dsh-loader.gif',
   'dsh-loader-dark.gif',
   'app-icon.png'
 ]
 const REQUIRED_DIRS = ['bin', 'node', join('harness', 'node_modules', '@deepseek-ai')]
+
+// CX-17 — primary runtime 载荷是**可选**资源：缺席合法（Rust 侧不注入
+// `DSH_BUNDLED_PRIMARY_RUNTIME`，Harness 的两个插件行保持 disabled）。
+// 但"在了一半"必须让构建失败——残缺载荷会让 Harness 启动期 stat 失败，即应用起不来。
+// 判据委托给 scripts/prepare-primary-runtime.mjs（唯一产地）。
+function primaryRuntimeConsistent() {
+  const { status, stdout } = spawnSync(process.execPath, [
+    join('scripts', 'prepare-primary-runtime.mjs'), '--check', '--resources', resources,
+  ], { encoding: 'utf8' })
+  if (status !== 0) {
+    console.error('[prepare-harness] resources/runtime/primary-runtime 残缺：缺一块就会让 Harness 起不来。')
+    console.error('  要么补全，要么整个删掉 resources/runtime/（缺席是合法形态，office skills 会保持禁用）。')
+    if (stdout) console.error(stdout.trim())
+    return { present: true, ok: false }
+  }
+  const present = stdout.includes('载荷完整')
+  return { present, ok: true }
+}
 
 function resourcesComplete() {
   return (
@@ -671,7 +714,6 @@ function copyBuildFiles() {
   for (const file of [
     'splash.html',
     'plugin-recovery.html',
-    'windows-menu.html',
     'dsh-loader.gif',
     'dsh-loader-dark.gif',
     'app-icon.png',
@@ -783,6 +825,7 @@ if (!forceRebuild && !updateLockfile) {
   const stagingLockfile = join(staging, 'package-lock.json')
   if (
     resourcesComplete() &&
+    primaryRuntimeConsistent().ok !== false &&
     existsSync(stagingLockfile) &&
     stagingInputsMatch() &&
     // resources/ 是全目标共用的：切到另一条通道时必须重新组装，否则会把上一条
@@ -1190,6 +1233,19 @@ cpSync(stagedNodeBin, join(resources, 'node', nodeBinName))
 // Sidecar binary directory (resources/bin/*)
 mkdirSync(join(resources, 'bin'), { recursive: true })
 writeFileSync(join(resources, 'bin', '.gitkeep'), '')
+
+// CX-17 — primary runtime 载荷根（可选，见 scripts/prepare-primary-runtime.mjs）。
+//
+// **为什么必须留一个标记文件**：`tauri.conf.json` 用 `resources/runtime/**/*` 把载荷
+// 收进安装包，而 Tauri 的资源 glob **匹配不到任何文件就让 build-script 失败**
+// （`glob pattern … didn't match any files`）。载荷缺席是合法形态（不打 python 分发包
+// 时 office skills 保持禁用），不能因此让每次编译都红；但"读 resource 却在
+// bundle.resources 里没有条目"又会让 `npm run gate -- harness-entry` 的红。
+// 一个永远存在的标记文件同时满足两边：缺席时只带进这几字节，载荷在时整个目录照带。
+// Rust 侧的完整性判定不看这个文件（它只认 python / node / pnpm / office-skills）。
+const payloadRoot = join(resources, 'runtime', 'primary-runtime')
+mkdirSync(payloadRoot, { recursive: true })
+writeFileSync(join(payloadRoot, '.payload-root'), '')
 
 // Full dependency tree, minus the node runtime package itself (its binary is
 // already extracted above and the package is hundreds of MB of duplicates).

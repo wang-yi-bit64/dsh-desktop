@@ -94,6 +94,8 @@ pub const MENU_ID_MOBILE_STOP: &str = "mobile-stop";
 pub const MENU_ID_UPDATES_CHECK: &str = "updates-check";
 /// 打开应用内反馈页（问题反馈 / 功能建议入口，批次 0.2-D2）。
 pub const MENU_ID_FEEDBACK_OPEN: &str = "feedback-open";
+/// 切换主窗口开发者工具（打包版同样可用；仅应用菜单，不进托盘）。
+pub const MENU_ID_DEVTOOLS_TOGGLE: &str = "devtools-toggle";
 /// 退出应用。
 pub const MENU_ID_APP_QUIT: &str = "app-quit";
 
@@ -145,6 +147,12 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
     // issue 模板才知道该带什么。
     let feedback = MenuItemBuilder::with_id(MENU_ID_FEEDBACK_OPEN, "Send Feedback…").build(app)?;
     let quit = MenuItemBuilder::with_id(MENU_ID_APP_QUIT, "Quit DSH Desktop").build(app)?;
+    // 排障入口：打包版也能开 DevTools（依赖 tauri 的 `devtools` feature）。
+    // 加速键用 CmdOrCtrl+Alt+I：macOS 即 ⌘⌥I；Windows 上 WebView2 自带的
+    // F12 / Ctrl+Shift+I 在启用 devtools 后同样有效，这里不去抢它们。
+    let devtools = MenuItemBuilder::with_id(MENU_ID_DEVTOOLS_TOGGLE, "Toggle Developer Tools")
+        .accelerator("CmdOrCtrl+Alt+I")
+        .build(app)?;
 
     let harness_submenu = SubmenuBuilder::new(app, "Harness")
         .item(&restart)
@@ -154,6 +162,8 @@ pub fn build_menu<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri:
         .item(&view_log)
         .item(&reveal_logs)
         .item(&export_diagnostics)
+        .separator()
+        .item(&devtools)
         .build()?;
 
     let mobile_submenu = SubmenuBuilder::with_id(app, PHONE_SUBMENU_ID, "Phone")
@@ -249,6 +259,11 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
         // 想看见窗口。放在 state 早退之前，避免「状态未就绪时托盘点击无反应」。
         if id == crate::tray::TRAY_SHOW_ID {
             crate::window::reveal_main_window(&app);
+            return;
+        }
+        // 同理不依赖应用状态：Harness 起不来时恰恰最需要 DevTools。
+        if id == MENU_ID_DEVTOOLS_TOGGLE {
+            crate::window::toggle_devtools(&app);
             return;
         }
         let Some(state) = app.try_state::<std::sync::Arc<AppState>>() else {
@@ -428,6 +443,11 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
                 crate::window::show_feedback_page(&app);
             }
             MENU_ID_APP_QUIT => {
+                // 退出前问一次「有没有会话在跑」：拦下时守卫负责唤回窗口 + 通知。
+                // 第二次显式退出强制生效，因此这里不会把用户永久卡住。
+                if !crate::quit_guard::decide(&app, false).await.is_proceed() {
+                    return;
+                }
                 // 先优雅停机再退出：`app.exit(0)` 不经过 `CloseRequested`，
                 // 若直接调用，Harness 只能被 JobObject 强杀（见 `lib.rs::shutdown`）。
                 crate::shutdown(&app).await;

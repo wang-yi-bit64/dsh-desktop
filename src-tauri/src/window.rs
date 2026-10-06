@@ -40,6 +40,22 @@ pub fn reveal_main_window<R: Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+/// 切换主窗口的开发者工具（菜单「Toggle Developer Tools」，打包版同样可用）。
+///
+/// 打包版能开 DevTools 依赖 `tauri` 的 `devtools` feature（见 workspace `Cargo.toml`）；
+/// 没有该 feature 时 release 构建里 `open_devtools` 是空操作——那正是本项要修的
+/// 「排障时打不开 DevTools」。参考上游桌面端：打包版同样提供该入口。
+pub fn toggle_devtools<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(webview) = main_window(app) else {
+        return;
+    };
+    if webview.is_devtools_open() {
+        webview.close_devtools();
+    } else {
+        webview.open_devtools();
+    }
+}
+
 /// 为打包在前端的本地页面构造绝对 URL。Tauri 按平台使用不同 origin
 /// （Windows：`http://tauri.localhost`；其它：`tauri://localhost`），
 /// `navigate` 拒绝相对地址。

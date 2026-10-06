@@ -65,6 +65,9 @@ pub const TRAY_SHOW_ID: &str = "tray-show";
 /// 托盘菜单里 Harness 状态信息行的 id（禁用项，只展示）。
 pub const TRAY_STATUS_ID: &str = "tray-harness-status";
 
+/// 托盘菜单里更新就绪状态行的 id（禁用项，只展示）。
+pub const TRAY_UPDATE_STATUS_ID: &str = "tray-update-status";
+
 /// Windows / Linux 托盘图标（32×32 圆角方块）。
 #[cfg(not(target_os = "macos"))]
 const TRAY_ICON: tauri::image::Image<'static> = tauri::include_image!("icons/tray-32.png");
@@ -86,6 +89,8 @@ pub struct TrayHandles {
     /// 刷新点统一在 [`crate::menu::refresh_bridge_status`]（它同时刷两处，
     /// 避免出现「菜单说已连接、托盘说没连接」的自相矛盾）。
     mobile_status: MenuItem<Wry>,
+    /// 更新就绪状态行（禁用项）。只在更新下载完成后出现，重启装完即消失。
+    update_status: MenuItem<Wry>,
 }
 
 /// 创建系统托盘，并把状态行句柄托管进应用状态。
@@ -170,7 +175,7 @@ fn appindicator_available() -> bool {
 
 /// 真正的创建流程（被 [`create`] 的 `catch_unwind` 包住）。
 fn create_inner(app: &AppHandle) -> tauri::Result<()> {
-    let (menu, status, mobile_status) = build_tray_menu(app)?;
+    let (menu, status, mobile_status, update_status) = build_tray_menu(app)?;
 
     let mut builder = TrayIconBuilder::<Wry>::with_id(TRAY_ID)
         .menu(&menu)
@@ -213,21 +218,26 @@ fn create_inner(app: &AppHandle) -> tauri::Result<()> {
     app.manage(TrayHandles {
         status,
         mobile_status,
+        update_status,
     });
     Ok(())
 }
 
-/// 组装托盘菜单，返回（菜单，Harness 状态行句柄，手机桥状态行句柄）。
+/// 组装托盘菜单，返回（菜单，Harness 状态行句柄，手机桥状态行句柄，更新状态行句柄）。
 ///
+/// 托盘菜单句柄集（[`build_tray_menu`] 的返回类型）。
+///
+/// 四个禁用项各一份：`Menu::get` 不跨菜单（见模块文档），因此应用菜单里的
+/// 同名状态行与托盘里的这份**互不可见**，必须逐一持有才能刷新。
+pub type TrayMenuHandles = (tauri::menu::Menu<Wry>, MenuItem<Wry>, MenuItem<Wry>, MenuItem<Wry>);
+
 /// 与应用菜单的差异都是**有意的**：
 ///
 /// 1. 首项是 Harness 状态行——窗口藏起来之后，这是唯一能看见进度的落点；
 /// 2. 有「Show Window」（[`TRAY_SHOW_ID`]）——窗口藏起来之后才需要它，而且在
 ///    Linux 上它是**唯一**的唤回入口（那里没有点击事件）；
 /// 3. `Phone` 子菜单保留（配对 / 停桥要在窗口藏起来时也能用）。
-pub fn build_tray_menu(
-    app: &AppHandle,
-) -> tauri::Result<(tauri::menu::Menu<Wry>, MenuItem<Wry>, MenuItem<Wry>)> {
+pub fn build_tray_menu(app: &AppHandle) -> tauri::Result<TrayMenuHandles> {
     let show = MenuItemBuilder::with_id(TRAY_SHOW_ID, "Show Window").build(app)?;
     let status = MenuItemBuilder::with_id(TRAY_STATUS_ID, status_label_for(&HarnessPhase::Idle))
         .enabled(false)
@@ -260,6 +270,12 @@ pub fn build_tray_menu(
     )
     .enabled(false)
     .build(app)?;
+    // 更新就绪行：**初始隐藏**（文案为空 + disabled），由
+    // [`set_update_ready_status`] 在下载完成时点亮、装机后熄灭。没有它，
+    // 关窗驻留期间用户看不到「更新已就绪」这件事。
+    let update_status = MenuItemBuilder::with_id(TRAY_UPDATE_STATUS_ID, "")
+        .enabled(false)
+        .build(app)?;
 
     let phone_submenu = SubmenuBuilder::with_id(app, PHONE_SUBMENU_ID, "Phone")
         .item(&mobile_status)
@@ -289,7 +305,32 @@ pub fn build_tray_menu(
         .item(&quit)
         .build()?;
 
-    Ok((menu, status, mobile_status))
+    Ok((menu, status, mobile_status, update_status))
+}
+
+/// 点亮 / 熄灭托盘里的「更新就绪」状态行（批次 0.8-可观测性）。
+///
+/// `ready = true` 时文案变成「Update: ready — restart to install」；`false` 时清空
+/// （菜单项仍是禁用项，看起来就像不存在）。**卸载安装由重启自然带过**，因此这里
+/// 不需要在启动时主动清除：每次启动的托盘菜单都以空文案开始。
+///
+/// 幂等；没有托盘（Linux 后端缺失 / 创建失败）时静默返回——与
+/// [`refresh_status`] 同一纪律：通知是附加价值，不得因为它失败而中断更新。
+pub fn set_update_ready_status(app: &AppHandle, ready: bool) {
+    if app.tray_by_id(TRAY_ID).is_none() {
+        return;
+    }
+    let Some(handles) = app.try_state::<TrayHandles>() else {
+        return;
+    };
+    let label = if ready {
+        "Update: ready — restart to install"
+    } else {
+        ""
+    };
+    if let Err(error) = handles.update_status.set_text(label) {
+        log::warn!("cannot update the tray update status label: {error}");
+    }
 }
 
 /// 把 Harness 相位渲染成托盘状态行文案。

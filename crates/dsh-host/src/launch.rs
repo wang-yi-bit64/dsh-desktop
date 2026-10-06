@@ -42,9 +42,11 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
 use crate::args::HarnessArgs;
+use std::path::Path;
+
 use crate::contracts::{
     EXIT_REAP_TIMEOUT, LOG_PUMP_DRAIN_DELAY, MAX_PORT_ATTEMPTS, PATTERN_PORT_IN_USE,
-    PORT_RETRY_BACKOFF, PORT_ZERO_SUPPORTED,
+    PORT_RETRY_BACKOFF, PORT_ZERO_SUPPORTED, STICKY_PORT_FILE, STICKY_PORT_MIN,
 };
 use crate::env::{capture_shell_environment, HarnessEnv};
 use crate::logs::{
@@ -528,6 +530,23 @@ impl Launcher {
             let live: Arc<Mutex<LogRing>> = Arc::new(Mutex::new(LogRing::new()));
 
             let port = match self.config.port_mode {
+                // CX-14：首个尝试优先复用上次就绪端口，让 Harness 页 origin 跨重启稳定
+                // （localStorage 按 origin 隔离）。端口冲突后的重试一律回到随机预留。
+                PortMode::Reserved if attempts == 1 => {
+                    match reuse_sticky_port(&self.layout.launch_root).await {
+                        Some(sticky) => {
+                            push_live(
+                                &live,
+                                &LogLine::new(
+                                    LogSource::Desktop,
+                                    format!("reusing sticky port {sticky}"),
+                                ),
+                            );
+                            sticky
+                        }
+                        None => reserve_port().await?,
+                    }
+                }
                 PortMode::Reserved => reserve_port().await?,
                 PortMode::Ephemeral => 0,
                 PortMode::Fixed(fixed) => fixed,
@@ -682,6 +701,18 @@ impl Launcher {
                         let warning = describe_port_mismatch(port, endpoint.port);
                         push_live(&live, &LogLine::new(LogSource::Desktop, warning.clone()));
                         record_level(&shared, LogLevel::Warn, &warning).await;
+                    }
+
+                    // CX-14：只在预留模式下记住**实际就绪**端口（以 stdout 为准）。
+                    // 落盘失败只记 warn：粘性端口是体验优化，不能让启动失败。
+                    if matches!(self.config.port_mode, PortMode::Reserved) {
+                        if let Err(error) =
+                            remember_sticky_port(&self.layout.launch_root, endpoint.port)
+                        {
+                            let warning = format!("cannot persist sticky port: {error}");
+                            push_live(&live, &LogLine::new(LogSource::Desktop, warning.clone()));
+                            record_level(&shared, LogLevel::Warn, &warning).await;
+                        }
                     }
 
                     on_event(LaunchEvent::TokenFound {
@@ -883,6 +914,28 @@ async fn reserve_port() -> HostResult<u16> {
     Ok(port)
 }
 
+/// 读取上次就绪端口（CX-14）；文件缺失、内容非法或低于 [`STICKY_PORT_MIN`] 返回 `None`。
+fn read_sticky_port(dir: &Path) -> Option<u16> {
+    let text = std::fs::read_to_string(dir.join(STICKY_PORT_FILE)).ok()?;
+    let port: u16 = text.trim().parse().ok()?;
+    (port >= STICKY_PORT_MIN).then_some(port)
+}
+
+/// 复用粘性端口：仅当它此刻仍可绑定时返回（绑定后立即释放，TOCTOU 与
+/// [`reserve_port`] 同级；真冲突仍由 `EADDRINUSE` 快速失败兜底）。
+async fn reuse_sticky_port(dir: &Path) -> Option<u16> {
+    let port = read_sticky_port(dir)?;
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.ok()?;
+    drop(listener);
+    Some(port)
+}
+
+/// 记下本次实际就绪端口，供下次启动复用（CX-14）。
+fn remember_sticky_port(dir: &Path, port: u16) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join(STICKY_PORT_FILE), port.to_string())
+}
+
 /// 公开的端口预留入口（CLI `--print-argv` dry-run 需要展示具体端口）。
 ///
 /// 与 [`PortMode::Reserved`] 的语义一致：绑定 `127.0.0.1:0` 后立即释放，
@@ -985,6 +1038,42 @@ mod tests {
     async fn reserve_port_returns_ephemeral_port() {
         let port = reserve_port().await.unwrap();
         assert!(port > 0);
+    }
+
+    fn sticky_dir(tag: &str) -> std::path::PathBuf {
+        let unique = format!("dsh-host-sticky-{tag}-{}-{}", std::process::id(), now_seconds());
+        std::env::temp_dir().join(unique)
+    }
+
+    /// CX-14：记住的端口原样读回；缺失、非数字、低于下界的都不复用。
+    #[test]
+    fn sticky_port_roundtrip_and_rejects_invalid_values() {
+        let dir = sticky_dir("roundtrip");
+        assert_eq!(read_sticky_port(&dir), None, "缺失文件不得复用");
+
+        remember_sticky_port(&dir, 51234).unwrap();
+        assert_eq!(read_sticky_port(&dir), Some(51234));
+
+        for invalid in ["", "abc", "0", "80", "70000"] {
+            std::fs::write(dir.join(STICKY_PORT_FILE), invalid).unwrap();
+            assert_eq!(read_sticky_port(&dir), None, "非法值 {invalid:?} 不得复用");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CX-14 可证伪性：端口被占用时**必须**放弃复用（否则首个尝试注定 EADDRINUSE）；
+    /// 释放后同一端口**必须**被复用（否则粘性形同虚设，origin 仍会漂移）。
+    #[tokio::test]
+    async fn sticky_port_is_reused_only_while_bindable() {
+        let dir = sticky_dir("bindable");
+        let holder = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = holder.local_addr().unwrap().port();
+        remember_sticky_port(&dir, port).unwrap();
+
+        assert_eq!(reuse_sticky_port(&dir).await, None, "被占用的端口不得复用");
+        drop(holder);
+        assert_eq!(reuse_sticky_port(&dir).await, Some(port), "空闲后应复用同一端口");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

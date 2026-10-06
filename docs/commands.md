@@ -69,6 +69,43 @@ npm run tauri build
 
 # 只组装内置运行时资源树（`--check` 仅校验树；`--dsh-target` 选上游通道）
 npm run prepare:harness -- --dsh-target=<next|alpha>
+
+# 一站式准备内置运行时（Harness 树 + primary runtime 载荷）——dev/build 默认走这条
+#   默认带载荷；DSH_SKIP_PRIMARY_RUNTIME=1 可跳过（跳过则 office skills 保持禁用）
+#   DSH_PRIMARY_RUNTIME_TIER=full 拉上游承诺的 8 个库（多约 100 MB）
+npm run prepare:runtime
+DSH_PRIMARY_RUNTIME_TIER=full npm run build
+DSH_SKIP_PRIMARY_RUNTIME=1 npm run dev
+
+# 组装 primary runtime 载荷（office skills / workspace-dependencies 的门控，CX-17）
+#   档位：authoring（档1.5，默认）= 解释器 + office-skills + node + pnpm
+#        full（档2）= 再把 pip 产物装进 site-packages
+#   缺席合法（office skills 保持禁用）；残缺（缺档1.5 任一项）会让 Harness 起不来，
+#   因此构建与 `npm run gate -- primary-runtime` 都拒绝。本仓刻意不写死下载 URL。
+# 档1.5
+npm run prepare:primary-runtime -- \
+  --source <已备好 python 解释器的目录> --tier authoring \
+  --office-skills <上游 office-skills 目录> \
+  --node-source src-tauri/resources/node --pnpm-source <pnpm 目录> \
+  --desktop-version "$(node -p 'require("./package.json").version')" \
+  --python-version 3.12.10 --node-version 24.14.0 --pnpm-version 11.7.0
+# 档2：再提供 pip 产物与版本表
+npm run prepare:primary-runtime -- … --tier full \
+  --python-packages-dir <pip install --target 的目录> \
+  --python-packages numpy=…,pandas=…,python-docx=…,python-pptx=…,openpyxl=…,Pillow=…,lxml=…,XlsxWriter=…
+# 只检验已落盘的载荷（缺席=合法 / 残缺=红 / 达标=绿并报告档位）
+npm run prepare:primary-runtime -- --check
+
+# 拉取载荷输入（解释器 + office skills + pnpm；档2 再拉 8 个库）
+#   URL / 版本 / sha256 全部钉在 runtime-locks/primary-runtime.json；不随 build 默认跑
+#   （完整载荷约 140 MB 且要联网），需要时才拉。
+npm run fetch:primary-runtime -- --self-test                     # 离线自检（不联网）
+npm run fetch:primary-runtime -- --tier authoring                # 源目录 → .desktop-build/primary-runtime/<target>
+npm run fetch:primary-runtime -- --tier full --target darwin-arm64
+# 拉完交给组装脚本（它做完整性判定与档位报告）
+npm run prepare:primary-runtime -- --source .desktop-build/primary-runtime/<target> \
+  --tier full --office-skills .desktop-build/primary-runtime/<target>/office-skills …
+# 载荷在 src-tauri/resources/runtime/ 时会被 tauri build 整个打进安装包
 ```
 
 ### 快速测试与校验门禁

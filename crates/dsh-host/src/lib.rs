@@ -36,6 +36,7 @@ pub mod logs;
 pub mod logs_view;
 pub mod paths;
 pub mod process;
+pub mod quit_probe;
 pub mod readiness;
 pub mod runtime_manifest;
 pub mod safe_mode;

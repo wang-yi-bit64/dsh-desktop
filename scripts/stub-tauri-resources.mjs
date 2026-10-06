@@ -47,7 +47,6 @@ const assets = [
   'dsh-desktop-safe.patch.yml',
   'splash.html',
   'plugin-recovery.html',
-  'windows-menu.html',
   'dsh-loader.gif',
   'dsh-loader-dark.gif',
   'app-icon.png',
@@ -64,3 +63,9 @@ writeFileSync(
   join(resources, 'MANIFEST.json'),
   JSON.stringify({ assembledAt: 'ci-stub', lockfileHash: 'ci-stub', pinned: {} }, null, 2) + '\n',
 )
+
+// CX-17 — 载荷根标记。`tauri.conf.json` 用 `resources/runtime/**/*` 收载荷，而 Tauri 的
+// 资源 glob 匹配不到文件就让 build-script 失败；新 checkout 不带 python 载荷（合法），
+// 一个永远存在的标记文件让 glob 始终可满足。Rust 侧的完整性判定不认这个文件。
+mkdirSync(join(resources, 'runtime', 'primary-runtime'), { recursive: true })
+writeFileSync(join(resources, 'runtime', 'primary-runtime', '.payload-root'), '')

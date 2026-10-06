@@ -66,9 +66,16 @@ tokio = { version = "1", features = [
 # crate（三平台各有一套后端）；Linux 后端链接 libappindicator，而三个工作流的
 # apt 安装步骤里早已包含 `libappindicator3-dev`（原本为 WebKitGTK 的同类依赖
 # 而装），因此 CI 侧无需改动。
-tauri = { version = "2", features = ["tray-icon"] }
+#
+# `devtools`：打包版也能经菜单「Toggle Developer Tools」打开 DevTools（排障入口，
+# 参考上游桌面端打包版同样提供）。不开它时 release 构建里 `open_devtools` 是空操作。
+tauri = { version = "2", features = ["tray-icon", "devtools"] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
+# 更新就绪的系统通知（窗口藏进托盘时用户看不到更新页）。
+tauri-plugin-notification = "2"
+# 退出确认模态框（退出守卫：有会话在跑时「退出 / 取消」二选一）。
+tauri-plugin-dialog = "2"
 # updater 的默认 `rustls-tls` 后端会拉入 `ring`（C 源码，编译需要 gcc/clang）。
 # 本机（见 .cargo/config.toml）刻意不装 C 工具链——纯 Rust 依赖树才能构建。
 # 改用 `native-tls`：Windows 上即 schannel（系统证书库，桌面应用更贴切），

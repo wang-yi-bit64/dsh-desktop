@@ -59,12 +59,29 @@ const IGNORED_EXTS = new Set([
 ]);
 
 /**
+ * **不得删除**的文件名（相对 `node_modules` 任意深度，小写比较）。
+ *
+ * `.md` 被当成开发产物删除，判据是"markdown 都是文档"——这个前提对
+ * `SKILL.md` 不成立：agent skill 的正文就是 markdown，由运行时代码
+ * `readFileSync` 读出来喂给模型。删掉它不出现在任何 import 图里，
+ * 因此没有编译错误、没有 require 失败，只有"skill 注册时抛 ENOENT"。
+ *
+ * 真实案例（2026-10-06）：`@deepseek-ai/dsh-skill-office` 的
+ * `lib/index.js` 读 `assets/office-docx/SKILL.md`（npm 包里有这份文件），
+ * 而组装后的树里三个 SKILL.md 全被 `pruneNodeModules` 删掉，于是
+ * primary runtime 载荷始终凑不齐 `office-skills`，office skills 整个不可用。
+ * 这与 `yaml/dist/doc` 是同一类缺陷：**按名字猜"是不是开发产物"猜错了**。
+ */
+export const KEEP_FILE_NAMES = new Set([
+  'skill.md',
+]);
+
+/**
  * 语义上属于「开发产物」的目录名（小写比较）。
  *
  * **命中这个列表只是必要条件，不是充分条件**——还必须通过 `containsRuntimeModule()`
  * 的检查。`doc` / `docs` 尤其危险：它们在某些包里是运行时路径（`yaml/dist/doc`）。
- */
-export const IGNORED_DIR_NAMES = new Set([
+ */export const IGNORED_DIR_NAMES = new Set([
   'test',
   'tests',
   '__tests__',
@@ -148,6 +165,8 @@ export function pruneNodeModules(root) {
       if (!ent.isFile()) continue;
 
       const name = ent.name.toLowerCase();
+      // 运行时要读的文件优先于"名字像不像开发产物"（见 KEEP_FILE_NAMES）。
+      if (KEEP_FILE_NAMES.has(name)) continue;
       if (
         name.endsWith('.d.ts') ||
         name.endsWith('.d.ts.map') ||
@@ -236,6 +255,16 @@ export function selfTest() {
     check(exists('demo/test/spec.js'), '瘦身：含运行时模块的 test/ 目录被整体删除了');
     check(!exists('demo/test/spec.js.map'), '瘦身：test/ 内的 .map 未被删除');
 
+    // 3b) `SKILL.md` 是运行时要读的正文（skill 注册时 readFileSync），不属于"开发文档"。
+    //     删掉它没有任何 import 会失败，只有 skill 注册抛 ENOENT——正是上面说的第二类事故。
+    put('skill-office/assets/office-docx/SKILL.md');
+    put('skill-office/assets/scripts/check_office.py');
+    put('skill-office/README.md');
+    pruneNodeModules(root);
+    check(exists('skill-office/assets/office-docx/SKILL.md'), '瘦身：SKILL.md 被删了（skill 正文是运行时资产）');
+    check(exists('skill-office/assets/scripts/check_office.py'), '瘦身：skill 的脚本被删了');
+    check(!exists('skill-office/README.md'), '瘦身：普通 README.md 未被删除');
+
     // 4) package.json 必须留（运行时读得到）。
     check(exists('demo/package.json'), '瘦身：package.json 被删了');
 
@@ -265,6 +294,29 @@ export function selfTest() {
       check(!survived, '瘦身：可伪证性检查失败——旧判据应当删掉 dist/doc，断言才有意义');
     } finally {
       rmSync(bug, { recursive: true, force: true });
+    }
+
+    // 5b) 可伪证性（第二类）：把"一律删 .md"应用于同一棵树，必须复现出
+    //     "SKILL.md 被删"——证明 3b 这组断言抓得住真实缺陷。
+    const mdBug = mkdtempSync(join(tmpdir(), 'prune-mdbug-'));
+    try {
+      mkdirSync(join(mdBug, 'skill-office/assets/office-docx'), { recursive: true });
+      writeFileSync(join(mdBug, 'skill-office/assets/office-docx/SKILL.md'), 'fixture\n', 'utf8');
+      const deleteAllMd = (dir) => {
+        for (const ent of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, ent.name);
+          if (ent.isDirectory()) { deleteAllMd(full); continue; }
+          if (ent.name.toLowerCase().endsWith('.md')) rmSync(full, { force: true });
+        }
+      };
+      deleteAllMd(mdBug);
+      const survivedMd = (() => {
+        try { statSync(join(mdBug, 'skill-office/assets/office-docx/SKILL.md')); return true; }
+        catch { return false; }
+      })();
+      check(!survivedMd, '瘦身：可伪证性检查失败——旧判据应当删掉 SKILL.md，3b 的断言才有意义');
+    } finally {
+      rmSync(mdBug, { recursive: true, force: true });
     }
 
     if (failures.length > 0) {

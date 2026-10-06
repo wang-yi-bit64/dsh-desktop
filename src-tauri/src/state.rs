@@ -95,6 +95,12 @@ struct SupervisorInner {
     message: String,
     logs: LogRing,
     running: Option<RunningHarness>,
+    /// 最近一次就绪的端点（退出检查用：拿 host/port/首航 token）。
+    ///
+    /// 与 `running` 同生命周期：`on_ready` 写入，停止时清空。**不**从
+    /// `HarnessPhase::Ready { url }` 反推——那个 URL 是给 webview 导航用的
+    /// （带 C12 参数与可能已被消费的 token），不含原始 token。
+    endpoint: Option<LaunchEndpoint>,
 }
 
 impl Default for SupervisorInner {
@@ -104,6 +110,7 @@ impl Default for SupervisorInner {
             message: "Harness is not running.".to_string(),
             logs: LogRing::new(),
             running: None,
+            endpoint: None,
         }
     }
 }
@@ -151,6 +158,16 @@ impl HarnessSupervisor {
             message: inner.message.clone(),
             logs: inner.logs.tail(200),
         }
+    }
+
+    /// 最近一次就绪的 Harness 端点（Harness 没在跑时为 `None`）。
+    ///
+    /// 退出前的「有没有会话在跑」检查靠它拿 `host` / `port` / 首航 token
+    /// （见 [`crate::quit_guard`]）。刻意不复用 [`Self::ready_url`]：那个 URL 是
+    /// 给 webview 导航用的，带 C12 参数且 token 可能已被消费，不含原始 token。
+    pub fn launch_endpoint(&self) -> Option<LaunchEndpoint> {
+        let inner = self.lock_inner();
+        inner.endpoint.clone()
     }
 
     /// 当前 harness 实例端口（导航白名单据此放行）。
@@ -368,6 +385,7 @@ impl HarnessSupervisor {
                 url: url.to_string(),
             };
             inner.message = "Harness is ready.".to_string();
+            inner.endpoint = Some(endpoint.clone());
             inner.push_desktop(format!("ready → {url}"));
         }
 
@@ -444,6 +462,8 @@ impl HarnessSupervisor {
         {
             let mut inner = self.lock_inner();
             inner.running = None;
+            // 端点跟着实例一起失效：留着会让退出检查去问一个已经不在监听的端口。
+            inner.endpoint = None;
             inner.push_desktop(match code {
                 Some(code) => format!("harness exited after ready (exit code {code})"),
                 None => "harness exited after ready".to_string(),

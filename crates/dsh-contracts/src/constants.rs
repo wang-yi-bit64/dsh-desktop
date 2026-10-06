@@ -1,6 +1,6 @@
 //! # DSH 契约常量定义
 //!
-//! 包含全系统通用的常量契约 (CX-1 ~ CX-13)、默认配置与系统阈值。
+//! 包含全系统通用的常量契约 (CX-1 ~ CX-17)、默认配置与系统阈值。
 
 use std::time::Duration;
 
@@ -86,6 +86,56 @@ pub const PORT_ZERO_SUPPORTED: bool = false;
 
 /// 端口策略：证据说明。
 pub const PORT_ZERO_EVIDENCE: Option<&str> = None;
+
+/// CX-14 — 粘性端口：上次**就绪**端口的落盘文件名（位于 `launch-root/`）。
+///
+/// Harness 页的 origin 是 `http://127.0.0.1:<port>`，而 WebView 的 `localStorage`
+/// 按 origin（**含端口**）隔离。端口每次随机，会让所有页内偏好——例如可重映射
+/// 快捷键 `dsh.keybindings.v1`、dshmarket 的 WebDAV/Gist 配置——在每次重启后丢失。
+/// 首个启动尝试因此优先复用该端口；端口被占用时才回退随机预留（仅此情形偏好会丢）。
+pub const STICKY_PORT_FILE: &str = "harness.port";
+
+/// CX-14 — 粘性端口的下界：落盘值低于它（含 `0` 与特权端口）一律视为无效、不复用。
+pub const STICKY_PORT_MIN: u16 = 1024;
+
+/// CX-15 — 更新 journal：目录名（位于 `app_data_dir/` 下），JSONL，一行一条记录。
+pub const UPDATE_JOURNAL_DIR: &str = "update-journal";
+
+/// CX-15 — 更新 journal：同名 `.jsonl` 的版本头字段。
+pub const UPDATE_JOURNAL_SCHEMA_VERSION: u8 = 1;
+
+/// CX-15 — 单个更新 journal 文件的体积上限（字节）。超过即轮转到 `.1`。
+pub const UPDATE_JOURNAL_MAX_BYTES: u64 = 512 * 1024;
+
+/// CX-16 — 退出检查的往返超时（毫秒）：覆盖握手 + 探测一次。超时即「问不出来」，
+/// 按**有工作**处理（上游口径同为超时即拦）。
+pub const QUIT_INSPECTION_TIMEOUT_MS: u64 = 2_000;
+
+/// CX-16 — 退出检查读的 Harness 端点：`session/list` 的行带 `running`，该字段由
+/// Harness 自己判定（`summaryFor()` 里 `agents.get(id)?.status === 'running'`），
+/// 壳不猜状态。
+pub const QUIT_INSPECTION_ENDPOINT: &str = "session/list";
+
+/// CX-17 — primary runtime 载荷在资源目录下的相对位置（`resources/runtime/…`）。
+///
+/// Harness 的 `skill-office` / `tool-workspace-dependencies` 两行由环境变量门控
+/// （见 `dsh-sdk-app/cordis.patch.yml`）：**载荷不在就不设变量**，两行保持 disabled。
+/// 这是"缺一块就整体禁用"的 fail-closed 口径，绝不设一个指向不存在目录的变量。
+pub const PRIMARY_RUNTIME_DIR: &str = "runtime";
+
+/// CX-17 — 载荷根目录名（`resources/runtime/primary-runtime`）。
+pub const PRIMARY_RUNTIME_ROOT: &str = "primary-runtime";
+
+/// CX-17 — office skills 资产目录名（与载荷根**同级**：`resources/runtime/office-skills`）。
+/// 该相对关系由上游 patch 行写死（`resolve(…, '..', 'office-skills')`），不是本仓的选择。
+pub const OFFICE_SKILLS_DIR: &str = "office-skills";
+
+/// CX-17 — 告诉 Harness「随包载荷在哪」的环境变量。
+///
+/// 刻意**不**用 `DSH_PRIMARY_RUNTIME`：上游注释明确它是开发态/用户侧覆盖项，
+/// 而 `DSH_BUNDLED_PRIMARY_RUNTIME` 才是"随包载体默认值"的语义。用后者，
+/// 开发者自己设的 `DSH_PRIMARY_RUNTIME` 仍然优先生效（含空串显式 opt-out）。
+pub const ENV_BUNDLED_PRIMARY_RUNTIME: &str = "DSH_BUNDLED_PRIMARY_RUNTIME";
 
 /// C4 — 健康判据的健康区间下界。
 pub const HEALTHY_STATUS_MIN: u16 = 200;
@@ -348,6 +398,9 @@ pub const WINDOWS_QUERY_MODE: (&str, &str) = ("dsh-desktop-mode", "advanced");
 pub const WINDOWS_QUERY_PLATFORM: (&str, &str) = ("dsh-desktop-platform", "win32");
 
 /// C5 — Cookie 清理前缀。
+///
+/// 同时是壳侧三处握手/清理/退出检查共用的**唯一产地**（CX-16 的退出检查引用它，
+/// 不另抄一份字符串）。
 pub const AUTH_COOKIE_PREFIX: &str = "dsh-auth-";
 
 // ---------------------------------------------------------------------------

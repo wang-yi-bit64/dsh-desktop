@@ -149,6 +149,19 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'primary-runtime',
+    script: 'scripts/prepare-primary-runtime.mjs',
+    title: 'primary runtime 载荷的完整性判据',
+    why: '载荷缺任何一块（python 解释器 / site-packages / node / node_modules / pnpm / office skills 任一）都会让 Harness 在启动期 stat 失败——那是「应用起不来」而不是「少个功能」。因此组装必须 fail-closed：全齐才落盘。三态判据：缺席=合法（不打载荷时 office skills 保持禁用）、残缺=红、完整=绿。self-test 用夹具把每一项轮流抽走，判据必须转红；若有人把实现改成「目录存在就算齐」，这条会红。',
+    // 真检查刻意**不进任何分档**：它读的是 src-tauri/resources 下的载荷，而普通检出
+    // 与 CI 都不带 python 载荷（体积按百 MB 计）。此时正确的结论就是「缺席=合法」，
+    // 跑它只会得到一条恒定绿色、零信息的步骤。夹具化的 self-test 才承载真判据。
+    // 一旦本仓开始随包发布载荷，把 real.tiers 改成 ['fast','ci','release'] 即可。
+    real: { tiers: [], args: ['--check'], needsAssembly: false },
+    manual: '真检查读本地载荷；普通检出与 CI 都不带 python 载荷（缺席合法），跑它只会得到恒定绿色、零信息的步骤。要校验某台具体机器的载荷时手动跑。一旦本仓开始随包发布载荷，就把 real.tiers 改成 ["fast","ci","release"]。',
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'profile-names',
     script: 'scripts/verify-profile-names.mjs',
     title: 'DSH profile 保留名 + 两个契约锚点',

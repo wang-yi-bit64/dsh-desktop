@@ -18,11 +18,14 @@ mod logging;
 mod menu;
 mod mobile_bridge;
 mod navigation;
+mod notifications;
 mod poison;
+mod quit_guard;
 mod safe_mode;
 mod state;
 mod tray;
 mod update;
+mod update_journal;
 mod window;
 
 use std::sync::Arc;
@@ -62,6 +65,12 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        // 更新就绪回执（托盘状态行之外的一条系统通知）。
+        // 注意：本仓不需要 `tauri-plugin-notification` 的 capability 白名单——
+        // 通知由 Rust 侧发起，不经过前端 invoke。
+        .plugin(tauri_plugin_notification::init())
+        // 退出确认模态框（退出守卫：有会话在跑时「退出 / 取消」）。
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
 

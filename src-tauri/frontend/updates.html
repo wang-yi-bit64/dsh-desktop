@@ -85,7 +85,16 @@
             error: 'The update check failed.'
           },
           available: (v) => `Version ${v} is available.`,
-          actions: { check: 'Update check', download: 'Download', install: 'Install', skip: 'Skip', back: 'Back' }
+          actions: { check: 'Update check', download: 'Download', install: 'Install', skip: 'Skip', back: 'Back' },
+          // 按稳定错误码分派，而不是匹配英文 message（与封套纪律同一取向）。
+          /* eslint-disable key-spacing */
+          codes: {
+            'E1005': 'Cannot reach the update server. Check your network or proxy, then try again.',
+            'E1006': 'The download stopped because of a network problem. Try again.',
+            'E1007': 'The update downloaded but could not be handed to the installer. See the update journal in the diagnostics bundle.',
+            'E1008': 'The downloaded update failed signature verification. A newer version may already be published — check again rather than retrying this one.'
+          }
+          /* eslint-enable key-spacing */
         },
         zh: {
           title: '软件更新',
@@ -103,7 +112,16 @@
             error: '检查更新失败。'
           },
           available: (v) => `发现新版本 ${v}。`,
-          actions: { check: '检查更新', download: '下载', install: '安装', skip: '跳过', back: '返回' }
+          actions: { check: '检查更新', download: '下载', install: '安装', skip: '跳过', back: '返回' },
+          // 按稳定错误码分派，而不是匹配英文 message（与封套纪律同一取向）。
+          /* eslint-disable key-spacing */
+          codes: {
+            'E1005': '连不上更新服务器。请检查网络或代理设置后重试。',
+            'E1006': '下载因网络问题中断，请重试。',
+            'E1007': '更新已下载，但无法交给安装器。详见诊断包里的 update journal。',
+            'E1008': '已下载的更新未通过签名校验。可能已有更新的版本发布——请重新检查，而不是重试这一个。'
+          }
+          /* eslint-enable key-spacing */
         }
       };
       const t = zh ? TEXT.zh : TEXT.en;
@@ -194,9 +212,20 @@
         const phase = snapshot.phase;
         const version = snapshot.available_version || '';
         availableVersion = version;
-        messageEl.textContent =
-          phase === 'available' ? t.available(version) : (t.phase[phase] || '');
-        if (snapshot.message) messageEl.textContent += `\n${snapshot.message}`;
+        // 错误相位的文案按稳定错误码分派（E1005~E1008），拿不到已知码才退回
+        // 相位兜底文案 + 原始 message。判据：message 是上游 updater 的原文，
+        // 会随 locale / 版本漂移，不能对它做字符串匹配。
+        let text = phase === 'available' ? t.available(version) : (t.phase[phase] || '');
+        if (phase === 'error' && snapshot.code && t.codes[snapshot.code]) {
+          text = t.codes[snapshot.code];
+        }
+        messageEl.textContent = text;
+        if (phase === 'error' && snapshot.message && t.codes[snapshot.code]) {
+          // 把上游原文作为**次要行**保留：分类文案负责指导行动，原文负责追溯。
+          messageEl.textContent += `\n${snapshot.message}`;
+        } else if (snapshot.message && phase !== 'error') {
+          messageEl.textContent += `\n${snapshot.message}`;
+        }
 
         const downloading = phase === 'downloading';
         const available = phase === 'available';

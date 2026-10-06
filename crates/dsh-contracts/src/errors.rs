@@ -72,6 +72,14 @@ pub mod codes {
     pub const RESOURCE_UNREADABLE: &str = "E1002";
     /// 更新器不可用（未配置更新源或初始化失败）。
     pub const UPDATER_UNAVAILABLE: &str = "E1003";
+    /// 更新检查失败且原因可归因到网络。
+    pub const UPDATE_CHECK_NETWORK: &str = "E1005";
+    /// 更新下载失败且原因可归因到网络。
+    pub const UPDATE_DOWNLOAD_NETWORK: &str = "E1006";
+    /// 更新安装（交接/重启）失败。
+    pub const UPDATE_INSTALL_FAILED: &str = "E1007";
+    /// 更新器拒绝安装：签名或校验和不匹配（**不可重试**，只能等新版本）。
+    pub const UPDATE_SIGNATURE_REJECTED: &str = "E1008";
     /// 日志目录不可写。
     pub const LOG_DIR_UNWRITABLE: &str = "E1004";
 
@@ -190,11 +198,14 @@ mod tests {
     /// 错误码族号与类别必须一一对应，否则前端按 `category` 分派会错族。
     #[test]
     fn every_code_family_maps_to_its_category() {
-        let pairs: [(&str, ErrorCategory); 13] = [
+        let pairs: [(&str, ErrorCategory); 15] = [
             (codes::RESOURCE_MISSING, ErrorCategory::Environment),
             (codes::RESOURCE_UNREADABLE, ErrorCategory::Environment),
             (codes::UPDATER_UNAVAILABLE, ErrorCategory::Environment),
             (codes::LOG_DIR_UNWRITABLE, ErrorCategory::Environment),
+            // E1xxx 族的更新失败：安装失败归「环境」，网络类归「网络」。
+            (codes::UPDATE_INSTALL_FAILED, ErrorCategory::Environment),
+            (codes::UPDATE_SIGNATURE_REJECTED, ErrorCategory::Environment),
             (codes::PORT_IN_USE, ErrorCategory::Network),
             (codes::READY_TIMEOUT, ErrorCategory::Network),
             (codes::SPAWN_FAILED, ErrorCategory::ProcessLifecycle),
@@ -224,6 +235,17 @@ mod tests {
         assert_eq!(&codes::MODEL_GATEWAY[1..2], "6");
         assert_eq!(&codes::INTERNAL[1..2], "7");
         assert_eq!(&codes::UNKNOWN_ACTION[1..2], "7");
+
+        // E1xxx 的更新失败细分码也必须在 E1 族：族号↔类别测试只覆盖上面显式列出的
+        // 几行，这里钉住全部四个细分码，避免新增细分码时忘记登记。
+        for code in [
+            codes::UPDATE_CHECK_NETWORK,
+            codes::UPDATE_DOWNLOAD_NETWORK,
+            codes::UPDATE_INSTALL_FAILED,
+            codes::UPDATE_SIGNATURE_REJECTED,
+        ] {
+            assert_eq!(&code[1..2], "1", "{code} 必须是 E1 族");
+        }
     }
 
     #[test]

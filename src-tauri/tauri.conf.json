@@ -54,8 +54,8 @@
       "resources/dsh-loader.gif",
       "resources/dsh-loader-dark.gif",
       "resources/plugin-recovery.html",
-      "resources/windows-menu.html",
-      "resources/app-icon.png"
+      "resources/app-icon.png",
+      "resources/runtime/**/*"
     ],
     "windows": {
       "nsis": {

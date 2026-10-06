@@ -16,9 +16,12 @@
   ],
   "scripts": {
     "prepare:harness": "node scripts/prepare-harness.mjs",
+    "prepare:primary-runtime": "node scripts/prepare-primary-runtime.mjs",
+    "fetch:primary-runtime": "node scripts/fetch-primary-runtime.mjs",
     "harness:lockfile": "node scripts/prepare-harness.mjs --update-lockfile",
-    "dev": "npm run prepare:harness && tauri dev",
-    "build": "npm run prepare:harness && tauri build",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "dev": "npm run prepare:runtime && tauri dev",
+    "build": "npm run prepare:runtime && tauri build",
     "tauri": "tauri",
 
     "gate": "node scripts/gates.mjs",

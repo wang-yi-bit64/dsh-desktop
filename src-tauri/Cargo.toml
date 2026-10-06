@@ -29,6 +29,11 @@ tauri.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-plugin-updater.workspace = true
 tauri-plugin-opener.workspace = true
+# 更新就绪的系统通知：关窗即隐藏时窗口可能不在屏幕上，托盘状态行之外再加一条。
+tauri-plugin-notification.workspace = true
+# 退出确认模态框（退出守卫）。该依赖曾随 `directory_picker_open` 的删除被摘除，
+# 2026-10-05 起因存在真实的二选一语义而重新引入。
+tauri-plugin-dialog.workspace = true
 tauri-plugin-log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

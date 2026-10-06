@@ -15,8 +15,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::contracts::{
-    ENV_DSH_HOME, ENV_FORCE_COLOR, ENV_NODE_OPTIONS, ENV_NO_COLOR, ENV_NPM_SIDE_EFFECTS_CACHE,
-    ENV_PATH, ENV_PNPM_SIDE_EFFECTS_CACHE, ENV_PYTHONIOENCODING, ENV_SYSTEM_ROOT,
+    ENV_BUNDLED_PRIMARY_RUNTIME, ENV_DSH_HOME, ENV_FORCE_COLOR, ENV_NODE_OPTIONS, ENV_NO_COLOR,
+    ENV_NPM_SIDE_EFFECTS_CACHE, ENV_PATH, ENV_PNPM_SIDE_EFFECTS_CACHE, ENV_PYTHONIOENCODING,
+    ENV_SYSTEM_ROOT,
 };
 use crate::paths::Layout;
 use crate::HostResult;
@@ -338,6 +339,23 @@ fn harness_env_inner(
         "--enable-source-maps".to_string(),
     );
 
+    // CX-17 — 随包 primary runtime 载荷（office skills / workspace-dependencies 的门控）。
+    //
+    // **只在载荷达到档1.5 时设置**（见 `Layout::primary_runtime` 的逐项判定）：设一个
+    // 指向不存在目录的变量会让 Harness 在启动期 stat 失败——那等于"残缺包让应用起不来"。
+    // 载荷不达标就不设，两行保持 disabled，Harness 照常启动。
+    //
+    // 档位**不进环境变量**：它只描述"这份载荷承诺了多少"（能创作 vs 全能），而 Harness
+    // 那两行不关心这个。需要陈述档位的地方（MANIFEST / 反馈页）应当直接调
+    // `Layout::primary_runtime()` 读，而不是从这里多带一个变量——少一个变量就少一条
+    // 需要与上游对齐的隐式契约。
+    if let Some((root, _tier)) = layout.primary_runtime() {
+        entries.insert(
+            ENV_BUNDLED_PRIMARY_RUNTIME.to_string(),
+            root.display().to_string(),
+        );
+    }
+
     // SystemRoot 兜底：缺失时很多 Windows 子进程（pwsh / pnpm）直接起不来。
     if cfg!(windows) && !has_key(&entries, ENV_SYSTEM_ROOT) {
         if let Some(system_root) = std::env::var(ENV_SYSTEM_ROOT)
@@ -586,9 +604,93 @@ pub fn path_contains(path: &str, candidate: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// CX-17 — 载荷达到档1.5 才注入 `DSH_BUNDLED_PRIMARY_RUNTIME`；**缺任何一项都不注入**。
+    ///
+    /// 可证伪性：把档1.5 及格线里每一项轮流删掉，断言两件事——(a) 变量消失（fail-closed），
+    /// (b) Harness 环境其余部分照常组装（不会因为载荷问题让整个启动失败）。
+    /// 若把实现改成"目录存在就设变量"，这条测试会红。
     #[test]
-    fn overrides_win_over_contract_values() {
-        let layout = Layout::resolve(
+    fn bundled_primary_runtime_is_injected_only_when_complete() {
+        let root = std::env::temp_dir().join(format!(
+            "dsh-env-payload-{}-{}",
+            std::process::id(),
+            crate::process::now_seconds()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let res = root.join("res");
+        let data = root.join("data");
+
+        // 造一份档1.5 载荷（用桩文件即可：判定只看类型，不看内容）。
+        let payload = res.join("runtime").join("primary-runtime");
+        let deps = payload.join("dependencies");
+        let office = res.join("runtime").join("office-skills");
+        std::fs::create_dir_all(deps.join("python").join(if cfg!(windows) { "." } else { "bin" }))
+            .unwrap();
+        std::fs::create_dir_all(deps.join("node").join("bin")).unwrap();
+        std::fs::create_dir_all(deps.join("node").join("node_modules")).unwrap();
+        std::fs::create_dir_all(deps.join("pnpm").join("bin")).unwrap();
+        std::fs::create_dir_all(office.join("scripts")).unwrap();
+        let python_bin = if cfg!(windows) {
+            deps.join("python").join("python.exe")
+        } else {
+            deps.join("python").join("bin").join("python3")
+        };
+        std::fs::write(&python_bin, b"stub").unwrap();
+        let node_bin = deps
+            .join("node")
+            .join("bin")
+            .join(if cfg!(windows) { "node.exe" } else { "node" });
+        std::fs::write(&node_bin, b"stub").unwrap();
+        std::fs::write(deps.join("pnpm").join("bin").join("pnpm.mjs"), b"stub").unwrap();
+        let check_script = office.join("scripts").join("check_office.py");
+        std::fs::write(&check_script, b"stub").unwrap();
+        if cfg!(windows) {
+            // Windows 上 site-packages 的判据是 `<python>/Lib` 目录本身。
+            let _ = std::fs::create_dir_all(deps.join("python").join("Lib"));
+        } else {
+            // POSIX 的判据是 `lib/python*` 下的任一目录。
+            let _ = std::fs::create_dir_all(deps.join("python").join("lib").join("python3.13"));
+        }
+
+        let layout = Layout::resolve(&res, &data);
+        let shell = HarnessEnv::default();
+
+        // (a) 档1.5 齐备 → 注入，且指向载荷根。
+        let env = harness_env(&layout, &shell, None);
+        let expected = layout.primary_runtime().map(|(root, _)| root.display().to_string());
+        assert_eq!(
+            env.get(crate::contracts::ENV_BUNDLED_PRIMARY_RUNTIME)
+                .cloned(),
+            expected,
+        );
+
+        // (b) 轮流删掉档1.5 及格线里的每一项：变量必须消失，且 DSH_HOME 等契约项仍在。
+        for victim in [
+            python_bin.clone(),
+            node_bin.clone(),
+            deps.join("pnpm").join("bin").join("pnpm.mjs"),
+            res.join("runtime")
+                .join("office-skills")
+                .join("scripts")
+                .join("check_office.py"),
+        ] {
+            let backup = format!("{}.bak", victim.display());
+            std::fs::rename(&victim, &backup).unwrap();
+            let env = harness_env(&layout, &shell, None);
+            assert!(
+                env.get(crate::contracts::ENV_BUNDLED_PRIMARY_RUNTIME).is_none(),
+                "删掉 {victim:?} 后仍注入了变量——残缺载荷会把 Harness 起不来"
+            );
+            // 载荷问题不影响其余契约环境。
+            assert_eq!(env.get("DSH_HOME").map(String::as_str), Some(layout.dsh_home.to_str().unwrap()));
+            std::fs::rename(&backup, &victim).unwrap();
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn overrides_win_over_contract_values() {        let layout = Layout::resolve(
             std::path::Path::new("/res-override"),
             std::path::Path::new("/data-override"),
         );

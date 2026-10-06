@@ -249,9 +249,16 @@ fn reveal_path(app: &tauri::AppHandle, path: &std::path::Path) -> CommandResult<
 /// 先 [`crate::shutdown`] 再退出：`app.exit(0)` 不经过窗口的 `CloseRequested`
 /// （自批次 0.2-B1 起，那条路径本来就只负责「藏窗」），若直接调用，Harness
 /// 只能被 JobObject / PDEATHSIG 强杀——来不及落盘收尾。见 `lib.rs::shutdown`。
+///
+/// 退出前还要过 [`crate::quit_guard`]：有会话在跑就**不**停机（错误页的 Quit 与
+/// 菜单 Quit 共用这一段）。第二次显式退出才会强制生效，因此这条路径不会把用户
+/// 锁在进程里。
 #[tauri::command]
 pub async fn app_quit(webview: WebviewWindow, app: tauri::AppHandle) -> CommandResult<()> {
     guard!(webview);
+    if !crate::quit_guard::decide(&app, false).await.is_proceed() {
+        return Err("quit blocked: a session is still running".to_string());
+    }
     crate::shutdown(&app).await;
     app.exit(0);
     ok(())
