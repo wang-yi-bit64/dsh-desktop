@@ -1,3 +1,13 @@
+# ⚠️ 本文件是 Pullfrog 的厂商模板（除标注处外勿改）。**已接线**（ADR-054）：
+# 它只由 workflow_dispatch 触发，属「按需调用」形态——不是死配置，但也不会自动运行。
+# 手动触发：gh workflow run pullfrog.yml -f prompt="<任务描述>"
+#
+# 本仓对它的两处**有意修改**（厂商模板之上的最小硬化）：
+#   1. actions/checkout 与 pullfrog/pullfrog 均钉到 40 位 commit SHA；
+#   2. 这一段文件头注释（说明存在理由与删除判据）。
+# 删除判据：不再使用该 agent 时删除本文件，而不是留着当摆设。
+# 防回归判据：scripts/verify-github-config.mjs 的规则 B（未钉 SHA 的第三方 action 报红）。
+#
 # PULLFROG ACTION — DO NOT EDIT EXCEPT WHERE INDICATED
 name: Pullfrog
 run-name: ${{ inputs.name || github.workflow }}
@@ -22,11 +32,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803   # v6
         with:
           fetch-depth: 1
       - name: Run agent
-        uses: pullfrog/pullfrog@v0
+        uses: pullfrog/pullfrog@9d9014dffa1bc03e4f77b7a3474c5c6aa9a9602f   # v0@2026-09-29
         with:
           prompt: ${{ inputs.prompt }}
         env:
