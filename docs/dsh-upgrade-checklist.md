@@ -204,7 +204,11 @@ boot / config-dump / 插件管理。
 >    （发布时长、相关讨论关闭、fixtures 全绿），仅「预检通过」一项满足；理由与已知代价须记入 ADR-060，
 >    **不得修改放行条件本身**。
 > ② `runtime-locks/primary-runtime.json` 是**不按通道分目录的共享载荷**，两线共用一份，
->    其 `officeSkills.version` 无法同时匹配 next 与 alpha 两条线；本轮默认不动，结构性张力记入 ADR-060。
+>    其 `officeSkills.version` 无法同时匹配 next 与 alpha 两条线。**本轮由用户显式裁定「向 alpha 线对齐」**：
+>    该字段由 `0.2.0-rc.2` 改为 `0.2.1-alpha.1`（依据 `@deepseek-ai/dsh@0.2.1-alpha.1` 直接依赖
+>    `dsh-skill-office@0.2.1-alpha.1`），代价（next 线下一次载荷准备会取同一版本）与边界
+>    （`runtime-locks/` 不拆目录）记入 **ADR-060 决策 4**。
+>    ⚠️ 该字段**没有任何门禁交叉校验**——改它不会让门禁变红，也不会被门禁发现问题，只能靠 ADR 记。
 
 > ### ✅ 双通道同步推进：next → 0.2.0-rc.2、alpha → 0.1.7-alpha.2（2026-09-30；ADR-057）
 >

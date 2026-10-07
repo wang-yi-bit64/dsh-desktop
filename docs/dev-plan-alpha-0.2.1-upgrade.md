@@ -221,23 +221,24 @@ npm run size:report        # 三口径：壳二进制 / 安装包 / 资源树
 | 9 | `README.md` / `README.zh-CN.md` / `AGENTS.md` §8.6 | 钉住的 DSH 版本声明点 | `verify-plan-facts` C1；`verify-doc-facts` C6（通道状态槽位） |
 | 10 | `docs/system_design.md` | 版本引用 | 人工纪律 |
 | 11 | `docs/dev-plan-0.8-convergence.md` §2 / §4 / §5 / §15 | 版本快照与门禁状态更正 | `verify-plan-facts`（人工同步纪律） |
+| 12 | `runtime-locks/primary-runtime.json` | `officeSkills.version` → `0.2.1-alpha.1`（载荷来源版本向 alpha 线对齐） | 无门禁交叉校验；裁定记入 ADR-060 决策 4 |
+| 13 | `docs/adr/060-*.md` + `AGENTS.md` ADR 计数 | 新增 ADR-060；计数 45 → 46 | `verify-doc-facts` C5 |
 
 ### 3.2 仅发布阶段修改
 
 | # | 文件 | 改动 | 守卫 |
 |---|---|---|---|
-| 12 | `package.json` `version` | `0.7.2-rc.1` → `0.7.3-alpha.1`（`scripts/version.mjs` 写） | `npm run gate -- version` |
-| 13 | `Cargo.toml` `[workspace.package] version` | 跟随真源 | 同上 |
-| 14 | `Cargo.lock` | cargo 自身更新 | — |
-| 15 | `CHANGELOG.md` | `changelog.mjs --write` 生成 | `npm run gate -- changelog` |
-| 16 | `src-tauri/tauri.conf.json` | **不动**（`version` 写 `"../package.json"`，原生继承） | — |
-| 17 | `docs/adr/060-*.md` | 新增 | `verify-doc-facts` C5（ADR 计数） |
+| 14 | `package.json` `version` | `0.7.2-rc.1` → `0.7.3-alpha.1`（`scripts/version.mjs` 写） | `npm run gate -- version` |
+| 15 | `Cargo.toml` `[workspace.package] version` | 跟随真源 | 同上 |
+| 16 | `Cargo.lock` | cargo 自身更新 | — |
+| 17 | `CHANGELOG.md` | `changelog.mjs --write` 生成 | `npm run gate -- changelog` |
+| 18 | `src-tauri/tauri.conf.json` | **不动**（`version` 写 `"../package.json"`，原生继承） | — |
 
 ### 3.3 需显式裁定（本轮的两个开口）
 
 | # | 项 | 现状 | 影响面 | 倾向 |
 |---|---|---|---|---|
-| A | `runtime-locks/primary-runtime.json` 的 `officeSkills.version` | `0.2.0-rc.2` | 🔴 该文件**不按通道分目录**（`runtime-locks/` 根下单一文件），两线共用同一份 primary runtime 载荷。而 `@deepseek-ai/dsh@0.2.1-alpha.1` **直接依赖** `@deepseek-ai/dsh-skill-office@0.2.1-alpha.1`（该版本已发布） | **默认不动**（保持与 next 线对齐），并把「共享载荷无法同时匹配两线」这一结构性张力**显式记入 ADR-060**，不静默处理 |
+| A | `runtime-locks/primary-runtime.json` 的 `officeSkills.version` | ✅ **已裁定改动**（2026-10-07 执行期，用户裁定）：`0.2.0-rc.2` → **`0.2.1-alpha.1`** | 🔴 该文件**不按通道分目录**（`runtime-locks/` 根下单一文件），两线共用同一份 primary runtime 载荷。而 `@deepseek-ai/dsh@0.2.1-alpha.1` **直接依赖** `@deepseek-ai/dsh-skill-office@0.2.1-alpha.1`（该版本已发布，registry 实测） | **向 alpha 线对齐**（本轮发布的是 alpha 线）；代价与边界（next 线会随之取同一版本、`runtime-locks/` 不拆目录）**显式记入 ADR-060 决策 4 与「已知代价」段**。⚠️ 该字段**无门禁交叉校验**（`verify-*.mjs` / `gates.mjs` 均无 `officeSkills` 引用），改它不会变红、也不会被工具发现问题 |
 | B | `packages/alpha/*.tgz`（vendored 覆盖包） | 空（2026-09-16 起） | 默认路径为空目录，`prepare-harness` 以 `readdirSafe` + `existsSync` 双重容忍缺失 | **预计不动**；仅当组装期发现「上游静默重发布过同版本不同字节的 tarball」才补 |
 
 ### 3.4 明确**不动**的部分
@@ -312,7 +313,7 @@ npm run size:report        # 三口径：壳二进制 / 安装包 / 资源树
 | 1 | 跨 minor 大重构（`0.1.7` → `0.2.1`），7/11 补丁冲突 | 中 | 复用 next 线 2026-09-30 同源裁定；`merge-migrate-patches.mjs` 工具化三路合并 |
 | 2 | 🔴 `advancedExtra` 注入点消失，每模型推理等级需换挂载点 | 中 | §1.4 已定位到 `renderSlot` / `ModelsChildSlots`；Step 2.3 须先读上游槽位声明再接线 |
 | 3 | `dev-plan-0.8-convergence.md` §6 四项切线放行条件（发布 ≥7~14 天 / 相关讨论关闭 / 预检通过 / fixtures 全绿）中，**目前仅第 3 项可满足** | 中 | 与 2026-09-30 那次同样属**例外放行**；须在 ADR-060 如实记录理由与已知代价，**不得修改放行条件本身** |
-| 4 | `runtime-locks/primary-runtime.json` 共享载荷无法同时匹配两线 | 低 | §3.3-A；默认不动 + 显式记录 |
+| 4 | `runtime-locks/primary-runtime.json` 共享载荷无法同时匹配两线 | 低 | §3.3-A；**已裁定向 alpha 线对齐**（`officeSkills.version` → `0.2.1-alpha.1`），代价与边界见 **ADR-060 决策 4** |
 | 5 | 体积增量不可比（无本地基线） | 低 | §1.5；取代理基线并标注 |
 | 6 | 组装期才现形的缺陷（历史形态：插件 import 不进新包 / regen 误删行） | 中 | 树健全性门禁 + `node --check` 语法自检 + L1 烟雾 |
 

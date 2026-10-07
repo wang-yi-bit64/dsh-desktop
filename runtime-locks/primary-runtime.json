@@ -46,7 +46,7 @@
   },
   "officeSkills": {
     "package": "@deepseek-ai/dsh-skill-office",
-    "version": "0.2.0-rc.2",
-    "_note": "npm 包 assets/ 下带三份 SKILL.md 与 scripts/check_office.py —— office-skills 目录的正文来源。"
+    "version": "0.2.1-alpha.1",
+    "_note": "npm 包 assets/ 下带三份 SKILL.md 与 scripts/check_office.py —— office-skills 目录的正文来源。⚠️ 本文件不按通道分目录，两线共用；本字段于 2026-10-07 向 alpha 线对齐（ADR-060 决策 4），next 线会随之取同一版本。"
   }
 }
