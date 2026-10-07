@@ -5,17 +5,20 @@
  * # 它解决什么问题
  *
  * `prepare-primary-runtime.mjs` 要求调用方提供三样本仓不自产的东西：python 解释器、
- * 8 个库的 site-packages、以及 office-skills（三份 SKILL.md + check_office.py）。
+ * office-skills（三份 SKILL.md + check_office.py）、以及一个 schema 要求的 `pnpm.mjs`。
  * 本脚本把它们变成**可复现的构建期产物**：
  *
  *   * 解释器：python-build-standalone 的 CPython 发行版（按 URL + sha256 钉死）；
- *   * 库：pip 交叉下载锁定版本的 wheel，解包进 site-packages
- *     （装 wheel 只是解压，因此不需要目标解释器，也不需要 payload 自带 pip）；
  *   * office skills / pnpm：从锁定版本的 npm 包里取文件。
  *
  * 产出是**源目录**（`dependencies/` + `office-skills/`），交给
  * `scripts/prepare-primary-runtime.mjs --source <dir>` 做组装与完整性判定。
  * 两步分开：拉错 vs 装错能在命令行上看出来，不用翻构建日志。
+ *
+ * 2026-10-07 起只拉这一份形态。曾经还带 8 个 python 库的 wheel 交叉安装
+ * （numpy/pandas/python-docx/python-pptx/openpyxl/Pillow/lxml/XlsxWriter），
+ * 但那 8 个库的唯一读者是上游**工具描述**与 skill 的 SKILL.md，本仓代码一个都不
+ * 引用，整条 `--tier full` 路径因此拆除。
  *
  * # 供应链纪律
  *
@@ -26,15 +29,8 @@
  * # 用法
  *
  * ```bash
- * node scripts/fetch-primary-runtime.mjs --tier authoring      # 只拉解释器 + skills
- * node scripts/fetch-primary-runtime.mjs --tier full          # 再拉 8 个库
- * node scripts/fetch-primary-runtime.mjs --self-test          # 离线自检（不联网）
- * ```
- *
- * 之后：
- * ```bash
- * npm run prepare:primary-runtime -- --source .desktop-build/primary-runtime/<target> \
- *   --tier full --office-skills <out>/office-skills …
+ * node scripts/fetch-primary-runtime.mjs --self-test   # 离线自检（不联网）
+ * node scripts/fetch-primary-runtime.mjs               # 拉当前主机对应目标
  * ```
  */
 
@@ -98,7 +94,7 @@ function readLock() {
       }
     }
   }
-  for (const key of ['packages', 'wheelTags', 'pnpm', 'officeSkills']) {
+  for (const key of ['pnpm', 'officeSkills']) {
     if (lock[key] === undefined) problems.push(`lock 缺少 ${key}`)
   }
   if (problems.length > 0) {
@@ -193,51 +189,11 @@ function newestTgz(dir) {
 
 /**
  * 用宿主 pip 交叉安装锁定 wheel 到 site-packages。
- *
- * 不需要目标解释器：`pip install` 对 wheel 就是解包 + 写 dist-info；`--platform`
- * 只是挑哪个 wheel。跨 Python 次版本同理（用 `--python-version` 声明 ABI）。
- */
-function installWheels(lock, target, sitePackages) {
-  const tag = lock.wheelTags[target]
-  if (tag === undefined) {
-    fail(`lock 没有 ${target} 的 wheelTags`)
-    return false
-  }
-  mkdirSync(sitePackages, { recursive: true })
-  const stage = mkdtempSync(join(tmpdir(), 'fetch-wheels-'))
-  try {
-    const args = [
-      '-m', 'pip', 'download',
-      '--dest', stage,
-      '--platform', tag.platform,
-      '--python-version', lock.interpreter.pythonVersion.split('.').slice(0, 2).join('.'),
-      '--only-binary', ':all:',
-      '--no-deps',
-      ...lock.packages.map((pkg) => `${pkg.name}==${pkg.version}`),
-    ]
-    log(`pip download ${lock.packages.length} 个 wheel（${tag.platform}）`)
-    execFileSync('python', args, { stdio: 'inherit' })
-    const target_ = process.execPath
-    execFileSync(target_, [
-      '-m', 'pip', 'install',
-      '--no-deps', '--no-compile', '--target', sitePackages,
-      '--no-index', '--find-links', stage,
-      ...lock.packages.map((pkg) => `${pkg.name}==${pkg.version}`),
-    ], { stdio: 'inherit' })
-    return true
-  } catch (error) {
-    fail(`wheel 安装失败：${error.message}`)
-    return false
-  } finally {
-    rmSync(stage, { recursive: true, force: true })
-  }
-}
-
 /**
  * 拉取一个目标，产出源目录。
  * @returns {boolean} 是否成功
  */
-async function fetchTarget(lock, target, tier, outRoot) {
+async function fetchTarget(lock, target, outRoot) {
   const entry = lock.interpreter.targets[target]
   const out = join(outRoot, target)
   rmSync(out, { recursive: true, force: true })
@@ -324,14 +280,6 @@ async function fetchTarget(lock, target, tier, outRoot) {
     }
     mkdirSync(join(out, 'dependencies', 'node', 'node_modules'), { recursive: true })
 
-    // 4) 档2：把 8 个库装进 site-packages。
-    if (tier === 'full') {
-      const site = entry.layout === 'flat'
-        ? join(python, 'Lib', 'site-packages')
-        : join(python, 'lib', `python${lock.interpreter.pythonVersion.split('.').slice(0, 2).join('.')}`, 'site-packages')
-      if (!installWheels(lock, target, site)) return false
-    }
-
     log(`源目录就绪：${out}`)
     return true
   } catch (error) {
@@ -351,25 +299,20 @@ function selfTest() {
   }
   const problems = []
 
-  // 1) 五个目标都必须有锁定项，且 sha256 形如 64 hex。
+  // 1) 五个目标都必须有锁定项，且 sha256 形如 64 hex、bytes 为正、layout 合法。
   for (const target of Object.keys(TARGETS)) {
     const entry = lock.interpreter.targets[target]
     if (!/^[a-f0-9]{64}$/u.test(entry.sha256)) problems.push(`${target} 的 sha256 不是 64 hex`)
     if (entry.bytes <= 0) problems.push(`${target} 的 bytes 非正`)
     if (!['flat', 'posix'].includes(entry.layout)) problems.push(`${target} 的 layout 非法`)
-    if (!lock.wheelTags[target]) problems.push(`${target} 缺 wheelTags`)
   }
 
-  // 2) 8 个库必须齐，且声明了导入名（与 Rust 判据同一张表）。
-  const expected = ['numpy', 'pandas', 'python-docx', 'python-pptx', 'openpyxl', 'Pillow', 'lxml', 'XlsxWriter']
-  const got = lock.packages.map((pkg) => pkg.name)
-  for (const name of expected) {
-    if (!got.includes(name)) problems.push(`packages 缺少 ${name}`)
+  // 2) office skills 与 pnpm 的锁定包必须钉到具体版本。
+  for (const [key, source] of [['officeSkills', lock.officeSkills], ['pnpm', lock.pnpm]]) {
+    if (typeof source.version !== 'string' || source.version.length === 0) {
+      problems.push(`lock 的 ${key} 缺 version`)
+    }
   }
-  for (const pkg of lock.packages) {
-    if (pkg.import === undefined || pkg.import.length === 0) problems.push(`${pkg.name} 缺 import 名`)
-  }
-  if (lock.packages.length !== expected.length) problems.push(`packages 应有 ${expected.length} 项，实为 ${lock.packages.length}`)
 
   // 3) sha256 判据可证伪：改动一个字节必须被发现。
   const fixture = mkdtempSync(join(tmpdir(), 'fetch-selftest-'))
@@ -394,7 +337,7 @@ function selfTest() {
     fail(`self-test 失败：\n  - ${problems.join('\n  - ')}`)
     return false
   }
-  log(`self-test 通过（${Object.keys(TARGETS).length} 个目标锁定 / 8 库齐备 / sha256 判据可证伪）`)
+  log(`self-test 通过（${Object.keys(TARGETS).length} 个目标锁定 / skills 与 pnpm 版本钉死 / sha256 判据可证伪）`)
   return true
 }
 
@@ -410,12 +353,7 @@ if (args['self-test'] !== undefined) {
     fail(`--target 非法：${target || '(宿主持有)'}（可选 ${Object.keys(TARGETS).join(' / ')}）`)
     process.exit(1)
   }
-  const tier = String(args.tier ?? 'authoring')
-  if (!['authoring', 'full'].includes(tier)) {
-    fail(`--tier 非法：${tier}（authoring / full）`)
-    process.exit(1)
-  }
   const outRoot = String(args.out ?? join('.desktop-build', 'primary-runtime'))
-  const ok = await fetchTarget(lock, target, tier, outRoot)
+  const ok = await fetchTarget(lock, target, outRoot)
   process.exit(ok ? 0 : 1)
 }
