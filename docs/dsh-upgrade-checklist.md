@@ -162,6 +162,50 @@ boot / config-dump / 插件管理。
 > 历史记录（仅供参考）：对中间版本 `0.1.2-rc.1` 的预检结果是 15 干净 / 3 冲突
 > （`agent-preset` / `settings-models` / `workspace`，均为 UI 层的上下文漂移）。
 
+> ### ✅ alpha 通道推进：`0.1.7-alpha.2` → `0.2.1-alpha.1`（2026-10-07；**跨 minor，补丁 11 → 10**）
+>
+> 本仓首次**跨 minor**推进（`0.1.7` → `0.2.1`）。补丁数由 11 降为 10：
+>
+> - **`dsh-client-ui-model-selection` 整条退役**：上游把型号选择器的搜索增强做进原生实现，
+>   命中该补丁 `retireWhen` 写明的判据——属「上游追上我们」，**不是能力回退**。
+>   ⚠️ 退役的是**补丁**，不是包：组装树内 `@deepseek-ai/dsh-client-ui-model-selection@0.2.1-alpha.1`
+>   仍然存在（它是上游正常依赖），判断退役是否生效要看 `patches/alpha/` 下的补丁文件数，**不是看目录在不在**。
+> - **`ui-chat` / `ui-settings-models` 语义重做**：`ui-chat` 收窄为只重放 `code === "FORBIDDEN"` 分支
+>   （额度文案交还上游）；`ui-settings-models` 的注入点随上游重排（`advancedExtra` 消失 →
+>   改挂 `renderSlot` / `ModelsChildSlots`），并补回上游新增的 `props.onSubmitCredential?.();`。
+> - **`llm-deepseek` / `llm-pi-ai` 纯行号重算**（无语义改动）。
+> - `cordis-plugin-loader` 保持 `1.0.3`（本补丁版本段与 DSH 版本解耦）。
+>
+> | 判据 | 结果 |
+> |---|---|
+> | 适用性预检 | `clean 10 / conflict 0` |
+> | 真实组装（唯一能证明补丁落盘） | ✅ **10/10 applied**，`MANIFEST.target = alpha` |
+> | 补丁后语法自检（`node --check`） | ✅ 10 个补丁包共 23 个 `.js/.cjs/.mjs`，`SyntaxError = 0` |
+> | 门禁编排器 `--tier=fast` | ✅ **45 步全绿**（含 `cargo test --tests`） |
+> | **L1 无头烟雾** | ✅ **5/5 PASS**，日志自证 `dsh=0.2.1-alpha.1 node=24.9.0 patches=10/10`，无 `[dsh-plugin-fault]` |
+>
+> **体积**：资源树口径三 **496.3 MB**（`harness/` 410.1 MB / `node/` 85.5 MB，199 个顶层包）。
+> 最大子项 `@deepseek-ai/libreoffice-kit-win32-x64` **184 MB**——该大件自 `0.1.6-alpha.2` 起就在资源树内，
+> **不是本轮新增**，故本轮**不构成需要解释的异常增量**。
+> ⚠️ 本机**无体积基线**（`.workbuddy/size-baseline.json` 不存在），因此**没有做增量对比**；
+> 代理基线见计划 §1.5，若需后续可比，首次可跑 `npm run size:report -- --write-baseline`。
+>
+> ⚠️ **本批次抓到两个「只看退出码看不见」的坑**（都已补守卫认知）：
+> ① **hunk `@@` 计数失配**：给 hunk 补行却未同步 `+new,M` 计数 ⇒ `patch-package` 解析错位 ⇒
+>    该补丁 `failed`。但 `check-patch-applicability`（按内容搜索）与 `relocate-patch-hunks`（只重算起点）
+>    **都不校验计数**，且 `ui-behavior` 层失败**只打印一行、进程退 0** ⇒ **静默降级出缺功能的构建**。
+>    **判绿必须逐行读补丁表，不能只看退出码。**
+> ② **`spawnSync … EBUSY` 的真根因**：不是安全软件、不是残留目录，而是**本机无法为子进程建立 stdin 管道**。
+>    它伪装成 `koffi` 的 `CMake does not seem to be available`（真因是 `cnoke` 的预编译探针子进程没起来）。
+>    详见 `docs/incidents/local-toolchain-limits.md` 末条与计划 §7.5。
+>
+> 另如实记录两项**例外放行**（与 2026-09-30 那次同性质）：
+> ① 本轮推进**早于**现役计划（`docs/dev-plan-0.8-convergence.md` §6）的四项切线条件中的三项
+>    （发布时长、相关讨论关闭、fixtures 全绿），仅「预检通过」一项满足；理由与已知代价须记入 ADR-060，
+>    **不得修改放行条件本身**。
+> ② `runtime-locks/primary-runtime.json` 是**不按通道分目录的共享载荷**，两线共用一份，
+>    其 `officeSkills.version` 无法同时匹配 next 与 alpha 两条线；本轮默认不动，结构性张力记入 ADR-060。
+
 > ### ✅ 双通道同步推进：next → 0.2.0-rc.2、alpha → 0.1.7-alpha.2（2026-09-30；ADR-057）
 >
 > **做法上的新增**：把 0.1.2-alpha.4 → rc.1 的先例（三路合并移植）工具化为

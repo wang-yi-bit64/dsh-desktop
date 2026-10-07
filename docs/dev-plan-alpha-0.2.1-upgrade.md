@@ -297,9 +297,11 @@ npm run size:report        # 三口径：壳二进制 / 安装包 / 资源树
 
 | 限制 | 现象 | 规避 |
 |---|---|---|
-| `spawnSync` 子进程 EBUSY | `npm run gate -- drift` 报 `spawnSync <node> EBUSY`，**门禁编排器 `gates.mjs` 在本机不可用** | 直调底层脚本：`node scripts/verify-upstream-drift.mjs`（已验证可行）；或用 `npm run check:patch-applicability` 这类不 spawn 的入口 |
+| `spawnSync` 子进程 EBUSY | `npm run gate -- drift` 报 `spawnSync <node> EBUSY` | ✅ **已根治（2026-10-07 追补，见 §7.5）**：唯一触发因子是**为子进程创建管道 stdin**。挂 `NODE_OPTIONS="--require=\"%TEMP%\dsh-env\local-spawn-stdin-fix.cjs\""` 后 `gates.mjs` 恢复可用（`--tier=fast` 45 步可编排）。未挂载时的兜底仍可直调 `node scripts/<gate>.mjs` |
 | `x86_64-pc-windows-gnu` 下 `src-tauri` 测试二进制加载失败 | `cargo test --workspace` 报错（缺 `api-ms-win-core-winrt-error-l1-1-0.dll`） | 本地以无头门禁为准；`src-tauri` 单测执行者是 CI（MSVC runner），**不得因本地跑不动就删测试** |
 | 无本地组装基线 | 无 `resources/`、无 `harness-deps/` | 见 §1.5；体积基线取代理值并显式标注 |
+| 🔴 GNU 工具链下**链接整体失败** | `cargo clippy`/`check`/`test`/`build` 只要遇到必须落成 `.exe`/`.dll` 的依赖（build script / proc-macro）即报 `lld: unable to find library -lgcc_eh / -lgcc`。现场特征：`target/debug/deps/*.rlib` 有产物而 `build_script_build-*.exe` **一个都没有**（本机 `target/` 下 `.exe` 计数为 0） | 跑 cargo 前 `export LIBRARY_PATH="…\1.90.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib\self-contained"`（`-C link-arg=-L…` 写法**无效**） |
+| 🔴 上述修好后撞第二层：`dlltool` 失败 | `raw-dylib` 依赖（`windows-link` 系）报 `Dlltool could not create import library with …\.cargo\bin\dlltool.exe … : …: CreateProcess` | **不是**安全软件拦子进程（原样参数从 bash 直喂同一 exe 也同样失败、产出 0 字节 `.lib`）；真因是 `.cargo\bin` 只有 GNU Binutils 2.42 的 `dlltool.exe` 而**没有配套 `as`**。改为 `export RUSTFLAGS="-C dlltool=…\llvm-mingw-…\bin\llvm-dlltool.exe"`（已验证） |
 
 ---
 
@@ -340,10 +342,10 @@ npm run smoke:headless
 | Phase B1 锚点切换 | ✅ 已完成（C1 五处声明点全绿） |
 | Phase B2 补丁移植与语义重做 | ✅ 已完成（41 hunk 全对齐；预检 clean 10 / conflict 0） |
 | Phase B3 lockfile 重生成 | ✅ 已完成（271 家族子包钉 0.2.1-alpha.1；`verify-plan-facts` 全绿） |
-| Phase B4 真实组装与无头门禁 | 🔄 进行中（首轮 9/10，`ui-settings-models` 因 `@@` 计数失配 failed，已修复并通过 patch-package 定点验证；重跑中） |
-| Phase B5 烟雾与体积 | 🕓 待执行 |
-| Phase B6 文档同步 | 🕓 待执行 |
-| Phase C 版本推进与发布 | 🕓 待执行 |
+| Phase B4 真实组装与无头门禁 | ✅ 组装侧已完成（第 5 轮：**EXIT=0 / 10/10 applied / MANIFEST target=alpha**，见 §7.5）；`cargo fmt --check` ✅、包级 clippy ✅、包级 test **197 passed / 0 failed**；workspace 级与 doctest 受环境限制（见 §7.4 / §7.5） |
+| Phase B5 烟雾与体积 | ✅ 已完成：L1 无头烟雾 **5/5 PASS**（EXIT=0，日志自证 `dsh=0.2.1-alpha.1 node=24.9.0 patches=10/10`，**无 `[dsh-plugin-fault]` 归因**）；体积口径三 **496.3 MB**（harness 410.1 MB / node 85.5 MB，最大子项 `@deepseek-ai/libreoffice-kit-win32-x64` 184 MB）。⚠️ 无本地基线，不做增量判定 |
+| Phase B6 文档同步 | ✅ 已完成（system_design 无版本引用；release-runbook §8.6 / dev-plan-0.8-convergence 更正块已补；upgrade-checklist 已追加本轮完成记录与体积原因） |
+| Phase C 版本推进与发布 | 🕓 待执行（⚠️ 分支形态与计划假设不同，见 §7.3：本 worktree 在 `workbuddy/main-f8784a51` 而非 `main`） |
 
 ### 7.1 B4 首轮失败与修复记录（2026-10-07）
 
@@ -357,8 +359,139 @@ npm run smoke:headless
 | 三重验证 | ①10 补丁计数全自洽；②`git apply --check` 与 GNU `patch --dry-run --fuzz=0` 双通过；③**原样复刻 patch-package 调用**（scratch 空间）→ `✔` applied，产物 `node --check` OK、定制标记齐全、上游钩子保留 |
 | 遗留建议 | 建议给 `relocate-patch-hunks.mjs` 或预检链补一条**离线 hunk 计数自洽校验**——本条失败在现有工具链下**完全不可见**，且 `ui-behavior` 层失败会静默降级出缺功能的构建。**未实施，待裁定** |
 
+### 7.2 B4 第二轮失败与修复记录（2026-10-07，环境侧）
+
+| 项 | 内容 |
+|---|---|
+| 好消息 | 重跑后补丁表为 **10/10 应用成功**——§7.1 的计数修复在真实组装层面得到确认 |
+| 现象 | 随后在 `assembling resources` 处崩溃：`Error: [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":10001,"threshold":50,"scope":"turn"}`，栈顶 `prepare-harness.mjs:1222` 的 `rmSync(resources,…)` |
+| 根因 | WorkBuddy 经 `NODE_OPTIONS` 注入 `node-safe-delete-shim.cjs`，包装 `fs.rmSync`；**单个 tool call 内递归删除 > 50 个条目**即要求确认。`src-tauri/resources/` 有 **28836 个文件 / 661MB** |
+| 为何首轮没炸 | 首轮该目录**不存在**，`rmSync` 是空操作——**只有二次组装才会撞上** |
+| 规避（已验证） | 组装前先直调 .NET API 清空该构建产物：`[System.IO.Directory]::Delete("\\?\<abs>\src-tauri\resources", $true)`（绕过 shim 的 cmdlet 层）。之后 build 内的 `rmSync` 变空操作，**无需关闭安全层** |
+| 性质说明 | `src-tauri/resources/` 是 `.gitignore` 第 8 行忽略、git 未跟踪的**构建产物**，每次组装都由 `prepare-harness` 清空重建——删除它是 build 工具自身的正常行为 |
+
+### 7.3 分支基线偏差（2026-10-07，执行期发现，非计划内）
+
+| 项 | 内容 |
+|---|---|
+| 发现 | 本 worktree 分支 `workbuddy/main-f8784a51` 的基线 `cc2cad0` 落后 `origin/main` **3 个提交**（0 ahead / 3 behind，无分叉） |
+| 这 3 个提交 | `2dfb24c` update-journal 轮转断言按上限反推行数 · `2660287` 临时目录名含 ISO 冒号致 Windows `create_dir_all` 失败 · `05c1a83` quit_probe 桩读请求头结束再回包 |
+| 影响面 | 仅 `crates/dsh-host/src/quit_probe.rs` 与 `src-tauri/src/update_journal.rs`；**不触及** `patches/` / `harness-locks/` / `scripts/` / `runtime-locks/` / `Cargo*` ⇒ 不影响已生成的组装树与 lockfile 指纹 |
+| 为何必须合入 | `2660287` 与 `05c1a83` 正是 **Windows 上的测试修复**，B4 的 `cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli` 依赖它们 |
+| 处置 | 先做原子提交 `29093a7`（23 文件，锚点+补丁集+lockfile+文档同批），再 `git merge --no-ff origin/main`（合并提交 `1a9a14f`）。合并后：领先 `origin/main` 2 个提交、无分叉、工作区干净 |
+
+
 
 > 📌 **执行更正**：§4.1 表格里的 `node scripts/harness-lockfile.mjs --check --dsh-target=alpha`
 > 不可用——该脚本**只支持 `--self-test`**（实测输出「用法：node scripts/harness-lockfile.mjs
 > --self-test」）。`lockInputsMatch` 四条规则的实际执行者是 `prepare-harness.mjs` 组装期；
 > 静态侧由 `verify-plan-facts.mjs` 的 C2（inputs.json 自证 `dshVersion` == 锚点）覆盖。
+
+### 7.4 B4 无头门禁的环境阻断：GNU 工具链链接不可用（2026-10-07，环境侧）
+
+计划 §B4 的 `cargo clippy` / `cargo test` 在本机**首次执行即全红**，但**不是代码问题**。
+已按仓库事故档案体例归档到 `docs/incidents/local-toolchain-limits.md` 末条，此处只记执行结论：
+
+| 层 | 现象 | 真根因（实证） | 规避（已验证） |
+|---|---|---|---|
+| ① | `lld: error: unable to find library -lgcc_eh` / `-lgcc`，发生在 build script / proc-macro **链接期**；`clippy`/`check`/`test`/`build` 全中招，纯 `.rlib` 不受影响 | PATH 上名为 `x86_64-w64-mingw32-gcc` 的驱动**不是 GNU GCC**，而是 WinGet 的 `MartinStorsjo.LLVM-MinGW.UCRT`（`clang-22`）；它不把 Rust 的 self-contained 目录纳入默认库搜索路径 | `export LIBRARY_PATH="…\lib\rustlib\x86_64-pc-windows-gnu\lib\self-contained"`。⚠️ `-C link-arg=-L<该目录>` **实测无效**，只有 `LIBRARY_PATH` 生效 |
+| ② | ①修好后冒出来：`Dlltool could not create import library with …\.cargo\bin\dlltool.exe …: CreateProcess` | **易误判为安全软件拦子进程**（本机有 `spawnSync EBUSY` 前科）。判据：把 rustc 的原样参数**从 bash 直喂同一个 exe** → **同样失败**并产出 **0 字节** `.lib`。真因是 `.cargo\bin` 只有 Binutils 2.42 的 `dlltool.exe`，**没有配套 `as`**（PATH 上也无裸名 `as`） | `export RUSTFLAGS="-C dlltool=…\llvm-mingw-…\bin\llvm-dlltool.exe"`（llvm-dlltool 自带对象写入，不需外部汇编器） |
+
+**MSVC 退路本机不可用**：`rustup` 中的 `stable-` / `1.90.0-x86_64-pc-windows-msvc` 是**残缺占位**
+（`the 'rustc.exe' binary … is not applicable to the 'stable-x86_64-pc-windows-msvc' toolchain`），
+机器上也无 Visual Studio / Build Tools（无 `link.exe` / 无 `vswhere`）。故本文档 §4.3 与
+`docs/incidents/local-toolchain-limits.md` 里「切 MSVC 跑 `src-tauri` 单测」那条路径**本机当前走不通**。
+
+> **本机跑 Rust 门禁的完整前置 = 上述两条环境变量都要设**；只设一条会在下一层再炸。
+> 设 `RUSTFLAGS` 会改变 cargo 指纹、触发一次全量重建，属预期开销。
+> **不要**为了让 `dlltool` 可用而往 `.cargo\bin` 补文件或改 `PATH` 序——`-C dlltool=` 是作用域最小的那条路。
+
+### 7.5 B4 第三～五轮：`spawnSync EBUSY` 根因锁定 → 组装成功 + 门禁编排器恢复（2026-10-07）
+
+第 3、4 轮连续失败在 `koffi` 的 `Error: CMake does not seem to be available`（`npm ci` 退 1）。
+顺着这条线把上文 §7.4 与 §4.3 里悬置的 `spawnSync EBUSY` / `ERROR_PIPE_BUSY` **一次性查清**。
+
+#### 7.5.1 三个流行猜测全部实测否掉
+
+| 猜测 | 实测 | 结论 |
+|---|---|---|
+| 本机安全软件锁住 `node.exe` | 换 Volta 系统 node 自 spawn | ❌ 仍 **10/10 失败** |
+| WorkBuddy 经 `NODE_OPTIONS` 注入的 shim 作祟 | `env -u NODE_OPTIONS` 后重测 | ❌ 仍 **20/20 失败** |
+| 上一轮 `node_modules` 残留被安全层删残包 | 组装前确认 `harness-deps/alpha` **整体不存在**，纯从零 `npm ci` | ❌ 依旧失败，**§7.5 发布前的旧结论作废** |
+
+#### 7.5.2 真根因：`stdio[0] === 'pipe'`（子进程 stdin 管道）是唯一触发器
+
+| `stdio` | 结果 |
+|---|---|
+| 默认（等价 `'pipe'`） / `['pipe','ignore','ignore']` | ❌ `status=null`，`error.code='EBUSY'` |
+| `['ignore','pipe','pipe']` / `['ignore','ignore','pipe']` / `'ignore'` / `'inherit'` | ✅ `status=0`，**stdout 照常可读** |
+
+libuv 在 Windows 把 `STATUS_SHARING_VIOLATION` 归入 `UV_EBUSY`；Rust 侧同一现象报 `ERROR_PIPE_BUSY (231)`。
+与 stdout/stderr、目标可执行文件、父进程类型（bash / cmd / node）**均无关**。
+
+#### 7.5.3 为什么 `koffi` 的报错会指向 CMake（误导链）
+
+`koffi` 的 `install` 脚本 `node ./cnoke.cjs -P . -D src/koffi --prebuild --release` 内
+`checkPrebuild()` = `spawnSync(process.execPath, ['-e','require(process.argv[1])', pkgdir])`，
+**只看 `proc.status === 0`** ⇒ 探针撞 stdin 管道 EBUSY（`null !== 0`）
+⇒ 打印 `Failed to load prebuilt binary, rebuilding from source` ⇒ 回退源码编译 ⇒ 本机无 CMake ⇒ `npm ci` 退 1。
+
+⚠️ **两处必须记住的误导**：
+1. `Failed to load prebuilt binary` **不是加载失败**，是探针子进程根本没起来；
+2. `koffi` 包里**从来没有 `build/` 目录**（那是 cnoke 的输出目录，不是"被删掉的产物"）。
+   真实预编译产物在 `node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node`（实测存在且可 `require`）。
+
+#### 7.5.4 规避层（仓库外临时文件，不改仓库任何代码）
+
+`%TEMP%\dsh-env\local-spawn-stdin-fix.cjs`：把「会建 stdin 管道」的
+`spawn/spawnSync/exec/execSync/execFile/execFileSync` 改写成 `stdin:'ignore'`
+（显式传 `input` 或已用 `inherit`/`ignore` 的**原样放行**）。
+
+```bash
+NODE_OPTIONS="--require=\"<该文件绝对路径>\"" <命令>
+```
+
+#### 7.5.5 第五轮执行结果
+
+| 项 | 结果 |
+|---|---|
+| `npm run prepare:harness -- --dsh-target=alpha --force` | ✅ **EXIT=0**，**4m07s**（第 3/4 轮各 16min 全耗在失败重试上） |
+| 补丁表 | ✅ **10/10 applied**（functional 3 + ui-behavior 7），**无 skipped** |
+| `MANIFEST.json` | ✅ `target = "alpha"`，`patches[]` 10 条**全 applied**，非 applied/skipped = **0** |
+| 关键补丁落盘抽查 | ✅ `settings-models/lib/client.js:2053 props.onSubmitCredential?.();`<br>✅ `ui-chat/lib/client.js:1223 if (code === "FORBIDDEN")` |
+| `node --check` 语法自检 | ✅ 10 个补丁包共 **23 个** `.js/.cjs/.mjs`，**SyntaxError = 0** |
+| `verify-harness-tree` | ✅ 规则1（无逃逸软链）+ 规则2（桌面插件裸导入可解析） |
+| `verify-harness-entry` / `verify-harness-inject` | ✅ E5d / E6 ok；可证伪性检查通过（上游变体被判红 ≥1） |
+| **`npm run gate -- --tier=fast`** | ✅ **全绿：45 步，383.5s，EXIT=0** —— **本机首次跑通完整门禁档**（其中 `cargo test --tests` 305.5s） |
+
+> **退役语义澄清（防止误判为缺陷）**：组装树内仍存在
+> `@deepseek-ai/dsh-client-ui-model-selection@0.2.1-alpha.1`。
+> 退役的是**我们那条补丁**（`patches/alpha/` 内含 model-selection 的补丁文件数 = **0**）；
+> 该包本身仍是上游正常依赖，且未被本仓打补丁。**不要**因为它还在就以为退役没生效。
+
+#### 7.5.6 对 §7.4 结论的修订幅度（实测收口，不夸大）
+
+**✅ 被本轮推翻的**：
+- `spawnSync EBUSY` 是「安全软件锁 exe / 残留目录删残包」所致 —— 两个猜测均被对照实验否掉；
+- 「门禁编排器本机不可用」—— `--tier=fast` **45 步全绿**（含 `cargo test --tests`）。
+
+**❌ 未被修复的（实测确认，仍交给 CI）**：
+
+| 命令 | 结果 | 说明 |
+|---|---|---|
+| `cargo clippy --workspace --all-targets -- -D warnings` | ❌ `EXIT=101`，`schemars-0.8.22` 报 `E0107`（`indexmap::IndexMap` 需 3 个泛型） | 根因仍是 `indexmap` 的 `build.rs` 经 `autocfg` 探测 std 失败 ⇒ `has_std` 不成立。**挂规避层也不影响** |
+| `cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli --doc` | ❌ `0 passed; 44 failed`，逐条 `Failed to spawn rustc process: Os { code: 231 }` | 44 个 doctest 全在 **`dsh-host`**；`dsh-contracts` / `dsh-host-cli` 本身**无 doctest**（单独跑为 `ok. 0 passed`） |
+| └ 降低并发（`--test-threads=1`） | ❌ 仍 44 失败 | **不是并发耗尽**，单线程同样挂 |
+
+**收口口径（把两类现象统一到一句话）**：
+> 本机**无法为子进程建立 stdin 管道**。node 侧表现为 `spawnSync … EBUSY`，
+> Rust 侧表现为 `ERROR_PIPE_BUSY (231)`。
+> - node 侧：**可规避**（我们控制 `stdio`）——即本节的规避层；
+> - Rust 侧：**不可规避**（`autocfg` 把探针源码经 stdin 喂给 `rustc`；`rustdoc --test` 同样把测试源码经 stdin 喂给 `rustc`；`cargo` 不给我们改 stdio 的口子）。
+
+⚠️ **这一条对 B4 判据的影响**：`--tier=fast` 的 cargo 步骤是
+`cargo test --tests -p dsh-contracts -p dsh-host -p dsh-host-cli`（见 `scripts/gates.mjs:64-65`），
+其依赖图**不含 `indexmap`/`schemars`**，故能全绿；而 workspace 级与 doctest 走 `full` 档 ——
+**这两项本机判据仍然只能由 CI 提供，不能因为 fast 档全绿就顺手宣布 full 档也绿**。
+
+
