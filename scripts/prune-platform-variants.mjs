@@ -35,10 +35,15 @@
  *      `@deepseek-ai/node-addon-system-linux-x64` 就是这种；Linux 目标的保留名因此
  *      必须含 `glibc`，否则 `oursIsHere` 那道安全丝认不出「同层有我们的变体」，
  *      会放过同层的 `musl`（2026-09-12 Linux 打包失败的复发原因）；
- *   4. **包名本身**是 libc 选择器（`@img/sharp-linuxmusl-x64` 与 `@img/sharp-linux-x64`
- *      并列）——见上文「libc 维度」，npm 过滤不了这一类。安全丝：**同层必须存在
- *      glibc 对应物**（把包名里的 `linuxmusl` 换成 `linux`）才删，且只在
- *      `platform === 'linux'` 时生效。
+ *   4. **包名本身**是 libc 选择器——见上文「libc 维度」，npm 过滤不了这一类。安全丝：
+ *      **同层必须存在 glibc 对应物**才删，且只在 `platform === 'linux'` 时生效。
+ *      这一条要同时认**两种命名约定**（本仓两次踩坑形态不同）：
+ *      a. **连写**标记 `linuxmusl`（`@img/sharp-linuxmusl-x64` 与 `@img/sharp-linux-x64` 并列），
+ *         映射是「把包名里的 `linuxmusl` 换成 `linux`」（2026-09-23 新增）；
+ *      b. **后缀 token** `-musl`（napi-rs 布局：`node-addon-require-builtin-linux-x64-musl`
+ *         与 `…-linux-x64-gnu` 并列），映射是「把 `musl` token 换成 `gnu`，或去掉该 token」
+ *         （2026-10-07 新增——`0.2.1-alpha.1` 让这一族**不再声明 `libc` 字段**，
+ *         于是 npm 把 gnu 与 musl 两份都装进树）。
  *
  * 包**名**里带平台后缀的（`@img/sharp-linux-x64`、`@vscode/ripgrep-linux-x64`）分两种：
  *
@@ -87,20 +92,59 @@ const PLATFORM_TOKENS = /^(darwin|linux|linuxmusl|win32|android|freebsd|musl|gli
  */
 const MUSL_PACKAGE_MARKER = 'linuxmusl'
 
+/** 后缀式的 libc token（napi-rs 约定：`<pkg>-<os>-<arch>-musl` 与 `…-gnu` 并列）。 */
+const MUSL_TOKEN = 'musl'
+
 /**
- * 把一个「musl 选择器包名」换成它的 glibc 对应物名；不含标记时返回 `null`。
+ * 列出「一个 musl 选择器包名」的**全部** glibc 对应物候选名。
  *
- * 只做**整体 token 替换**（`linuxmusl` → `linux`），因此
- * `@img/sharp-linuxmusl-x64` → `@img/sharp-linux-x64`、
- * `@img/sharp-libvips-linuxmusl-x64` → `@img/sharp-libvips-linux-x64`。
- * 返回 `null` 而非 `name` 本身，是为了让调用点无法把「不是这类名字」误当成命中。
+ * 两种命名约定并存，必须都能认（本仓 2026-09 与 2026-10 各踩一次，形态不同）：
  *
- * @param {string} name 包目录名（不含 scope 时也要能判，例如 `foo-linuxmusl-x64`）
- * @returns {string|null} glibc 对应物名；不含 `linuxmusl` 标记时为 `null`
+ *   1. **连写**标记 `linuxmusl`（`@img/sharp` 布局）——整体 token 替换 `linuxmusl` → `linux`：
+ *      `@img/sharp-linuxmusl-x64` → `@img/sharp-linux-x64`。
+ *   2. **后缀 token** `-musl`（napi-rs 布局，`node-addon-require-builtin-linux-x64-musl`）
+ *      ——把该 token 换成 `gnu`（`…-linux-x64-musl` → `…-linux-x64-gnu`），
+ *      并额外给出「整个 token 去掉」的候选（`…-linux-x64-musl` → `…-linux-x64`），
+ *      两者命中任一即可。
+ *
+ * 返回**候选集合**而不是单个名字：调用点的安全丝是「同层确实存在那个 glibc 对应物」，
+ * 把它放宽成「存在任一候选」既不影响安全性的方向（仍然要求实证存在），又能覆盖
+ * 上游换命名约定而本模块无需再改。
+ *
+ * 不含任何 musl 标记时返回**空数组**（而不是原名字），使调用点无法把「不是这类名字」
+ * 误当成命中。
+ *
+ * @param {string} name 包目录名（不含 scope 时也要能判，例如 `foo-linux-x64-musl`）
+ * @returns {string[]} glibc 对应物的候选名（按优先级排序，可能为空）
+ */
+export function glibcSiblingCandidates(name) {
+  const out = []
+  if (name.includes(MUSL_PACKAGE_MARKER)) {
+    out.push(name.split(MUSL_PACKAGE_MARKER).join('linux'))
+  }
+  const tokens = name.split('-')
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] !== MUSL_TOKEN) continue
+    const renamed = [...tokens]
+    renamed[index] = 'gnu'
+    out.push(renamed.join('-'))
+    const dropped = tokens.filter((_, position) => position !== index)
+    if (dropped.length > 0) out.push(dropped.join('-'))
+  }
+  return [...new Set(out)].filter((candidate) => candidate.length > 0 && candidate !== name)
+}
+
+/**
+ * 把一个「musl 选择器包名」换成它的首选 glibc 对应物名；不含标记时返回 `null`。
+ *
+ * 是 `glibcSiblingCandidates()` 的首选项。保留单一返回值是为了让调用点无法写出
+ * 「见 musl 就删」这种没有实证的判据，也让纯函数断言能写成等号。
+ *
+ * @param {string} name 包目录名
+ * @returns {string|null} 首选 glibc 对应物名；不含 musl 标记时为 `null`
  */
 export function glibcSiblingName(name) {
-  if (!name.includes(MUSL_PACKAGE_MARKER)) return null
-  return name.split(MUSL_PACKAGE_MARKER).join('linux')
+  return glibcSiblingCandidates(name)[0] ?? null
 }
 
 /**
@@ -154,7 +198,9 @@ export function isForeignVariantName(name, keep) {
  *
  * 覆盖四类判据（详见模块文档「判据的边界」）：prebuilds 目录内的 `platform-arch`、
  * `musl_*` 目录、裸 libc 目录名（`bin/glibc` 与 `bin/musl`），以及**包名里的 libc 选择器**
- * （`@img/sharp-linuxmusl-x64`——`platform === 'linux'` 时且同层存在 glibc 对应物才删）。
+ * ——`platform === 'linux'` 时且同层**确实存在** glibc 对应物才删。包名选择器有连写
+ * （`@img/sharp-linuxmusl-x64`）与后缀 token（`node-addon-require-builtin-linux-x64-musl`）
+ * 两种约定，由 `glibcSiblingCandidates()` 一并给出候选。
  *
  * @param {string} root 依赖树根目录（通常是 `<resources>/harness/node_modules`）
  * @param {{platform: string, arch: string}} [target] 打包目标；默认取当前进程宿主
@@ -185,10 +231,11 @@ export function pruneForeignPlatformVariants(root, target = { platform: process.
 
     for (const entry of dirs) {
       const full = join(dir, entry.name)
-      // 第 4 类：包名本身是 libc 选择器，且同层有 glibc 对应物。
-      const glibcTwin = glibcSiblingName(entry.name)
+      // 第 4 类：包名本身是 libc 选择器，且同层**确实存在**它的 glibc 对应物。
+      // 候选是「连写 linuxmusl」与「后缀 -musl」两种约定各自的映射，命中任一即可。
+      const glibcTwins = glibcSiblingCandidates(entry.name)
       const isForeignMuslPackage =
-        pruningMuslPackages && glibcTwin !== null && namesHere.has(glibcTwin)
+        pruningMuslPackages && glibcTwins.some((twin) => namesHere.has(twin))
       if (
         isForeignMuslPackage ||
         (isForeignVariantName(entry.name, keep) && (insidePrebuilds || oursIsHere))
@@ -257,6 +304,14 @@ function makeFixture(root) {
   put('@img/sharp-libvips-linuxmusl-x64/lib/libvips.node')
   // prebuilds 之外、且**没有** glibc 对应物的孤独 musl 包：安全丝必须挡住（保留）
   put('@img/sharp-lonely-linuxmusl-x64/lib/x.node')
+  // napi-rs 布局：libc 是**后缀 token**（`…-linux-x64-gnu` 与 `…-linux-x64-musl` 并列），
+  // 且 0.2.1-alpha.1 起该族在 lockfile 里**不再声明 `libc` 字段**，于是 npm 把两份都装进树
+  // （2026-10-07 现场 smoke 37635305716：linuxdeploy 在 `linux-x64-musl-napi-v9.node` 上
+  //  解析 `libc.musl-x86_64.so.1` 失败 ⇒ AppImage 打包整体失败；next 线无此变体故不受影响）。
+  put('node-addon-require-builtin-linux-x64-gnu/prebuilt/linux-x64-gnu-napi-v9.node')
+  put('node-addon-require-builtin-linux-x64-musl/prebuilt/linux-x64-musl-napi-v9.node')
+  // 安全丝：只有 musl、同层**没有** `-gnu` 对应物的孤独包必须保留
+  put('lonely-napi-linux-x64-musl/prebuilt/x.node')
   // 与平台无关的运行时模块：绝不能被这套判据碰到
   put('yaml/dist/doc/directives.js')
   put('demo/package.json')
@@ -342,6 +397,23 @@ export function selfTest() {
       '变体剪枝：没有 glibc 对应物的孤独 musl 包被误删（安全丝对包名选择器失效）'
     )
 
+    // 4c-2) **后缀 token** 形态（napi-rs 布局，2026-10-07 新增判据）：`-musl` 包必须删、
+    //      `-gnu` 包必须留。这一组是「命名约定换了一种」的可伪证点——只认 `linuxmusl`
+    //      的旧实现会在这里放过 musl 包，继而让 linuxdeploy 拖垮 AppImage 打包。
+    check(
+      !exists('node-addon-require-builtin-linux-x64-musl/prebuilt/linux-x64-musl-napi-v9.node'),
+      '变体剪枝：后缀式 `-musl` 包未被删除（2026-10-07 linuxdeploy 打包事故未修）'
+    )
+    check(
+      exists('node-addon-require-builtin-linux-x64-gnu/prebuilt/linux-x64-gnu-napi-v9.node'),
+      '变体剪枝：后缀式 `-gnu` 包被误删（会删掉目标平台唯一的构建）'
+    )
+    // 安全丝同构：同层**没有** `-gnu` 对应物的孤独 `-musl` 包必须保留。
+    check(
+      exists('lonely-napi-linux-x64-musl/prebuilt/x.node'),
+      '变体剪枝：没有 `-gnu` 对应物的孤独 `-musl` 包被误删（安全丝对后缀式选择器失效）'
+    )
+
     // 4d) 纯函数：只对含标记的名字给出对应物，且是**整体 token** 替换。
     check(glibcSiblingName('@img/sharp-linux-x64') === null, 'glibcSiblingName：非 musl 名应为 null')
     check(
@@ -351,6 +423,25 @@ export function selfTest() {
     check(
       glibcSiblingName('sharp-libvips-linuxmusl-arm64') === 'sharp-libvips-linux-arm64',
       'glibcSiblingName：中间词应整体替换而不是只换开头'
+    )
+    check(
+      glibcSiblingName('node-addon-require-builtin-linux-x64-musl') ===
+        'node-addon-require-builtin-linux-x64-gnu',
+      'glibcSiblingName：后缀式 `-musl` 应优先映射到 `-gnu` 对应物'
+    )
+    check(
+      glibcSiblingName('node-addon-require-builtin-linux-x64-gnu') === null,
+      'glibcSiblingName：`-gnu` 包不应被判成 musl 选择器'
+    )
+    check(
+      glibcSiblingCandidates('node-addon-require-builtin-linux-x64-musl').includes(
+        'node-addon-require-builtin-linux-x64'
+      ),
+      'glibcSiblingCandidates：应同时给出「去掉 musl token」的候选'
+    )
+    check(
+      glibcSiblingCandidates('yaml').length === 0,
+      'glibcSiblingCandidates：与 libc 无关的包名必须给空候选'
     )
 
     // 5) 目标参数化：换成 darwin/arm64，保留集合必须整体翻转。
@@ -366,6 +457,12 @@ export function selfTest() {
       check(
         existsSync(join(macRoot, '@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64.node')),
         '变体剪枝：非 linux 目标下按 libc 剪了包（判据越界）'
+      )
+      check(
+        existsSync(
+          join(macRoot, 'node-addon-require-builtin-linux-x64-musl/prebuilt/linux-x64-musl-napi-v9.node')
+        ),
+        '变体剪枝：非 linux 目标下按 libc 剪了后缀式包（判据越界）'
       )
     } finally {
       rmSync(macRoot, { recursive: true, force: true })
@@ -385,6 +482,14 @@ export function selfTest() {
       check(
         survivedSharp,
         '变体剪枝：可伪证性检查失败——现有 prune 应当留下 sharp 的 linuxmusl 包，断言才有意义'
+      )
+      // 后缀式同理：现有门禁对这一族同样无感（2026-10-07 的 AppImage 事故就是这么漏出去的）。
+      const survivedNapi = existsSync(
+        join(bugRoot, 'node-addon-require-builtin-linux-x64-musl/prebuilt/linux-x64-musl-napi-v9.node')
+      )
+      check(
+        survivedNapi,
+        '变体剪枝：可伪证性检查失败——现有 prune 应当留下 napi-rs 的 `-musl` 包，断言才有意义'
       )
     } finally {
       rmSync(bugRoot, { recursive: true, force: true })

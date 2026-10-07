@@ -102,3 +102,39 @@ npm **只在包自己声明了 `libc` 时才按 libc 过滤**（`os`/`cpu`/`libc
 > 再核对这里的四类判据。⚠️ 尤其注意「包名带平台后缀」这一类：先判它选的是 **os/cpu**
 > （npm 会过滤，别碰）还是 **libc**（npm 不过滤，必须碰）。
 
+#### 复发（2026-10-07，同一条判据、换了一种命名约定）：**后缀式 `-musl`**
+
+上一节那句「升级 DSH 时请复核」在两周后就应验了：`0.2.1-alpha.1` 带来一族新的 libc 选择器写法，
+形态与 sharp 那次**不同**，于是第 4 类判据（当时只认**连写**的 `linuxmusl`）没有命中，
+`Build installers` 在 ubuntu 上**再次**失败（smoke `37635305716`：macOS ✓、Windows ✓、**ubuntu ✗**）：
+
+```
+Deploying dependencies for ELF file …/harness/node_modules/node-addon-require-builtin-linux-x64-musl/prebuilt/linux-x64-musl-napi-v9.node
+ERROR: Could not find dependency: libc.musl-x86_64.so.1
+ERROR: Failed to deploy dependencies for existing files
+failed to bundle project: `failed to run ~/.cache/tauri/linuxdeploy-…-x86_64.AppImage`
+```
+
+根因同源，但**多了一层变化**：`node-addon-require-builtin@0.1.7` 用**后缀 token** 区分 libc
+（`…-linux-x64-gnu` 与 `…-linux-x64-musl` 并列），且 **0.2.1-alpha.1 起这一族在 lockfile 里
+连 `libc` 字段都不再声明**（对照：next 线 `0.2.0-rc.2` 的 `…-linux-x64-gnu` 曾声明
+`libc:["glibc"]`，且当时根本没有 musl 变体）。两件事叠加 ⇒ npm 认为 gnu 与 musl **同样适用**，
+把两份都装进树。**判据只覆盖了一种命名约定，是这次漏出去的真正原因。**
+
+**修法**：第 4 类判据从「一个映射」放宽为「**一组候选**」——`glibcSiblingCandidates()` 同时给出
+
+- **连写**：把 `linuxmusl` 换成 `linux`（`@img/sharp` 布局）；
+- **后缀 token**：把 `musl` token 换成 `gnu`，以及「整个 token 去掉」的候选（napi-rs 布局）。
+
+命中**任一候选**且**该名确实存在于同一层**才删。安全丝的语义不变（仍是「有实证的 glibc 对应物才删」），
+只是把「对应物」由单名放宽为候选集合——因此上游**再换命名约定时本模块多半无需再改**。
+
+`verify:variants` 29 → **38 项**：新增后缀式布局的夹具与断言（含「只有 musl、同层**没有**
+`-gnu` 对应物的孤独包必须保留」）、非 linux 目标不得按 libc 剪后缀式包，以及一条可伪证性断言
+（现有 `pruneNodeModules` 对该布局同样完全无感）。
+
+> **升级时的一条通用判据**（两次复发提炼）：漏出去的从来不是「没识别出 musl」，而是
+> **「同一个 libc 维度换了书写方式」**。复核时不要只对关键词，而要对**维度**：
+> 先在 lockfile 里列出「同族名字里同时存在 A 与 B 两个变体、且两者都没声明 `libc`」的包，
+> 再逐族判断 A/B 之间哪个是目标 libc。
+
