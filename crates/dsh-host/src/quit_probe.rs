@@ -227,10 +227,28 @@ mod tests {
                 let Ok((mut stream, _peer)) = listener.accept() else {
                     break;
                 };
-                // 等客户端把请求写出来（只读 1 字节也够：它已经发了 header）。
-                let mut probe = [0u8; 1];
-                if stream.read(&mut probe).is_err() {
-                    continue;
+                // 等客户端把**整个请求头**写出来再回包。
+                //
+                // 原先这里只 `read` 1 字节就回，竞态下会把客户端第二个请求的首字节
+                // 吃掉，导致响应与请求错位——CI（慢机器 + 并行）上表现为
+                // `left: Unknown, right: NoWork`，本机因时序宽松反而稳定通过。
+                // 现在读到 `\r\n\r\n`（请求头结束）为止，才写响应。
+                let mut buf = [0u8; 4096];
+                let mut filled = 0usize;
+                loop {
+                    match stream.read(&mut buf[filled..]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            filled += n;
+                            if buf[..filled].windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                            if filled == buf.len() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
                 }
                 let head = turns.next().unwrap_or_default();
                 if stream.write_all(head.as_bytes()).is_err() {
