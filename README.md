@@ -274,7 +274,7 @@ The upstream runtime the shell bundles is maintained on **two channels in parall
 | Target | Upstream line (`channel`) | Pinned DSH | Desktop suffix (`publishChannel`) | Desktop version example |
 |---------|---------------|-----------|-------------------------|-------------------------|
 | `next` (default) | npm `next` dist-tag (rc stage) | `0.2.0-rc.2` | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.1.7-alpha.2` | `alpha` | `0.7.3-alpha.x`+ (must be strictly greater than the highest rc tag — ADR-057) |
+| `alpha` | npm `alpha` dist-tag (early preview of the next minor) | `0.2.1-alpha.1` | `alpha` | `0.7.3-alpha.x`+ (must be strictly greater than the highest rc tag — ADR-057) |
 
 **Two different "channel" names — do not conflate them.** Each target carries `channel` (which upstream npm dist-tag to assemble from — an upstream fact you cannot rename) and `publishChannel` (the desktop tag's pre-release suffix — this repo's own naming). Upstream's `next` dist-tag currently points at an `rc`-stage version, so the desktop suffix is `rc` while the target key stays `next`. Forcing them to be the same string means that renaming the desktop suffix would send the drift sentinel looking for an upstream `rc` tag that does not exist, silently falling back to `latest`.
 

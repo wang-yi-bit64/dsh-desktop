@@ -1,0 +1,19 @@
+diff --git a/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js
+--- a/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js
++++ b/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js
+@@ -1219,6 +1219,7 @@
+ 		function failureMessage(message, code, t) {
+ 			if (code === "ACCOUNT_SIGNED_OUT") return t("message.failure.accountSignedOut");
+ 			if (code === "ACCOUNT_SIGN_IN_REQUIRED") return t("message.failure.accountSignInRequired");
+ 			if (code === "QUOTA" || code === "ACCOUNT_QUOTA") return t("message.failure.quota");
++			if (code === "FORBIDDEN") return t("message.failure.forbidden");
+ 			return code === "AUTH" ? t("message.failure.auth") : message;
+ 		}
+@@ -6153,2 +6154,3 @@
+ 			"message.failure.quota": "当前请求的额度已用尽",
++			"message.failure.forbidden": "模型服务商拒绝了本次请求，请检查账号权限、地区限制或模型开通情况。",
+ 			"message.turnError": "本轮运行失败",
+@@ -6342,2 +6344,3 @@
+ 			"message.failure.quota": "Request quota exhausted.",
++			"message.failure.forbidden": "The model provider denied this request. Check your account permissions, region, or model access.",
+ 			"message.turnError": "This turn failed",

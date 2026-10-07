@@ -90,9 +90,9 @@ export const DSH_TARGETS = {
     channel: 'alpha',
     publishChannel: 'alpha',
     status: 'active',
-    dshVersion: '0.1.7-alpha.2',
+    dshVersion: '0.2.1-alpha.1',
     summary:
-      '上游 alpha 线（2026-09-30 复役并推进到 0.1.7-alpha.2：修订 ADR-056 见 ADR-057；补丁退役 2 个，11 个落盘）'
+      '上游 alpha 线（2026-10-07 从 0.1.7-alpha.2 跨 minor 推进到 0.2.1-alpha.1：补丁按 retireWhen 退役 1 个、语义重做 4 个，10 个落盘——见 patches/LAYERS.md「alpha 线（0.2.1-alpha.1）的移植裁定」）'
   }
 }
 

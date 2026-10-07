@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
-@@ -1454,7 +1454,7 @@ window.__ModuleLoader__.load({
+@@ -1271,7 +1271,7 @@ window.__ModuleLoader__.load({
  		*/
  		function producedFileMentions(paths, openFile, label) {
  			return { resolve(value) {
@@ -10,7 +10,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
  				if (path === void 0) return void 0;
  				return {
  					open: () => {
-@@ -1465,6 +1465,21 @@ window.__ModuleLoader__.load({
+@@ -1282,6 +1282,21 @@ window.__ModuleLoader__.load({
  				};
  			} };
  		}
@@ -32,7 +32,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
  		/** The single supplied path whose basename is exactly `value`, else undefined. */
  		function onlyPathWithBasename(paths, value) {
  			const matches = paths.filter((path) => basename(path) === value);
-@@ -2289,7 +2304,6 @@ window.__ModuleLoader__.load({
+@@ -2320,7 +2335,6 @@ window.__ModuleLoader__.load({
  			ctx.provide("chatFileMentions", { forClosing(owner) {
  				const paths = selectProducedFiles(owner);
  				const presented = presentedForClosing(owner);

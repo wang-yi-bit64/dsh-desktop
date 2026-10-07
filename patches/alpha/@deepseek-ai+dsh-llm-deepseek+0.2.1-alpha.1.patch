@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js b/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js
 --- a/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js
-@@ -144,7 +144,7 @@ var DeepSeekFilesError = class extends LlmError {
+@@ -581,7 +581,7 @@ var DeepSeekFilesError = class extends LlmError {
  	* @param detail - provider error fields joined for classification.
  	*/
  	constructor(message, status, detail) {
@@ -10,7 +10,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js b/node_modu
  		this.name = "DeepSeekFilesError";
  		this.detail = detail;
  	}
-@@ -1493,7 +1493,8 @@ function providerError(raw, status, headers) {
+@@ -1747,7 +1747,8 @@ function providerError(raw, status, headers) {
  	const type = typeof error.type === "string" ? error.type : "";
  	const detail = `${type} ${typeof error.code === "string" ? error.code : ""} ${message}`;
  	let code;
