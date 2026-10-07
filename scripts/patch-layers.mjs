@@ -101,11 +101,6 @@ export const PATCH_LAYERS = {
     why: '模型设置页的每模型推理等级（advancedExtra 插槽 + reasoningEfforts 字段）。（Provider 选择器与搜索已于 2026-09-30 随上游目录/自定义添加流退役——官方提供等价能力。）',
     retireWhen: '官方提供 per-model 推理等级控件时（当前上游源码明确注释「刻意不做」）。'
   },
-  '@deepseek-ai/dsh-client-ui-model-selection': {
-    layer: 'ui-behavior',
-    why: '模型选择弹层的搜索框与样式。（next 线已于 2026-09-30 随 0.2.0-rc.2 退役：上游自带模糊搜索 + 键盘选择；alpha 线上游尚无搜索，补丁保留。）',
-    retireWhen: '官方模型选择器自带搜索时。'
-  },
   '@deepseek-ai/dsh-client-ui-chat': {
     layer: 'ui-behavior',
     why: '会话内 QUOTA / FORBIDDEN 错误文案。缺失时退回原始错误文本。',

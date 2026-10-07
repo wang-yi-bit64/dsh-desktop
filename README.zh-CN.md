@@ -273,7 +273,7 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 | 目标 | 上游线（`channel`） | 固定的 DSH | 桌面后缀（`publishChannel`） | 桌面版本示例 |
 |---------|---------------|-----------|-------------------------|-------------------------|
 | `next`（默认） | npm `next` dist-tag（rc 阶段） | `0.2.0-rc.2` | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.1.7-alpha.2` | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
+| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.2.1-alpha.1` | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
 
 **两个「通道名」不是一回事，别混用。** 每个目标带两个字段：`channel` 是**组装时拉哪条上游 npm dist-tag**（上游客观事实，改不了名），`publishChannel` 是**桌面 tag 的预发布后缀**（本仓自己的命名）。上游 `next` dist-tag 当下指向一个 `rc` 阶段版本，所以桌面后缀是 `rc` 而目标键仍是 `next`。**若把两者强行同名**，一改桌面后缀就会让漂移哨兵去查一个上游不存在的 `rc` tag，静默退回 `latest`。
 

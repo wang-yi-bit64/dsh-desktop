@@ -202,7 +202,7 @@
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2` | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须**严格大于**最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057 后果段） |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1` | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须**严格大于**最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057 后果段） |
 
 > ✅ **next 线于 2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`**（ADR-057 同批
 > 恢复 alpha 在役并推进到 `0.1.7-alpha.2`）：预检 clean 2 / conflict 12，经
@@ -212,8 +212,15 @@
 > 文件模型重铸为注册模型）。双线锚点现已各自对齐上游 dist-tag，`npm run gate -- drift` 不再告警。
 > 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-09-30 记录。
 
-> **两条线的补丁数可以不同，这是正常的**：本轮退役后 next 10 个 / alpha 11 个——
-> `ui-model-selection` 仅 next 退役（上游 0.2.0 自带搜索而 alpha 线尚无）。
+> ✅ **alpha 线于 2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`**（ADR-060）：
+> 预检 clean 4 / conflict 7（11 个补丁），经 `relocate-patch-hunks.mjs` 行号重算（41 个 hunk
+> 全部对齐）+ 3 个包语义重做 + 1 个退役（`ui-model-selection`）后 **10 个补丁全部 clean**，
+> 两线补丁集在包名层面归一。逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的
+> 2026-10-07 记录。
+
+> **两条线的补丁数可以不同，这是正常的**：2026-09-30 退役后 next 10 个 / alpha 11 个
+> （`ui-model-selection` 当时**仅 next 退役**——上游 0.2.0 自带搜索而 alpha 线尚无）；
+> 2026-10-07 alpha 线推进到 `0.2.1-alpha.1` 后该补丁在 alpha 线也退役，**两线各 10 个**。
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
 > 📖 通道解耦（`channel` vs `publishChannel`）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6。

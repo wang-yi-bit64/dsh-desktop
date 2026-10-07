@@ -303,15 +303,21 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 | 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2`（2026-09-30 推进） | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.1.7-alpha.2`（2026-09-30 推进） | `patches/alpha/`（11 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1`（2026-10-07 跨 minor 推进） | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
 
 > ✅ **双线锚点已各自对齐上游 dist-tag**（2026-09-30，ADR-057）：`npm run gate -- drift` 不再告警。
 > next 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`（预检 clean 2 / conflict 12，
 > 三路合并后重做 4 个、退役 4 个补丁）；alpha 复役并推进到 `0.1.7-alpha.2`。
 > 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-09-30 记录。
+>
+> 〔2026-10-07〕alpha 线自 `0.1.7-alpha.2` 跨 minor 推进到 **`0.2.1-alpha.1`**（上游 2026-10-03 发布）：
+> 预检 clean 4 / conflict 7 → 行号重算 + 语义重做 3 个 + 退役 1 个（`ui-model-selection`，上游自带搜索）
+> → **10/10 全部 applied**（`prepare:harness --dsh-target=alpha --force` 实证）。
+> 裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的「alpha 线（0.2.1-alpha.1）的移植裁定（2026-10-07）」小节。
 
-> **两条线的补丁数可以不同，这是正常的**：退役后 next 10 个 / alpha 11 个
-> （`ui-model-selection` 仅 next 退役——上游 0.2.0 自带搜索而 alpha 线尚无）。
+> **两条线的补丁数可以不同，这是正常的**：本轮退役后 next 10 个 / alpha 10 个
+> （`ui-model-selection` **两条线先后退役**——next 于 2026-09-30 随 `0.2.0-rc.2`、
+> alpha 于 2026-10-07 随 `0.2.1-alpha.1`，均因上游自带模糊搜索 + 键盘选择，属「上游追上我们」而非能力回退）。
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
 - **唯一事实源是 [`scripts/dsh-targets.mjs`](scripts/dsh-targets.mjs)** 的 `DSH_TARGETS`：

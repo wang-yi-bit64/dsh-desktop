@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（10 条） | `packages/next/`（**已清空**，2026-09-24） | `0.7.2-rc.1`（0.7.1 之后的下一个 rc；实际版本以 package.json 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.1.7-alpha.2`） | `patches/alpha/`（11 条） | `packages/alpha/`（已清空） | `0.7.3-alpha.x` 起（必须**严格**大于最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.1`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进，含上游重构；预检 clean 4 / conflict 7，经行号重算 + 语义重做 3 个 + 退役 1 个后 10 个补丁全部 clean） | `patches/alpha/`（10 条） | `packages/alpha/`（已清空） | `0.7.3-alpha.x` 起（必须**严格**大于最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -68,7 +68,7 @@
 
 ---
 
-## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核）
+## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核）
 
 分类原则：**只有当缺失会导致「补丁体系失效」或「桌面插件挂不上 / 起不来」时才归 `functional`**；
 其余一律 `ui-behavior`（可降级）。产品功能增强（如会话永久删除）虽然影响功能，
@@ -76,7 +76,7 @@
 
 下表按**包名**列（两个目标同名同判据）；实际文件名带各自目标的版本段，
 如 `patches/next/@deepseek-ai+dsh+0.2.0-rc.2.patch` 与
-`patches/alpha/@deepseek-ai+dsh+0.1.7-alpha.2.patch`。
+`patches/alpha/@deepseek-ai+dsh+0.2.1-alpha.1.patch`。
 
 ### functional（3 个）
 
@@ -86,17 +86,17 @@
 | `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 
-### ui-behavior（next 7 个 / alpha 8 个；**已退役项**在表内以删除线标明，半退役项在判据列内注明）
+### ui-behavior（next 7 个 / alpha 7 个；**已退役项**在表内以删除线标明，半退役项在判据列内注明）
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
 | ~~`dsh-client-ui-layout`~~ | 🗄️ **已全线退役**：alpha 线 2026-09-16、next 线 2026-09-30（上游 0.2.0 的 `computeColumns(…, collapsedWidth)` + `data-platform` 推导覆盖本补丁全部意图，两线判据均已满足）。补丁文件两线均已删除 | 官方区分平台宽度 ← **已满足（两线）** |
 | `dsh-client-ui-sidebar` | 注入壳层锚点属性（`data-dsh-sidebar-root` / `-wide` / `-settings`），供 Harness 页注入脚本挂载手机状态指示器。**自定义 padding 已于 2026-09-16 移除**（上游原生适配 macOS，叠加会成双份留白） | 官方侧栏暴露等效锚点（本仓注入脚本可挂到官方标记上）时 |
 | ~~`dsh-client-ui-workspace`~~ | 🗄️ **两线退役（2026-09-30）**：上游原生 `completionUnread` → `SessionStatusDots`/`StateDot` 未读完成态 + 完整会话行样式。补丁文件两线均已删除 | 官方列表补齐未读与行样式 ← **已满足（两线）** |
-| `dsh-client-ui-settings-models` | 模型设置页 Provider 选择器、模态切换、目录 UX | 官方设置页提供等价能力 |
-| `dsh-client-ui-model-selection` | 模型选择弹层搜索框与样式。（**next 线已于 2026-09-30 随 0.2.0-rc.2 退役**：上游自带模糊搜索 + 键盘选择，判据满足；alpha 线上游尚无搜索，补丁保留） | 官方自带搜索 |
+| `dsh-client-ui-settings-models` | 模型设置页的**每模型推理等级**注入（`ModelReasoningEffortsField`，经上游 `ModelRow` 的插槽挂载）。（Provider 选择器 / 搜索自 2026-09-30 起随上游目录添加流退役；alpha 线于 2026-10-07 推进时同轮退役） | 官方提供 per-model 推理等级控件（上游源码明确注释「刻意不做」） |
+| ~~`dsh-client-ui-model-selection`~~ | 🗄️ **已全线退役**：next 线 2026-09-30、alpha 线 2026-10-07（上游 `0.2.1-alpha.1` 实测自带模糊搜索 `search`×30 / `fuzzy` / 键盘导航 `moveFocus`，判据满足）。补丁文件两线均已删除 | 官方自带搜索 ← **已满足（两线）** |
 | ~~`dsh-client-ui-agent-preset`~~ | 🗄️ **两线退役（2026-09-30）**：上游重写为卡片式预设管理 UI（`cardBroken`/`guideTitle` 键域），旧菜单/对话框锚点整体消失；**整条预设传递链路同轮退役**（`dsh-desktop-preset-transfer`）。补丁文件两线均已删除 | 官方提供预设包导入导出 ← **判据已转化为「上游重写」** |
-| `dsh-client-ui-chat` | 会话内 `QUOTA` / `FORBIDDEN` 错误文案 | 官方补齐这两种错误码文案 |
+| `dsh-client-ui-chat` | 会话内 `FORBIDDEN` 错误文案。（`QUOTA` / `ACCOUNT_*` 族上游已于 `0.2.1-alpha.1` 内置，自 2026-10-07 起本补丁只重放 `FORBIDDEN`） | 官方补齐 `FORBIDDEN` 文案 |
 | `dsh-client-ui-trajectory` | 轨迹页 `QUOTA` / `FORBIDDEN` 错误文案 | 同上 |
 | `dsh-client-ui-deliverables` | Codex 风格本地路径引用解析；`paths` 为 `null` 时的空数组兜底 | 官方支持本地路径引用解析 |
 | `dsh-llm-deepseek` | 把 HTTP 403 从 `AUTH` 拆成独立 `FORBIDDEN` 码；缺失时 403 显示为鉴权错误（文案不准，不影响运行） | 官方错误码分类含 `FORBIDDEN` |
@@ -230,6 +230,55 @@ registry 内容做应用判定，13 个补丁全部干净可用（vendoring 的�
 > 三者均为 `prerelease: true`，且实测确认 `releases/latest` 仍指向 `v0.4.0`——
 > 预发布**不会**进入 stable 更新链路。
 
+### alpha 线（0.2.1-alpha.1）的移植裁定（2026-10-07）
+
+上游 `alpha` dist-tag 从 `0.1.7-alpha.2` 直跳到 `0.2.1-alpha.1`（跨 minor，含上游重构）。
+本轮**没有本地组装基线**，全部裁定基于「上游 tgz 实测 + 纯净树按内容定位」，纯净树与
+取证目录一律放仓库外（`%TEMP%`）——上游 npm 代码落入 `harness-deps/` 会被安全门扫出高危。
+
+**预检基线**：clean 4 / conflict 7（11 个补丁）。与 2026-09-30 next 线那次落在同一个上游
+重构窗口，语义裁定沿用先例。
+
+**行号重算**：用 [`relocate-patch-hunks.mjs`](../scripts/relocate-patch-hunks.mjs)
+（本机 `spawnSync git` 报 EBUSY，故走「只改 `@@` 行、无外部进程」这条路径）。
+首轮 **8/10 个补丁、27 个 hunk 自动重算，6 个 hunk 定位不到**（`chat` 3 + `settings-models` 3）；
+逐条重写后 **41 个 hunk 全部对齐（10/10 补丁）**。最终 `check:patch-applicability` =
+**clean 10 / conflict 0**。
+
+**退役 1 个（`retireWhen` 已实证满足）**：
+
+| 补丁 | 判据的核实结果（对 `0.2.1-alpha.1` tgz 实测） | 结论 |
+|------|--------------------------------------------|------|
+| `dsh-client-ui-model-selection` | 上游自带模糊搜索与键盘导航：`search`×30 / `searchRow`×9 / `searchRef`×6 / `fuzzy`×1 / `moveFocus`×2（`lib/`） | **alpha 线退役**（next 线已于 2026-09-30 退役）——**两线归一** |
+
+**语义重做 3 个**：
+
+- **`dsh-client-ui-chat`**（3 个 hunk 全部重写）：上游已内置 `ACCOUNT_SIGNED_OUT` /
+  `ACCOUNT_SIGN_IN_REQUIRED` / `QUOTA` / `ACCOUNT_QUOTA` 四个分支与对应 zh/en 文案
+  （`failureMessage()` 现为 4 行 if 链），**仍无 `FORBIDDEN`**。补丁相应收窄：只重放
+  `code === "FORBIDDEN"` 分支 + zh/en `message.failure.forbidden` 词条，
+  **不再覆盖 `quota` 文案**（上游已接管——属「上游追上我们」，不是能力回退）。
+- **`dsh-client-ui-settings-models`**：24 个 hunk 自动定位；3 个定位不到的根因是
+  **上游把 `EditorFooter` 的 `onSubmit` 扩成两段**（新增 `props.onSubmitCredential?.()`）。
+  裁定：`footerProps` 的 `onSubmit` 与 `1805` hunk 的 before 块**都补回该行**——
+  这属于「上游新增行为能力不得因移植而丢失」，而本补丁的 Provider 编辑器 sticky footer
+  改造正建立在此 `footerProps` 提取之上。另 2 个 hunk 的 `welcomeBody` 上下文文案
+  随上游从 `0.1`→`0.2` 更新，**仅校正上下文，不动本仓新增的 onboarding 词条**。
+  🔴 **注入点未变的前提已核实**：本线上游仍无 `reasoningEffort*` 控件（4 处注释明确
+  「per-MODEL, deliberately none」），故每模型推理等级增强仍需保留。
+- **`dsh-llm-deepseek` / `dsh-llm-pi-ai`**：纯行号重算（2 + 1 个 hunk），无语义变化。
+
+**一个刻意不改的值**：`@deepseek-ai/cordis-plugin-loader` 的上游解析范围由 `~1.0.5`
+变为 `~1.0.6-alpha.1`，本仓**保持补丁文件名 `1.0.3`**——`prepare-harness.mjs` 由文件名推导
+override，把它反向钉到补丁所针对的 `1.0.3`；这与两线既有做法一致（`~1.0.5` 时同样钉 `1.0.3`），
+且 1.0.x 段代码未变（`EntryTree` 的裸 specifier 回退逻辑逐字相同）。
+
+**退役后的净结果**：alpha 11 → 10 条（**与 next 线补丁集在包名层面归一**）。
+
+**体积（清单 Step 6，如实记录）**：本轮**无本地组装基线**（`src-tauri/resources/` 与
+`harness-deps/` 均不存在），无法给出增量对比；按计划取代理基线并显式标注
+「基线缺失，增量不可比」——不重蹈 2026-09-30 那次「跳过体积对比」的流程教训。
+
 ### next 线（0.2.0-rc.2）与 alpha 线（0.1.7-alpha.2）的移植裁定（2026-09-30）
 
 本轮推进的**做法**是把升级清单 §2 的三路合并移植**工具化**：新增
@@ -310,5 +359,5 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
       看哪些干净、哪些冲突（它现在也会报「内容匹配但行号漂移超窗」）；
    2. 冲突的按语义重做（见上文 alpha 线的做法），**改完必须重算行号**：
       `node scripts/recount-patches.mjs --dsh-target=<目标> --pristine=<未打补丁的包根>`；
-   3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认**本目标**全部 `applied`（当前 next 10 / alpha 11）
+   3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认**本目标**全部 `applied`（当前 next 10 / alpha 10）
       ——**这一步不可省略**：预检与真实组装在行号口径上不同，只有它能证明补丁真的落盘。
