@@ -341,15 +341,10 @@ fn harness_env_inner(
 
     // CX-17 — 随包 primary runtime 载荷（office skills / workspace-dependencies 的门控）。
     //
-    // **只在载荷达到档1.5 时设置**（见 `Layout::primary_runtime` 的逐项判定）：设一个
-    // 指向不存在目录的变量会让 Harness 在启动期 stat 失败——那等于"残缺包让应用起不来"。
-    // 载荷不达标就不设，两行保持 disabled，Harness 照常启动。
-    //
-    // 档位**不进环境变量**：它只描述"这份载荷承诺了多少"（能创作 vs 全能），而 Harness
-    // 那两行不关心这个。需要陈述档位的地方（MANIFEST / 反馈页）应当直接调
-    // `Layout::primary_runtime()` 读，而不是从这里多带一个变量——少一个变量就少一条
-    // 需要与上游对齐的隐式契约。
-    if let Some((root, _tier)) = layout.primary_runtime() {
+    // **只在载荷完整时设置**（见 `Layout::primary_runtime` 的逐项判定）：设一个指向
+    // 不存在目录的变量会让 Harness 在启动期 stat 失败——那等于"残缺包让应用起不来"。
+    // 载荷不完整就不设，两行保持 disabled，Harness 照常启动。
+    if let Some(root) = layout.primary_runtime() {
         entries.insert(
             ENV_BUNDLED_PRIMARY_RUNTIME.to_string(),
             root.display().to_string(),
@@ -604,9 +599,9 @@ pub fn path_contains(path: &str, candidate: &Path) -> bool {
 mod tests {
     use super::*;
 
-    /// CX-17 — 载荷达到档1.5 才注入 `DSH_BUNDLED_PRIMARY_RUNTIME`；**缺任何一项都不注入**。
+    /// CX-17 — 载荷完整才注入 `DSH_BUNDLED_PRIMARY_RUNTIME`；**缺任何一项都不注入**。
     ///
-    /// 可证伪性：把档1.5 及格线里每一项轮流删掉，断言两件事——(a) 变量消失（fail-closed），
+    /// 可证伪性：把必备清单里每一项轮流抽走，断言两件事——(a) 变量消失（fail-closed），
     /// (b) Harness 环境其余部分照常组装（不会因为载荷问题让整个启动失败）。
     /// 若把实现改成"目录存在就设变量"，这条测试会红。
     #[test]
@@ -620,7 +615,7 @@ mod tests {
         let res = root.join("res");
         let data = root.join("data");
 
-        // 造一份档1.5 载荷（用桩文件即可：判定只看类型，不看内容）。
+        // 造一份完整载荷（用桩文件即可：判定只看类型，不看内容）。
         let payload = res.join("runtime").join("primary-runtime");
         let deps = payload.join("dependencies");
         let office = res.join("runtime").join("office-skills");
@@ -647,29 +642,28 @@ mod tests {
         std::fs::write(deps.join("pnpm").join("bin").join("pnpm.mjs"), b"stub").unwrap();
         let check_script = office.join("scripts").join("check_office.py");
         std::fs::write(&check_script, b"stub").unwrap();
-        if cfg!(windows) {
-            // Windows 上 site-packages 的判据是 `<python>/Lib` 目录本身。
-            let _ = std::fs::create_dir_all(deps.join("python").join("Lib"));
-        } else {
-            // POSIX 的判据是 `lib/python*` 下的任一目录。
-            let _ = std::fs::create_dir_all(deps.join("python").join("lib").join("python3.13"));
+        // 三份 SKILL.md 也是硬需求：缺一个会让 `dsh-skill-office` 在挂载期
+        // `readFileSync` 抛 ENOENT，Harness 起不来。
+        for skill in ["office-docx", "office-pptx", "office-xlsx"] {
+            std::fs::create_dir_all(office.join(skill)).unwrap();
+            std::fs::write(office.join(skill).join("SKILL.md"), b"stub").unwrap();
         }
 
         let layout = Layout::resolve(&res, &data);
         let shell = HarnessEnv::default();
 
-        // (a) 档1.5 齐备 → 注入，且指向载荷根。
+        // (a) 完整 → 注入，且指向载荷根。
         let env = harness_env(&layout, &shell, None);
         let expected = layout
             .primary_runtime()
-            .map(|(root, _)| root.display().to_string());
+            .map(|root| root.display().to_string());
         assert_eq!(
             env.get(crate::contracts::ENV_BUNDLED_PRIMARY_RUNTIME)
                 .cloned(),
             expected,
         );
 
-        // (b) 轮流删掉档1.5 及格线里的每一项：变量必须消失，且 DSH_HOME 等契约项仍在。
+        // (b) 轮流抽走每一项：变量必须消失，且 DSH_HOME 等契约项仍在。
         for victim in [
             python_bin.clone(),
             node_bin.clone(),
@@ -678,6 +672,10 @@ mod tests {
                 .join("office-skills")
                 .join("scripts")
                 .join("check_office.py"),
+            res.join("runtime")
+                .join("office-skills")
+                .join("office-docx")
+                .join("SKILL.md"),
         ] {
             let backup = format!("{}.bak", victim.display());
             std::fs::rename(&victim, &backup).unwrap();

@@ -54,65 +54,13 @@ pub enum LaunchTarget {
     },
 }
 
-/// CX-17 — 载荷满足的档位。**只描述"这份载荷承诺了多少"，不改变壳的行为**：
-/// 两个档位走同一条启用路径、注入同一个环境变量。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PayloadTier {
-    /// 档1.5：解释器 + office skills + 校验脚本齐备 → 模型可创建/编辑 docx/pptx/xlsx。
-    Authoring,
-    /// 档2：档1.5 + site-packages 含上游工具描述承诺的 8 个库。
-    FullToolchain,
-}
-
-impl PayloadTier {
-    /// 供 MANIFEST / 日志使用的稳定标识。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Authoring => "authoring",
-            Self::FullToolchain => "full-toolchain",
-        }
-    }
-}
-
-/// `dsh-skill-office` 会去读的三个 skill 目录名（`SKILLS` 的逐字镜像）。
-const OFFICE_SKILLS: [&str; 3] = ["office-docx", "office-pptx", "office-xlsx"];
-
-/// 上游工具描述承诺的 8 个分布名（`numpy`/`pandas`/`python-docx`/`python-pptx`/
-/// `openpyxl`/`Pillow`/`lxml`/`XlsxWriter`）在 site-packages 下的**导入名**。分布名与
-/// 导入名不一致（`python-docx`→`docx`、`Pillow`→`PIL`、`XlsxWriter`→`xlsxwriter`），
-/// 这里必须用导入名——判据是"目录存在"，而目录名就是导入名。
-const TOOLCHAIN_PACKAGES: [&str; 8] = [
-    "numpy",
-    "pandas",
-    "docx",
-    "pptx",
-    "openpyxl",
-    "PIL",
-    "lxml",
-    "xlsxwriter",
-];
-
-/// 在 `<python>/Lib`（Windows）或 `<python>/lib/pythonX.Y`（POSIX）下定位 site-packages。
+/// `dsh-skill-office` 会去读的三个 skill 目录名（上游 `SKILLS` 常量的逐字镜像）。
 ///
-/// 次版本号无法在常量里写死，因此 POSIX 侧按"`python3.*` 下取第一个目录名"解析；
-/// 找不到就返回 `None`（档2 判为不满足，但仍保留档1.5）。
-fn site_packages_dir(python_lib: &Path, windows: bool) -> Option<PathBuf> {
-    if windows {
-        let candidate = python_lib.join("site-packages");
-        return candidate.is_dir().then_some(candidate);
-    }
-    let versioned = std::fs::read_dir(python_lib)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().starts_with("python"))
-                .unwrap_or(false)
-        })?;
-    let candidate = versioned.join("site-packages");
-    candidate.is_dir().then_some(candidate)
-}
+/// 这三份 `SKILL.md` 是**硬需求**，不是可选项：`dsh-skill-office/lib/index.js` 在
+/// 插件挂载期对每个 `SKILL.md` 做 `readFileSync`，缺任何一个都直接抛 ENOENT，
+/// 于是 Harness 起不来——正是 [`Layout::primary_runtime`] 要 fail-closed 防的那类
+/// 失败（「应用起不来」而非「少个功能」）。
+const OFFICE_SKILLS: [&str; 3] = ["office-docx", "office-pptx", "office-xlsx"];
 
 /// 一次启动所需的全部路径。
 ///
@@ -220,15 +168,15 @@ impl Layout {
         }
     }
 
-    /// CX-17 — 随包 primary runtime 载荷根与它满足的**档位**；不满足最低档位时 `None`。
+    /// CX-17 — 随包 primary runtime 载荷根；**仅当载荷完整**时返回 `Some`。
     ///
     /// # 为什么是"完整才启用"而不是"存在就启用"
     ///
     /// Harness 那两个插件行（`skill-office` / `tool-workspace-dependencies`）一旦启用，
     /// 会**立刻**去 stat 载荷里的解释器、node、pnpm 与 office skills 资产，缺任何一个
     /// 都在 Host 启动期抛错——那等于"打了个残缺的包，应用起不来"。因此这里逐项检查
-    /// 上游 `validatePayloadEntries` 关心的同一条清单，任何一项缺失就返回 `None`：
-    /// 两行保持 disabled，Harness 正常启动（只是没有 office skills）。
+    /// 上游关心的同一条清单，任何一项缺失就返回 `None`：两行保持 disabled，
+    /// Harness 正常启动（只是没有 office skills）。
     ///
     /// 检查项与上游逐字对应（`dsh-tool-workspace-dependencies` 的
     /// `workspaceDependencyPaths` + `validatePayloadEntries`，以及 `dsh-skill-office`
@@ -237,26 +185,32 @@ impl Layout {
     /// | 路径 | 类型 |
     /// |------|------|
     /// | `dependencies/python/python.exe` 或 `dependencies/python/bin/python3` | 文件 |
-    /// | `dependencies/python/<Lib\|lib/pythonX.Y/site-packages>` | 目录 |
     /// | `dependencies/node/bin/node[.exe]` | 文件 |
     /// | `dependencies/node/node_modules` | 目录 |
     /// | `dependencies/pnpm/bin/pnpm.mjs` | 文件 |
     /// | `<同级>/office-skills/scripts/check_office.py` | 文件 |
     /// | `<同级>/office-skills/<office-docx\|office-pptx\|office-xlsx>/SKILL.md` | 文件 |
     ///
-    /// # 两个档位（2026-10-06 落地档1.5 后引入）
+    /// # 关于 `Lib` / `lib/python*`
     ///
-    /// 上面那张表是**档1.5（Authoring）**的及格线：解释器 + office skills + 校验脚本齐备，
-    /// 模型即可创建/编辑 docx/pptx/xlsx。**档2（FullToolchain）**额外要求 site-packages 里
-    /// 出现上游工具描述承诺的 8 个库（numpy/pandas/python-docx/python-pptx/openpyxl/
-    /// Pillow/lxml/XlsxWriter）——否则模型按描述 import 会拿到 ModuleNotFoundError。
+    /// Windows 的可嵌入发行版（`python-3.12-embed-amd64.zip`，实测解包 21.5 MB / 35 个
+    /// 文件）整个包是**扁平**的——标准库在 `python312.zip` 里，没有 `Lib` 目录。上游
+    /// 判据（`validatePayloadEntries`）只要求 `pythonPackages` 目录存在，而
+    /// `workspaceDependencyPaths` 在 Windows 上正是把它指向 `<python>/Lib`。因此这里
+    /// **不**把 `Lib`（或 POSIX 的 `lib/python*`）列为硬要求：缺它不影响本仓的启用
+    /// 判定，缺了只是模型少一处可写目录。
     ///
-    /// 两档**同一个环境变量、同一条启用路径**：档位只决定"这份载荷承诺了多少"，不改变
-    /// 壳的行为。`full_toolchain` 让 MANIFEST / 反馈页能如实区分"能创作"与"全能"。
+    /// # 2026-10-07 起只保留单一档位
     ///
-    /// `runtime.json` 的**内容**校验（版本、平台、架构、分发包清单）由组装期脚本负责，
-    /// 这里只做存在性判定——启动路径不该在每次开应用时重算一份 sha256。
-    pub fn primary_runtime(&self) -> Option<(&Path, PayloadTier)> {
+    /// 曾经拆成「档1.5（authoring）/ 档2（full toolchain，另需 site-packages 8 库）」。
+    /// 本仓实际交付的是前者——8 个库的唯一读者是上游**工具描述**与 skill 的 `SKILL.md`，
+    /// 本仓不引用其中任何一个。整条 wheel 交叉安装 / 版本表 / site-packages 判定因此
+    /// 全部拆除（YAGNI）；需要时按 git 历史恢复。随之修正一处真错误：三份 `SKILL.md`
+    /// 原先被归进档2，但它们其实是硬需求（见 [`OFFICE_SKILLS`] 的说明）。
+    ///
+    /// `runtime.json` 的**内容**校验（版本、平台、架构）由组装期脚本负责，这里只做
+    /// 存在性判定——启动路径不该在每次开应用时重算一份 sha256。
+    pub fn primary_runtime(&self) -> Option<&Path> {
         let root = &self.primary_runtime_root;
         if !root.is_dir() {
             return None;
@@ -267,26 +221,10 @@ impl Layout {
             dependencies
                 .join("python")
                 .join(if windows { "python.exe" } else { "bin/python3" });
-        // site-packages 的确切目录名带次版本号（`python3.13`），无法在常量里写死；
-        // 于是按"`Lib`（Windows）或 `lib/python*` 下任一目录"判定——未知次版本时
-        // 不让整个载荷失效，但也不假装它存在。
-        let python_lib = dependencies
-            .join("python")
-            .join(if windows { "Lib" } else { "lib" });
-        // `Lib`（Windows）/ `lib/python*`（POSIX）**不是**硬要求：Windows 的
-        // 可嵌入发行版（`python-3.12-embed-amd64.zip`，实测解包 21.5 MB / 35 个文件）
-        // 整个包是**扁平**的——标准库在 `python312.zip` 里，没有 `Lib` 目录。
-        // 上游判据（`validatePayloadEntries`）只要求 `pythonPackages` 目录存在，
-        // 而 `workspaceDependencyPaths` 在 Windows 上正是把它指向 `<python>/Lib`。
-        // 因此这里区分两件事：
-        //   · 档1.5 只要求解释器本体（`python.exe` / `bin/python3`）；
-        //   · `Lib`（或 POSIX 的 `lib/python*`）只在判档2 时用——那时它必须存在，
-        //     否则 site-packages 无从查找，8 库判据必然不满足。
         let python_interp_ok = python.is_file();
         let office_skills = root.parent().unwrap_or(root).join(OFFICE_SKILLS_DIR);
 
-        // 档1.5 及格线（缺一即整个载荷不启用）。
-        let authoring_ready = [
+        let ready = [
             python_interp_ok,
             dependencies
                 .join("node")
@@ -303,34 +241,17 @@ impl Layout {
                 .join("scripts")
                 .join("check_office.py")
                 .is_file(),
+            // `SKILL.md` 缺一个 = 插件挂载期 readFileSync 抛 ENOENT = Harness 起不来。
+            OFFICE_SKILLS
+                .iter()
+                .all(|skill| office_skills.join(skill).join("SKILL.md").is_file()),
         ]
         .into_iter()
         .all(|present| present);
-        if !authoring_ready {
+        if !ready {
             return None;
         }
-
-        // 档2：三个 SKILL.md + site-packages 里 8 个库可导入。
-        //
-        // 判据是"目录/文件存在"，不是"真的 import 成功"：启动路径不派生 python 进程
-        // （那要几十毫秒，且会因解释器缺动态库而给出难读的错误）。上游自己也是这么做的
-        // ——`validatePayloadEntries` 只 stat。
-        let site_packages = site_packages_dir(&python_lib, windows);
-        let toolchain_complete = OFFICE_SKILLS
-            .iter()
-            .all(|skill| office_skills.join(skill).join("SKILL.md").is_file())
-            && match &site_packages {
-                Some(dir) => TOOLCHAIN_PACKAGES
-                    .iter()
-                    .all(|package| dir.join(package).is_dir()),
-                None => false,
-            };
-        let tier = if toolchain_complete {
-            PayloadTier::FullToolchain
-        } else {
-            PayloadTier::Authoring
-        };
-        Some((root.as_path(), tier))
+        Some(root.as_path())
     }
 
     /// 探测并解析当前可用的运行目标（Sidecar 优先或 Node 模式）。
@@ -537,16 +458,15 @@ mod tests {
         Layout::resolve(root.join("res"), root.join("data"))
     }
 
-    /// CX-17 — 档位判定：档1.5 齐备 → `Authoring`；三个 SKILL.md + site-packages 8 库
-    /// 也在 → `FullToolchain`。
+    /// CX-17 — 载荷完整性判据：**逐项抽走任何一个必备项，判据必须变 `None`**。
     ///
-    /// 可证伪性：逐个抽走档2 专属项，档位必须掉回 `Authoring`（不是变 None）；
-    /// 再逐个抽走档1.5 及格线里的项，整个判据必须变 `None`。若有人把档位判据写成
-    /// "只看目录存在"，这里会红。
+    /// 可证伪性：若有人把实现改成"载荷根目录存在就算齐"，这里会红；若有人把三份
+    /// `SKILL.md` 从清单里漏掉（它们缺一个就会让 `dsh-skill-office` 在挂载期
+    /// `readFileSync` 抛 ENOENT、Harness 起不来），这里也会红。
     #[test]
-    fn payload_tier_drops_when_any_required_entry_is_missing() {
+    fn primary_runtime_requires_every_entry() {
         let root = std::env::temp_dir().join(format!(
-            "dsh-tier-{}-{}",
+            "dsh-payload-{}-{}",
             std::process::id(),
             crate::process::now_seconds()
         ));
@@ -559,7 +479,7 @@ mod tests {
             .unwrap()
             .join(OFFICE_SKILLS_DIR);
 
-        // 档1.5 及格线。
+        // 造一份完整载荷（桩文件即可：判定只看类型，不看内容）。
         std::fs::create_dir_all(deps.join("node").join("bin")).unwrap();
         std::fs::create_dir_all(deps.join("node").join("node_modules")).unwrap();
         std::fs::create_dir_all(deps.join("pnpm").join("bin")).unwrap();
@@ -580,63 +500,52 @@ mod tests {
         .unwrap();
         std::fs::write(deps.join("pnpm").join("bin").join("pnpm.mjs"), b"stub").unwrap();
         std::fs::write(office.join("scripts").join("check_office.py"), b"stub").unwrap();
-
-        // 档2 专属：site-packages 里的 8 个导入名 + 三个 SKILL.md。
-        let site = if cfg!(windows) {
-            deps.join("python").join("Lib").join("site-packages")
-        } else {
-            deps.join("python")
-                .join("lib")
-                .join("python3.13")
-                .join("site-packages")
-        };
-        std::fs::create_dir_all(&site).unwrap();
-        for package in TOOLCHAIN_PACKAGES {
-            std::fs::create_dir_all(site.join(package)).unwrap();
-        }
         for skill in OFFICE_SKILLS {
             std::fs::create_dir_all(office.join(skill)).unwrap();
             std::fs::write(office.join(skill).join("SKILL.md"), b"stub").unwrap();
         }
 
-        // 全齐 → 档2。
-        let (_root, tier) = layout.primary_runtime().expect("payload must qualify");
-        assert_eq!(tier, PayloadTier::FullToolchain);
+        // 全齐 → 认下，且指向载荷根。
+        let found = layout.primary_runtime().expect("完整载荷必须被认下");
+        assert_eq!(found, layout.primary_runtime_root.as_path());
 
-        // 抽走任一档2 专属项 → 掉回档1.5（不是变 None）。
-        let victims: Vec<PathBuf> = OFFICE_SKILLS
-            .iter()
-            .map(|skill| office.join(skill).join("SKILL.md"))
-            .chain(TOOLCHAIN_PACKAGES.iter().map(|pkg| site.join(pkg)))
-            .collect();
-        for victim in victims {
-            let backup = victim.with_extension("bak");
-            std::fs::rename(&victim, &backup).unwrap();
-            assert_eq!(
-                layout.primary_runtime().map(|(_, tier)| tier),
-                Some(PayloadTier::Authoring),
-                "抽走 {victim:?} 后档位应掉回 Authoring"
-            );
-            std::fs::rename(&backup, &victim).unwrap();
-        }
-
-        // 抽走档1.5 及格线里的项 → 整个判据变 None（载荷不启用）。
-        for victim in [
+        // 逐个抽走必备项 → 必须变 None（fail-closed）。
+        let victims: Vec<PathBuf> = [
             python_bin.clone(),
             deps.join("node")
                 .join("bin")
                 .join(if cfg!(windows) { "node.exe" } else { "node" }),
             deps.join("pnpm").join("bin").join("pnpm.mjs"),
             office.join("scripts").join("check_office.py"),
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            OFFICE_SKILLS
+                .iter()
+                .map(|skill| office.join(skill).join("SKILL.md")),
+        )
+        .collect();
+        for victim in victims {
             let backup = victim.with_extension("bak");
             std::fs::rename(&victim, &backup).unwrap();
             assert!(
                 layout.primary_runtime().is_none(),
-                "抽走 {victim:?} 后载荷必须整体不启用"
+                "抽走 {victim:?} 后载荷必须整体不启用——缺它会让 Harness 起不来"
             );
             std::fs::rename(&backup, &victim).unwrap();
         }
+
+        // `node_modules` 也必须是目录（判据里唯一一项"目录"）。
+        let modules = deps.join("node").join("node_modules");
+        let stash = modules.with_extension("stash");
+        std::fs::rename(&modules, &stash).unwrap();
+        std::fs::write(&modules, b"now a file").unwrap();
+        assert!(
+            layout.primary_runtime().is_none(),
+            "node_modules 不是目录时必须不启用"
+        );
+        std::fs::remove_file(&modules).unwrap();
+        std::fs::rename(&stash, &modules).unwrap();
 
         let _ = std::fs::remove_dir_all(&root);
     }

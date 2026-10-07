@@ -37,34 +37,30 @@
  *    （`dsh-skill-office/lib/index.js` 的 `SKILLS` 常量），
  *    自己造三份等于伪造上游能力（AGENTS.md §7.1 规则 1/2）。缺它们 → 载荷不落盘。
  *
- * # 档位（2026-10-06 落地档1.5）
+ * # 它装什么（2026-10-07 起只有一种形态）
  *
- * `--tier authoring`（默认，档1.5）只需要：解释器 + office-skills + node + pnpm。
- * 模型据此可创建/编辑 docx/pptx/xlsx，并跑纯标准库的 `check_office.py` 校验。
+ * 一份完整载荷 = CPython 解释器 + office-skills（三份 `SKILL.md` + `check_office.py`）
+ * + node + pnpm。模型据此可创建/编辑 docx/pptx/xlsx，并跑 `check_office.py` 校验。
  *
- * `--tier full`（档2）额外要求 site-packages 里出现上游工具描述承诺的 8 个库，
- * 通过 `--python-packages-dir <pip install --target 的产物>` 提供。
- * 两档在 Rust 侧是同一条启用路径、同一个环境变量；档位只影响 MANIFEST 里的陈述。
- *
- * 实测依据（Windows / CPython 3.12.10）：档1.5 比档2 少 ~73 MB 解包、每平台少
- * ~22 MB wheels；差额几乎只有 numpy(19.6 MB)+pandas(32.6 MB) 及其传递依赖。
+ * 曾经还有第二种形态（另带 site-packages 里 8 个库：numpy/pandas/python-docx/
+ * python-pptx/openpyxl/Pillow/lxml/XlsxWriter）。2026-10-07 拆除：那 8 个库的唯一
+ * 读者是上游**工具描述**与 skill 的 `SKILL.md`，本仓代码一个都不引用，整条
+ * `--tier full` / `--python-packages-dir` / wheel 交叉安装因此是死路。需要时按
+ * git 历史恢复。
  *
  * # 用法
  *
  * ```bash
- * # 档1.5：解释器 + 上游 office-skills
- * node scripts/prepare-primary-runtime.mjs --source <dir> --tier authoring \
+ * node scripts/prepare-primary-runtime.mjs --source <dir> \
  *      --office-skills <dir> --desktop-version 0.7.2 --python-version 3.12.10 \
- *      --node-version 24.14.0 --pnpm-version 11.7.0
- * # 档2：再把 pip 产物塞进 site-packages
- * node scripts/prepare-primary-runtime.mjs … --tier full \
- *      --python-packages-dir <pip install --target 的目录>
+ *      --node-version 24.19.0 --pnpm-version 11.7.0
  * node scripts/prepare-primary-runtime.mjs --check          # 只检验已落盘的载荷
  * node scripts/prepare-primary-runtime.mjs --self-test     # 离线自检（CI 用）
  * ```
  *
- * `--check` 与 `--self-test` 都不碰网络；`--python-packages-dir` 的内容由调用方
- * 预先用 pip 装好（本仓不写死任何下载 URL——硬编码外部 URL 违反 AGENTS.md §3.2）。
+ * `--check` 与 `--self-test` 都不碰网络；`--source` 指向的目录由上游构建产物提供
+ * （本仓不写死任何下载 URL——硬编码外部 URL 违反 AGENTS.md §3.2）。输入可用
+ * `scripts/fetch-primary-runtime.mjs` 拉取。
  */
 
 import { existsSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync, statSync, readdirSync, renameSync } from 'node:fs'
@@ -73,16 +69,7 @@ import { join, dirname, resolve } from 'node:path'
 const PRIMARY_RUNTIME_ROOT = 'primary-runtime'
 const OFFICE_SKILLS_DIR = 'office-skills'
 const RUNTIME_JSON = 'runtime.json'
-const PYTHON_PACKAGES = [
-  'numpy', 'pandas', 'python-docx', 'python-pptx', 'openpyxl', 'Pillow', 'lxml', 'XlsxWriter',
-]
 const SKILLS = ['office-docx', 'office-pptx', 'office-xlsx']
-// 上游工具描述里 8 个**分发名**在 site-packages 下的导入名（不一致的有
-// `python-docx`→`docx`、`Pillow`→`PIL`、`XlsxWriter`→`xlsxwriter`）。与 Rust 侧
-// `TOOLCHAIN_PACKAGES` 同一张表——漂移会让"脚本说档2、Rust 说档1.5"。
-const TOOLCHAIN_IMPORTS = [
-  'numpy', 'pandas', 'docx', 'pptx', 'openpyxl', 'PIL', 'lxml', 'xlsxwriter',
-]
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/u
 const PLATFORMS = ['win32', 'darwin', 'linux']
 const ARCHES = ['x64', 'arm64']
@@ -160,7 +147,7 @@ function checkEntry(entry) {
 }
 
 /**
- * 检验已落盘的载荷，并判定它满足的**档位**（`authoring` / `full`）。
+ * 检验已落盘的载荷。
  *
  * 三态必须分清——把「缺席」当错误会让每次 `npm run gate` 都红，而那是个合法的
  * 部署形态（不打 python 载荷，office skills 保持禁用）：
@@ -168,25 +155,28 @@ function checkEntry(entry) {
  * | 状态 | 判据 | `ok` |
  * |------|------|------|
  * | `absent` | 载荷根目录不存在 | ✅（`absent: true`） |
- * | `partial` | 根在，但缺档1.5 及格线里任一项 | ❌ —— 残缺载荷会让 Harness 启动期 stat 失败 |
- * | `authoring` | 档1.5 全齐（解释器 + office-skills + node + pnpm） | ✅ |
- * | `full` | 档1.5 + 三份 SKILL.md + site-packages 8 库 | ✅ |
+ * | `partial` | 根在，但缺任一项 | ❌ —— 残缺载荷会让 Harness 启动期 stat 失败 |
+ * | `complete` | 全部齐备 | ✅ |
  *
- * 档位判定与 Rust 侧 `Layout::primary_runtime` **逐字同构**（同一张表、同样的
- * fail-closed 口径）。两边漂移的后果是"脚本说能创作、Rust 说不启用"——没有任何
- * 日志能发现，所以 `--self-test` 里对此有对账断言。
+ * 判据与 Rust 侧 `Layout::primary_runtime` **逐字同构**（同一张表、同样的 fail-closed
+ * 口径）。两边漂移的后果是"脚本说齐了、Rust 说没齐"——没有任何日志能发现，所以
+ * `--self-test` 里逐项抽走夹具来钉住这一点。
  *
  * @param {string} root 载荷根
  * @param {'win32'|'darwin'|'linux'} platform 目标平台
  */
 function inspectPayload(root, platform) {
   if (!existsSync(root)) {
-    return { ok: true, absent: true, problems: [], bytes: 0, tier: null }
+    return { ok: true, absent: true, problems: [], bytes: 0 }
   }
   const problems = expectedEntries(root, platform).map(checkEntry).filter(Boolean)
   const officeSkills = join(dirname(root), OFFICE_SKILLS_DIR)
-  // 三个 SKILL.md **不属于**档1.5 及格线：缺它们只影响档位，不让载荷变残缺。
-  // 判档位在下面 `toolchainOk` 里做。
+  // 三份 SKILL.md 是**硬需求**：`dsh-skill-office/lib/index.js` 在插件挂载期对每个
+  // `SKILL.md` 做 `readFileSync`，缺一个就 ENOENT → Harness 起不来。
+  for (const skill of SKILLS) {
+    const md = join(officeSkills, skill, 'SKILL.md')
+    if (!existsSync(md)) problems.push(`skill 资产缺失：${md}`)
+  }
   // runtime.json 内容校验（与上游 `parsePrimaryRuntime` 同构；不含 sha256 复算——
   // 那是组装期的事）。
   const manifestPath = join(root, RUNTIME_JSON)
@@ -220,6 +210,10 @@ function inspectPayload(root, platform) {
     if (manifest.node === undefined && manifest.pnpm !== undefined) {
       problems.push(`${RUNTIME_JSON} 有 pnpm 却无 node——上游 schema 禁止该组合`)
     }
+    // `pythonPackages` 是上游 schema 的**可选**字段。本仓自 2026-10-07 起不再往里
+    // 装 8 个库（它们的唯一读者是上游工具描述，本仓代码零引用），因此自己组装的
+    // 载荷不写这个字段；这里仍然校验它——万一别人给的载荷带了，不能因为形状不熟
+    // 就把一份合法载荷判成残缺。
     if (manifest.pythonPackages !== undefined) {
       const normalised = new Set()
       for (const [name, version] of Object.entries(manifest.pythonPackages)) {
@@ -233,103 +227,10 @@ function inspectPayload(root, platform) {
     }
   }
 
-  const authoringOk = problems.length === 0
-  const skillMissing = SKILLS.filter((skill) => !existsSync(join(officeSkills, skill, 'SKILL.md')))
-  const site = sitePackages(root, platform)
-  const toolchainOk = authoringOk
-    && skillMissing.length === 0
-    && site !== null
-    && TOOLCHAIN_IMPORTS.every((name) => existsSync(join(site, name)))
-  if (!authoringOk) {
-    return { ok: false, absent: false, problems, bytes: dirSize(root), tier: null }
+  if (problems.length > 0) {
+    return { ok: false, absent: false, problems, bytes: dirSize(root) }
   }
-  return {
-    ok: true,
-    absent: false,
-    problems,
-    bytes: dirSize(root),
-    manifest,
-    tier: toolchainOk ? 'full' : 'authoring',
-    // 只说事实，不说"缺什么"：档1.5 是合法形态，缺 8 库不是缺陷。
-    toolchainMissing: toolchainOk
-      ? []
-      : [
-          ...skillMissing.map((skill) => `office-skills/${skill}/SKILL.md`),
-          ...(site === null ? ['site-packages'] : []),
-          ...TOOLCHAIN_IMPORTS.filter((name) => site === null || !existsSync(join(site, name))),
-        ],
-  }
-}
-
-/**
- * 定位 site-packages 目录（次版本号无法在常量里写死）。
- * @param {string} root 载荷根
- * @param {'win32'|'darwin'|'linux'} platform
- * @returns {string|null}
- */
-function sitePackages(root, platform) {
-  const pythonLib = join(root, 'dependencies', 'python', platform === 'win32' ? 'Lib' : 'lib')
-  if (platform === 'win32') {
-    const candidate = join(pythonLib, 'site-packages')
-    return existsSync(candidate) ? candidate : null
-  }
-  if (!existsSync(pythonLib)) return null
-  for (const entry of readdirSync(pythonLib)) {
-    if (!entry.startsWith('python')) continue
-    const candidate = join(pythonLib, entry, 'site-packages')
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
-
-/**
- * 解析 `--python-packages`（`name=version` 逗号分隔）并校验 8 个库齐全。
- *
- * **只有 `--tier full` 才要求 8 库齐**：档1.5 刻意不承诺它们（实测差额 ~73 MB
- * 解包、每平台 ~22 MB wheels），此时调用方可以一个都不给。
- *
- * @param {string|undefined} raw
- * @param {'authoring'|'full'} tier
- * @returns {{ok: boolean, packages?: Record<string,string>, problems: string[]}}
- */
-function parsePythonPackages(raw, tier) {
-  if (raw === undefined) {
-    return tier === 'full'
-      ? { ok: false, problems: ['--tier full 需要 --python-packages（8 个库的版本表）'] }
-      // 档1.5 不承诺第三方库，写空表即可（`runtime.json` 的 `pythonPackages` 描述
-      // 的是"这份载荷里实际装了什么"，不是"承诺装什么"——空表比假表诚实）。
-      : { ok: true, packages: {}, problems: [] }
-  }
-  const packages = {}
-  const problems = []
-  const normalised = new Set()
-  for (const item of raw.split(',').map((part) => part.trim()).filter(Boolean)) {
-    const at = item.indexOf('=')
-    if (at <= 0) {
-      problems.push(`--python-packages 项非法：${item}（应为 name=version）`)
-      continue
-    }
-    const name = item.slice(0, at)
-    const version = item.slice(at + 1)
-    // PEP 503 归一化后查重：上游 `parsePrimaryRuntime` 正是这么做，并在撞名时直接
-    // 拒绝整个清单。在这里查而不是等到落盘后，是为了让调用方在命令行就看见原因。
-    const key = name.toLowerCase().replace(/[-_.]+/gu, '-')
-    if (normalised.has(key)) {
-      problems.push(`分发包归一化后重名：${name}（PEP 503 视作同一发行版）`)
-      continue
-    }
-    normalised.add(key)
-    packages[name] = version
-  }
-  if (tier === 'full') {
-    for (const required of PYTHON_PACKAGES) {
-      const present = Object.keys(packages).some(
-        (name) => name.toLowerCase() === required.toLowerCase(),
-      )
-      if (!present) problems.push(`--tier full: --python-packages 缺少 ${required}`)
-    }
-  }
-  return { ok: problems.length === 0, packages, problems }
+  return { ok: true, absent: false, problems, bytes: dirSize(root), manifest }
 }
 
 /** 解析命令行参数（只支持 `--key value` 与 `--flag`）。 */
@@ -373,18 +274,8 @@ function assemble(args) {
     return false
   }
   const windows = platform === 'win32'
-  const tier = String(args.tier ?? 'authoring')
-  if (!TIERS.includes(tier)) {
-    fail(`--tier 非法：${tier}（可选 ${TIERS.join(' / ')}）`)
-    return false
-  }
 
   const problems = []
-  const { packages, problems: packageProblems } = parsePythonPackages(
-    args['python-packages'] === undefined ? undefined : String(args['python-packages']),
-    tier,
-  )
-  problems.push(...packageProblems)
   for (const key of ['desktop-version', 'python-version', 'node-version', 'pnpm-version']) {
     const value = args[key] === undefined ? undefined : String(args[key])
     if (value === undefined || !SEMVER.test(value)) {
@@ -407,7 +298,6 @@ function assemble(args) {
     python: String(args['python-version']),
     node: String(args['node-version']),
     pnpm: String(args['pnpm-version']),
-    pythonPackages: packages,
   }
 
   // 先落临时目录，全部校验通过后再替换产物——避免"拷到一半失败留下残包"。
@@ -480,30 +370,6 @@ function assemble(args) {
       }
     }
     writeFileSync(join(stagedPayload, RUNTIME_JSON), `${JSON.stringify(manifest, null, 2)}\n`)
-
-    // 档2 才做：把 pip 产物（`pip install --target <dir>` 的结果）塞进 site-packages。
-    //
-    // 这一步刻意放在暂存区而不是直接写产物：先落地后失败会留下"档1.5 看着齐、
-    // 档2 少一个库"的半份。同理，`--python-packages-dir` 的完整性也由
-    // `inspectPayload` 在暂存区里判，不靠调用方自觉。
-    if (tier === 'full') {
-      const packageDir = args['python-packages-dir'] === undefined
-        ? null
-        : resolve(String(args['python-packages-dir']))
-      if (packageDir === null || !existsSync(packageDir)) {
-        fail('--tier full 需要 --python-packages-dir <pip install --target 的目录>')
-        rmSync(staging, { recursive: true, force: true })
-        return false
-      }
-      const site = windows
-        ? join(stagedDeps, 'python', 'Lib', 'site-packages')
-        : join(stagedDeps, 'python', 'lib', `python${String(args['python-version']).split('.').slice(0, 2).join('.')}`, 'site-packages')
-      mkdirSync(site, { recursive: true })
-      for (const entry of readdirSync(packageDir)) {
-        cpSync(join(packageDir, entry), join(site, entry), { recursive: true })
-      }
-      log(`已装入 ${Object.keys(packages).length} 个库 → ${site}`)
-    }
   } catch (error) {
     fail(`拷贝载荷失败：${error.message}`)
     rmSync(staging, { recursive: true, force: true })
@@ -533,31 +399,23 @@ function assemble(args) {
 }
 
 /**
- * `--self-test`：用夹具离线验证档位判据。
+ * 建一份完整载荷夹具（桩文件即可：判定只看类型，不看内容）。
  *
- * 覆盖四组断言，每组都可证伪（把实现打回旧写法必须转红）：
+ * 抽成函数是为了让「manifest 内容规则」那组断言能在**独立的干净树**上跑——
+ * 复用同一棵树会让它读到前面几组删剩的「不存在」，断言随之退化成对执行顺序的
+ * 偶然检验（2026-10-07 macOS CI 红、Windows 侥幸通过，就是这个原因）。
  *
- * 1. 全齐 → 档2；
- * 2. 抽走任一**档2 专属**项（SKILL.md / 8 库之一）→ 掉回档1.5，但**不判残缺**；
- * 3. 抽走任一**档1.5 及格线**项 → 整个载荷 `ok:false`（fail-closed）；
- * 4. 缺席 → `ok:true` 且 `absent:true`（不打载荷是合法部署形态）。
+ * @param {string} root 载荷根（`primary-runtime`）
+ * @param {'win32'|'darwin'|'linux'} platform
  */
-function selfTest() {
-  const tmp = join(process.cwd(), 'node_modules', '.cache', 'primary-runtime-selftest')
-  rmSync(tmp, { recursive: true, force: true })
-  const platform = process.platform
+function buildFixture(root, platform) {
   const windows = platform === 'win32'
-  const root = join(tmp, 'resources', 'runtime', PRIMARY_RUNTIME_ROOT)
   const deps = join(root, 'dependencies')
-  const office = join(tmp, 'resources', 'runtime', OFFICE_SKILLS_DIR)
-  const site = windows
-    ? join(deps, 'python', 'Lib', 'site-packages')
-    : join(deps, 'python', 'lib', 'python3.13', 'site-packages')
+  const office = join(dirname(root), OFFICE_SKILLS_DIR)
   mkdirSync(join(deps, 'python', windows ? '.' : 'bin'), { recursive: true })
   mkdirSync(join(deps, 'node', 'bin'), { recursive: true })
   mkdirSync(join(deps, 'node', 'node_modules'), { recursive: true })
   mkdirSync(join(deps, 'pnpm', 'bin'), { recursive: true })
-  mkdirSync(site, { recursive: true })
   writeFileSync(join(deps, 'python', ...(windows ? ['python.exe'] : ['bin', 'python3'])), 'stub')
   writeFileSync(join(deps, 'node', 'bin', windows ? 'node.exe' : 'node'), 'stub')
   writeFileSync(join(deps, 'pnpm', 'bin', 'pnpm.mjs'), 'stub')
@@ -567,77 +425,111 @@ function selfTest() {
     mkdirSync(join(office, skill), { recursive: true })
     writeFileSync(join(office, skill, 'SKILL.md'), 'stub')
   }
-  for (const name of TOOLCHAIN_IMPORTS) mkdirSync(join(site, name), { recursive: true })
   writeFileSync(join(root, RUNTIME_JSON), JSON.stringify({
     desktopVersion: '0.0.0-test', platform, arch: 'x64', python: '3.13.1', node: '24.14.0', pnpm: '11.7.0',
-    pythonPackages: Object.fromEntries(PYTHON_PACKAGES.map((name) => [name, '1.0.0'])),
   }))
+}
+
+/**
+ * `--self-test`：用夹具离线验证完整性判据。
+ *
+ * 覆盖四组断言，每组都可证伪（把实现打回旧写法必须转红）：
+ *
+ * 1. 全齐 → 放行；
+ * 2. **逐项**抽走任一项（含三份 `SKILL.md`）→ 判残缺（fail-closed）；
+ *    `node_modules` 类型不对也要红；
+ * 3. 缺席 → `ok:true` 且 `absent:true`（不打载荷是合法部署形态）；
+ * 4. `runtime.json` 内容规则生效（platform 不符 / arch 非法 / 非 semver / 有 pnpm 无 node）。
+ */
+function selfTest() {
+  const tmp = join(process.cwd(), 'node_modules', '.cache', 'primary-runtime-selftest')
+  rmSync(tmp, { recursive: true, force: true })
+  const platform = process.platform
+  const windows = platform === 'win32'
+  const root = join(tmp, 'resources', 'runtime', PRIMARY_RUNTIME_ROOT)
+  const deps = join(root, 'dependencies')
+  const office = join(tmp, 'resources', 'runtime', OFFICE_SKILLS_DIR)
+  buildFixture(root, platform)
 
   const problems = []
 
-  // 1) 全齐 → 档2。
+  // 1) 全齐 → 放行。
   const complete = inspectPayload(root, platform)
-  if (!complete.ok || complete.tier !== 'full') {
-    problems.push(`夹具应判为档2，实得 ok=${complete.ok} tier=${complete.tier}：${complete.problems.join('; ')}`)
+  if (!complete.ok) {
+    problems.push(`夹具应通过校验，却报了：${complete.problems.join('; ')}`)
   }
 
-  // 2) 抽走任一档2 专属项 → 掉回档1.5，且**不**判残缺。
-  const tierVictims = [
-    ...SKILLS.map((skill) => join(office, skill, 'SKILL.md')),
-    ...TOOLCHAIN_IMPORTS.map((name) => join(site, name)),
-  ]
-  for (const victim of tierVictims) {
-    const backup = `${victim}.bak`
-    rmSync(backup, { recursive: true, force: true })
-    renameSync(victim, backup)
-    const found = inspectPayload(root, platform)
-    if (!found.ok) {
-      problems.push(`抽走 ${victim} 后判为残缺——缺 8 库/SKILL.md 只是掉档，不是残缺`)
-    } else if (found.tier !== 'authoring') {
-      problems.push(`抽走 ${victim} 后档位应掉回 authoring，实得 ${found.tier}`)
-    }
-    renameSync(backup, victim)
-  }
-
-  // 3) 抽走任一档1.5 及格线项 → 整个载荷不可用。
-  const hardVictims = [
+  // 2) 逐项抽走 → 必须判残缺（fail-closed）。含三份 SKILL.md——缺一个就会让
+  //    `dsh-skill-office` 在挂载期 readFileSync 抛 ENOENT、Harness 起不来。
+  const victims = [
     join(deps, 'python', ...(windows ? ['python.exe'] : ['bin', 'python3'])),
     join(deps, 'node', 'bin', windows ? 'node.exe' : 'node'),
     join(deps, 'pnpm', 'bin', 'pnpm.mjs'),
-    join(deps, 'node', 'node_modules', 'x'),
     join(office, 'scripts', 'check_office.py'),
+    ...SKILLS.map((skill) => join(office, skill, 'SKILL.md')),
+    join(root, RUNTIME_JSON),
   ]
-  for (const victim of hardVictims) {
+  for (const victim of victims) {
     rmSync(victim, { force: true })
     const broken = inspectPayload(root, platform)
     if (broken.ok) problems.push(`抽走 ${victim} 后仍判为可用——残缺载荷会让 Harness 起不来`)
   }
 
-  // 4) 缺席合法。
+  // 2b) `node_modules` 是判据里唯一一项"目录"，类型不对也要红。
+  const modules = join(deps, 'node', 'node_modules')
+  const stash = `${modules}.stash`
+  rmSync(stash, { recursive: true, force: true })
+  renameSync(modules, stash)
+  writeFileSync(modules, 'now a file')
+  if (inspectPayload(root, platform).ok) problems.push('node_modules 变成文件后仍判为可用')
+  rmSync(modules, { force: true })
+  renameSync(stash, modules)
+
+  // 3) 缺席合法。
   const absent = inspectPayload(join(tmp, 'does-not-exist'), platform)
   if (!absent.ok || absent.absent !== true) {
     problems.push('载荷缺席必须判为 ok + absent（不打载荷是合法部署形态）')
   }
 
-  // 版本表规则按档位分化。
-  const authoringBare = parsePythonPackages(undefined, 'authoring')
-  if (!authoringBare.ok) problems.push('档1.5 不给 --python-packages 应放行')
-  const fullBare = parsePythonPackages(undefined, 'full')
-  if (fullBare.ok) problems.push('档2 不给 --python-packages 应拒绝')
-  const oneLib = parsePythonPackages('numpy=2.2.4', 'full')
-  if (oneLib.ok) problems.push('档2 只给 1 个库应拒绝')
-  const duplicate = parsePythonPackages(
-    PYTHON_PACKAGES.map((n) => `${n}=1`).concat(['python_docx=2']).join(','),
-    'full',
-  )
-  if (duplicate.ok) problems.push('归一化重名（python-docx / python_docx）却通过了')
+  // 4) runtime.json 内容规则。**独立夹具**：前面几组已把这棵树删改得面目全非，
+  //    复用它会读到一堆「不存在」而不是想要的 manifest 违规——那断言就变成了
+  //    「夹具有没有被弄脏」的偶然检验（见 buildFixture 的说明）。
+  const solo = join(tmp, 'solo', 'resources', 'runtime', PRIMARY_RUNTIME_ROOT)
+  buildFixture(solo, platform)
+  const bad = (patch) => {
+    writeFileSync(join(solo, RUNTIME_JSON), JSON.stringify({
+      desktopVersion: '0.0.0-test', platform, arch: 'x64', python: '3.13.1', node: '24.14.0', pnpm: '11.7.0', ...patch,
+    }))
+    return inspectPayload(solo, platform)
+  }
+  // 不得硬编码某个平台名（`platform: 'darwin'`）当"错误值"：在 macOS 上那正是
+  // 当前平台，改完等于没改，于是 ok=true、断言误判为缺陷（2026-10-07 macOS CI
+  // 两连红的原因）。要挑一个**当前平台之外**的值。
+  const otherPlatform = PLATFORMS.find((p) => p !== platform)
+  const cases = [
+    [{ platform: otherPlatform }, /platform=/u],
+    [{ arch: 'mips' }, /arch 非法/u],
+    [{ python: '3.13' }, /不是 semver/u],
+    [{ node: undefined }, /有 pnpm 却无 node/u],
+  ]
+  for (const [patch, expect] of cases) {
+    const r = bad(patch)
+    if (r.ok || !expect.test(r.problems.join(';'))) {
+      // 输出**完整** problems：这条断言曾在 macOS 上红而 Windows 上绿，差异全在
+      // problems 的内容里，截断过的消息只会让下一次排查又从零开始。
+      problems.push(
+        `runtime.json 违规未被拒：${JSON.stringify(patch)} → ` +
+          `ok=${r.ok} absent=${r.absent} problems=[${r.problems.join(' || ')}]`,
+      )
+    }
+  }
 
   rmSync(tmp, { recursive: true, force: true })
   if (problems.length > 0) {
     fail(`self-test 失败：\n  - ${problems.join('\n  - ')}`)
     return false
   }
-  log('self-test 通过（档2 全齐 / 档2 专属项缺失只掉档 / 档1.5 缺失即拒 / 缺席合法 / 版本表按档位分化）')
+  log('self-test 通过（全齐放行 / 逐项缺失被拒 / 缺席合法 / runtime.json 规则生效）')
   return true
 }
 
@@ -651,11 +543,7 @@ if (args['self-test']) {
   if (result.absent) {
     log('载荷缺席（合法：office skills 保持禁用）')
   } else if (result.ok) {
-    // 档位只说事实：缺 8 库/SKILL.md 不是缺陷，是"这份载荷承诺到哪"。
-    const detail = result.tier === 'full'
-      ? '档2 full（含上游承诺的 8 库）'
-      : `档1.5 authoring（可创建/编辑 docx/pptx/xlsx；未含 8 库：${result.toolchainMissing.slice(0, 4).join('、')}${result.toolchainMissing.length > 4 ? ' 等' : ''}）`
-    log(`载荷达标（${result.bytes} 字节）：${detail}`)
+    log(`载荷达标（${result.bytes} 字节）：可创建/编辑 docx/pptx/xlsx + 跑 check_office.py 校验`)
   } else {
     fail(`载荷残缺（缺一块就会让 Harness 起不来）：\n  - ${result.problems.join('\n  - ')}`)
   }

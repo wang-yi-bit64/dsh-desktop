@@ -5,7 +5,7 @@
     "_source": "python-build-standalone（astral-sh 的 GitHub Release，逐产物公布 sha256）；CPython 官方发行版不含可移植的 Linux 构建，故不用它。",
     "release": "20261003",
     "pythonVersion": "3.10.22",
-    "_abi": "wheel 标签用 cp310；换 Python 版本必须同步换 packages 里的整组 wheel。",
+    "_note": "换版本必须同步换 targets 里每一项的 sha256 / bytes，以及组装时的 --python-version。",
     "targets": {
       "win32-x64": {
         "artifact": "cpython-3.10.22+20261003-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
@@ -39,26 +39,11 @@
       }
     }
   },
-  "_packages_comment": "上游工具描述承诺的 8 个库。`import` 名与分发名不一致的三对：python-docx→docx、Pillow→PIL、XlsxWriter→xlsxwriter。lock 里记分发名（pip 用），Rust 判据用导入名。",
-  "packages": [
-    { "name": "numpy", "version": "2.2.4", "import": "numpy" },
-    { "name": "pandas", "version": "2.2.4", "import": "pandas" },
-    { "name": "python-docx", "version": "1.1.2", "import": "docx" },
-    { "name": "python-pptx", "version": "1.0.2", "import": "pptx" },
-    { "name": "openpyxl", "version": "3.1.5", "import": "openpyxl" },
-    { "name": "Pillow", "version": "11.2.1", "import": "PIL" },
-    { "name": "lxml", "version": "5.3.1", "import": "lxml" },
-    { "name": "XlsxWriter", "version": "3.2.2", "import": "xlsxwriter" }
-  ],
-  "_wheel_tag_comment": "pip 交叉下载用的目标标签（build host 的 Python 版本无关：装 wheel 只是解包，不需要目标解释器）。",
-  "wheelTags": {
-    "win32-x64": { "platform": "win_amd64", "abi": "cp310" },
-    "darwin-arm64": { "platform": "macosx_11_0_arm64", "abi": "cp310" },
-    "darwin-x64": { "platform": "macosx_10_9_x64", "abi": "cp310" },
-    "linux-x64": { "platform": "manylinux2014_x86_64", "abi": "cp310" },
-    "linux-arm64": { "platform": "manylinux2014_aarch64", "abi": "cp310" }
+  "_removed_packages": "2026-10-07 拆除 8 库（numpy/pandas/python-docx/python-pptx/openpyxl/Pillow/lxml/XlsxWriter）与 wheel 交叉安装：它们唯一的读者是上游工具描述与 skill 的 SKILL.md，本仓代码零引用。需要时按 git 历史恢复 packages / wheelTags 两节。",
+  "pnpm": {
+    "version": "11.7.0",
+    "_note": "npm 包里 `bin/pnpm.mjs` —— 正是载荷 schema 要求的路径。"
   },
-  "pnpm": { "version": "11.7.0", "_note": "npm 包里 `bin/pnpm.mjs` —— 正是载荷 schema 要求的路径。" },
   "officeSkills": {
     "package": "@deepseek-ai/dsh-skill-office",
     "version": "0.2.0-rc.2",
