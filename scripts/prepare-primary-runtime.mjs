@@ -502,8 +502,12 @@ function selfTest() {
     }))
     return inspectPayload(solo, platform)
   }
+  // 不得硬编码某个平台名（`platform: 'darwin'`）当"错误值"：在 macOS 上那正是
+  // 当前平台，改完等于没改，于是 ok=true、断言误判为缺陷（2026-10-07 macOS CI
+  // 两连红的原因）。要挑一个**当前平台之外**的值。
+  const otherPlatform = PLATFORMS.find((p) => p !== platform)
   const cases = [
-    [{ platform: 'darwin' }, /platform=/u],
+    [{ platform: otherPlatform }, /platform=/u],
     [{ arch: 'mips' }, /arch 非法/u],
     [{ python: '3.13' }, /不是 semver/u],
     [{ node: undefined }, /有 pnpm 却无 node/u],
