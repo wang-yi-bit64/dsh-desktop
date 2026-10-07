@@ -399,6 +399,38 @@ function assemble(args) {
 }
 
 /**
+ * 建一份完整载荷夹具（桩文件即可：判定只看类型，不看内容）。
+ *
+ * 抽成函数是为了让「manifest 内容规则」那组断言能在**独立的干净树**上跑——
+ * 复用同一棵树会让它读到前面几组删剩的「不存在」，断言随之退化成对执行顺序的
+ * 偶然检验（2026-10-07 macOS CI 红、Windows 侥幸通过，就是这个原因）。
+ *
+ * @param {string} root 载荷根（`primary-runtime`）
+ * @param {'win32'|'darwin'|'linux'} platform
+ */
+function buildFixture(root, platform) {
+  const windows = platform === 'win32'
+  const deps = join(root, 'dependencies')
+  const office = join(dirname(root), OFFICE_SKILLS_DIR)
+  mkdirSync(join(deps, 'python', windows ? '.' : 'bin'), { recursive: true })
+  mkdirSync(join(deps, 'node', 'bin'), { recursive: true })
+  mkdirSync(join(deps, 'node', 'node_modules'), { recursive: true })
+  mkdirSync(join(deps, 'pnpm', 'bin'), { recursive: true })
+  writeFileSync(join(deps, 'python', ...(windows ? ['python.exe'] : ['bin', 'python3'])), 'stub')
+  writeFileSync(join(deps, 'node', 'bin', windows ? 'node.exe' : 'node'), 'stub')
+  writeFileSync(join(deps, 'pnpm', 'bin', 'pnpm.mjs'), 'stub')
+  mkdirSync(join(office, 'scripts'), { recursive: true })
+  writeFileSync(join(office, 'scripts', 'check_office.py'), 'stub')
+  for (const skill of SKILLS) {
+    mkdirSync(join(office, skill), { recursive: true })
+    writeFileSync(join(office, skill, 'SKILL.md'), 'stub')
+  }
+  writeFileSync(join(root, RUNTIME_JSON), JSON.stringify({
+    desktopVersion: '0.0.0-test', platform, arch: 'x64', python: '3.13.1', node: '24.14.0', pnpm: '11.7.0',
+  }))
+}
+
+/**
  * `--self-test`：用夹具离线验证完整性判据。
  *
  * 覆盖四组断言，每组都可证伪（把实现打回旧写法必须转红）：
@@ -417,22 +449,7 @@ function selfTest() {
   const root = join(tmp, 'resources', 'runtime', PRIMARY_RUNTIME_ROOT)
   const deps = join(root, 'dependencies')
   const office = join(tmp, 'resources', 'runtime', OFFICE_SKILLS_DIR)
-  mkdirSync(join(deps, 'python', windows ? '.' : 'bin'), { recursive: true })
-  mkdirSync(join(deps, 'node', 'bin'), { recursive: true })
-  mkdirSync(join(deps, 'node', 'node_modules'), { recursive: true })
-  mkdirSync(join(deps, 'pnpm', 'bin'), { recursive: true })
-  writeFileSync(join(deps, 'python', ...(windows ? ['python.exe'] : ['bin', 'python3'])), 'stub')
-  writeFileSync(join(deps, 'node', 'bin', windows ? 'node.exe' : 'node'), 'stub')
-  writeFileSync(join(deps, 'pnpm', 'bin', 'pnpm.mjs'), 'stub')
-  mkdirSync(join(office, 'scripts'), { recursive: true })
-  writeFileSync(join(office, 'scripts', 'check_office.py'), 'stub')
-  for (const skill of SKILLS) {
-    mkdirSync(join(office, skill), { recursive: true })
-    writeFileSync(join(office, skill, 'SKILL.md'), 'stub')
-  }
-  writeFileSync(join(root, RUNTIME_JSON), JSON.stringify({
-    desktopVersion: '0.0.0-test', platform, arch: 'x64', python: '3.13.1', node: '24.14.0', pnpm: '11.7.0',
-  }))
+  buildFixture(root, platform)
 
   const problems = []
 
@@ -474,13 +491,16 @@ function selfTest() {
     problems.push('载荷缺席必须判为 ok + absent（不打载荷是合法部署形态）')
   }
 
-  // 4) runtime.json 内容规则：platform 与目标不符、arch 非法、版本不是 semver、
-  //    有 pnpm 无 node——逐条都要红。
+  // 4) runtime.json 内容规则。**独立夹具**：前面几组已把这棵树删改得面目全非，
+  //    复用它会读到一堆「不存在」而不是想要的 manifest 违规——那断言就变成了
+  //    「夹具有没有被弄脏」的偶然检验（见 buildFixture 的说明）。
+  const solo = join(tmp, 'solo', 'resources', 'runtime', PRIMARY_RUNTIME_ROOT)
+  buildFixture(solo, platform)
   const bad = (patch) => {
-    writeFileSync(join(root, RUNTIME_JSON), JSON.stringify({
+    writeFileSync(join(solo, RUNTIME_JSON), JSON.stringify({
       desktopVersion: '0.0.0-test', platform, arch: 'x64', python: '3.13.1', node: '24.14.0', pnpm: '11.7.0', ...patch,
     }))
-    return inspectPayload(root, platform)
+    return inspectPayload(solo, platform)
   }
   const cases = [
     [{ platform: 'darwin' }, /platform=/u],
@@ -491,11 +511,14 @@ function selfTest() {
   for (const [patch, expect] of cases) {
     const r = bad(patch)
     if (r.ok || !expect.test(r.problems.join(';'))) {
-      problems.push(`runtime.json 违规未被拒：${JSON.stringify(patch)} → ${r.problems.join(';') || '(通过)'}`)
+      // 输出**完整** problems：这条断言曾在 macOS 上红而 Windows 上绿，差异全在
+      // problems 的内容里，截断过的消息只会让下一次排查又从零开始。
+      problems.push(
+        `runtime.json 违规未被拒：${JSON.stringify(patch)} → ` +
+          `ok=${r.ok} absent=${r.absent} problems=[${r.problems.join(' || ')}]`,
+      )
     }
   }
-  // 修回合法 manifest，让 1) 的夹具状态复原（顺序无关，self-test 不依赖它）。
-  bad({})
 
   rmSync(tmp, { recursive: true, force: true })
   if (problems.length > 0) {
