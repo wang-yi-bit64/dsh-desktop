@@ -7,6 +7,41 @@
 
 <!-- changelog-entries -->
 
+## [0.7.2-rc.2] - 2026-10-07
+
+### ✨ 新功能
+
+- **runtime**: 默认构建带上 primary runtime 载荷，并补齐壳层观测/退出/快捷键 ([115161b](https://github.com/wang-yi-bit64/dsh-desktop/commit/115161b466a869b08f2d29ef18c006d17fb9186f))
+
+### 🐛 修复
+
+- **test**: manifest 平台用例不得硬编码 darwin——在 macOS 上等于没改 ([1ee03eb](https://github.com/wang-yi-bit64/dsh-desktop/commit/1ee03eb683efe22fd0523da6abe1423e3bfdff47))
+- **test**: quit_probe 桩读到请求头结束再回包，消除吃字节竞态 ([05c1a83](https://github.com/wang-yi-bit64/dsh-desktop/commit/05c1a83b74c04e226f51982d38c9a3821b8809f0))
+- **test**: 临时目录名含 ISO 时间戳的冒号，Windows 上 create_dir_all 失败 ([2660287](https://github.com/wang-yi-bit64/dsh-desktop/commit/266028743ecaeec0050555866f3b8d8a7252927f))
+- **workflows**: 给含「冒号+空格」的步骤名加引号，否则 workflow_dispatch 失效 ([78c3ab8](https://github.com/wang-yi-bit64/dsh-desktop/commit/78c3ab80669b2e768b2e9b64b987a7124a82e7dd))
+- **docs**: 收敛文档与代码事实矛盾，并同步门禁收敛（G1/G2） ([ad3b2a4](https://github.com/wang-yi-bit64/dsh-desktop/commit/ad3b2a44e30c3ec22e5dc3d47442835cbe34eac0))
+- **state**: 收敛生产 unwrap，锁中毒改恢复 guard（D10/S4-4 销账） ([15b9169](https://github.com/wang-yi-bit64/dsh-desktop/commit/15b91698836e020608533f0b45fbc85cdcef4120))
+- **workflows**: gate PR Agent on real /commands after a floating-image failure ([45d7327](https://github.com/wang-yi-bit64/dsh-desktop/commit/45d7327faf73aa777ee09316a9132b94a9e9cd58))
+
+### ♻️ 重构
+
+- **runtime**: 拆除档2（8 库 wheel 交叉安装），只保留档1.5 载荷形态 ([a6e4ba9](https://github.com/wang-yi-bit64/dsh-desktop/commit/a6e4ba9a810d307bc15a5d773a19baaf28e7e8e1))
+
+### ✅ 测试
+
+- **primary-runtime**: self-test 的 manifest 规则改用独立夹具，并输出完整 problems ([b55e497](https://github.com/wang-yi-bit64/dsh-desktop/commit/b55e4974d190a4dc72be4aa6c0c85864af28d4e0))
+- **update-journal**: 轮转断言因写入量不足三平台全红——按上限反推行数 ([2dfb24c](https://github.com/wang-yi-bit64/dsh-desktop/commit/2dfb24cd36db73fb4a1abd64f49b7f329aeddd9e))
+
+### 🧹 其他
+
+- **rust**: cargo fmt 对齐 rustfmt 规范（CI 的 cargo fmt 步骤用） ([cc2cad0](https://github.com/wang-yi-bit64/dsh-desktop/commit/cc2cad0a403b50b030e87a404e0e6ac59bb99491))
+- **scripts**: add verify:sentinels / verify:all and document the script map ([5112173](https://github.com/wang-yi-bit64/dsh-desktop/commit/51121734334748e12f5134c8080ea476470de2e9))
+- **workflows**: pin Linux runners to ubuntu-24.04, drop node20 action ([d6c8809](https://github.com/wang-yi-bit64/dsh-desktop/commit/d6c880986a8adfc66bd38ae5b35dd7e3b2b48f8b))
+- **workflows**: retire pullfrog, converge AI review on PR Agent (ADR-058) ([9f7ec0e](https://github.com/wang-yi-bit64/dsh-desktop/commit/9f7ec0ef1b5b6d58347b7a9082baec03d6645246))
+- **git**: ignore merge-migrate-patches temp workdir ([ec56914](https://github.com/wang-yi-bit64/dsh-desktop/commit/ec569148a6bc3e6ba7dbd1b9134f2d640aa0a540))
+
+
+
 ## [0.7.2-rc.1] - 2026-09-30
 
 ### ✨ 新功能
@@ -41,6 +76,7 @@
 - **docs**: archive the three release-channels planning docs (S2-4) ([a5e3728](https://github.com/wang-yi-bit64/dsh-desktop/commit/a5e37280df6fde976323654d243c28f226b06026))
 - **repo**: add LICENSE and SECURITY.md, fix authors (S0-1/S0-2/S0-5, S2-2) ([48e89cb](https://github.com/wang-yi-bit64/dsh-desktop/commit/48e89cb84b15ee37f166e2c456175b8bc4f0b7c6))
 
+
 ## [0.7.1-rc.1] - 2026-09-30
 
 ### ✨ 新功能
@@ -71,12 +107,14 @@
 - Merge pull request #1 from wang-yi-bit64/upgrade/tauri-2.12 ([ce4fe6e](https://github.com/wang-yi-bit64/dsh-desktop/commit/ce4fe6e3f879b770726b1d3e46b84545a76ce157))
 - **gitignore**: ignore the .qoder/ better-harness run and scratch dirs ([b4fe335](https://github.com/wang-yi-bit64/dsh-desktop/commit/b4fe3356941e336189504f8ac19d19f9341a354a))
 
+
 ## [0.7.0-alpha.8] - 2026-09-25
 
 ### 🐛 修复
 
 - **release-assets**: share one process runner so the L2 check works on this host ([2699297](https://github.com/wang-yi-bit64/dsh-desktop/commit/2699297e0fad6bc5cd6e3c8bd9f310814906ed18))
 - **release**: checkout before verifying the portable assets ([4991828](https://github.com/wang-yi-bit64/dsh-desktop/commit/4991828fa0ab859942dd3e9db551391bf9dbaf1f))
+
 
 ## [0.7.0-rc.1] - 2026-09-25
 
@@ -111,11 +149,13 @@
 
 - **harness**: regenerate the next lockfile for rc.3 and sync the current-state docs ([bc60e97](https://github.com/wang-yi-bit64/dsh-desktop/commit/bc60e97b7add665e7c72d6947f14e07804afa232))
 
+
 ## [0.7.0-alpha.7] - 2026-09-23
 
 ### 🐛 修复
 
 - **portable**: normalize zip entry separators before publishing ([59bd75c](https://github.com/wang-yi-bit64/dsh-desktop/commit/59bd75c07ea921c6b994db9ede88d2aafe9f7eae))
+
 
 ## [0.7.0-alpha.6] - 2026-09-23
 
@@ -129,6 +169,7 @@
 
 - **release**: record the alpha.6 CI fix in the changelog ([a7b1b2b](https://github.com/wang-yi-bit64/dsh-desktop/commit/a7b1b2b8a0ba302a47e5f752d0ddc86f65656bfa))
 - **release**: 0.7.0-alpha.6 ([9e112e2](https://github.com/wang-yi-bit64/dsh-desktop/commit/9e112e275b562027a4546233ea606f87854d8943))
+
 
 ## [0.7.0-alpha.5] - 2026-09-23
 
@@ -145,6 +186,7 @@
 ### 🧹 其他
 
 - **release**: 0.7.0-alpha.5 ([6f3742e](https://github.com/wang-yi-bit64/dsh-desktop/commit/6f3742e44863c98fb088334baae65730e72dd98f))
+
 
 ## [0.7.0-alpha.4] - 2026-09-22
 
@@ -167,6 +209,7 @@
 - **portable**: drop the orphaned tauri.portable.conf.json ([14f0ae4](https://github.com/wang-yi-bit64/dsh-desktop/commit/14f0ae435379a4f029ecc62d8248f706fc55b12a))
 - fix safe mode persistence, plugin fault attribution, and register the plugin isolation gap ([89d12f8](https://github.com/wang-yi-bit64/dsh-desktop/commit/89d12f8472ec7b0b187cf21f06051fbd8bcc2b3e))
 
+
 ## [0.7.0-alpha.3] - 2026-09-22
 
 ### ✨ 新功能
@@ -186,6 +229,7 @@
 
 - **release**: 0.7.0-alpha.3 ([48320c7](https://github.com/wang-yi-bit64/dsh-desktop/commit/48320c7eb8f0b119d1952ffe20de5bf1a425ff1e))
 
+
 ## [0.7.0-alpha.2] - 2026-09-21
 
 ### 🐛 修复
@@ -198,6 +242,7 @@
 - 既有决策 ADR 化（docs/adr/ 34 篇 + 索引） ([6aad22d](https://github.com/wang-yi-bit64/dsh-desktop/commit/6aad22dba54909fcb16f93f3536e632e51d7ecb6))
 
 
+
 ## [0.7.0-alpha.1] - 2026-09-19
 
 ### ✨ 新功能
@@ -207,6 +252,7 @@
 ### 📝 文档
 
 - 记录 alpha.2 安装包体积翻倍的原因与判据 ([ac89570](https://github.com/wang-yi-bit64/dsh-desktop/commit/ac89570cb3bdb98d3f5587853b79b48aff28cdff))
+
 
 
 ## [0.6.0-alpha.2] - 2026-09-18
@@ -225,6 +271,7 @@
 - 固定 Node 版本并启用 npm 缓存 ([4f4bdc3](https://github.com/wang-yi-bit64/dsh-desktop/commit/4f4bdc3d7e22c207a3457d4a94e177aef5b01ed3))
 - 使用 .nvmrc 统一 Node 版本 ([baa8cd5](https://github.com/wang-yi-bit64/dsh-desktop/commit/baa8cd55a3be719fb5a838f12b8402f74e0e12d0))
 - 升级 GitHub Actions 依赖与 Node 版本 ([13c9003](https://github.com/wang-yi-bit64/dsh-desktop/commit/13c90035adb593538e7022a4d115bf0a71194305))
+
 
 
 ## [0.5.0-next.1] - 2026-09-15
@@ -249,6 +296,7 @@
 - Add `pullfrog.yml` workflow ([574f61e](https://github.com/wang-yi-bit64/dsh-desktop/commit/574f61ee7a71b9e2e5a6c44d777dd4d6a20c4d90))
 
 
+
 ## [0.4.0] - 2026-09-13
 
 ### ✨ 新功能
@@ -270,6 +318,7 @@
 - 接入 CLI 打包与发布步骤原文演练门禁 ([920d211](https://github.com/wang-yi-bit64/dsh-desktop/commit/920d211466fac64336ff536c84b120b4f8229340))
 
 
+
 ## [0.3.0] - 2026-09-13
 
 ### ✨ 新功能
@@ -286,6 +335,7 @@
 ### 🧹 其他
 
 - **github**: 新增 Issue 模板与 Discussions 入口（0.2-D1） ([f9c8513](https://github.com/wang-yi-bit64/dsh-desktop/commit/f9c8513ff030c3959e50b9a7719896e89c343840))
+
 
 
 ## [0.2.0] - 2026-09-12
@@ -310,6 +360,7 @@
 ### 🧹 其他
 
 - **skills**: 安装项目级 agent skills（10 项）并入库技能实体 ([d7e12ed](https://github.com/wang-yi-bit64/dsh-desktop/commit/d7e12ed7d9890500c63e12382b3bc66eacc545b2))
+
 
 ## [0.1.0] - 2026-09-11
 
