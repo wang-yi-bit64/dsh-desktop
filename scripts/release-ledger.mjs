@@ -176,6 +176,15 @@ export function composeDesktopVersion(upstreamDsh, n, w = null) {
   if (shape.build !== null) {
     throw new Error(`上游版本不应带 build 段：${JSON.stringify(upstreamDsh)}（build 是塞不进合成号的）`);
   }
+  if (shape.prerelease === null) {
+    // 这里必须守：合成号 = `<上游含预发布>.<n>`，上游无预发布段时本仓序号**无载体**——
+    // 直接拼接会产出 `0.2.1.1` 这种**四段式**，构建期即死（tauri-codegen 写死三段解析）。
+    // 该开口是 ADR-061 决策 7；在唯一产地拦住，`planNextDesktopVersion` 之外的所有调用方（含 --apply）同样受保护。
+    throw new Error(
+      `上游 ${upstreamDsh} 是正式线（无预发布段），本仓序号无载体：直接拼接会产出四段式 ${upstreamDsh}.${n}。` +
+        `该开口见 ADR-061 决策 7——落地 stable 目标前必须先定载体规则。`,
+    );
+  }
   if (!Number.isInteger(n) || n < 1) throw new Error(`本仓序号必须是 ≥1 的整数，收到 ${JSON.stringify(n)}`);
   if (w !== null && w !== undefined && w !== '') {
     if (!/^[0-9A-Za-z-]+$/.test(String(w))) {
@@ -590,8 +599,10 @@ export function selfTest() {
     '0.2.1-alpha.1.2',
   );
 
-  // 🔴 正式线必须**显式拒绝**，不得静默产出 `0.2.1-1`（ADR-061 决策 7 的开口）。
+  // 🔴 正式线必须**显式拒绝**，不得静默产出 `0.2.1-1` / `0.2.1.1`（ADR-061 决策 7 的开口）。
+  //    这条守在**合成函数**（唯一产地）本身：`planNextDesktopVersion` 之外的所有调用方同样受保护。
   throws('计划：正式线上游必须抛错（ADR-061 决策 7）', () => planNextDesktopVersion({ builds: [], upstreamDsh: '0.2.1' }));
+  throws('合成：正式线上游必须抛错（直接拼接会产出四段式 0.2.1.1）', () => composeDesktopVersion('0.2.1', 1));
   throws('合成：n 必须是正整数', () => composeDesktopVersion('0.2.1-alpha.1', 0));
   throws('合成：w 禁下划线', () => composeDesktopVersion('0.2.1-alpha.1', 1, 'w_1'));
   throws('合成：上游不得带 build 段', () => composeDesktopVersion('0.2.1-alpha.1+x', 1));
