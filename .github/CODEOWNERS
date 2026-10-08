@@ -15,13 +15,16 @@
 #   2. 未来若加协作者，只需替换下面的 handle，路径划分本身不用重来；
 #   3. 一旦开启分支保护，这些规则立刻生效，不需要回头补。
 #
-# ## ⚠️ 现状：这些规则目前**不产生任何拦截**
+# ## 现状：已接线（2026-10-08）——经 ruleset「Rules」在 main 上强制
 #
-# `main` 分支**未受保护**（实测 `gh api repos/.../branches/main/protection` 返回
-# 404 Branch not protected）。CODEOWNERS 只在**分支保护开启「Require review from
-# Code Owners」**时才强制审核。在此之前本文件是**声明**，不是**门禁**——
-# 不得描述为「已启用代码审核」。启用路径：Settings → Branches → 勾选
-# "Require a pull request before merging" → "Require review from Code Owners"。
+# 强制载体是 ruleset「Rules」（id 24713630，enforcement active，作用域 `~DEFAULT_BRANCH`），
+# 其 `pull_request` 规则开启了 `require_code_owner_review`：对 main 的改动必须走 PR，
+# 且需要 Code Owner（即 `@wang-yi-bit64`）批准；直推 main 会被拒。Repository admin
+# （本仓即 owner 本人）可 bypass 越过。传统分支保护（`branches/main/protection`）刻意
+# 未用——与 rulesets 二选一即可，本仓选 rulesets（可同时挂 deletion / non-fast-forward）。
+# ⚠️ CODEOWNERS 的一切（review 指派、强制审核）**只作用于 PR**；bypass 直推不产生 review。
+# 关闭路径：Settings → Rules → Rulesets → Rules → 删掉其中的
+# "Require a pull request before merging" 规则。
 #
 # ## 语法与顺序（GitHub 口径，**别按直觉写**）
 #
