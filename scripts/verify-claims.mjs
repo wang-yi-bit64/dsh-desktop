@@ -57,7 +57,14 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 这条为什么被禁——这正是本仓文档纪律的一贯要求。
  *
  * 匹配时**大小写不敏感**、并对空白做归一（换行/多空格折叠），以便跨 CRLF 检出
- * 与中英混排一致生效。
+ * 与中英混排一致生效。**逐行匹配**（见 `findForbiddenClaims`）：`unlessLine` 的语义
+ * 是「同一行内出现如实声明即放行」，跨行不算。
+ *
+ * @typedef {object} ForbiddenClaim
+ * @property {string} id 规则标识（报错时点名用）
+ * @property {RegExp} pattern 命中即候选违规
+ * @property {RegExp} [unlessLine] 同一行命中它 ⇒ 视为**如实声明**，放行
+ * @property {string} because 依据（AGENTS/ADR 原话或章节）
  */
 export const FORBIDDEN_CLAIMS = [
   {
@@ -78,6 +85,21 @@ export const FORBIDDEN_CLAIMS = [
     id: 'plugin-isolation-claim-zh2',
     pattern: /插件崩溃(不|不会|无法)拖垮/,
     because: 'AGENTS §7.2 同上：这是被逐字点名的禁止表述。'
+  },
+  {
+    id: 'os-signing-claim',
+    // OS 信任层的专有词汇：minisign 更新链**永远**不该被描述成「代码签名 / 公证」，
+    // 所以这些词本身就是判据——它们只可能出现在 OS 级签名的语境里。
+    pattern:
+      /(代码签名|公证|authenticode|notariz\w*|code[- ]?sign\w*|developer\s+id|trusted\s+signing|certificatethumbprint|signingidentity)/i,
+    // 如实声明必须**在同一行**写明否定或引用 ADR-046（见 because）。
+    // 这样「不做 OS 级代码签名 / 公证（ADR-046）」放行，而「已公证 / code-signed」照旧报红。
+    // `[\s*_]+` 而非 `\s+`：Markdown 的 `**not** code-signed` 中间夹强调符，用 `\s+` 会漏判成违规，
+    // 而「守卫报假红 → 有人干脆删掉守卫」是本仓最想避免的退化路径。
+    unlessLine:
+      /(adr-046|不做|未做|尚不|不提供|不实现|not[\s*_]+(?:code[- ]?sign|notariz|signed)|without[\s*_]+(?:code[\s*_]*signing|notariz))/i,
+    because:
+      'ADR-046（2026-09-20 零预算重裁）裁定本仓**不做** OS 级代码签名与公证、**不做任何接线**；ADR-044 的「明确不做」清单已收编。README 只能**如实声明不做**（同一行写 `不做` / `not code-signed` 并引用 `ADR-046`），不得出现「已代码签名 / 已公证」类正面宣称。'
   }
 ]
 
@@ -107,15 +129,25 @@ export function normalize(text) {
 
 /**
  * 在文本里查找被禁止的表述。
+ *
+ * **逐行匹配**（不是整篇一次）：`rule.unlessLine` 的语义是「同一行里出现如实声明即放行」，
+ * 若整篇一次性匹配，一次否定就会豁免之后所有行的正面宣称——那等于把守卫关掉一半。
+ * 现有模式都不跨行（含 `[^。\n]` 的地方本来就被行边界截断），故逐行与逐篇等价。
+ *
  * @param {string} text 待检文本
  * @returns {{id:string, match:string, because:string}[]}
  */
 export function findForbiddenClaims(text) {
   const normalized = normalize(text)
   const hits = []
-  for (const rule of FORBIDDEN_CLAIMS) {
-    const m = rule.pattern.exec(normalized)
-    if (m) hits.push({ id: rule.id, match: m[0], because: rule.because })
+  for (const line of normalized.split('\n')) {
+    for (const rule of FORBIDDEN_CLAIMS) {
+      const m = rule.pattern.exec(line)
+      if (!m) continue
+      // 如实声明（同一行内的否定语或 ADR 引用）不算违规。
+      if (rule.unlessLine && rule.unlessLine.test(line)) continue
+      hits.push({ id: rule.id, match: m[0], because: rule.because })
+    }
   }
   return hits
 }
@@ -266,6 +298,25 @@ function selfTest() {
   const goodZh = '让插件故障可归因、可诊断而不是静默发生。它运行在 Harness 进程内，因此不隔离崩溃的插件。'
   check('好夹具(EN) 通过', findForbiddenClaims(goodEn).length === 0)
   check('好夹具(ZH) 通过', findForbiddenClaims(goodZh).length === 0)
+
+  // OS 级签名 / 公证（ADR-046：不做、不接线）。
+  // 坏夹具 = 正面宣称已签名 / 已公证；好夹具 = 如实声明不做（且引用 ADR-046）。
+  const badSigningEn =
+    'Installers are code-signed with an EV certificate and notarized by Apple Developer ID.'
+  const badSigningZh = 'Windows 产物已做代码签名，macOS 安装包已通过 Apple 公证。'
+  check('坏夹具(OS 签名 EN) 命中', findForbiddenClaims(badSigningEn).length > 0)
+  check('坏夹具(OS 签名 ZH) 命中', findForbiddenClaims(badSigningZh).length > 0)
+
+  const goodSigningEn =
+    'This project does not code-sign or notarize its installers (ADR-046); expect a first-run SmartScreen warning.'
+  const goodSigningZh = '本项目不做 OS 级代码签名 / 公证（ADR-046）——首次运行可能出现 SmartScreen 提示。'
+  check('好夹具(OS 签名 如实声明 EN) 通过', findForbiddenClaims(goodSigningEn).length === 0)
+  check('好夹具(OS 签名 如实声明 ZH) 通过', findForbiddenClaims(goodSigningZh).length === 0)
+
+  // 逐行语义：否定只豁免**同一行**，下一行的正面宣称必须照旧报红。
+  // （若守卫改成整篇一次性匹配，这条会静默变成绿——正是「一半关掉」的形态。）
+  const splitLines = `${goodSigningZh}\nInstallers are code-signed by our EV certificate.`
+  check('逐行：下一行的正面宣称仍报红', findForbiddenClaims(splitLines).length > 0)
 
   // 图例：五项齐全才通过，缺一即报（证明它不是「永远空数组」）。
   const fullLegend = STATUS_MARKERS.map((m) => m.emoji).join(' ')

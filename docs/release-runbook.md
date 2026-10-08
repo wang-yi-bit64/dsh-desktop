@@ -166,11 +166,13 @@ npm run version:bump -- auto --dry-run
 # 4. 落版本号 + 重新生成 CHANGELOG 段落 + 提交 + 打本地 tag（一个原子发布提交）
 npm run version:bump -- auto --commit --tag
 
-# 5. 推送（tag 推送即触发 Release 工作流）
-git push origin main --follow-tags
-#    ⚠️ --follow-tags 会把「本机有、远端没有」的注释标签一并推上去，而推 v* tag 会再次
-#    触发 release.yml。若历史上删过某个远端 tag，先在本机也删掉（git tag -d <tag>），
-#    否则下一次发布会凭空再造一个旧版本的 Release。见下文 2026-09-23 记录。
+# 5. 推送（两步；tag 推送即触发 Release 工作流）
+git push origin main:main          # 第一步：先推分支
+git push origin "v<版本>"           # 第二步：显式推 tag（**必须加引号**）
+#    ⛔ 禁 `--follow-tags`（D5 定案）：它会把「本机有、远端没有」的注释标签一并推上去，
+#    与年龄无关，而推 v* tag 会再次触发 release.yml。若历史上删过某个远端 tag，
+#    先在本机也删掉（git tag -d <tag>），否则下一次发布会凭空再造一个旧版本的 Release。
+#    清理完成的自检：`git push --dry-run --follow-tags origin main` 应为空（见 §8.6）。
 ```
 
 > 第 4 步的 `--tag` 只创建**本地** tag，推送与否由人决定——这是刻意的：打 tag 就是发布意图，

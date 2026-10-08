@@ -132,8 +132,9 @@ scripts/                # 构建与测试辅助（prepare-harness、stub-tauri-r
 docs/                   # 架构设计、契约定义与技术方案
   roadmap.md                        # 【顶层路线图】定位、边界与阶段序列（H0~H3）
   dev-plan-hardening-and-differentiation.md  # 近端施工计划（路线图 H0 阶段）：风险清单 R1~R9 与批次 H~N
-  dev-plan-0.2-hardening.md         # 【产品与分发侧增补】批次 0.2-A~D：签名/公证、发布通道、体验底线、反馈闭环
+  dev-plan-0.2-hardening.md         # 【产品与分发侧增补】批次 0.2-A~D：发布通道、体验底线、反馈闭环（OS 代码签名：不做——ADR-046）
   dev-plan-disconnected-points.md   # 上一阶段主计划（已闭环）：断线点清单（D1~D11）与批次 A~G 施工记录
+  version-policy.md                 # 【版本号策略唯一口径】命名规则、按变更类型的递增条件、递增权限（谁有权决定版本号）、发布流程与守卫
   dsh-desktop-redesign-architecture-and-plan.md  # 架构重构与开发执行完整计划
   system_design.md                  # 系统架构设计与不变量规范
   archive/                          # 已归档设计（刻意不做，代码已删，仅留作追溯）
@@ -228,6 +229,9 @@ cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli
 
 没有签名凭据时构建仍能产出安装包，但这种包无法被已发布的客户端安装——验签会直接拒绝。因此 CI 会在**开始昂贵的构建之前**先校验该 Secret 是否存在，缺失时以显式 `::error::` 提前失败，而不是等到最后才发现问题。
 
+- **不做 OS 级代码签名与公证**（[ADR-046](docs/adr/046-no-code-signing.md)）：上面这把 minisign 密钥是本项目**唯一**的完整性签名层。Windows 安装包不使用 Authenticode 证书签名，macOS 包也不做 Developer ID 公证。这是**已裁决接受的边界，不是待办**——本项目不会去接线证书。
+- 预期中的首次运行摩擦与解法：macOS 上右键 → 打开（或在「系统设置 → 隐私与安全性」中放行）；Windows 上 SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」。可用 Release 说明里的 SHA-256 校验你的下载。
+
 **私钥一旦丢失，对已安装用户而言不可挽回。** 公钥被编译进每一个已发布的二进制；换新密钥对就意味着换新公钥，而已安装的客户端会持续拒绝由新公钥签名的更新。请把 `~/.tauri/dsh-desktop.key` 当作发布关键基础设施，而不是本地开发文件。
 
 ## 版本与发布
@@ -252,7 +256,11 @@ gh workflow run ci.yml --ref main                   # 静态门禁 + clippy + �
 gh workflow run smoke.yml --ref main -f scope=full  # 组装真实资源 + 打包 + L2 冒烟
 gh run watch                                        # 等两个都全绿再继续
 npm run version:bump -- auto --commit --tag # 落版本号 + 更新 CHANGELOG + 提交 + 打本地 tag
-git push origin main --follow-tags          # 推 tag 即触发发布
+git push origin main:main                   # 第一步：推分支
+git push origin "<tag>"                     # 第二步：显式推 tag（触发发布）
+# ⛔ 不要用 --follow-tags：它会把「本机有、远端没有」的注释标签一并推上去，
+#    与年龄无关。远端 tag 被清理后，本机残留的同名 tag 会被它**复活**，
+#    而推 v* tag 会再次触发 release.yml（见 docs/release-runbook.md §8.6）。
 ```
 
 > 省掉那几行 dispatch 不是无伤大雅：`release.yml` 的 preflight 只跑秒级静态门禁，
@@ -277,7 +285,7 @@ git push origin main --follow-tags          # 推 tag 即触发发布
 
 **两个「通道名」不是一回事，别混用。** 每个目标带两个字段：`channel` 是**组装时拉哪条上游 npm dist-tag**（上游客观事实，改不了名），`publishChannel` 是**桌面 tag 的预发布后缀**（本仓自己的命名）。上游 `next` dist-tag 当下指向一个 `rc` 阶段版本，所以桌面后缀是 `rc` 而目标键仍是 `next`。**若把两者强行同名**，一改桌面后缀就会让漂移哨兵去查一个上游不存在的 `rc` tag，静默退回 `latest`。
 
-> ⚠️ **目标键告诉不了你钉的是哪个上游版本。** 目标的 `channel` 是它**对着哪条上游 dist-tag 定义**的，而 `dshVersion` 是本仓**实际钉住**的版本——两者历史上可以不一致。截至 2026-09-30 本轮推进后，`next` 与 `alpha` 两条线均已各自对齐（next `0.2.0-rc.2`、alpha `0.1.7-alpha.2`，与上游 dist-tag 实测一致）。要看实时值请跑 `node scripts/dsh-targets.mjs`；**不要按目标键推断版本**。
+> ⚠️ **目标键告诉不了你钉的是哪个上游版本。** 目标的 `channel` 是它**对着哪条上游 dist-tag 定义**的，而 `dshVersion` 是本仓**实际钉住**的版本——两者历史上可以不一致。截至 2026-10-07 alpha 线推进后，`next` 与 `alpha` 两条线均已各自对齐（next `0.2.0-rc.2`、alpha `0.2.1-alpha.1`，与上游 dist-tag 于 2026-10-08 实测一致）。要看实时值请跑 `node scripts/dsh-targets.mjs`；**不要按目标键推断版本**。
 
 桌面版本号的**预发布后缀就是 `publishChannel`**：`0.7.0-rc.1` 捆的是 DSH `next` 目标，`0.7.0-alpha.1` 捆 DSH alpha 线。发布流程从 tag 本身反推构建目标（`scripts/dsh-targets.mjs --channel-of`），**tag 后缀因此自动决定组装哪条运行时**——不需要在 tag 之外再声明一次通道。后缀不对应任何已知通道的 tag（例如 `beta`）会**直接让发布失败**，而不是回退到默认目标：静默回退会产出「版本号说一条线、运行时却是另一条线」的包，这类错配只有用户装上之后才会被发现。⚠️ 旧的 `0.7.0-next.1` 后缀**已不再是合法输入**——随本次改名退役。
 

@@ -132,10 +132,21 @@ function stepsFromNames(names, forceSelfTest) {
 function runStep(step) {
   const scriptPath = join(projectRoot, step.gate.script)
   const t0 = Date.now()
+  // ⚠️ `stdio` 必须显式给，**不是**风格偏好（2026-10-08 实测）：
+  //   默认的 `['pipe','pipe','pipe']` 下，Windows 本机 spawn 任何子进程都直接
+  //   以 `EBUSY` 失败（`result.status === null`）——连 `process.execPath` 自己都同理，
+  //   于是整档 43 步全红、看起来像「门禁全挂了」，实际一行都没跑。
+  //   触发条件是 **`stdin` 是管道**，与执行什么命令无关。实测（两个命令 × 三种 stdio，
+  //   双向对照）：`default` → EBUSY；`['ignore','pipe','pipe']` → status 0；
+  //   `['pipe','pipe','pipe']` → EBUSY；`git --version` 亦然。
+  //   这些被编排的脚本都不读 stdin，因此 `ignore` 与 `pipe` **语义等价**。
+  //   同一条缺口此前已在 `conventional-commits.mjs` / `changelog.mjs` / `version.mjs`
+  //   各修一处（2026-09-25）；本文件是 2026-10-03 新增的编排器，当时没被那条纪律覆盖。
   const result = spawnSync(process.execPath, [scriptPath, ...step.args], {
     cwd: projectRoot,
     encoding: 'utf8',
-    env: process.env
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe']
   })
   const seconds = ((Date.now() - t0) / 1000).toFixed(1)
   const ok = result.status === 0
@@ -234,7 +245,14 @@ function main() {
   }
   if (cargo) {
     const t = Date.now()
-    const r = spawnSync('cargo', cargo.args, { cwd: projectRoot, encoding: 'utf8', env: process.env, shell: platform === 'win32' })
+    const r = spawnSync('cargo', cargo.args, {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      env: process.env,
+      shell: platform === 'win32',
+      // 同 runStep 的理由：默认 `stdio` 在本机直接 EBUSY，cargo 步骤会「红得莫名其妙」。
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
     const seconds = ((Date.now() - t) / 1000).toFixed(1)
     const ok = r.status === 0
     console.log((ok ? '✅ ' : '❌ ') + cargo.label + '（' + seconds + 's）')

@@ -142,19 +142,72 @@ export function stagingDirFor(name) {
 }
 
 /**
+ * 版本的**形状解析**——非抛错，供**语料扫描**用。
+ *
+ * 与 {@link channelOfPrerelease} 是**同一规则的两种意图**（形状正则只写一次，本函数是产地）：
+ *
+ * | 意图 | 入口 | 输入是脏的时 |
+ * |---|---|---|
+ * | 「我手里这个版本号应当是真的」 | {@link channelOfPrerelease} | **抛错**（异常） |
+ * | 「我在扫一批来路不明的字符串」 | 本函数 | 返回 `{ ok: false }`（跳过） |
+ *
+ * 为什么必须分开：`git tag --list 'v*'` 的结果是**语料**，里面可能有非 semver 的 tag
+ * （人工 tag、命名变更期的旧 tag）。若扫描谓词直接调抛错的入口，**任一脏元素就会让整趟
+ * 扫描失败**，且失败信息与真正的低投递问题混在一起无法区分（本仓缺陷族「守卫只覆盖 N 段里
+ * 的 N-1 段」的镜像：把校验用的判据错用在扫描点上）。
+ *
+ * @param {string} version 任意字符串；可带前导 `v`。
+ * @returns {{ ok: true, major: number, minor: number, patch: number,
+ *   prerelease: string|null, build: string|null } | { ok: false }}
+ *   解析成功给出各段（`prerelease` / `build` 为 `null` 表示该段不存在）；
+ *   失败给出 `{ ok: false }`。
+ */
+export function parseVersionShape(version) {
+  const raw = String(version ?? '').trim().replace(/^v/i, '')
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(raw)
+  if (!m) return { ok: false }
+  return {
+    ok: true,
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3]),
+    prerelease: m[4] ?? null,
+    build: m[5] ?? null,
+  }
+}
+
+/**
  * 从语义化版本的**预发布标识符**里取通道名。
  *
- * `0.5.0-next.1` → `next`；`0.6.0-alpha.1` → `alpha`；`0.5.0` → `null`（正式版无通道）。
- * 只取第一段标识符：`next.1` 的通道是 `next`，不是 `next.1`。
+ * `0.2.1-alpha.1.3` → `alpha`；`0.2.0-rc.3.1` → `rc`；`0.5.0` → `null`（正式版无通道）。
+ * 只取第一段标识符：`alpha.1.3` 的通道是 `alpha`，不是 `alpha.1`。
+ *
+ * 🔴 **无法解析的输入必须抛错，不得返回 `null`**（缺口 **2i**，见 `ADR-061`）。
+ * 早期实现把「格式不符」与「无预发布后缀」合并成同一个 `null`，于是
+ * `targetForVersion('0.2.1.3-rc.1')` 会**静默**落回默认目标，按**错的**补丁集与
+ * lockfile 组装而**不报错**——这是最危险的一类缺陷：产物看起来正常，但装错了通道。
+ * 分开之后，「正式版」仍是 `null`（合法语义），「不识别的形状」是异常。
+ *
+ * ⚠️ **扫语料时不要用本函数**——那是 {@link parseVersionShape} 的场景，用错会让脏 tag
+ * 炸掉整趟扫描。
  *
  * @param {string} version 语义化版本（可带前导 `v`）。
- * @returns {string|null} 通道名；正式版或无法解析时为 `null`。
+ * @returns {string|null} 通道名；**仅**在确为正式版（无预发布段）时为 `null`。
+ * @throws {Error} 输入不是 `major.minor.patch[-预发布][+build]` 形状时。
  */
 export function channelOfPrerelease(version) {
-  const raw = String(version ?? '').trim().replace(/^v/i, '')
-  const m = /^\d+\.\d+\.\d+-([0-9A-Za-z.-]+)(?:\+[0-9A-Za-z.-]+)?$/.exec(raw)
-  if (!m) return null
-  return m[1].split('.')[0]
+  const parsed = parseVersionShape(version)
+  if (!parsed.ok) {
+    throw new Error(
+      `无法解析的版本号：${JSON.stringify(String(version ?? ''))}——` +
+        `要求 <major>.<minor>.<patch>[-<预发布>][+<build>]。` +
+        `若是四段式（如 0.2.1.3-rc.1），它以前会被静默判成正式版并落回默认目标，` +
+        `现已改为抛错（ADR-061 缺口 2i）。` +
+        `若你在**扫一批来路不明的字符串**（如 git tag 列表），请改用 parseVersionShape()。`
+    )
+  }
+  if (parsed.prerelease === null) return null
+  return parsed.prerelease.split('.')[0]
 }
 
 /**
@@ -163,7 +216,13 @@ export function channelOfPrerelease(version) {
  * 规则（与 `AGENTS.md` §8.4 的通道约定一致）：
  *   · 无预发布后缀（正式版）→ 默认目标（stable 线跟随默认目标）；
  *   · 预发布且后缀命中某目标的 `publishChannel` → 该目标；
- *   · 预发布但后缀未命中（如 `beta`）→ `null`，调用方**必须报错**（见模块文档）。
+ *   · 预发布但后缀未命中（如 `beta`）→ `null`，调用方**必须报错**（见模块文档）；
+ *   · **形状不合法**（如四段式 `0.2.1.3-rc.1`）→ **抛错**，不落回默认目标（缺口 2i）。
+ *
+ * 合成版本号（`ADR-061`）下，合成号的**首段预发布标识符就是上游自己的**标识符
+ * （`0.2.1-alpha.1.3` 的 `alpha`、`0.2.0-rc.3.1` 的 `rc`），而现有目标的
+ * `publishChannel` 恰好与之同名（`alpha` / `rc`）⇒ **本函数无需为合成号改动**。
+ * 本仓序号是第二段（`alpha.1.3` 里的 `3`），不参与通道判定。
  *
  * 🔴 查的是 **`publishChannel`**（本仓自己的 tag 后缀约定），**不是** `channel`
  * （上游 dist-tag 名）。两者独立——上游 `next` dist-tag 当下指向一个 `rc` 阶段
@@ -172,6 +231,7 @@ export function channelOfPrerelease(version) {
  *
  * @param {string} version 语义化版本（可带前导 `v`）。
  * @returns {string|null} 目标名；未知后缀时为 `null`。
+ * @throws {Error} 版本形状不合法时（由 {@link channelOfPrerelease} 抛出）。
  */
 export function targetForVersion(version) {
   const suffix = channelOfPrerelease(version)
@@ -274,13 +334,59 @@ export function selfTest() {
   eq('channel：多段标识符只取首段', channelOfPrerelease('0.5.0-next.1.2'), 'next')
   eq('channel：正式版无通道', channelOfPrerelease('0.5.0'), null)
   eq('channel：build metadata 不算通道', channelOfPrerelease('0.5.0+build.7'), null)
-  eq('channel：非法版本', channelOfPrerelease('not-a-version'), null)
+
+  // 合成版本号（ADR-061）：本仓序号追加在**上游预发布段之后**，首标识符仍是通道名。
+  eq('channel：合成号 alpha.1.3 → alpha', channelOfPrerelease('0.2.1-alpha.1.3'), 'alpha')
+  eq('channel：合成号 alpha.1.10 → alpha', channelOfPrerelease('0.2.1-alpha.1.10'), 'alpha')
+  eq('channel：合成号 rc.3.1 → rc', channelOfPrerelease('0.2.0-rc.3.1'), 'rc')
+  eq('channel：合成号带 w 标签', channelOfPrerelease('0.2.1-alpha.1.3+w1'), 'alpha')
+  eq('channel：合成号带前导 v', channelOfPrerelease('v0.2.1-alpha.1.3'), 'alpha')
+
+  // 🔴 缺口 2i：**不识别的形状必须抛错**，不得静默返回 null。
+  //    ⚠️ 这几条以前断言的是 `null` —— 那个断言本身就是缺陷（静默落回默认目标 = 装错通道）。
+  throws('channel：非版本串必须抛错（2i）', () => channelOfPrerelease('not-a-version'))
+  throws('channel：空串必须抛错（2i）', () => channelOfPrerelease(''))
+  throws('channel：四段式必须抛错（2i）', () => channelOfPrerelease('0.2.1.3-rc.1'))
+  throws('channel：两段式必须抛错（2i）', () => channelOfPrerelease('0.2'))
+
+  // 形状解析（非抛错）：**语料扫描**入口。与上面的抛错入口是同一规则的两种意图。
+  // ⚠️ 断言逐字段取，不整体 JSON 比对——整体比对会把「多加一个字段」误报成失败，
+  //    于是以后没人敢扩这个返回结构。
+  const s1 = parseVersionShape('0.5.0')
+  eq('形状：合法正式版的 ok', s1.ok, true)
+  eq('形状：核心三段', [s1.major, s1.minor, s1.patch], [0, 5, 0])
+  eq('形状：正式版无预发布', s1.prerelease, null)
+  eq('形状：正式版无 build', s1.build, null)
+  const s2 = parseVersionShape('0.2.1-alpha.1.3')
+  eq('形状：合法预发布', s2.prerelease, 'alpha.1.3')
+  eq('形状：预发布的数字段是数字', [s2.major, s2.minor, s2.patch], [0, 2, 1])
+  const s3 = parseVersionShape('0.5.0+build.7')
+  eq('形状：build 不算预发布', s3.prerelease, null)
+  eq('形状：build 被单独取到', s3.build, 'build.7')
+  eq('形状：带前导 v', parseVersionShape('v0.2.1-alpha.1.3').prerelease, 'alpha.1.3')
+  eq('形状：四段式不可解析但不抛错', parseVersionShape('0.2.1.3-rc.1').ok, false)
+  eq('形状：任意垃圾串不可解析但不抛错', parseVersionShape('vNext').ok, false)
+  eq('形状：空串不可解析但不抛错', parseVersionShape('').ok, false)
+
+  // 🔴 两分法（对称失效守卫）：**同一个输入、两种意图、相反结果**，期望值全部硬编码。
+  //    若有人把扫描点改回抛错入口（或把本函数改成抛错），必有一侧变红。
+  throws('两分法：已知版本号（四段式）抛错', () => channelOfPrerelease('0.2.1.3-rc.1'))
+  eq('两分法：同一串在语料扫描里只是「不可解析」', parseVersionShape('0.2.1.3-rc.1').ok, false)
+  eq(
+    '两分法：合法版本号两侧都能用',
+    [channelOfPrerelease('0.2.1-alpha.1.3'), parseVersionShape('0.2.1-alpha.1.3').ok],
+    ['alpha', true]
+  )
 
   // 版本 → 目标：正式版落默认目标；后缀按 publishChannel 查表，未知后缀必须判 null。
   eq('target：正式版 → 默认目标', targetForVersion('0.5.0'), DEFAULT_TARGET)
   eq('target：rc 后缀 → next 目标（publishChannel 解耦）', targetForVersion('0.5.0-rc.1'), 'next')
   eq('target：alpha 通道', targetForVersion('0.6.0-alpha.1'), 'alpha')
   eq('target：未知后缀（beta）必须是 null', targetForVersion('0.5.0-beta.1'), null)
+  eq('target：合成号 alpha.1.3 → alpha', targetForVersion('0.2.1-alpha.1.3'), 'alpha')
+  eq('target：合成号 rc.3.1 → next（与上游 dist-tag 解耦）', targetForVersion('0.2.0-rc.3.1'), 'next')
+  // 🔴 2i 的端到端形态：错的形状必须炸，不能装错通道。
+  throws('target：四段式必须抛错（2i 端到端）', () => targetForVersion('0.2.1.3-rc.1'))
   // 🔴 可伪证性：`next` 作为**桌面后缀**已不再是任何目标的 publishChannel
   //    （它现在是纯上游 dist-tag 名）。若有人把 targetForVersion 改回按
   //    `channel` 查表，这条会立刻红——那正是本次解耦要防的倒退。

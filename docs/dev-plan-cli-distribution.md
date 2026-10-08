@@ -142,7 +142,9 @@ dsh-host-cli start  --resource <真树> → token acquired → ready http://127.
 
 - **CLI 不含 runtime**。归档里的 `README.txt` 与 Release 正文都显式写明这一点，并指向 `--resource`。
   产物自述与实际能力不一致，比缺失更糟。
-- **macOS 二进制未公证**（Phase 3 才处理）；未签名，Gatekeeper 会给警告，`README.txt` 给出绕过步骤。
+- **不做 OS 级签名 / 公证**（[ADR-046](adr/046-no-code-signing.md)：零预算重裁裁定不买证书，
+  **不接线**；原文「Phase 3 才处理」**已失效**）。如实声明与用户侧绕过步骤写在归档的 `README.txt` 里
+  （`package-cli.mjs` 生成），不藏起来。
 - **没有自动更新**：CLI 是手动下载的产物，不参与 updater 链路。
 
 ---

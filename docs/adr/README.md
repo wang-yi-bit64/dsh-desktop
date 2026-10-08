@@ -99,6 +99,8 @@
 | [057](057-alpha-channel-restored-and-dual-promotion.md) | alpha 复役 + 双通道同步推进至 0.2.0-rc.2 / 0.1.7-alpha.2（修订 ADR-056 决策 1） | 已接受 |
 | [058](058-retire-pullfrog-agent.md) | 停用 Pullfrog：删除工作流文件，AI 评审收敛到 PR Agent（修订 ADR-054 决策 2） | 已接受 |
 | [059](059-pr-agent-image-floating-and-command-gate.md) | action SHA 钉不死 Docker 镜像：触发面增补「评论以命令开头」（ADR-054 决策 3 的边界） | 已接受 |
+| [060](060-alpha-cross-minor-upgrade-and-shared-payload.md) | alpha 跨 minor 推进至 DSH `0.2.1-alpha.1`：退役判据、注入点迁移、共享载荷对齐 | 已接受 |
+| [061](061-synthetic-version-model.md) | **合成版本号**：上游 `x.y.z-<预发布>` 原样保留 + 本仓 `.<n>` 追加（排序键在**预发布段**，不落 build）；声明 ADR-057 守卫继续有效、接管 ADR-028 决策 4 | 已接受 |
 
 ## 新增一条 ADR 的规则
 

@@ -32,7 +32,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { argv, env as processEnv, exit } from 'node:process'
 import { compareSemver } from './conventional-commits.mjs'
-import { channelOfPrerelease, listTargetNames, resolveTarget, targetForVersion } from './dsh-targets.mjs'
+import { channelOfPrerelease, listTargetNames, parseVersionShape, resolveTarget, targetForVersion } from './dsh-targets.mjs'
 
 export const DEFAULT_REPO = 'wang-yi-bit64/dsh-desktop'
 
@@ -70,33 +70,6 @@ export function publishChannelForVersion(version) {
   return resolveTarget(target).publishChannel
 }
 
-function parseSemver(version) {
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(version).replace(/^v/, ''))
-  if (!m) return null
-  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] ?? null }
-}
-
-function comparePrerelease(a, b) {
-  const as = a.split('.')
-  const bs = b.split('.')
-  for (let i = 0; i < Math.max(as.length, bs.length); i += 1) {
-    const x = as[i]
-    const y = bs[i]
-    if (x === undefined) return -1
-    if (y === undefined) return 1
-    const xn = /^\d+$/.test(x)
-    const yn = /^\d+$/.test(y)
-    if (xn && yn) {
-      if (Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1
-    } else if (x !== y) {
-      return x < y ? -1 : 1
-    }
-  }
-  return 0
-}
-
-
-
 /**
  * 判定一个通道的更新链是否健康。**纯函数**，喂夹具即可证伪。
  * @returns {string[]} problems（空数组 = 通过）
@@ -127,16 +100,38 @@ function git(args, cwd) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 }
 
+/**
+ * 从 tag 列表里挑出该通道最新的 `v*` tag。**纯函数**，喂夹具即可证伪。
+ *
+ * 🔴 这是**语料扫描**，不是版本校验：`git tag --list 'v*'` 的结果里可能有非 semver 的
+ * tag（人工打的 tag、命名变更期的旧 tag）。这类元素必须**跳过**，绝不能让它们抛错——
+ * 否则 `git tag --list` 里任一脏元素都会让整趟通道健康核对失败，且报错信息与真正的
+ * 「端点 version 低于最新 tag」混在一起，无法区分是**扫描器坏了**还是**投递真的断了**。
+ * 判据：喂一个含垃圾 tag 的列表，本函数必须正常返回正确结果。
+ * （对照：已知的单个版本号走 `channelOfPrerelease`，形状不合法**必须**抛错——见 `ADR-061` 缺口 2i。）
+ *
+ * @param {string[]} tags tag 列表（可带前导 `v`）。
+ * @param {string} channel 通道名（= 目标的 `publishChannel`）。
+ * @returns {string|null} 版本号（**不含**前导 `v`）；该通道无匹配时 `null`。
+ */
+export function newestTagFrom(tags, channel) {
+  let best = null
+  for (const tag of tags) {
+    const raw = String(tag ?? '').trim()
+    if (!raw) continue
+    if (!parseVersionShape(raw).ok) continue // 脏 tag：跳过，不由它决定通道
+    if (channelOfPrerelease(raw) !== channel) continue
+    const version = raw.replace(/^v/i, '')
+    if (best === null || compareSemver(version, best) > 0) best = version
+  }
+  return best
+}
+
 /** 该通道下最新的 v* tag（只看 v* 前缀，滚动 tag 不参与比较）。 */
 export function newestTagFor(channel, cwd = process.cwd()) {
   const out = git(['tag', '--list', 'v*'], cwd)
   if (!out) return null
-  const candidates = out.split(/\r?\n/).map((t) => t.trim()).filter((t) => t && channelOfPrerelease(t) === channel)
-  let best = null
-  for (const tag of candidates) {
-    if (best === null || compareSemver(tag.replace(/^v/, ''), best.replace(/^v/, '')) > 0) best = tag
-  }
-  return best === null ? null : best.replace(/^v/, '')
+  return newestTagFrom(out.split(/\r?\n/), channel)
 }
 
 async function fetchManifestVersion(url) {
@@ -277,6 +272,35 @@ export function selfTest() {
   // （verify 里 examined 计数守着这条）。
   eq('目标状态：alpha 已复役（ADR-057 修订 ADR-056）', resolveTarget('alpha').status, 'active')
   eq('目标状态：next 在役', resolveTarget('next').status, 'active')
+  // 🔴 tag 扫描的**语料**语义：脏元素必须被跳过，不得炸掉整趟扫描
+  //    （本仓缺陷族「守卫只覆盖 N 段里的 N-1 段」的镜像：把校验判据错用在扫描点上）
+  eq('扫描：含垃圾 tag 的列表照常返回', newestTagFrom(['vNext', 'v0.7.0-rc.1', 'v0.7', ''], 'rc'), '0.7.0-rc.1')
+  eq('扫描：垃圾 tag 在前也不受影响', newestTagFrom(['vNext', 'batch-2026', 'v0.7.0-rc.1'], 'rc'), '0.7.0-rc.1')
+  eq('扫描：只挑本通道，不取全局最高', newestTagFrom(['v0.7.3-alpha.1', 'v0.7.2-rc.1'], 'rc'), '0.7.2-rc.1')
+  eq('扫描：本通道无 tag → null', newestTagFrom(['v0.7.0-alpha.8', 'vNext'], 'rc'), null)
+  eq('扫描：空列表 → null', newestTagFrom([], 'rc'), null)
+  eq('扫描：版本号不带前导 v 返回', newestTagFrom(['v0.7.1-rc.1', 'v0.7.0-rc.1'], 'rc'), '0.7.1-rc.1')
+  eq(
+    '扫描：整趟不抛错（脏语料下）',
+    (() => { try { newestTagFrom(['x', '', 'vNext', 'v0.7.0-rc.1'], 'rc'); return 'ok' } catch { return 'throw' } })(),
+    'ok'
+  )
+  // 🔴 两分法（对称失效守卫）：**同一个输入、两种意图、相反结果**，期望值硬编码。
+  //    若有人把扫描点改回抛错入口，第一条会变 throw。
+  eq(
+    '两分法：同一串在扫描里只是被跳过',
+    newestTagFrom(['v0.7.0.1-rc.1', 'v0.7.0-rc.1'], 'rc'),
+    '0.7.0-rc.1'
+  )
+  eq(
+    '两分法：同一串作「已知版本号」必须抛错',
+    (() => { try { publishChannelForVersion('0.7.0.1-rc.1'); return 'no-throw' } catch { return 'throw' } })(),
+    'throw'
+  )
+  // 合成版本号（ADR-061）：本仓序号追加在上游预发布段之后，通道判定只看首标识符
+  eq('合成号：通道判定不受本仓序号影响', publishChannelForVersion('0.2.1-alpha.1.3'), 'alpha')
+  eq('合成号：rc 合成号 → rc 通道', publishChannelForVersion('0.2.0-rc.3.1'), 'rc')
+  eq('合成号：扫描取本仓序号最高的那个', newestTagFrom(['v0.2.1-alpha.1.3', 'v0.2.1-alpha.1.10'], 'alpha'), '0.2.1-alpha.1.10')
   if (failed > 0) { console.error('updater-manifest self-test 失败 ' + failed + ' 项'); return 1 }
   console.log('✅ updater-manifest 自检通过（' + total + ' 项）')
   return 0

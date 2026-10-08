@@ -722,7 +722,13 @@ function main(argv) {
     if (tagName) {
       git(['tag', '-a', tagName, '-m', `Release ${nextVersion}`]);
       console.log(`   已创建本地 tag ${tagName}（未推送）`);
-      console.log(`   推送：git push origin HEAD --follow-tags`);
+      // 🔴 不要在这里建议 `--follow-tags`（D5 定案禁止）：它会把「本机有、远端没有」的
+      //    **注释**标签一起推上去，只要指向 main 可达的提交就推，与年龄无关。远端 tag
+      //    被清理后，本机残留的同名 tag 会被它**复活**，且推 `v*` 会再次触发 release.yml。
+      //    正确姿势是两步：先推分支，确认后再显式推**带引号**的 tag。
+      console.log(`   推送（两步，禁 --follow-tags）：`);
+      console.log(`     git push origin main:main`);
+      console.log(`     git push origin "${tagName}"`);
     }
     return;
   }

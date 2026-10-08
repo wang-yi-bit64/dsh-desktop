@@ -52,6 +52,25 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+/**
+ * 子进程 `stdio` 契约——**必须显式给，不是风格偏好**（2026-10-08 实测）。
+ *
+ * 默认 stdio 是 `['pipe','pipe','pipe']`，而其 `stdin` 为管道这一条，在 Windows 本机
+ * 会让 spawnSync **直接以 `EBUSY` 失败**（`result.status === null`、`result.error.code
+ * === 'EBUSY'`），与执行什么命令无关——连 `process.execPath` 自己都同理。
+ * 症状尤其误导：包级自测会显示「tar 无法执行：spawnSync tar EBUSY」，看着像
+ * 打包器坏了或环境缺 tar，实际只有一行没写。
+ *
+ * 双向实测（`node` 与 `git` 两个命令 × 三种 stdio）：`default` → EBUSY、
+ * `['ignore','pipe','pipe']` → status 0、`['pipe','pipe','pipe']` → EBUSY。
+ * 本文件里的子进程都不读 stdin，因此 `ignore` 与 `pipe` **语义等价**。
+ *
+ * 同一条缺口此前已在 `conventional-commits.mjs` / `changelog.mjs` / `version.mjs`
+ * （2026-09-25）与 `gates.mjs`（2026-10-08）各修过；判据与完整实测表见
+ * `scripts/gates.mjs` 的 `runStep()`。
+ */
+export const CHILD_STDIO = ['ignore', 'pipe', 'pipe']
+
 // 临时目录清理是**辅助动作**：它失败绝不能否决主结论（见 remove-tree.mjs 模块文档，
 // 2026-09-23 alpha.5 的 `finally` EACCES 事故）。CLI 侧此前用的是裸 `rmSync`。
 import { removeTreeBestEffort } from './remove-tree.mjs'
@@ -197,7 +216,8 @@ Verify this download against the value published in the same release:
   Windows      certutil -hashfile <archive> SHA256
   macOS/Linux  shasum -a 256 -c <archive>.sha256
 
-macOS: this binary is NOT notarized. If Gatekeeper blocks it, allow it in
+macOS: OS-level code signing and notarization are deliberately NOT done here
+(see ADR-046). If Gatekeeper blocks it, allow it in
 System Settings -> Privacy & Security, or clear the quarantine attribute:
   xattr -d com.apple.quarantine ./dsh-host-cli
 
@@ -245,7 +265,7 @@ export function checkMissingResourceExit(status) {
  */
 export function smokeRun({ binaryPath, version }) {
   const problems = []
-  const versionRun = spawnSync(binaryPath, ['--version'], { encoding: 'utf8' })
+  const versionRun = spawnSync(binaryPath, ['--version'], { encoding: 'utf8', stdio: CHILD_STDIO })
   if (versionRun.error) {
     return [`产物无法执行：${versionRun.error.message}`]
   }
@@ -255,7 +275,8 @@ export function smokeRun({ binaryPath, version }) {
   const dataDir = mkdtempSync(join(tmpdir(), 'dsh-cli-smoke-data-'))
   try {
     const statusRun = spawnSync(binaryPath, ['status', '--resource', missing, '--data', dataDir], {
-      encoding: 'utf8'
+      encoding: 'utf8',
+      stdio: CHILD_STDIO
     })
     problems.push(...checkMissingResourceExit(statusRun.status))
   } finally {
@@ -376,7 +397,7 @@ export function renderCliNotes({ manifests, tag, repository }) {
  * @returns {string|null}
  */
 export function hostTriple() {
-  const out = spawnSync('rustc', ['-vV'], { encoding: 'utf8' })
+  const out = spawnSync('rustc', ['-vV'], { encoding: 'utf8', stdio: CHILD_STDIO })
   if (out.status !== 0) return null
   const m = /^host:\s*(\S+)$/m.exec(out.stdout ?? '')
   return m ? m[1] : null
@@ -384,7 +405,9 @@ export function hostTriple() {
 
 /** 跑一条外部命令，失败时抛错并带上 stderr（不让「静默失败」有机会传下去）。 */
 function run(command, args, opts = {}) {
-  const out = spawnSync(command, args, { encoding: 'utf8', ...opts })
+  // stdio 默认值由 CHILD_STDIO 给（调用方仍可用 opts 覆盖）——不加它，本机的 `tar`
+  // 会以 `EBUSY` 失败，而报错文字（「tar 无法执行」）会把根因指向错误的方向。
+  const out = spawnSync(command, args, { stdio: CHILD_STDIO, encoding: 'utf8', ...opts })
   if (out.error) throw new Error(`${command} 无法执行：${out.error.message}`)
   if (out.status !== 0) {
     throw new Error(`${command} 退出码 ${out.status}\n${out.stderr || out.stdout || ''}`.trim())

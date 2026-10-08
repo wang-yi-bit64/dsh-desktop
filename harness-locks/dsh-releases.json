@@ -1,0 +1,55 @@
+{
+  "$comment": [
+    "本仓「精确上游版本 → 本仓构建」索引与台账的唯一产地（D4 定案：不新开第三个 lock 目录）。",
+    "逻辑与校验见 scripts/release-ledger.mjs；由 scripts/sync-upstream-release.mjs 读写，禁止手改（计划 2b）。",
+    "",
+    "## 键 = 上游精确版本（含上游自己的预发布段，如 0.2.0-rc.2）",
+    "## 它承担两个职责",
+    "① 「这个精确上游版本用哪套补丁与运行时规则」的唯一产地（patchTarget）；",
+    "② 「本仓序号 n 与标签 w」的唯一产地（builds[]）。",
+    "",
+    "## 与 inputs.json 的分工（不得互相覆盖）",
+    "· harness-locks/<target>/inputs.json 存**上游段**（dshVersion，补丁文件名锚它）；",
+    "· 本文件存**本仓段**（n / w / 台账）；桌面合成版本号由两者算出。",
+    "⚠️ 补丁文件名锚的是 dshVersion（上游精确版本段），桌面号是**合成号**——两者不是同一字符串。",
+    "",
+    "## 字段",
+    "· patchTarget      —— patches/<key> 目录键（next / alpha）。目录键保持不动（计划 2e）。",
+    "· upstreamDistTag  —— 上游 npm dist-tag，**仅用于发现**，不是发布依据。",
+    "· status           —— 上游该精确版本在本仓是否在役（active / dormant）。",
+    "· builds[]         —— 已发布的本仓构建台账。",
+    "· upstreamTag / upstreamCommit —— ⚠️ **刻意留空**：按计划 2c，它们只能在",
+    "  sync-upstream-release.mjs 核实「上游 Release 存在」+「npm 精确版本可安装」之后写入。",
+    "  在核实之前填猜测值 = 伪造成功（AGENTS.md §7.1 规则 2）。",
+    "· releaseChannel   —— ⚠️ **刻意不存**（偏离计划 §4.6 2b 的字段清单，理由如下）：",
+    "  按计划 §4.4 规则 2，它是「由上游线决定的本仓 publishChannel」（next 线 ⇒ rc，alpha 线 ⇒ alpha），",
+    "  而 publishChannel 已经是 DSH_TARGETS[patchTarget].publishChannel 的唯一产地。",
+    "  存第二份 = 同一事实两处可漂而无人发现（本文件 build 段不存 upstreamDsh 是同一条理由）。",
+    "  ⇒ 读取方一律走 **deriveReleaseChannel()**（release-ledger.mjs），由 patchTarget 现算。",
+    "",
+    "## builds[] 的契约",
+    "desktopVersion 必须逐字等于由 (upstream 键, n, w) 合成出来的串（validateBuild 断言）。",
+    "n 不由人填：n = max(同上游键组内的 n) + 1；上游前进（含预发布段前进）⇒ n 归 1。",
+    "守卫：同一 (上游键, n) 不得重复（事后形态），且 n 序列从 1 起无空洞（事前形态）。",
+    "",
+    "## ⚠️ 不要回填历史 tag",
+    "合成号机制（ADR-061）之前的 v0.7.3-alpha.1 这类版本号里**没有本仓序号**，",
+    "而其形状与合成号**同构**（见 release-ledger.mjs 模块文档）⇒ 回填会把两种语义",
+    "混进同一字段且此后无法区分。台账只记往后的发布。builds 为空即真实状态。"
+  ],
+  "schemaVersion": 1,
+  "releases": {
+    "0.2.0-rc.2": {
+      "patchTarget": "next",
+      "upstreamDistTag": "next",
+      "status": "active",
+      "builds": []
+    },
+    "0.2.1-alpha.1": {
+      "patchTarget": "alpha",
+      "upstreamDistTag": "alpha",
+      "status": "active",
+      "builds": []
+    }
+  }
+}

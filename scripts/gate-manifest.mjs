@@ -112,6 +112,22 @@ export const GATES = [
     real: { tiers: ['fast', 'ci', 'release'], args: ['check'] },
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
+  {
+    name: 'release-ledger',
+    script: 'scripts/release-ledger.mjs',
+    title: '发布台账自洽（合成号序号不重复 / 记录与版本号逐字自洽）',
+    why: '合成号（ADR-061）的 <n> 只能由台账推导，「这一版是第几次交付」这件事没有任何别的地方记录。守卫 1：已发布构建不得共享 (上游, n) 二元组——重复意味着两次发布声称同一版，updater 会把其中一个当作已安装 ⇒ 那份更新永远推不出去。字段自洽断言 desktopVersion 必须逐字等于由 (upstreamDsh, n, w) 合成出来的串，否则「台账里的 n」与「版本号里的 n」可以各说各话而无人发现。⚠️ 台账为空时它打印「空集判据」而不是静默通过——「没有可断言的东西」不得冒充「已断言且通过」。',
+    real: { tiers: ['fast', 'ci', 'release'], args: ['--validate'] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
+    name: 'version-policy',
+    script: 'scripts/verify-version.mjs',
+    title: '版本策略三守卫（台账序号 / w 不参与排序 / 通道解析严格）',
+    why: '这三条是**矩阵型**缺陷：每一处单独看都合理，合起来才致命。守卫 2 尤其隐蔽——本仓 JS 比较器忽略 build，而 tauri-plugin-updater 用的 Rust Ord **包含** build，两套实现今天不一致；排序键刻意只落在预发布段，就是为了不依赖这个巧合。守卫 3 对应缺口 2i（四段式会让 targetForVersion 静默给 next ⇒ 按错的补丁集组装而不报错）。⚠️ 本守卫的被探测实现是**参数化注入**的，自测里喂了「比较 build 的比较器」与「缺口 2i 的旧实现」两个已知有缺陷的实现并断言报红——否则判据本身写坏时同样给绿。',
+    real: { tiers: ['fast', 'ci', 'release'], args: [] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
 
   // ------------------------------------------------------------------
   // 壳面（IPC / 页面 / 注入 / 入口约定）

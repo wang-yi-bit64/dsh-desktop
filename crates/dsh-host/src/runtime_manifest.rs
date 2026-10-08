@@ -86,7 +86,9 @@ pub struct RuntimeManifest {
 impl RuntimeManifest {
     /// 供界面显示的一行身份描述（未知字段显示 `unknown`，不猜）。
     ///
-    /// 形如 `DSH 0.1.6-alpha.2 · channel alpha`；读不到时是 `unknown`。
+    /// 形如 `DSH <内置版本> · channel <目标名>`（例如 `DSH 1.2.3-rc.1 · channel next`）；
+    /// 读不到时是 `unknown`。**示例值刻意写成形状**：写死一个当期版本号，它必然随
+    /// 锚点推进而漂，而注释不在任何守卫的判据里。
     pub fn identity_line(&self) -> String {
         let dsh = self.dsh_version.as_deref().unwrap_or("unknown");
         let channel = self.target.as_deref().unwrap_or("unknown");

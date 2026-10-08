@@ -43,6 +43,22 @@ A2 Windows 签名）因此长期挂在「0.2-决策点 1 — 签名证书预算�
 
 ## 守卫与证据
 
-- `verify:claims`（README 不得宣称「已签名 / 已公证」）。
+- `npm run verify:claims` 的规则 **`os-signing-claim`**（`scripts/verify-claims.mjs`）：两份 README
+  **不得**出现「代码签名 / 公证 / Authenticode / notarize / code-sign / Developer ID / certificateThumbprint /
+  signingIdentity」类**正面宣称**；如实声明（同一行写 `不做` / `not code-signed` 并引用 `ADR-046`）
+  放行。自检含正反夹具 + 「否定只豁免同一行」的逐行夹具。
 - `tauri.conf.json` 的 `bundle.createUpdaterArtifacts` 与 updater 端点保持现状
   （minisign 侧不受影响）。
+- **不在任何地方接线**是判定的一部分，不是疏忽：`.github/workflows/`、`tauri.conf.json`、
+  `scripts/` 内对 `APPLE_*` / `WINDOWS_CERTIFICATE*` / `certificateThumbprint` / `signingIdentity` /
+  `codesign` **零命中即正确**。
+
+## 记账（2026-10-08 补齐）
+
+本 ADR 的结论此前只落在本文件与 `SECURITY.md` / `dev-plan-defect-remediation.md`，而
+`dev-plan-0.2-hardening.md`（A1/A2）、`roadmap.md`（H3-b、决策点 6）仍把它写成
+**待采购/待排期**的施工项。2026-10-08 已按本 ADR 全部改为「**已关闭——不实现、不接线**」，
+并在 `AGENTS.md` §7.2 补一行 `🗄️ 刻意不做（能力边界）`。同期也把「一份输入提案里的
+P2 OS code signing / notarization」**剔除**（不是降级到 P2）；该输入提案及其处置记录
+已于 2026-10-08 从库中移除（备查 `.workbuddy/backup/2026-10-08-v3-docs-before-delete/`）。
+「需要外部采购（Windows 证书 / Apple 会员）」这一门禁表述**已从仓库中清除**。

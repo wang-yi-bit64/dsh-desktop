@@ -134,8 +134,9 @@ scripts/                # Build and testing helpers (prepare-harness, stub-tauri
 docs/                   # Architecture designs, contract definitions, and specifications
   roadmap.md                        # TOP-LEVEL ROADMAP: positioning, boundaries, stage sequence (H0~H3)
   dev-plan-hardening-and-differentiation.md  # Near-term plan (roadmap H0 stage): risks R1~R9, batches H~N
-  dev-plan-0.2-hardening.md         # Product & distribution supplement (batches 0.2-A~D): signing, channels, desktop baseline, feedback loop
+  dev-plan-0.2-hardening.md         # Product & distribution supplement (batches 0.2-A~D): release channels, desktop baseline, feedback loop (OS code signing: NOT done — ADR-046)
   dev-plan-disconnected-points.md   # Previous main plan (closed): disconnected-point inventory (D1~D11) + batch A~G execution log
+  version-policy.md                 # SOLE authority for the version-number policy: naming rules, per-change-type increment conditions, who owns the version, release flow & guards
   dsh-desktop-redesign-architecture-and-plan.md  # Comprehensive redesign architecture & execution plan
   system_design.md                  # Core system design & invariant specifications
   archive/                          # ARCHIVED designs — dropped on purpose, code deleted, kept only for traceability
@@ -228,6 +229,9 @@ Update integrity rests on a single minisign key pair:
 
 A build without signing credentials still produces a bundle, but such a bundle cannot be installed by an already-released client — the signature check rejects it. CI therefore verifies the secret exists *before* starting the expensive build and fails early with an explicit `::error::` when it is missing, rather than discovering the problem at the end.
 
+- **No OS-level code signing or notarization** ([ADR-046](docs/adr/046-no-code-signing.md)): the minisign key above is the **only** integrity layer this project signs. Windows installers are not code-signed with an Authenticode certificate, and macOS bundles are not notarized with a Developer ID. This is an **accepted boundary, not a pending task** — the project will not wire up certificates.
+- Expected first-run friction, and what to do about it: on macOS, right-click → Open (or allow the app under *System Settings → Privacy & Security*); on Windows, SmartScreen may show "unknown publisher" — click *More info → Run anyway*. Verify your download against the SHA-256 published in the release notes.
+
 **Losing the private key is unrecoverable for existing users.** The public key is compiled into every shipped binary; a new key pair means a new public key, and installed clients will keep rejecting updates signed by it. Treat `~/.tauri/dsh-desktop.key` as release-critical infrastructure rather than as a local developer file.
 
 ## Versioning & Release
@@ -253,7 +257,12 @@ gh workflow run ci.yml --ref main                   # static gates + clippy + un
 gh workflow run smoke.yml --ref main -f scope=full  # real resources + bundle + L2 smoke
 gh run watch                                        # wait for both to go green
 npm run version:bump -- auto --commit --tag # bump + regenerate CHANGELOG + commit + local tag
-git push origin main --follow-tags          # pushing the tag triggers the release
+git push origin main:main                   # step 1: the branch
+git push origin "<tag>"                     # step 2: the tag explicitly (triggers release)
+# ⛔ Never use --follow-tags: it also pushes annotated tags that exist locally but not
+#    remotely, regardless of age. After a remote tag is cleaned up, a stale local tag of
+#    the same name gets resurrected by it — and pushing a v* tag re-triggers release.yml
+#    (see docs/release-runbook.md §8.6).
 ```
 
 > Skipping those dispatches is not cosmetic: `release.yml`'s preflight only runs
@@ -278,7 +287,7 @@ The upstream runtime the shell bundles is maintained on **two channels in parall
 
 **Two different "channel" names — do not conflate them.** Each target carries `channel` (which upstream npm dist-tag to assemble from — an upstream fact you cannot rename) and `publishChannel` (the desktop tag's pre-release suffix — this repo's own naming). Upstream's `next` dist-tag currently points at an `rc`-stage version, so the desktop suffix is `rc` while the target key stays `next`. Forcing them to be the same string means that renaming the desktop suffix would send the drift sentinel looking for an upstream `rc` tag that does not exist, silently falling back to `latest`.
 
-> ⚠️ **The target key does not tell you which upstream version is pinned.** A target's `channel` is the upstream dist-tag it is *defined against*; its `dshVersion` is what this repo *actually pins* — the two have historically diverged. After the 2026-09-30 promotion both lines are aligned: `next` pins `0.2.0-rc.2` and `alpha` pins `0.1.7-alpha.2`, matching upstream's dist-tags as measured. Read `node scripts/dsh-targets.mjs` for the live values; never infer the pinned version from the target key.
+> ⚠️ **The target key does not tell you which upstream version is pinned.** A target's `channel` is the upstream dist-tag it is *defined against*; its `dshVersion` is what this repo *actually pins* — the two have historically diverged. As of the 2026-10-07 alpha promotion both lines are aligned: `next` pins `0.2.0-rc.2` and `alpha` pins `0.2.1-alpha.1`, matching upstream's dist-tags as measured on 2026-10-08. Read `node scripts/dsh-targets.mjs` for the live values; never infer the pinned version from the target key.
 
 The desktop version's **pre-release suffix is `publishChannel`**: `0.7.0-rc.1` ships the DSH `next` target, `0.7.0-alpha.1` ships the DSH `alpha` line. The release workflow derives the build target from the tag itself (`scripts/dsh-targets.mjs --channel-of`), so **the tag suffix chooses the runtime** — there is no second channel declaration to keep in sync. A tag with no known suffix (say `beta`) **fails the release** rather than falling back to the default target: a silent fallback would produce a package whose version says one line while its runtime is another, and that mismatch would only surface after users installed it. ⚠️ The old `0.7.0-next.1` suffix is **no longer valid input** — it was retired with the rename.
 

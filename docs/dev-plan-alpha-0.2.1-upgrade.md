@@ -1,6 +1,7 @@
 # alpha 通道推进计划：DSH `0.1.7-alpha.2` → `0.2.1-alpha.1`
 
-> **状态**：🕓 **计划已就绪，未执行任何写操作**（Phase A 为只读诊断，已完成）。
+> **状态**：✅ **已执行完毕**（Phase A~C 全部落地；Phase C 于 2026-10-07 随桌面
+> `0.7.3-alpha.1` 的发布完成——逐阶段证据见 §7 执行状态台账）。
 > **依据**：`docs/dsh-upgrade-checklist.md`（升级权威流程）+ ADR-057（alpha 在役与跨通道单调守卫）。
 > **唯一产地提醒**：本文件中的版本号是 **2026-10-06 的快照**；锚点的唯一产地始终是
 > `scripts/dsh-targets.mjs` 的 `DSH_TARGETS`（运行时动态解析）。
@@ -346,7 +347,7 @@ npm run smoke:headless
 | Phase B4 真实组装与无头门禁 | ✅ 组装侧已完成（第 5 轮：**EXIT=0 / 10/10 applied / MANIFEST target=alpha**，见 §7.5）；`cargo fmt --check` ✅、包级 clippy ✅、包级 test **197 passed / 0 failed**；workspace 级与 doctest 受环境限制（见 §7.4 / §7.5） |
 | Phase B5 烟雾与体积 | ✅ 已完成：L1 无头烟雾 **5/5 PASS**（EXIT=0，日志自证 `dsh=0.2.1-alpha.1 node=24.9.0 patches=10/10`，**无 `[dsh-plugin-fault]` 归因**）；体积口径三 **496.3 MB**（harness 410.1 MB / node 85.5 MB，最大子项 `@deepseek-ai/libreoffice-kit-win32-x64` 184 MB）。⚠️ 无本地基线，不做增量判定 |
 | Phase B6 文档同步 | ✅ 已完成（system_design 无版本引用；release-runbook §8.6 / dev-plan-0.8-convergence 更正块已补；upgrade-checklist 已追加本轮完成记录与体积原因） |
-| Phase C 版本推进与发布 | 🕓 待执行（⚠️ 分支形态与计划假设不同，见 §7.3：本 worktree 在 `workbuddy/main-f8784a51` 而非 `main`） |
+| Phase C 版本推进与发布 | ✅ 已完成（2026-10-07）：发布提交 `521a8c7`（`chore(release): 0.7.3-alpha.1`）经 PR #5 合入 main，tag `v0.7.3-alpha.1` 指向 `5f715f2`；Release 13 资产、`prerelease=true`。§7.3 记录的 worktree 分支差异（在 `workbuddy/main-f8784a51` 而非 `main`）已随该 PR 合入消解 |
 
 ### 7.1 B4 首轮失败与修复记录（2026-10-07）
 

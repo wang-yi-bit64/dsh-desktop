@@ -192,7 +192,7 @@ clean startup → workspace open → session create → tool call → tool failu
 | 项 | 内容 |
 |----|------|
 | H3-a | 可回滚的运行时更新事务（失败更新可恢复，不软锁用户） |
-| H3-b | 发行质量：签名、SHA-256、runtime manifest、离线 runtime、国内 registry fallback、代理感知引导 |
+| H3-b | 发行质量：SHA-256、runtime manifest、离线 runtime、国内 registry fallback、代理感知引导（**签名 / 公证已按 ADR-046 移出本项**，见 §8 决策点 6） |
 | H3-c | 真实三平台端到端发布实验室（把冒烟从"手动档"升级为可调度回归） |
 | H3-d | 定位固化：README / 品牌收敛为 "Runtime Reliability Edition"；明确与官方桌面的**互补**关系 |
 
@@ -274,8 +274,16 @@ A 稳妥（先 `0.1.2-rc.1`）/ B 激进（直追 `0.1.5-rc.*`）。
 ### 决策点 5 — 门禁强度与 CI 成本（沿用加固计划）
 GUI 冒烟与 POSIX fault-inject 是否转硬门禁（可折中：mac/win 硬、Linux 软）。
 
-### 决策点 6 — 签名密钥策略（沿用加固计划）
-单密钥 + runbook，还是双公钥过渡？
+### 决策点 6 — 签名密钥策略（沿用加固计划）—— ✅ **已裁决（2026-09-20，ADR-046；2026-10-08 记账）**
+- **OS 层签名 / 公证**（Authenticode / Developer ID / Azure Trusted Signing）：**不做**。
+  [ADR-046](adr/046-no-code-signing.md)（零预算重裁）裁定不买证书；
+  [ADR-044](adr/044-explicitly-out-of-scope.md) 的「明确不做」清单已收编「签名 / 公证」。
+  **不实现、不接线、不排期**——代价（macOS Gatekeeper / Windows SmartScreen 首次运行摩擦）
+  被**显式接受**，正面写进 README / `SECURITY.md` 的用户侧解法。详见
+  [`dev-plan-0.2-hardening.md`](dev-plan-0.2-hardening.md) 批次 0.2-A。
+- **minisign 更新链**（本项目自有的密钥对，与上者是**两条独立的链**）：**单密钥 + runbook**，
+  不引入双公钥过渡——ADR-046 原文：「roadmap 决策点 6 的双公钥过渡策略随之失去对象」。
+  备份 / 恢复演练项见 `dev-plan-0.2-hardening.md` A4（与 H0 批次 M1 合并执行）。
 
 ---
 

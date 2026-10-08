@@ -25,7 +25,7 @@
  *
  * | 编号 | 检查 | 级别 |
  * |------|------|------|
- * | C1 | 各文档里「钉住的 DSH 版本」（表格 3 列 与 散文两种写法）必须等于 `DSH_TARGETS[<target>].dshVersion`；**声明点缺失也判红**（不然删掉整张表就能让检查静默变绿） | 错误 |
+ * | C1 | 各文档里「钉住的 DSH 版本」（表格 3 文件 × 2 目标 + 12 处散文/注释写法）必须等于 `DSH_TARGETS[<target>].dshVersion`；**声明点缺失也判红**（不然删掉整张表就能让检查静默变绿） | 错误 |
  * | C2 | `harness-locks/<target>/inputs.json` 的 `dshVersion` 必须等于同一值 | 错误 |
  * | C3 | 计划文档的批次状态词必须与脚本内的**状态账本**一致（§5 小节标题 与 §10.1 表行**两处**都要含该状态词），且账本必须覆盖 §10.1 的全部批次；开头的「状态」段必须点名所有非「待办」的状态词 | 错误 |
  *
@@ -102,6 +102,68 @@ const PROSE_DECLARATIONS = [
     // 只认「alpha 线 `…`」这一种：另一句里的 `0.1.7-rc.1` 是**上游**值，不是本仓锚点。
     label: '§0 锚点说明',
     res: [/alpha 线 `([0-9][^`]*)`/g]
+  },
+  // ⚠️ 以下 4 条是 2026-10-08 补的。它们此前**没有守卫**，而 README 的两份「目标键告诉不了你
+  // 钉的是哪个上游版本」说明段在 2026-10-07 alpha 线推进到 0.2.1-alpha.1 后**双双漏改**，
+  // 却因为 Pinned 表是对的而让本守卫继续打印 ✅ —— 这正是「枚举不全 = 假绿」。
+  // 教训：**表格对不等于事实对**；同一事实的散文写法必须逐处点名，否则等于没测。
+  // 判据形状刻意收得很紧（必须同时出现反引号包裹的目标键 + ` pins ` / 全角 `、` 等字面词），
+  // 以免命中 README 里其它提到 `next` / `alpha` 的句子（那些不声明版本号）。
+  {
+    file: 'README.md',
+    target: 'next',
+    label: '通道表下方 English 散文的「`next` pins …」',
+    res: [/`next` pins `([0-9][^`]*)`/g]
+  },
+  {
+    file: 'README.md',
+    target: 'alpha',
+    label: '通道表下方 English 散文的「`alpha` pins …」',
+    res: [/`alpha` pins `([0-9][^`]*)`/g]
+  },
+  {
+    file: 'README.zh-CN.md',
+    target: 'next',
+    label: '通道表下方中文散文的「（next `…`、」',
+    res: [/（next `([0-9][^`]*)`、/g]
+  },
+  {
+    file: 'README.zh-CN.md',
+    target: 'alpha',
+    label: '通道表下方中文散文的「alpha `…`，与上游」',
+    res: [/alpha `([0-9][^`]*)`，与上游/g]
+  },
+  // 第三批（2026-10-08）：另外两处**无人守、且已实际漂移**的现状声明。
+  //  1) `docs/dsh-upgrade-checklist.md` 的「`next` 锚 X / `alpha` 锚 Y」写法。该文件**已被**
+  //     PROSE_DECLARATIONS 守着另外两种写法（「当前钉的是…」「next 线 `…`」），而这两句
+  //     在同一文件里紧邻——于是旧判据照样打印 ✅。这是**假绿的第二种形态**：
+  //     同一事实在同一文件里有多种写法，只守了其中一部分。
+  //  2) `scripts/prepare-harness.mjs` 的构建目标注释。它此前被登记为「注释也算现状声明，
+  //     但不纳入自动判据、只能人工同步」——而它确实漂移过（长期停在 `0.1.5-rc.3`）。
+  //     「只能人工同步」等于「迟早漂」：判据读的是文件全文，注释当然读得到，故改为自动比对。
+  {
+    file: 'docs/dsh-upgrade-checklist.md',
+    target: 'next',
+    label: '首部「`next` 锚 …」写法',
+    res: [/`next` 锚 `([0-9][^`]*)`/g]
+  },
+  {
+    file: 'docs/dsh-upgrade-checklist.md',
+    target: 'alpha',
+    label: '首部「`alpha` 锚 …」写法',
+    res: [/`alpha` 锚 `([0-9][^`]*)`/g]
+  },
+  {
+    file: 'scripts/prepare-harness.mjs',
+    target: 'next',
+    label: '构建目标注释的「next → DSH …」',
+    res: [/next\s+→ DSH ([0-9][0-9A-Za-z.-]*)/g]
+  },
+  {
+    file: 'scripts/prepare-harness.mjs',
+    target: 'alpha',
+    label: '构建目标注释的「alpha → DSH …」',
+    res: [/alpha\s+→ DSH ([0-9][0-9A-Za-z.-]*)/g]
   }
 ]
 
@@ -343,7 +405,10 @@ function selfTest() {
   const TARGETS = { next: { dshVersion: '0.1.5-rc.3' }, alpha: { dshVersion: '0.1.6-alpha.2' } }
 
   // --- 夹具 1：表格抽取器只认「第 1 格是目标键 + 第 3 格是版本号」 ---
-  const readmeOk = [
+  // 表格与散文**分开建常量**：散文声明点是后加的（见 PROSE_DECLARATIONS 末尾），
+  // 分成两个夹具才能分别证明「表格抽取器」与「散文抽取器」各自真的在比对——
+  // 混成一份时，删掉其中一处而另一处仍在，用例会照样绿。
+  const readmeTableEn = [
     '# README',
     '',
     '| Target | Line | Pinned DSH | Desktop tag |',
@@ -351,6 +416,20 @@ function selfTest() {
     '| `next` (default) | npm `next` dist-tag (rc stage) | `0.1.5-rc.3` | `rc` |',
     '| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `alpha` |'
   ].join('\n')
+  const readmeProseEn =
+    '> ⚠️ … both lines are aligned: `next` pins `0.1.5-rc.3` and `alpha` pins `0.1.6-alpha.2`, matching upstream.'
+  const readmeOk = [readmeTableEn, '', readmeProseEn].join('\n')
+  const readmeTableZh = [
+    '# README（中文）',
+    '',
+    '| 目标 | 上游线 | Pinned DSH | 桌面后缀 |',
+    '|------|--------|------------|----------|',
+    '| `next`（默认） | npm `next` dist-tag（rc 阶段） | `0.1.5-rc.3` | `rc` |',
+    '| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `alpha` |'
+  ].join('\n')
+  const readmeProseZh =
+    '> ⚠️ …（next `0.1.5-rc.3`、alpha `0.1.6-alpha.2`，与上游 dist-tag 于 2026-10-08 实测一致）。'
+  const readmeZhOk = [readmeTableZh, '', readmeProseZh].join('\n')
   eq('夹具1：next 抽出 1 处且带行号', pinTableSites(readmeOk, 'next'), [{ line: 5, version: '0.1.5-rc.3' }])
   eq('夹具1：alpha 抽出 1 处', pinTableSites(readmeOk, 'alpha'), [{ line: 6, version: '0.1.6-alpha.2' }])
   // 反证：第 3 格不是版本号形状的行**不得**被当成声明（否则会命中把 channel 当第 3 格的表）
@@ -368,13 +447,18 @@ function selfTest() {
   ].join('\n')
   const checklistOk =
     '例如 `next` 目标当前钉的是 `0.1.5-rc.3`，而 npm 的 `next` dist-tag 已前进到 `0.1.7-rc.1`；' +
-    '（当前：next 线 `0.1.5-rc.3`、alpha 线 `0.1.6-alpha.2`）'
+    '（当前：next 线 `0.1.5-rc.3`、alpha 线 `0.1.6-alpha.2`）' +
+    '推进后 `next` 锚 `0.1.5-rc.3`、`alpha` 锚 `0.1.6-alpha.2`。'
+  const harnessCommentOk =
+    '//   next  → DSH 0.1.5-rc.3    （默认；桌面后缀 rc。2026-09-30 从 0.1.5-rc.2 跨 minor 推进）\n' +
+    '//   alpha → DSH 0.1.6-alpha.2 （桌面后缀 alpha；2026-10-07 从 0.1.6-alpha.1 推进）'
   const docsOk = {
     'README.md': readmeOk,
-    'README.zh-CN.md': readmeOk,
+    'README.zh-CN.md': readmeZhOk,
     'AGENTS.md': readmeOk,
     'patches/LAYERS.md': layersOk,
-    'docs/dsh-upgrade-checklist.md': checklistOk
+    'docs/dsh-upgrade-checklist.md': checklistOk,
+    'scripts/prepare-harness.mjs': harnessCommentOk
   }
   eq('夹具2：全部声明点一致 → 无问题', checkVersionDeclarations(docsOk, TARGETS), [])
 
@@ -398,11 +482,42 @@ function selfTest() {
     [0, 1]
   )
 
+  // --- 夹具 3b：**表格仍对、只有散文过期**（2026-10-07 的真实形态，补守卫前这里是 0） ---
+  const staleProse = readmeOk.replace('`next` pins `0.1.5-rc.3`', '`next` pins `0.1.5-rc.2`')
+  const proseStale = checkVersionDeclarations({ ...docsOk, 'README.md': staleProse }, TARGETS)
+  eq('夹具3b：表格对、散文过期 → 判红 1 条', proseStale.length, 1)
+  eq('夹具3b：报错点名散文声明而不是表格', proseStale[0].includes('English 散文'), true)
+  // 反证：只改表格那处时，散文声明**不得**跟着报红（否则说明两处抽的是同一个位置）
+  eq(
+    '夹具3b：两处声明互相独立（改表格只报表格那处）',
+    checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS)[0].includes('README.md:5'),
+    true
+  )
+
+  // --- 夹具 3c：中文 README 的散文声明同样在生效（新增点不是只测了英文） ---
+  const staleZh = readmeZhOk.replace('alpha `0.1.6-alpha.2`', 'alpha `0.1.6-alpha.1`')
+  const zhStale = checkVersionDeclarations({ ...docsOk, 'README.zh-CN.md': staleZh }, TARGETS)
+  eq('夹具3c：中文散文过期 → 判红 1 条', zhStale.length, 1)
+  eq('夹具3c：报错点名中文散文声明', zhStale[0].includes('中文散文'), true)
+
   // --- 夹具 4：整张表被删掉 → 必须判红（不得因「0 个声明点」而静默通过） ---
-  const noTable = '# README\n\n没有表格了。\n'
+  // ⚠️ 本夹具**刻意保留散文**：它要证明的是「表格抽取器发现声明行消失」。
+  //    若把散文一并删掉，会同时命中散文判据，那就分不清红在哪一侧了（那是夹具 4b 的事）。
+  const noTable = ['# README', '', readmeProseEn].join('\n')
   const deleted = checkVersionDeclarations({ ...docsOk, 'README.md': noTable }, TARGETS)
-  eq('夹具4：声明点整体消失 → 判红 2 条（每目标一条）', deleted.length, 2)
+  eq('夹具4：表格声明行整体消失 → 判红 2 条（每目标一条）', deleted.length, 2)
   eq('夹具4：报错说清是「找不到声明行」', deleted.every((p) => p.includes('找不到')), true)
+
+  // --- 夹具 4b：**散文声明行被删掉**（表格仍在）→ 同样必须判红 ---
+  // 这是新声明点的「锚点消失」用例：少了它，把 README 那段 ⚠️ 说明整段删掉就能让新判据
+  // 静默变绿（0 个声明点 = 全通过），比写错还危险。
+  const proseDeleted = checkVersionDeclarations({ ...docsOk, 'README.md': readmeTableEn }, TARGETS)
+  eq('夹具4b：散文声明整体消失 → 判红 2 条', proseDeleted.length, 2)
+  eq(
+    '夹具4b：报错措辞是「找不到 … 散文」（与表格缺失可区分）',
+    proseDeleted.every((p) => p.includes('找不到') && p.includes('散文')),
+    true
+  )
 
   // --- 夹具 5：散文型声明（含「上游值不许被当成本仓声明」的反证） ---
   const layers = [
@@ -415,6 +530,44 @@ function selfTest() {
     ['0.1.5-rc.3']
   )
   eq('夹具5：alpha 散文声明', proseSites(layers, [/dist-tag（当前 `([0-9][^`]*)`）/g]), ['0.1.6-alpha.2'])
+
+  // --- 夹具 5b：同一文件里的**第二种写法**（「`alpha` 锚 …」）也必须在判据内 ---
+  // 真实形态：`docs/dsh-upgrade-checklist.md` 首部相邻两句声明同一事实，
+  // 旧判据只守了「next 线 `…`」那种写法，于是另一句停在旧值也照样绿。
+  const staleAnchor = checklistOk.replace('`alpha` 锚 `0.1.6-alpha.2`', '`alpha` 锚 `0.1.6-alpha.1`')
+  const anchorProblems = checkVersionDeclarations(
+    { ...docsOk, 'docs/dsh-upgrade-checklist.md': staleAnchor },
+    TARGETS
+  )
+  eq('夹具5b：`alpha` 锚 写法过期 → 判红 1 条', anchorProblems.length, 1)
+  eq('夹具5b：报错点名「`alpha` 锚」这种写法', anchorProblems[0].includes('`alpha` 锚'), true)
+  // 反证：只改这一种写法时，同文件的另一种写法**不得**被连带报红
+  eq(
+    '夹具5b：两种写法互相独立（不重复计问题）',
+    anchorProblems[0].includes('next 线'),
+    false
+  )
+
+  // --- 夹具 5c：源码注释里的现状声明同样受判 ---
+  // 2026-10-08 起由「只人工同步」改为自动比对；此前它确实漂移过（停在 0.1.5-rc.3）。
+  const staleComment = harnessCommentOk.replace('alpha → DSH 0.1.6-alpha.2', 'alpha → DSH 0.1.6-alpha.1')
+  const commentProblems = checkVersionDeclarations(
+    { ...docsOk, 'scripts/prepare-harness.mjs': staleComment },
+    TARGETS
+  )
+  eq('夹具5c：源码注释里的版本过期 → 判红 1 条', commentProblems.length, 1)
+  eq('夹具5c：报错点名 prepare-harness.mjs', commentProblems[0].includes('prepare-harness.mjs'), true)
+  // 反证：注释里的**历史**版本串（「从 X 推进」）不得被当成本仓声明——
+  // 否则每次推进都会因为「历史提到了旧版本」而报红。判据只认「→ DSH <版本>」这一形状，
+  // 而夹具里两条注释**都**带了历史串，正好把这条边界钉住。
+  eq(
+    '夹具5c：注释里的历史版本串（「从 X 推进」）不被误抽',
+    proseSites(harnessCommentOk, [
+      /next\s+→ DSH ([0-9][0-9A-Za-z.-]*)/g,
+      /alpha\s+→ DSH ([0-9][0-9A-Za-z.-]*)/g
+    ]),
+    ['0.1.5-rc.3', '0.1.6-alpha.2']
+  )
 
   // --- 夹具 6：inputs.json 自证字段 ---
   const lockOk = {

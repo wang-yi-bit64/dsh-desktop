@@ -86,7 +86,8 @@
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点 D1~D11 与裁决记录；「插件禁用语义」证据链在此。
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
 - `docs/dev-plan-defect-remediation.md`：**缺陷治理专项**（批次 S0~S7，2026-09-30 起）——D1~D12 缺陷清单、可证伪判据、C1~C8 裁决与执行台账；动 S 批次任何条目前先读它。
-- `docs/adr/`：架构决策记录库（46 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
+- `docs/version-policy.md`：**版本号策略唯一口径**——命名规则、按变更类型的递增条件、**递增权限**（谁有权决定版本号）、发布流程与守卫；**动版本模型或 `release.yml` 前先读它**。
+- `docs/adr/`：架构决策记录库（47 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
 - `crates/dsh-contracts/src/constants.rs`（契约常量）、`errors.rs`（错误码 + `AppError`）、`ipc.rs`（`IpcEnvelope<T>` + 形状测试）、`rpc.rs`（JSON-RPC 唯一契约源，⚠️ 无运行时消费者）。
@@ -144,6 +145,7 @@
 | ↳ 命令面 `Result` 语义 | ✅ 已接线 | `commands.rs::CommandResult` 文档注释 + 测试 | 外层 `Result` **恒为 `Ok`**（Tauri 编译要求）；语义全在内层封套。**返回 `Err` 会丢掉错误码**，属违规 |
 | **自动更新链路** | ✅ 已接线（2026-09-10 批次 B 闭环） | `src-tauri/src/update.rs` + `tauri-plugin-updater`（`lib.rs:58`、`UpdateManager` 构造于 `lib.rs:145`）；`tauri.conf.json` 开启 `bundle.createUpdaterArtifacts` | 菜单 `updates-check` → `window::show_updates_page` + `UpdateManager::check(true)`；`frontend/updates.html` 调 `updates_status` / `updates_check` / `updates_download` / `updates_install` / `updates_skip` 并监听 `updates://status` |
 | ↳ 更新源归属与签名密钥 | ✅ 已闭环（2026-09-10；**端点 2026-09-30 通道化**，见 [ADR-053](docs/adr/053-channelized-updater-manifest.md)） | 端点按通道指向滚动 Release（`releases/download/updater-<channel>/latest.json`），**URL 的唯一产地是 `scripts/updater-manifest.mjs`**，由 `tauri build --config` 在构建期注入（`tauri.conf.json` 只留默认值）；配置里的 `pubkey` 与 `~/.tauri/dsh-desktop.key.pub` **逐字节一致** | 私钥经 CI Secret `TAURI_SIGNING_PRIVATE_KEY` 注入（无口令），本地离线备份在 `~/.tauri/backup/`。发布后由 `npm run gate -- update-channel` 断言「端点 version ≥ 该通道最新 tag」 |
+| **OS 级代码签名 / 公证** | 🗄️ **刻意不做——能力边界，非欠债、非计划中**（ADR-046 / ADR-044）。词表里 🗄️ 是唯一表示「裁定不做」的状态；本条与「曾实现后删除」的区别是它**从未实现过** | **无代码，且裁定不接线**：不申请 Authenticode / Developer ID / Azure Trusted Signing 证书，不加 `certificateThumbprint` / `macOS.signingIdentity`，不在工作流注入 `APPLE_*` / `WINDOWS_CERTIFICATE*`。判据（防回归）：上述词汇在 `.github/`、`tauri.conf.json`、`scripts/` 内**零命中即正确**（出现命中反而是违规接线）；README 不得正面宣称（`verify:claims` 的 `os-signing-claim`） | **无**——完整性签名的唯一一层是 updater 的 **minisign**（`plugins.updater.pubkey`）。两条链**不可互相替代**，本行不影响 minisign。用户侧代价与解法写在 `SECURITY.md`「明示边界」与两份 README |
 | **应用内日志查看器** | ✅ **已接线（2026-09-10 批次 D）** | `frontend/logs.html` + `crates/dsh-host/src/logs_view.rs`（三来源，尾部读取，**截断如实上报 `truncated`**） | 菜单「Harness → View Logs…」→ `window::show_logs_page`；页面调 `logs_read` / `open_logs` / `diagnostics_export` / `harness_open`。「Reveal Log Folder」保留为次入口 |
 | **错误页「安全模式」按钮** | ✅ 已接线（2026-09-10 修复调用名；同日补完启动链路） | `src-tauri/frontend/error.html` 调 `safe_mode_action`（`action: "restart"`），失败经 `fail()` 可见上报 | 错误页按钮 → `commands::safe_mode_action` → `HarnessSupervisor::restart_in_safe_mode`（此前调 `restart()`，实际只是**普通重启**——按钮曾是谎话） |
 | **恢复页交互** | ✅ **已接线（2026-09-10 批次 C）** | `plugin-recovery.html` 调 `recovery_status` / `recovery_action`（`restart` / `safe-mode` / `show-log` / `quit`）并**检查封套 `success`**；监听 `harness://status` 反映恢复进度 | 错误页「插件恢复…」按钮 → `recovery_open` → `show_recovery_page`。数据来自 `dsh_host::diagnostics`（此前零消费者的那条链） |
