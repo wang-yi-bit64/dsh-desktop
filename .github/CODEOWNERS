@@ -1,0 +1,188 @@
+# CODEOWNERS — 本仓代码所有者与默认审核人
+#
+# ## 为什么有它（以及为什么只有一个所有者）
+#
+# 本仓是**单人公开仓库**：owner = `wang-yi-bit64`，协作者也只此一个（`gh api
+# repos/wang-yi-bit64/dsh-desktop/collaborators` 实测 2026-10-08）。因此这里**不能**
+# 出现 `@org/team` 形式——本仓没有组织、没有团队，写一个不存在的团队名不会报错，
+# 只会让该规则**静默失效**（GitHub 对未解析的 owner 直接忽略该条）。这正是本仓
+# 最忌讳的形态：配置看着在、实际不生效、没有任何提示（同 `pr-agent.yml` 放错目录，
+# 见 ADR-054）。
+#
+# 因此每条规则都指向唯一真实所有者 `@wang-yi-bit64`。它的价值**不在**于「拦住谁」，
+# 而在于：
+#   1. 把「改哪些文件需要谁看」变成**可 diff、可评审**的仓库内事实，而不是口口相传；
+#   2. 未来若加协作者，只需替换下面的 handle，路径划分本身不用重来；
+#   3. 一旦开启分支保护，这些规则立刻生效，不需要回头补。
+#
+# ## ⚠️ 现状：这些规则目前**不产生任何拦截**
+#
+# `main` 分支**未受保护**（实测 `gh api repos/.../branches/main/protection` 返回
+# 404 Branch not protected）。CODEOWNERS 只在**分支保护开启「Require review from
+# Code Owners」**时才强制审核。在此之前本文件是**声明**，不是**门禁**——
+# 不得描述为「已启用代码审核」。启用路径：Settings → Branches → 勾选
+# "Require a pull request before merging" → "Require review from Code Owners"。
+#
+# ## 语法与顺序（GitHub 口径，**别按直觉写**）
+#
+# - **最后匹配的规则生效**（不是最具体的生效）。
+# - ⚠️ **`*` 必须放在最前面**，不能当兜底放末尾。`*` 的匹配范围等价于 `**/*`，
+#   **包含任意层级的文件**；放到末尾它会盖掉上面每一条细则，让整个文件退化成
+#   「所有文件都归一个人」。GitHub 官方示例正是把 `*` 写在开头当默认值，并用
+#   "Unless a later match takes precedence" 描述它——顺序反了这个文件就白写了。
+# - 不含 `/` 的模式匹配任意层级；含 `/` 或 `/` 开头的模式锚定仓库根。
+# - 目录尾斜杠 = 整棵子树（`docs/` ≡ `docs/**`）；`*` 只在单层内通配，`**` 跨多级。
+# - ⚠️ CODEOWNERS **不支持** `!` 取反、`[ ]` 字符范围（这两条是 gitignore 语法，
+#   在 CODEOWNERS 里**不生效**）。靠「后面的规则覆盖前面的」来收窄范围。
+# - 路径**大小写敏感**；`#` 起注释；语法非法的行会被**静默跳过**。
+#   自查入口：仓库页打开本文件看高亮，或调 API
+#   `GET /repos/wang-yi-bit64/dsh-desktop/codeowners/errors`。
+
+# ---------------------------------------------------------------------------
+# 0. 默认所有者（**必须最先**——理由见文件头「语法与顺序」）
+#
+# 它是 `**/*` 的等价物：覆盖本仓所有未被下方细则命中的文件（`data/`、`dist/`、
+# `.gitignore` / `.nvmrc` / `LICENSE` 这类根配置，以及将来新增的顶层路径）。
+# 放在开头才会被下方细则安全覆盖。
+# ---------------------------------------------------------------------------
+*                              @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 1. 自我管辖：改 CODEOWNERS 的规则本身也要人看
+# ---------------------------------------------------------------------------
+/.github/CODEOWNERS            @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 2. CI / CD 与发布链路（最高风险面）
+#
+# 这些文件决定**发什么、怎么发、用谁的密钥发**。release.yml 持有发布签名私钥的
+# 注入点（CI Secret `TAURI_SIGNING_PRIVATE_KEY`），工作流的浮动 action ref 或
+# 一处 trigger 写坏就能改变产物来源——ADR-054 的两条规则就是为这类事故写的。
+# ---------------------------------------------------------------------------
+/.github/workflows/            @wang-yi-bit64
+/.github/dependabot.yml        @wang-yi-bit64
+/.github/ISSUE_TEMPLATE/       @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 3. scripts/ —— 组装、门禁、发布工具链（本仓最密集的风险面）
+#
+# ⚠️ **顺序是全文件最容易写错的地方**：`/scripts/` 覆盖整个目录，必须放在
+# 所有 `/scripts/<file>` 细则**之前**，否则它能盖掉 §4/§5 的每一条（最后匹配生效）。
+# 曾按「具体→泛化」的直觉把 `/scripts/` 写在 §5 末尾，被 `tmp-co-sim.mjs` 的
+# 属性模拟抓出 11 个细则全部失效——不要改回去。
+#
+# 具体归属见下方各小节；本行只保证目录兜底。
+# ---------------------------------------------------------------------------
+/scripts/                      @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 4. 版本模型与发布台账（单一事实源，改一处影响所有已安装用户）
+#
+# `version-policy.md` 是版本号唯一权威（ADR-061）；`dsh-targets.mjs` 是通道总表；
+# `updater-manifest.mjs` 是更新源 URL 的唯一产地；`release-ledger.mjs` 是序号产地。
+# 这几个文件错了不会让门禁变红，只会让**安装包声称的版本与它实际的运行时不一致**，
+# 而后者要到用户装上之后才暴露。
+# ---------------------------------------------------------------------------
+/scripts/dsh-targets.mjs       @wang-yi-bit64
+/scripts/version.mjs           @wang-yi-bit64
+/scripts/verify-version.mjs    @wang-yi-bit64
+/scripts/release-ledger.mjs    @wang-yi-bit64
+/scripts/updater-manifest.mjs  @wang-yi-bit64
+/harness-locks/                @wang-yi-bit64
+/runtime-locks/                @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 5. 门禁体系（唯一产地 + 编排器 + 各独立守卫）
+#
+# `gate-manifest.mjs` 是全部门禁的唯一产地，`gates.mjs` 是唯一入口。本仓反复出现的
+# 一条教训是「守卫写了却不在任何自动流程里」⇒ 清单与编排器本身必须有人看。
+# ---------------------------------------------------------------------------
+/scripts/gate-manifest.mjs     @wang-yi-bit64
+/scripts/gates.mjs             @wang-yi-bit64
+/scripts/verify-*.mjs          @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 6. 组装与打包工具链（决定产物内容，构建期失败最难回溯）
+# ---------------------------------------------------------------------------
+/scripts/prepare-harness.mjs   @wang-yi-bit64
+/scripts/prepare-runtime.mjs   @wang-yi-bit64
+/scripts/fetch-primary-runtime.mjs @wang-yi-bit64
+/scripts/prune-harness-deps.mjs @wang-yi-bit64
+/scripts/package-cli.mjs       @wang-yi-bit64
+/scripts/package-portable.mjs  @wang-yi-bit64
+/scripts/patch-layers.mjs      @wang-yi-bit64
+/scripts/changelog.mjs         @wang-yi-bit64
+/scripts/conventional-commits.mjs @wang-yi-bit64
+/scripts/harness-lockfile.mjs  @wang-yi-bit64
+/scripts/merge-migrate-patches.mjs @wang-yi-bit64
+/scripts/recount-patches.mjs   @wang-yi-bit64
+/scripts/relocate-patch-hunks.mjs @wang-yi-bit64
+/scripts/check-patch-applicability.mjs @wang-yi-bit64
+/scripts/prune-platform-variants.mjs @wang-yi-bit64
+/scripts/remove-tree.mjs       @wang-yi-bit64
+/scripts/stub-tauri-resources.mjs @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 7. 补丁与 vendored 包（按上游通道分目录；改锚点与重命名补丁必须同批）
+# ---------------------------------------------------------------------------
+/patches/                      @wang-yi-bit64
+/packages/                     @wang-yi-bit64
+
+# `vendor/` 是**本地桌面定制包**（`dshmarket`、`dsh-desktop-market-installer`、
+# `dsh-desktop-client-ui` 等），会随产物进入用户的运行时。它**不是**上游代码，
+# 改动等于直接改用户机器上跑的东西——与 `src-tauri/` 同级对待。
+/vendor/                       @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 8. Rust 工作区
+#
+# `dsh-contracts` 是契约与常量的唯一产地（CX- 编号）；
+# `dsh-host` 是无 GUI 核心（INV-6 严格 headless，判据：能否在无窗口系统的机器上测试）；
+# `src-tauri` 是桌面应用层，含 IPC 命令面与自动更新调用方。
+# ---------------------------------------------------------------------------
+/Cargo.toml                    @wang-yi-bit64
+/Cargo.lock                    @wang-yi-bit64
+/deny.toml                     @wang-yi-bit64
+/crates/                       @wang-yi-bit64
+/src-tauri/                    @wang-yi-bit64
+
+# `build/` 是运行时启动脚本与安全防护注入——被打包进产物、在用户机器上执行。
+/build/                        @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 9. 文档的口径面
+#
+# `version-policy.md` 与 `docs/adr/` 是决策的唯一产地；改 ADR 计数会让
+# `verify-doc-facts` 判红。`AGENTS.md` 与两份 README 受 `verify-claims` 约束
+# （状态词表不得单边漂移、禁止表述、§7.2 欠债登记）。
+#
+# ⚠️ 顺序：**宽规则在前、窄规则在后**。`/docs/` 会命中它下面的一切，若它写在
+# `/docs/adr/` 之后，后者就盖不过它、被静默吞掉（最后匹配生效）——本文件确曾按
+# 「具体→泛化」的直觉排过一版，被 `tmp-co-sim.mjs` 的归属模拟抓出来，不要改回去。
+# 同一条纪律在 §3 反向出现（`/scripts/` 必须先于所有 `/scripts/<file>`）。
+# ---------------------------------------------------------------------------
+/docs/                         @wang-yi-bit64
+/docs/adr/                     @wang-yi-bit64
+/docs/version-policy.md        @wang-yi-bit64
+/docs/release-runbook.md       @wang-yi-bit64
+/AGENTS.md                     @wang-yi-bit64
+/README.md                     @wang-yi-bit64
+/README.zh-CN.md               @wang-yi-bit64
+/SECURITY.md                   @wang-yi-bit64
+/CHANGELOG.md                  @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 10. 依赖清单（供应链面）
+# ---------------------------------------------------------------------------
+/package.json                  @wang-yi-bit64
+/package-lock.json             @wang-yi-bit64
+/skills-lock.json              @wang-yi-bit64
+
+# ---------------------------------------------------------------------------
+# 11. Agent 技能目录
+#
+# `.agents/skills/` 是**被 git 跟踪**的技能定义树（含 `authoring-github-workflows`
+# 等），而它的内容是**面向 AI 的指令**——改一行就可能改变自动化行为，且不会有
+# 任何编译器或门禁看得见。与 `scripts/` 同级对待。
+# ---------------------------------------------------------------------------
+/.agents/                      @wang-yi-bit64

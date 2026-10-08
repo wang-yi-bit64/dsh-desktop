@@ -2,7 +2,7 @@
 /**
  * verify-github-config.mjs — .github/ 下的配置准入守卫（ADR-054）
  *
- * ## 它守什么（两条规则，各自都能静默失效）
+ * ## 它守什么（四条规则，各自都能静默失效）
  *
  * A. **工作流必须住在 .github/workflows/ 下**。GitHub Actions 只从该目录加载文件；
  *    放在别处的工作流是「看得见、从不运行」的死配置——YAML 合法、编辑器有高亮、
@@ -13,6 +13,29 @@
  * B. **第三方 action 必须钉到 40 位 commit SHA**。浮动 ref（@v5 / @main / @stable）
  *    会在上游被改动时静默换掉代码——本仓持有发布签名私钥，那是最不该有的组合。
  *
+ * C. **未加引号的标量里不允许出现 `: `（冒号 + 空格）**（见下方专节）。
+ *
+ * D. **CODEOWNERS 必须是「合法且非全绿恒真」的**（2026-10-08 新增）。
+ *    CODEOWNERS 没有解析器、没有编译器、GitHub 对非法行**静默跳过**（不报错），
+ *    因此它天然落在本文件要守的「配置看着在、实际不生效」这一类里。本规则查四点，
+ *    每一点都对应一次真实踩坑或一条官方口径：
+ *      D1. `*`（默认所有者）**必须在第一条规则**。GitHub 是「最后匹配生效」，
+ *          而单个 `*` 的匹配范围等价于 `**` + `/*`（**含任意层级**）。把它当兜底放末尾
+ *          会盖掉上面每一条细则，整个文件退化成「所有文件归同一个人」——
+ *          配置合法、GitHub 不报错、hover 显示有 owner，**只是你的划分全废了**。
+ *          官方示例把 `*` 写在开头并注明 "Unless a later match takes precedence"。
+ *      D2. 每条规则恰有 1 个 owner，且是 `@user` 形态（`@org/team` 需 org 存在，
+ *          本仓是个人仓库）。owner 写错一个字符 GitHub 只忽略该条、不报错。
+ *      D3. **目录型规则必须与它的父目录同值**。CODEOWNERS 里「后面的规则覆盖前面的」
+ *          是唯一收窄手段，因此「宽在前、窄在后」才有效；反之则该目录下的细则全是
+ *          **装饰**——它们仍然存在、仍然能被 grep 到、reviewer 仍然相信它们在生效。
+ *          本规则用值比较而非匹配模拟来判定：同一个 owner 下，父目录规则与子路径
+ *          规则的先后顺序不影响归属结果，只有**owner 不同**时才需要顺序保证。
+ *          因此本仓「全部规则同 owner」时 D3 恒真——它防的是**将来加了协作者之后**，
+ *          有人按直觉把具体规则写在泛化规则前面。
+ *      D4. 模式不能含 `!` 取反 / `[ ]` 字符范围——这两条是 gitignore 语法，
+ *          在 CODEOWNERS 里**不生效**（GitHub 文档明列）。写了等于没写。
+ *
  * ## 为什么 B 有一张基线表
  * `PRE_EXISTING_FLOATING` 是**预先存在**的浮动 ref，属 docs/dev-plan-defect-remediation.md
  * 的 S3-3，尚未执行。本守卫对**新增**浮动 ref 一律报错（防回归），并在基线非空时打印
@@ -21,8 +44,10 @@
  * ## 可证伪性
  * --self-test 以「修复前的真实形态」为夹具（错放目录的工作流、@v5 的 action）：
  * 喂进去必须报红。这些夹具用的就是本仓自己踩过的写法，不是构造出来的玩具。
+ * D 的夹具同样是**本文件初版真实写错的两处**（`*` 放末尾、`/docs/` 写在
+ * `/docs/adr/` 之后），不是假想形态。
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { argv, exit } from 'node:process'
 
@@ -132,6 +157,164 @@ export function extractUnsafeScalars(text) {
     .map(({ line, raw }) => ({ line, raw }))
 }
 
+/**
+ * 解析 CODEOWNERS 文本成规则列表。
+ *
+ * 只做**保守**解析：不认识的行（缺 owner、`!` 取反等）会被原样留下交给调用方判，
+ * 而不是静默丢弃——静默丢弃正是本文件要防的形态（GitHub 对非法行就是这么做的）。
+ *
+ * @param {string} text
+ * @returns {{ line: number, raw: string, pattern: string, owners: string[] }[]}
+ */
+export function parseCodeowners(text) {
+  const rules = []
+  const lines = text.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i]
+    const bare = raw.replace(/#.*$/, '').trim()
+    if (bare === '') continue
+    const parts = bare.split(/\s+/)
+    rules.push({ line: i + 1, raw, pattern: parts[0], owners: parts.slice(1) })
+  }
+  return rules
+}
+
+/** `@user` 或 `@org/team`（另允许邮箱形态，但本仓不用）。 */
+const OWNER_RE = /^(?:@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\/[A-Za-z0-9._-]+)?|[^\s@]+@[^\s@]+\.[^\s@]+)$/
+
+/**
+ * CODEOWNERS 准入检查（规则 D）。
+ *
+ * @param {string} text CODEOWNERS 全文
+ * @param {(rel: string) => string[]} listFiles 给定目录返回其下的文件（相对仓库根、posix 风格）；
+ *        用于判断「目录规则是否覆盖到真实文件」——扫出数为 0 时不能判通过（AGENTS §7.3）。
+ * @returns {{ problems: string[], ruleCount: number, dirRules: number, matchedFiles: number }}
+ */
+export function checkCodeowners(text, listFiles) {
+  const problems = []
+  const rules = parseCodeowners(text)
+
+  if (rules.length === 0) {
+    problems.push(
+      'CODEOWNERS 里扫出 0 条规则——这不是「干净」，是解析器或文件失效了。先怀疑解析器，再怀疑源码（AGENTS.md §7.3）。',
+    )
+    return { problems, ruleCount: 0, dirRules: 0, matchedFiles: 0 }
+  }
+
+  // D1：`*` 必须在第一条规则。
+  const starIdx = rules.findIndex((r) => r.pattern === '*')
+  if (starIdx === -1) {
+    problems.push(
+      'CODEOWNERS 缺少 `*` 默认所有者规则。没有它，未被任何细则命中的文件**不会有 code owner**，' +
+        '分支保护下这类改动无人被要求 review。',
+    )
+  } else if (starIdx !== 0) {
+    problems.push(
+      `CODEOWNERS:${rules[starIdx].line}：` + '`*` 默认所有者必须是**第一条规则**，现在排在第 ' +
+        (starIdx + 1) + ' 条。' +
+        'GitHub 是「最后匹配生效」，而单个 `*` 的匹配范围等价于 `**/*`（含任意层级），' +
+        '放在后面它会盖掉上面每一条细则——文件仍合法、GitHub 不报错、hover 仍显示 owner，' +
+        '但你的路径划分**全部失效**。官方示例把 `*` 写在开头（"Unless a later match takes precedence"）。',
+    )
+    // 同一问题会在归因上层层伪装，这里额外把「被盖掉」的条数说清楚，避免读者以为只是顺序难看。
+    const shadowedPatterns = rules.slice(0, starIdx).map((r) => r.pattern)
+    if (shadowedPatterns.length > 0) {
+      // ⚠️ 不要在这条模板字符串里写反引号包住的 `*` —— 反引号会**提前结束模板字面量**
+      // （本行初版就因此把 message 拼成 NaN，夹具抓出来的）。用单引号形态描述它。
+      problems.push(
+        '↳ 具体后果：上面 ' + shadowedPatterns.length + ' 条细则（' +
+          shadowedPatterns.join(', ') + '）已被那条 * 规则全部盖掉。',
+      )
+    }
+  }
+
+  // D2：每条规则恰有 1 个合法 owner。
+  for (const r of rules) {
+    if (r.owners.length === 0) {
+      problems.push(
+        `CODEOWNERS:${r.line}：规则 \`${r.pattern}\` 没有 owner。` +
+          'GitHub 会把该行**静默跳过**（不报错）——看着有规则，实际没人被指派。',
+      )
+      continue
+    }
+    if (r.owners.length > 1) {
+      problems.push(
+        `CODEOWNERS:${r.line}：规则 \`${r.pattern}\` 有 ${r.owners.length} 个 owner。` +
+          '本仓是单人仓库，多 owner 会让人误以为存在审批分工。' +
+          '（GitHub 语义：同一 pattern 的多 owner 须在同一行，任一批准即可。）',
+      )
+    }
+    for (const o of r.owners) {
+      if (!OWNER_RE.test(o)) {
+        problems.push(
+          `CODEOWNERS:${r.line}：owner \`${o}\` 形态非法。` +
+            '必须是 `@user` 或 `@org/team`；写错一个字符 GitHub 只忽略该条、**不报错**。',
+        )
+      }
+      if (o.includes('/')) {
+        problems.push(
+          `CODEOWNERS:${r.line}：owner \`${o}\` 是团队形态。` +
+            '本仓是**个人公开仓库**（owner 与唯一 collaborator 均为 wang-yi-bit64，无组织），' +
+            '不存在的团队会被 GitHub 静默忽略 ⇒ 该规则永不生效。用 `@wang-yi-bit64`。',
+        )
+      }
+    }
+  }
+
+  // D4：`!` 取反 / `[ ]` 字符范围是 gitignore 语法，CODEOWNERS 不支持（官方文档明列）。
+  for (const r of rules) {
+    if (r.pattern.startsWith('!')) {
+      problems.push(
+        `CODEOWNERS:${r.line}：模式 \`${r.pattern}\` 用了 \`!\` 取反——` +
+          'CODEOWNERS **不支持**取反（GitHub 文档明列 gitignore 的 `!` 在此无效）。' +
+          '要收窄范围只能靠「后面的规则覆盖前面的」。',
+      )
+    }
+    if (/\[[^\]]*\]/.test(r.pattern)) {
+      problems.push(
+        `CODEOWNERS:${r.line}：模式 \`${r.pattern}\` 用了 \`[ ]\` 字符范围——` +
+          'CODEOWNERS **不支持**（同上）。',
+      )
+    }
+  }
+
+  // D3：泛化规则（祖先目录）与其下的具体规则**若 owner 不同**，泛化必须在前。
+  //     同 owner 时顺序不影响结果，因此本仓恒真；防的是加协作者后按直觉写反。
+  const dirRules = rules.filter((r) => r.pattern.endsWith('/') && r.pattern !== '*/')
+  let matchedFiles = 0
+  for (const ancestor of dirRules) {
+    const base = ancestor.pattern.replace(/^\//, '').replace(/\/$/, '')
+    for (const descendant of rules) {
+      if (descendant === ancestor) continue
+      const dBase = descendant.pattern.replace(/^\//, '').replace(/\/$/, '')
+      const isUnder =
+        dBase !== base && (dBase.startsWith(base + '/') || dBase === base)
+      if (!isUnder) continue
+      if (descendant.line < ancestor.line) {
+        problems.push(
+          `CODEOWNERS:${descendant.line}：\`${descendant.pattern}\` 是 \`${ancestor.pattern}\` 的子孙，` +
+            '却排在它**前面**——「最后匹配生效」会让祖先规则反过来盖掉这条细则。' +
+            '把宽的写在前面、窄的写在后面。',
+        )
+      }
+    }
+    // 该目录规则是否真的覆盖到文件？扫出 0 个要报，否则守卫在替不存在的检查背书。
+    const files = typeof listFiles === 'function' ? listFiles(base) : []
+    if (files.length === 0) {
+      // 目录不存在本身不算错（例如 packages/ 在两条线都清空后确实为空），但必须**显式说明**。
+      problems.push(
+        `CODEOWNERS:${ancestor.line}：目录规则 \`${ancestor.pattern}\` 在仓库里找不到对应文件或目录。` +
+          '若该目录确实还不存在（尚未创建的占位），请确认这是有意的；' +
+          '若目录已改名或删除，这条规则是死规则，应同步更新。',
+      )
+    } else {
+      matchedFiles += files.length
+    }
+  }
+
+  return { problems, ruleCount: rules.length, dirRules: dirRules.length, matchedFiles }
+}
+
 /** 纯函数：给定 [{path, text}]，返回 problems。路径用 posix 风格以便跨平台判据一致。 */
 export function checkFiles(files, allowedFloating = PRE_EXISTING_FLOATING) {
   const problems = []
@@ -202,6 +385,52 @@ function main() {
         '（S3-3 未执行）。空表是目标状态。',
     )
   }
+
+  // 规则 D：CODEOWNERS 准入。
+  // ⚠️ 它**不是** YAML，因此不在上面的 walk() 收集面里；这里单独读。
+  const coPath = join(ROOT, '.github', 'CODEOWNERS')
+  if (!existsSync(coPath)) {
+    problems.push(
+      '.github/CODEOWNERS 不存在。本仓要求它有两条理由：(1) 分支保护一旦开启，' +
+        '「Require review from Code Owners」需要有它才有效；(2) 路径 → 审核人的划分是仓库内可评审的事实。' +
+        '若有意删除，请同时更新 docs/adr/ 与删除本条断言（不要留下「文件没了、守卫还在找它」的状态）。',
+    )
+  } else {
+    const coText = readFileSync(coPath, 'utf8')
+    // 目录规则的「是否覆盖到真实文件」判定：直接看磁盘（不管是否被 git 跟踪——
+    // 这条只用来区分「目录不存在」与「目录存在但空」，两者都合法，语气不同而已）。
+    const co = checkCodeowners(coText, (rel) => {
+      const dir = join(ROOT, rel)
+      if (!existsSync(dir)) return []
+      try {
+        return readdirSync(dir)
+      } catch {
+        return []
+      }
+    })
+    // 占位目录的说明不是错误，降级为提示；其余是错误。
+    for (const p of co.problems) {
+      if (/找不到对应文件或目录/.test(p)) {
+        console.log('· 提示：' + p)
+      } else {
+        problems.push(p)
+      }
+    }
+    console.log(
+      '· CODEOWNERS：' + co.ruleCount + ' 条规则 · 目录规则 ' + co.dirRules + ' 条 · ' +
+        '目录规则共匹配 ' + co.matchedFiles + ' 个条目',
+    )
+    if (co.ruleCount === 0) {
+      problems.push('CODEOWNERS 扫出 0 条规则——先怀疑解析器，再怀疑源码（AGENTS.md §7.3）。')
+    }
+    if (co.dirRules > 0 && co.matchedFiles === 0) {
+      problems.push(
+        'CODEOWNERS 的目录规则一条都没匹配到仓库内容——「扫出来再校验」的扫出数为 0，' +
+          '不得判通过（AGENTS.md §7.3）。',
+      )
+    }
+  }
+
   if (problems.length > 0) {
     for (const p of problems) console.error('❌ ' + p)
     return 1
@@ -297,8 +526,98 @@ export function selfTest() {
   const r6 = checkFiles([{ path: join('.github', 'dependabot.yml'), text: dependabotSample }])
   check('扫出 0 个工作流必须报错而不是通过', r6.problems.some((p) => /扫描器失效/.test(p)))
   check('uses 数量 0 也必须报错', checkFiles([{ path: join('.github', 'workflows', 'x.yml'), text: 'on: [push]\njobs:\n  a:\n    runs-on: ubuntu-latest\n' }]).problems.some((p) => /0 个 uses/.test(p)))
+
+  // ---------------------------------------------------------------------------
+  // 规则 D：CODEOWNERS 的可证伪夹具
+  //
+  // 🔴 以下两个坏夹具是**本文件初版的真实写法**，不是构造出来的玩具：
+  //    本文件第一次写 CODEOWNERS 时就同时踩了 D1（`*` 放末尾）与 D3（`/docs/`
+  //    写在 `/docs/adr/` 之后），而两种写法都**没有**让任何工具报错——
+  //    是 owner 归属模拟（`.workbuddy/tmp-co-sim.mjs`）把它们揪出来的。
+  //    守卫必须能独立复现这两次误判，否则它只是装饰。
+  // ---------------------------------------------------------------------------
+  const coFiles = () => ['a.txt', 'b.txt'] // 目录存在且非空
+  const goodCo = [
+    '# 默认所有者必须最先',
+    '*                             @wang-yi-bit64',
+    '/.github/workflows/           @wang-yi-bit64',
+    '/docs/                        @wang-yi-bit64',
+    '/docs/adr/                    @wang-yi-bit64',
+    '',
+  ].join('\n')
+  const good = checkCodeowners(goodCo, coFiles)
+  check('D 好夹具：合法 CODEOWNERS 必须通过', good.problems.length === 0)
+
+  // D1 🔴 真实误判 1：`*` 放末尾
+  const starLast = [
+    '/.github/workflows/           @wang-yi-bit64',
+    '/docs/adr/                    @wang-yi-bit64',
+    '*                             @wang-yi-bit64',
+    '',
+  ].join('\n')
+  const d1 = checkCodeowners(starLast, coFiles)
+  check(
+    'D1 可伪证：`*` 放末尾必须报红（会盖掉全部细则）',
+    d1.problems.some((p) => /必须是\*\*第一条规则\*\*/.test(p)),
+  )
+  check(
+    'D1 报红时必须点名被盖掉的条目数（不能只说「顺序不对」）',
+    d1.problems.some((p) => /已被那条 \* 规则全部盖掉/.test(p)),
+  )
+  // `*` 在开头时必须放行——否则这条规则会把正确写法也毙掉。
+  check('D1 反向：`*` 在开头必须放行', checkCodeowners(goodCo, coFiles).problems.length === 0)
+
+  // D3 🔴 真实误判 2：子孙规则排在祖先规则之前
+  const descendantFirst = [
+    '*                             @wang-yi-bit64',
+    '/docs/adr/                    @wang-yi-bit64',
+    '/docs/                        @wang-yi-bit64',
+    '',
+  ].join('\n')
+  const d3 = checkCodeowners(descendantFirst, coFiles)
+  check(
+    'D3 可伪证：子孙规则排在祖先规则之前必须报红（细则是装饰）',
+    d3.problems.some((p) => /却排在它\*\*前面\*\*/.test(p)),
+  )
+
+  // D2：owner 形态
+  check(
+    'D2 可伪证：团队 owner 在个人仓库必须报红（会被静默忽略）',
+    checkCodeowners('*  @some-org/some-team\n', coFiles).problems.some((p) => /团队形态/.test(p)),
+  )
+  check(
+    'D2 可伪证：没有 owner 的规则必须报红（GitHub 静默跳过该行）',
+    checkCodeowners('*  @wang-yi-bit64\n/docs/\n', coFiles).problems.some((p) => /没有 owner/.test(p)),
+  )
+  check(
+    'D2 可伪证：owner 写错形态必须报红',
+    checkCodeowners('*  wang-yi-bit64\n', coFiles).problems.some((p) => /形态非法/.test(p)),
+  )
+
+  // D4：gitignore 专有语法在 CODEOWNERS 里不生效
+  check(
+    'D4 可伪证：`!` 取反必须报红（CODEOWNERS 不支持）',
+    checkCodeowners('*  @wang-yi-bit64\n!docs/  @wang-yi-bit64\n', coFiles).problems.some((p) => /取反/.test(p)),
+  )
+  check(
+    'D4 可伪证：`[ ]` 字符范围必须报红（CODEOWNERS 不支持）',
+    checkCodeowners('*  @wang-yi-bit64\n/docs/*.[md]  @wang-yi-bit64\n', coFiles).problems.some((p) => /字符范围/.test(p)),
+  )
+
+  // 「扫出 0 条必须报错」纪律
+  check(
+    'D 扫出 0 条规则必须报错而不是通过',
+    checkCodeowners('# 只有注释\n\n', coFiles).problems.some((p) => /扫出 0 条规则/.test(p)),
+  )
+  // 目录规则匹配到 0 个条目 → 提示（不是错误）：这里断言它至少**被报出来**。
+  check(
+    'D 目录规则匹配 0 个条目必须被报出（不得静默）',
+    checkCodeowners('*  @wang-yi-bit64\n/nonexistent-dir/  @wang-yi-bit64\n', () => [])
+      .problems.some((p) => /找不到对应文件或目录/.test(p)),
+  )
+
   if (failed > 0) { console.error('verify-github-config self-test 失败 ' + failed + ' 项'); return 1 }
-  console.log('✅ verify-github-config 自检通过（17 项）')
+  console.log('✅ verify-github-config 自检通过（28 项）')
   return 0
 }
 
