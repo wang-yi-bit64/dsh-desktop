@@ -412,7 +412,7 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
       ],
       delegates: [
         `步骤⑤ 更新 lock：node scripts/prepare-harness.mjs --target ${target} --update-lockfile`,
-        `步骤⑧ 补丁适用性：node ${PATCH_APPLICABILITY_SCRIPT}`,
+        `步骤⑧ 补丁适用性：node ${PATCH_APPLICABILITY_SCRIPT} --target=${upstreamDsh} --dsh-target=${target}`,
       ],
     },
   };
@@ -453,13 +453,47 @@ export function snapshotFiles(files) {
 }
 
 /**
+ * 步骤⑧的**参数合成**（纯函数，可证伪）。
+ *
+ * 🔴 为什么单独抽出来：`--apply` 首次端到端运行（2026-10-10）即暴露——此前这里
+ *    **不带任何参数**地 spawn 补丁脚本，子进程打印用法后以非零退出，步骤⑧**恒失败**
+ *    并触发整趟回滚。它是「写了但从未真正执行过的步骤」的又一例：`--plan` 不跑步骤⑧，
+ *    自测也不覆盖 spawn 参数，于是缺陷存活到首次真跑。
+ *
+ * 语义（子进程 CLI 的约定，`check-patch-applicability.mjs` 头部）：
+ *   · `--target=<版本>` 是**待检的上游版本**（升级候选）⇒ 传上游精确版本 `upstreamDsh`；
+ *   · `--dsh-target=<name>` 选**哪一套补丁** ⇒ 传目标键 `target`。
+ *
+ * @param {object} input
+ * @param {string} input.target - 目标键（`next` / `alpha`）。
+ * @param {string} input.upstreamDsh - 上游精确版本（如 `0.2.1-alpha.1`）。
+ * @returns {string[]|null} 子进程参数；缺输入时返回 `null`（调用方据此直接判失败）。
+ */
+export function patchApplicabilityArgs({ target, upstreamDsh }) {
+  if (!target || !upstreamDsh) return null;
+  return [`--target=${upstreamDsh}`, `--dsh-target=${target}`];
+}
+
+/**
  * 步骤⑧：补丁适用性（子进程，**不** import——它有自己的 CLI 语义与自测）。
  *
- * @param {string} root - 仓库根。
+ * @param {object} input
+ * @param {string} [input.root] - 仓库根。
+ * @param {string} input.target - 目标键（选哪套补丁）。
+ * @param {string} input.upstreamDsh - 待检的上游精确版本。
  * @returns {{ ok: boolean, detail: string }}
  */
-export function runPatchApplicability(root = process.cwd()) {
-  const result = spawnSync(process.execPath, [resolve(root, PATCH_APPLICABILITY_SCRIPT)], {
+export function runPatchApplicability({ root = process.cwd(), target, upstreamDsh } = {}) {
+  const args = patchApplicabilityArgs({ target, upstreamDsh });
+  if (args === null) {
+    return {
+      ok: false,
+      detail:
+        '缺 target 或 upstreamDsh ⇒ 无法构造补丁适用性检查的参数' +
+        '（--dsh-target 选补丁集、--target 是待检上游版本）。这是调用方缺陷，不是补丁问题。',
+    };
+  }
+  const result = spawnSync(process.execPath, [resolve(root, PATCH_APPLICABILITY_SCRIPT), ...args], {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -698,6 +732,24 @@ export function selfTest() {
   cyclic.self = cyclic;
   eq('describeError：循环引用对象仍可读（不抛、不退化成 [object Object]）', describeError(cyclic), '{"code":"EPERM","self":"[循环引用]"}');
 
+  // --- 步骤⑧的参数合成（2026-10-10 真实缺陷的回归夹具）-----------------------
+  // 真实形态：`--apply` 首次端到端跑即在此失败——spawn 不带参数，子进程打印用法后退出。
+  // 期望值**硬编码**（不得由被测函数现算），并把「缺输入必须判失败」钉住：
+  // 若有人把判据弱化成「缺了也返回参数」，下面两条会红。
+  eq(
+    '步骤⑧：参数形状逐字正确（--target=上游精确版本 --dsh-target=目标键）',
+    patchApplicabilityArgs({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1' }),
+    ['--target=0.2.1-alpha.1', '--dsh-target=alpha'],
+  );
+  eq(
+    '步骤⑧：next 线同样带两个参数',
+    patchApplicabilityArgs({ target: 'next', upstreamDsh: '0.2.0-rc.2' }),
+    ['--target=0.2.0-rc.2', '--dsh-target=next'],
+  );
+  eq('步骤⑧：缺 target ⇒ null（调用方判失败，不得空跑）', patchApplicabilityArgs({ upstreamDsh: '0.2.1-alpha.1' }), null);
+  eq('步骤⑧：缺 upstreamDsh ⇒ null', patchApplicabilityArgs({ target: 'alpha' }), null);
+  eq('步骤⑧：两者皆缺 ⇒ null', patchApplicabilityArgs({}), null);
+
   if (failures.length > 0) {
     throw new Error(`sync-upstream-release 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
   }
@@ -874,7 +926,12 @@ function main(args) {
     return 1;
   }
   const versionFiles = [join(process.cwd(), 'package.json'), join(process.cwd(), 'Cargo.toml')];
-  const snapshot = snapshotFiles([ledgerPath(), ...versionFiles]);
+  // ⚠️ Cargo.lock 必须进快照：步骤⑤的 refreshLock 会改写它（含 workspace 成员版本号），
+  //    而后续任一步失败回滚时，若它不在快照里，就会残留「版本文件已回滚、lock 里还是
+  //    新版本号」的半套状态（2026-10-10 首次 --apply 实测泄漏过一次：步骤⑧失败后
+  //    Cargo.lock 里残留 0.2.1-alpha.1.1，而 package.json 已回滚成 0.7.4-alpha.1）。
+  const lockFile = join(process.cwd(), 'Cargo.lock');
+  const snapshot = snapshotFiles([ledgerPath(), ...versionFiles, lockFile]);
   console.log(`📸 快照：${snapshot.dir}`);
 
   const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
@@ -900,7 +957,7 @@ function main(args) {
   const lock = refreshLock();
   console.log(`${lock.ok ? '✅' : '⚠️ '} Cargo.lock：${lock.detail}`);
 
-  const patches = runPatchApplicability();
+  const patches = runPatchApplicability({ target, upstreamDsh });
   if (!patches.ok) {
     snapshot.restore();
     const cleaned = snapshot.cleanup();
