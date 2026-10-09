@@ -297,9 +297,16 @@ npm run package:cli -- --verify-download dist/cli --manifest dist/cli/<base>.man
 #       · 豁免判据不得锚在散文上，必须锚在机器可读标记（missing-artifact-class:）上。
 
 # 26. 推进版本号（dry-run 先看，再真改）
+npm run version:show                       # 显示真源与跟随处、最近 tag
+npm run version:show -- --explain          # 解释合成号（上游身份取自台账索引键）
+npm run version:set  -- 0.2.0              # 直接指定（非发布场景）
 npm run version:bump -- auto --dry-run     # 依提交历史判定升 major/minor/patch
-npm run version:set  -- 0.2.0              # 直接指定
 npm run version:bump -- minor --commit --tag   # 改文件 + 提交 + 打本地 tag（不推送）
+
+# 26b. **合成号发布主路径**（ADR-061；序号 n 只能由台账推导）
+npm run version:sync-upstream -- --plan     # 只读：打印将写的文件与委托步骤（--plan 是默认）
+npm run version:sync-upstream -- --apply    # 显式写：快照 → 台账 + 版本真源 → 跑守卫 → 失败回滚
+npm run version:verify-upstream             # 只核上游可信性（不推 n、不写盘；= 前门 --no-counter）
 
 # 27. 变更日志（产物入库 / 供 Release 正文使用）
 npm run changelog:write -- --version 0.2.0     # 写入 CHANGELOG.md

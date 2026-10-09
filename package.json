@@ -33,6 +33,8 @@
     "version:show": "node scripts/version.mjs show",
     "version:set": "node scripts/version.mjs set",
     "version:bump": "node scripts/version.mjs bump",
+    "version:sync-upstream": "node scripts/version.mjs sync-upstream",
+    "version:verify-upstream": "node scripts/version.mjs verify-upstream",
     "changelog:notes": "node scripts/changelog.mjs --notes",
     "changelog:write": "node scripts/changelog.mjs --write",
 

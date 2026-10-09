@@ -375,6 +375,68 @@ export function runPatchApplicability(root = process.cwd()) {
 }
 
 /**
+ * 把任意抛出物渲染成**可读**的失败说明。
+ *
+ * ## 为什么必须有它（真实缺陷的止血）
+ *
+ * 曾经这里写的是 `` `${error?.message ?? error}` ``。当抛出物**不是** `Error`（对象 / 字符串 /
+ * `undefined`）时，模板字符串会产出 `[object Object]`——调用方**无法从输出判断到底哪里错了**，
+ * 违反 `AGENTS.md` §7.1 规则 2（失败必须可辨识）。同一处的 `if (!wrote.ok)` 更严重：
+ * `writeVersion()` **不返回** `{ ok }`（见 {@link attemptVersionWrite}），于是该分支**恒成立**，
+ * 把成功也判成失败并回滚 ⇒ `--apply` 主路径**不可能成功**。
+ *
+ * @param {unknown} error - 捕获到的任意抛出物。
+ * @returns {string} 永远非空、且**永远不是** `[object Object]` 的说明。
+ */
+export function describeError(error) {
+  if (error instanceof Error) return error.message || error.name || '(Error 无 message)';
+  if (typeof error === 'string') return error === '' ? '(空字符串)' : error;
+  if (error === null) return 'null';
+  if (error === undefined) return 'undefined';
+  try {
+    // 带循环检测的 JSON 渲染：普通对象与自引用对象都得到**可读**结果，不会退化成 `[object Object]`。
+    const seen = new WeakSet();
+    const rendered = JSON.stringify(error, (_key, value) => {
+      if (value !== null && typeof value === 'object') {
+        if (seen.has(value)) return '[循环引用]';
+        seen.add(value);
+      }
+      return value;
+    });
+    if (typeof rendered === 'string' && rendered !== '') return rendered;
+  } catch {
+    /* 落到下一行的可辨识兜底 */
+  }
+  // 兜底只服务 JSON 渲染不了的输入（函数、Symbol 等）；它至少**点名类型**，不会含糊成 `[object Object]`。
+  return Object.prototype.toString.call(error);
+}
+
+/**
+ * 步骤⑦的**可注入**封装：执行写版本，并把「抛」与「返回值」两种失败形态归一。
+ *
+ * ## 契约差异是这一层存在的唯一理由
+ *
+ * `version.mjs` 里三个写函数的形状**不一致**：
+ * - `writeVersion()` → 失败**靠抛**，成功返回 `{ changed }`（**没有** `ok` 字段）；
+ * - `refreshLock()` / `writeChangelogSection()` → 返回 `{ ok, detail }`。
+ *
+ * 照后两者的形状去读 `writeVersion()` 会 `!undefined === true` ⇒ **恒判失败**。
+ * 因此这里用 `try/catch` 而不是读返回值，把两种形态统一成 `{ ok, changed | detail }`。
+ *
+ * @param {object} input
+ * @param {() => { changed?: string[] }} input.writer - 真正执行写入的函数（便于注入夹具）。
+ * @returns {{ ok: true, changed: string[] } | { ok: false, detail: string }}
+ */
+export function attemptVersionWrite({ writer }) {
+  try {
+    const result = writer();
+    return { ok: true, changed: Array.isArray(result?.changed) ? result.changed : [] };
+  } catch (error) {
+    return { ok: false, detail: describeError(error) };
+  }
+}
+
+/**
  * 纯逻辑自测（**不读盘、不联网**）。含注入式可伪证夹具。
  *
  * @returns {{ passed: number }} 通过项数。
@@ -439,6 +501,38 @@ export function selfTest() {
   // 伪证夹具：内部空白 / 非版本串必须判红。（首尾空白被有意 `trim()` 归一——那是宽容，不是漏洞。）
   eq('锁 exact：内部空格判红', validateExactSpec('0.2.1 alpha.1').length > 0, true);
   eq('锁 exact：尾随空白被归一（放行）', validateExactSpec('0.2.1-alpha.1 '), []);
+
+  // ---------------------------------------------------------------------------
+  // 🔴 步骤⑦ 的契约不一致（真实缺陷的回归夹具）
+  //
+  // `writeVersion()` 失败**靠抛**、成功返回 `{ changed }`——**没有** `ok` 字段。
+  // 曾经调用方按兄弟函数（`refreshLock` / `writeChangelogSection` 返回 `{ ok, detail }`）
+  // 的形状写成 `if (!wrote.ok)` ⇒ 恒成立 ⇒ **成功也被判失败并回滚**，`--apply` 不可能成功。
+  // 下面第 ① 条喂的就是**真实生产者**的返回形状，它是这段缺陷的**直接判据**。
+  // ---------------------------------------------------------------------------
+  const okShape = attemptVersionWrite({ writer: () => ({ changed: ['package.json', 'Cargo.toml'] }) });
+  eq('步骤⑦：喂真实返回形状 {changed}（无 ok 字段）必须判**成功**', okShape.ok, true);
+  eq('步骤⑦：透传改写清单', okShape.changed.length, 2);
+  const emptyShape = attemptVersionWrite({ writer: () => ({ changed: [] }) });
+  eq('步骤⑦：changed 为空也算成功（版本号本来就一致）', emptyShape.ok, true);
+  const threwError = attemptVersionWrite({ writer: () => { throw new Error('EPERM: 目标文件只读'); } });
+  eq('步骤⑦：抛 Error ⇒ 判失败', threwError.ok, false);
+  eq('步骤⑦：失败说明是可读的 message', threwError.detail, 'EPERM: 目标文件只读');
+  // 抛出物不是 Error 时，模板字符串会产出 [object Object]——调用方因此无法定位问题。
+  const threwObject = attemptVersionWrite({ writer: () => { throw { code: 'EPERM', path: 'Cargo.toml' }; } });
+  eq('步骤⑦：抛普通对象 ⇒ 仍判失败', threwObject.ok, false);
+  eq('步骤⑦：抛普通对象不得渲染成 [object Object]', threwObject.detail.includes('[object Object]'), false);
+  eq('步骤⑦：抛普通对象渲染成 JSON', threwObject.detail, '{"code":"EPERM","path":"Cargo.toml"}');
+  eq('步骤⑦：抛字符串原样透出', attemptVersionWrite({ writer: () => { throw '被拒绝'; } }).detail, '被拒绝');
+  // describeError 的兜底：任何输入都不得产出 [object Object]，也不得为空。
+  eq('describeError：undefined', describeError(undefined), 'undefined');
+  eq('describeError：null', describeError(null), 'null');
+  eq('describeError：空字符串不返回空串（否则日志里是一行空白）', describeError('') === '', false);
+  eq('describeError：数组可读', describeError(['a', 'b']), '["a","b"]');
+  // 自引用对象：朴素的 JSON.stringify 会抛，朴素兜底会得到 [object Object]——两者都必须被挡住。
+  const cyclic = { code: 'EPERM' };
+  cyclic.self = cyclic;
+  eq('describeError：循环引用对象仍可读（不抛、不退化成 [object Object]）', describeError(cyclic), '{"code":"EPERM","self":"[循环引用]"}');
 
   if (failures.length > 0) {
     throw new Error(`sync-upstream-release 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
@@ -568,15 +662,17 @@ function main(args) {
   writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
   console.log(`✅ 步骤⑥⑨：台账 ${LEDGER_RELATIVE} 追加 n=${plan.n}${release.commit ? `，回填 upstreamCommit` : ''}`);
 
-  const wrote = writeVersion(plan.desktopVersion);
+  // 🔴 不得写 `if (!writeVersion(...).ok)`：writeVersion 失败靠**抛**、成功返回 `{ changed }`，
+  //    没有 `ok` 字段 ⇒ 该判断恒成立，成功也会被当成失败并回滚（真实缺陷，见 attemptVersionWrite）。
+  const wrote = attemptVersionWrite({ writer: () => writeVersion(plan.desktopVersion) });
   if (!wrote.ok) {
     snapshot.restore();
     const cleaned = snapshot.cleanup();
     if (cleaned) console.warn(`⚠️  ${cleaned}`);
-    console.error(`❌ 步骤⑦：写版本失败（已回滚）：${wrote.error?.message ?? wrote}`);
+    console.error(`❌ 步骤⑦：写版本失败（已回滚）：${wrote.detail}`);
     return 1;
   }
-  console.log(`✅ 步骤⑦：package.json / Cargo.toml ← ${plan.desktopVersion}`);
+  console.log(`✅ 步骤⑦：package.json / Cargo.toml ← ${plan.desktopVersion}（改写 ${wrote.changed.length} 个文件）`);
   const lock = refreshLock();
   console.log(`${lock.ok ? '✅' : '⚠️ '} Cargo.lock：${lock.detail}`);
 

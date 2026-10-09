@@ -39,22 +39,30 @@
  *
  * ```bash
  * node scripts/version.mjs show                      # 显示各处版本与本仓库状态
+ * node scripts/version.mjs show --explain            # 解释合成号（上游身份取自台账索引键）
  * node scripts/version.mjs check                     # 校验一致性（CI 门禁；tag 构建时校验 tag 与版本匹配）
  * node scripts/version.mjs check --tag v0.2.0        # 显式指定 tag
  * node scripts/version.mjs set 0.2.0                 # 直接指定版本（唯一真源 + 跟随处一起改）
  * node scripts/version.mjs bump auto                 # 按提交历史自动决定升哪一位
  * node scripts/version.mjs bump minor --tag          # 升 minor 并打 tag（tag 默认不推送）
+ * node scripts/version.mjs sync-upstream --plan      # **合成号发布主路径**（转发给前门；--apply 才写）
+ * node scripts/version.mjs verify-upstream           # 只核上游可信性（不推 n、不写盘）
  * node scripts/version.mjs --self-test               # 纯逻辑自测
  * ```
+ *
+ * ⚠️ 合成号（ADR-061）之后，**正式发布路径是 `sync-upstream`**：序号 `n` 只能由台账推导，
+ * `bump` 依据的「提交历史决定升哪一位」是合成号之前的模型。`bump` 保留给非发布场景。
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { compareSemver, latestTag, readCommits, suggestBump } from './conventional-commits.mjs';
 import { insertSection, renderSection, repoUrl } from './changelog.mjs';
+import { DEFAULT_TARGET, DSH_TARGETS } from './dsh-targets.mjs';
+import { LEDGER_RELATIVE, allBuilds, deriveReleaseChannel, readLedger, splitRepoSequence } from './release-ledger.mjs';
 
 /** 需要保持同步的 Cargo 工作区成员（Cargo.lock 里的校验对象）。 */
 const CARGO_CRATES = ['dsh-desktop', 'dsh-contracts', 'dsh-host', 'dsh-host-cli'];
@@ -163,9 +171,20 @@ export function readVersions(root = process.cwd()) {
  * 写入用**定点替换**而不是 `JSON.parse` → 整体 `JSON.stringify`：后者会重排
  * 键序、可能改动缩进，把一次版本变更变成一整文件 diff——审阅时看不出真正改了什么。
  *
+ * ## ⚠️ 契约：失败**靠抛**，成功**没有** `ok` 字段
+ *
+ * 本函数遵循「抛异常即失败」，成功时返回 `{ changed }`。**它与同模块的
+ * `refreshLock()` / `writeChangelogSection()` 形状不同**——那两者返回 `{ ok, detail }`。
+ *
+ * 照后两者的形状读它（`if (!wrote.ok) …`）会 `!undefined === true` ⇒ **成功也被判失败**，
+ * 调用方会据此回滚。这不是假设：`sync-upstream-release.mjs` 的步骤⑦ 曾因此**恒判失败**，
+ * 使 `--apply` 主路径**不可能成功**。调用方必须用 `try/catch`，或走前门的
+ * `attemptVersionWrite()`（它把两种形态归一）。
+ *
  * @param {string} version - 新版本号。
  * @param {string} [root] - 仓库根路径。
- * @returns {{ changed: string[] }} 实际被改写的文件路径。
+ * @returns {{ changed: string[] }} 实际被改写的文件路径（可能为空数组）。
+ * @throws {Error} 版本号非法，或 `package.json` / `Cargo.toml` 读不到。
  */
 export function writeVersion(version, root = process.cwd()) {
   if (!parseSemver(version)) throw new Error(`拒绝写入非法版本号：${JSON.stringify(version)}`);
@@ -419,6 +438,111 @@ export function isPrerelease(version) {
 }
 
 // ---------------------------------------------------------------------------
+// 合成号解释（show --explain，计划 2d）
+// ---------------------------------------------------------------------------
+
+/**
+ * 解释一个**合成号**由什么组成（ADR-061）。
+ *
+ * ## 为什么必须回查台账，而不是把版本号切成几段
+ *
+ * `0.7.3-alpha.1`（历史遗留：上游就是 `0.7.3-alpha.1`，本仓**无**序号）与
+ * `0.2.1-alpha.1.3`（上游 `0.2.1-alpha.1`，本仓序号 `3`）**形状同构** ⇒ 只看桌面号
+ * **判不出**末段标识符属谁。上游身份的唯一产地是**台账索引键**，所以本函数：
+ * 先用 {@link splitRepoSequence} 判断「它是不是合成号形状」，再**去台账里查这条记录**，
+ * 所有上游字段都从**记录所属的索引键**取。
+ *
+ * ## 为什么不满足「台账里没有」就直接判红
+ *
+ * 「台账里没有」有**两种**成因，单看台账**不可区分**：
+ * ① 它早于台账机制（历史遗留，合法）；② 上游键漏登记 / 版本号被手工改成没登记过的一版（缺陷）。
+ *
+ * 因此判红只建立在**可判定**的矛盾上：当拆出的上游基址 `split.base` **本身是台账键**时，
+ * 「这个键明明是已知上游，却没有这条 n 的记录」就不可能由受支持路径产出——合成号的唯一
+ * 生产者是 `scripts/sync-upstream-release.mjs`，它写台账。这才是真问题（`kind: missing-record`）。
+ * 基址**不是**台账键时（`unknown-upstream`）只作说明、不判红：否则历史号 `0.7.3-alpha.1`
+ * 会让本命令**恒红**，一个恒红的守卫等于没有守卫（见 `AGENTS.md` §4 的同类教训）。
+ *
+ * @param {object} input
+ * @param {string} input.version - 待解释的版本号（通常是 `package.json` 的真源）。
+ * @param {object} input.ledger - 台账内容（{@link readLedger} 的产物）。
+ * @returns {{ kind: 'composite'|'inconsistent'|'missing-record'|'unknown-upstream'|'not-composite',
+ *   problems: string[], notes: string[], lines: string[] }}
+ *   分类结果、**应当判红**的问题（`problems`）、只作说明的提示（`notes`）与解释行。
+ *   `lines` 仅在 `kind` 为 `composite` / `inconsistent` 时有内容。
+ */
+export function explainComposite({ version, ledger }) {
+  const problems = [];
+  const notes = [];
+  const split = splitRepoSequence(version);
+  if (!split.ok) {
+    notes.push(
+      `${version} 不是合成号形状（${split.reason}）。合成号形如 ` +
+        `<上游精确 x.y.z>-<上游预发布>.<n>[+<w>]（ADR-061）。` +
+        `合成号机制之前的历史版本（如 1.2.3、0.7.0-beta）**不在**台账里，也不会被回填——` +
+        `本命令对它只作说明，不判红。`,
+    );
+    return { kind: 'not-composite', problems, notes, lines: [] };
+  }
+
+  const build = allBuilds(ledger).find((item) => item.desktopVersion === version);
+  if (build === undefined) {
+    // 可判定性全在这一行：基址**是不是**台账键。
+    const baseIsKnown = Object.prototype.hasOwnProperty.call(ledger.releases ?? {}, split.base);
+    if (baseIsKnown) {
+      problems.push(
+        `${version} 的基址 ${split.base} **是**台账里的键，但该键下没有 n=${split.n} 的记录。` +
+          `合成号的唯一生产者是 scripts/sync-upstream-release.mjs（它同时写版本号与台账记录），` +
+          `受支持路径**不可能**产出这个号 ⇒ 台账漏记，或版本号被手工改成了未登记过的一版。`,
+      );
+      return { kind: 'missing-record', problems, notes, lines: [] };
+    }
+    notes.push(
+      `${version} 形状上是合成号（拆出上游基址 ${split.base}、本仓序号 ${split.n}），` +
+        `但台账（${LEDGER_RELATIVE}）里没有 ${split.base} 这个键。`,
+      `⚠️ 形状判断**不足以**认定它是合成号：历史遗留版本与合成号**形状同构**` +
+        `（0.7.3-alpha.1 的真实上游就是 0.7.3-alpha.1、本仓无序号，拆解会得到同样的形状）。` +
+        `两种成因在当前信息下**不可区分**：① 它早于台账机制；② 上游键被漏登记。` +
+        `若这一版确实由本仓发布过，按 ② 处理——发布路径唯一入口是 sync-upstream。`,
+    );
+    return { kind: 'unknown-upstream', problems, notes, lines: [] };
+  }
+
+  // 上游身份只认**索引键**（allBuilds 把它附着在 upstreamDsh 上），不从头解析。
+  const upstreamDsh = build.upstreamDsh;
+  const entry = ledger.releases[upstreamDsh] ?? {};
+  const channel = deriveReleaseChannel(entry.patchTarget);
+  const shape = parseSemver(upstreamDsh);
+  const upstreamPrerelease = shape?.prerelease ?? null;
+
+  // 自洽：记录里的 n/w 必须能逐字复算出这个版本号（与 validateBuild 同一判据，此处面向人读）。
+  const lines = [
+    `${version}  ← 合成号（ADR-061）`,
+    `  · 上游精确版本（台账键）  ${upstreamDsh}`,
+    `  · 上游 x.y.z              ${shape ? `${shape.major}.${shape.minor}.${shape.patch}` : '(无法解析)'}`,
+    `  · 上游预发布段            ${upstreamPrerelease ?? '(无)'}`,
+    `  · 本仓序号 n              ${build.n}`,
+    `  · 人读标签 w              ${build.w ?? '(无)'}`,
+    `  · 补丁/目录目标           ${entry.patchTarget ?? '(未知)'}`,
+    `  · 桌面通道 publishChannel ${channel ?? '(无法由 patchTarget 派生)'}`,
+    `  · 上游 dist-tag（仅发现） ${entry.upstreamDistTag ?? '(未知)'}`,
+    `  · 发布日期                ${build.date}`,
+    `  · tag                     ${build.tag}`,
+    '',
+    `⚠️ 上游身份取自**台账索引键**，不是从桌面号反推——历史遗留版本与合成号**形状同构**。`,
+  ];
+  // 复算用的 `split` 就是上面那次拆解（同一个输入 ⇒ 同一个结果），不重复调用。
+  if (split.n !== build.n || split.w !== (build.w ?? null)) {
+    problems.push(
+      `记录自洽性失败：桌面号里的 (n, w) = (${split.n}, ${JSON.stringify(split.w)}) ` +
+        `与台账记录的 (${build.n}, ${JSON.stringify(build.w ?? null)}) 不一致——合成号的唯一排序键因此不可信。`,
+    );
+    return { kind: 'inconsistent', problems, notes, lines };
+  }
+  return { kind: 'composite', problems, notes, lines };
+}
+
+// ---------------------------------------------------------------------------
 // 自测
 // ---------------------------------------------------------------------------
 
@@ -489,6 +613,69 @@ export function selfTest() {
   eq('semver：接受 tag 前导 v', compareSemver('v0.7.1-rc.1', '0.7.0-rc.1') > 0, true);
   throws('semver：非法输入必须抛错而不是按相等处理', () => compareSemver('vNext', '0.7.0'));
 
+  // 合成号解释（show --explain）：上游身份**只认台账键**。
+  const ledgerFixture = {
+    schemaVersion: 1,
+    releases: {
+      '0.2.1-alpha.1': {
+        patchTarget: 'alpha',
+        upstreamDistTag: 'alpha',
+        status: 'active',
+        builds: [{ channel: 'alpha', n: 1, desktopVersion: '0.2.1-alpha.1.1', tag: 'v0.2.1-alpha.1.1', date: '2026-10-08' }],
+      },
+      '0.2.0-rc.2': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] },
+    },
+  };
+  const explained = explainComposite({ version: '0.2.1-alpha.1.1', ledger: ledgerFixture });
+  eq('解释：合成号零 problem', explained.problems.length, 0);
+  eq('解释：合成号零 note', explained.notes.length, 0);
+  eq('解释：分类为 composite', explained.kind, 'composite');
+  eq('解释：上游键取自台账', explained.lines.some((line) => line.includes('0.2.1-alpha.1')), true);
+  eq('解释：桌面通道由 patchTarget 派生', explained.lines.some((line) => line.includes('alpha')), true);
+  eq('解释：永远打印「上游身份取自台账键」的警告', explained.lines.some((line) => line.includes('台账索引键')), true);
+
+  // 🔴 可伪证夹具 ①：**同构**证明。两个版本都会被形状判据放行 ⇒ 「是不是合成号形状」不足为凭。
+  eq('同构：历史号也被形状判据放行', splitRepoSequence('0.7.3-alpha.1').ok, true);
+  eq('同构：历史号被拆出的基址并非真实上游', splitRepoSequence('0.7.3-alpha.1').base, '0.7.3-alpha');
+
+  // 🔴 可伪证夹具 ②：历史形态（基址**不是**台账键）⇒ 只说明，**不判红**。
+  //    若把「台账里没有」一律判红，本仓迁移完成前这条会**恒红**——恒红的守卫等于没有守卫。
+  const historical = explainComposite({ version: '0.7.3-alpha.1', ledger: ledgerFixture });
+  eq('解释：历史形态不判红', historical.problems.length, 0);
+  eq('解释：历史形态归 unknown-upstream', historical.kind, 'unknown-upstream');
+  eq('解释：历史形态必须如实说明「台账里没有」', historical.notes.some((note) => note.includes('台账')), true);
+  eq('解释：历史形态不走「不是合成号形状」那一支', historical.kind === 'not-composite', false);
+
+  // 🔴 可伪证夹具 ③：同一支「台账里没有」，但基址**是**台账键 ⇒ 受支持路径产不出 ⇒ 必须判红。
+  //    它与夹具 ② 走的是同一个 if，却必须落到不同分类——这条只有把判据实现出来才会通过。
+  const orphan = explainComposite({ version: '0.2.1-alpha.1.9', ledger: ledgerFixture });
+  eq('解释：已知上游键下缺记录必须判红', orphan.problems.length > 0, true);
+  eq('解释：归 missing-record', orphan.kind, 'missing-record');
+  eq('解释：判红理由点名「受支持路径不可能产出」', orphan.problems.some((p) => p.includes('不可能')), true);
+
+  // 🔴 可伪证夹具 ④：记录自洽性——台账里的 n 与版本号末段不一致。
+  const drifted = {
+    schemaVersion: 1,
+    releases: {
+      '0.2.1-alpha.1': {
+        patchTarget: 'alpha',
+        upstreamDistTag: 'alpha',
+        status: 'active',
+        // desktopVersion 说 n=1，记录字段却说 n=2：两份值各说各话。
+        builds: [{ channel: 'alpha', n: 2, desktopVersion: '0.2.1-alpha.1.1', tag: 'v0.2.1-alpha.1.1', date: '2026-10-08' }],
+      },
+    },
+  };
+  const inconsistent = explainComposite({ version: '0.2.1-alpha.1.1', ledger: drifted });
+  eq('解释：自洽性漂移必须判红', inconsistent.problems.length > 0, true);
+  eq('解释：归 inconsistent', inconsistent.kind, 'inconsistent');
+  eq('解释：漂移时仍然打印解释行（供人对照）', inconsistent.lines.length > 0, true);
+
+  // 迁移前形态：连预发布段都没有 ⇒ 形状层就否掉。
+  const notComposite = explainComposite({ version: '1.2.3', ledger: ledgerFixture });
+  eq('解释：真·非合成号判 not-composite', notComposite.kind, 'not-composite');
+  eq('解释：非合成号不判红（迁移前形态合法）', notComposite.problems.length, 0);
+
   if (failures.length > 0) {
     throw new Error(`version 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
   }
@@ -512,26 +699,34 @@ function parseForBump(subject) {
 
 const USAGE = `version.mjs — 版本号的定义、校验与推进
 
-  show                       显示各处版本与本仓库状态
+  show [--explain]           显示各处版本与本仓库状态；--explain 解释合成号的组成
   check [--tag vX.Y.Z]       校验一致性（CI 门禁）
   set <x.y.z> [--commit] [--tag] [--dry-run]
                              直接指定版本（改 package.json + Cargo.toml）
   bump <major|minor|patch|auto> [--commit] [--tag] [--from <ref>] [--dry-run]
                              推进版本；auto 依据提交历史决定升哪一位
+  sync-upstream [参数…]      转发给 scripts/sync-upstream-release.mjs（合成号发布前门）
+  verify-upstream [参数…]    只核上游可信性（= 前门 --no-counter：不推 n、不写任何东西）
   --self-test                纯逻辑自测
   --help                     显示本帮助
 
 说明：--tag 只创建本地 tag，**不会**推送（推送与否由人决定）。
       --dry-run 只打印将要发生的事，不写文件、不提交、不打 tag。
       --commit 会**顺带重新生成 CHANGELOG.md 的对应段落**并一起提交——
-              版本号与变更日志同属一个原子发布提交，避免 tag 打在缺变更日志的提交上。`;
+              版本号与变更日志同属一个原子发布提交，避免 tag 打在缺变更日志的提交上。
+
+⚠️ \`bump auto\` 依据 Conventional Commits 决定升哪一位——这是**合成号之前**的模型。
+   合成号（ADR-061）的序号 n 只能由台账推导，因此正式发布路径应走 \`sync-upstream\`
+   （它调用台账并合成版本号）。\`bump\` 保留给非发布场景；\`--commit\` 生成变更日志段落的
+   机制仍然有效（发布提交仍需要它）。\`check\` / \`show\` 语义不变。`;
 
 /**
  * 解析命令行参数。
  *
  * @param {string[]} argv - `process.argv.slice(2)`。
  * @returns {{ command: string, arg: string|null, tag: string|null, explicitTag: boolean,
- *   commit: boolean, dryRun: boolean, from: string|null, selfTest: boolean, help: boolean }} 选项。
+ *   commit: boolean, dryRun: boolean, from: string|null, explain: boolean,
+ *   selfTest: boolean, help: boolean }} 选项。
  */
 function parseArgs(argv) {
   const options = {
@@ -542,6 +737,7 @@ function parseArgs(argv) {
     commit: false,
     dryRun: false,
     from: null,
+    explain: false,
     selfTest: false,
     help: false,
   };
@@ -551,6 +747,7 @@ function parseArgs(argv) {
     if (arg === '--self-test') options.selfTest = true;
     else if (arg === '--commit') options.commit = true;
     else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--explain') options.explain = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--tag') {
       options.explicitTag = true;
@@ -599,12 +796,46 @@ if (isDirectRun) {
 }
 
 /**
+ * 把子命令**转发**给合成号发布前门（`scripts/sync-upstream-release.mjs`）。
+ *
+ * 为什么用子进程而不是 import：前门**需要** `version.mjs` 的 `writeVersion()` ⇒ 直接互相
+ * import 会形成 ESM 循环。转发同时保住了前门自己的 CLI 语义（`--plan` 默认只读、
+ * `--apply` 才写），语义不必在这一层重述。
+ *
+ * **不吞退出码**：前门判红（上游核验失败 / 锚点前进被拒）必须原样成为本进程的退出码，
+ * 否则 CI 里「上游不可信」会被读成成功。
+ *
+ * @param {string[]} extra - 除子命令名之外的参数（原样透传）。
+ * @param {string} label - 报错时点名用。
+ * @returns {never} 本函数以子进程退出码结束进程。
+ */
+function delegateToFrontDoor(extra, label) {
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'sync-upstream-release.mjs');
+  const result = spawnSync(process.execPath, [script, ...extra], { stdio: ['ignore', 'inherit', 'inherit'] });
+  if (result.status === null) {
+    throw new Error(`${label}：子进程未能启动（${result.error?.message ?? 'unknown'}）`);
+  }
+  process.exit(result.status);
+}
+
+/**
  * CLI 主入口。
  *
  * @param {string[]} argv - 命令行参数。
  * @returns {void}
  */
 function main(argv) {
+  // 转发型子命令**先于** parseArgs 处理：前门有自己的参数（`--target` / `--upstream` /
+  // `--apply` / `--no-counter`），让 parseArgs 先过会把它们当「未知参数」直接抛错。
+  // `--self-test` 除外——它永远属于本脚本。
+  if (!argv.includes('--self-test')) {
+    const forwarded = { 'sync-upstream': [], 'verify-upstream': ['--no-counter'] };
+    const index = argv.findIndex((arg) => arg === 'sync-upstream' || arg === 'verify-upstream');
+    if (index !== -1) {
+      delegateToFrontDoor([...forwarded[argv[index]], ...argv.slice(index + 1)], argv[index]);
+    }
+  }
+
   const options = parseArgs(argv);
 
   if (options.help) {
@@ -637,6 +868,19 @@ function main(argv) {
       const since = readCommits({ from: tag, to: 'HEAD' });
       console.log(`  ${tag} 以来的提交            ${since.length} 条，建议升级位：${suggestBump(since)}`);
     }
+
+    if (!options.explain) return;
+
+    // --explain：解释合成号的组成。**上游身份只认台账索引键**——桌面号与历史版本同构，
+    // 从版本号本身反推上游是错的（这正是 0.7.3-alpha.1 与 0.2.1-alpha.1.3 的教训）。
+    const explained = explainComposite({ version: pkgVersion, ledger: readLedger() });
+    console.log(`\n合成号解释（--explain，分类 ${explained.kind}）：`);
+    for (const line of explained.lines) console.log(line === '' ? '' : `  ${line}`);
+    for (const note of explained.notes) console.log(`\nℹ️  ${note}`);
+    for (const problem of explained.problems) console.error(`\n❌ ${problem}`);
+    // 仅 `problems` 非空才判红。`notes` 是「不可判定」的说明（历史遗留 / 上游键未登记），
+    // 拿它当红灯会让本命令在迁移完成前恒红；恒红的守卫等于没有守卫。
+    if (explained.problems.length > 0) process.exit(1);
     return;
   }
 
