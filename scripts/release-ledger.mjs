@@ -1067,6 +1067,12 @@ export function readReleasePlan(root = process.cwd()) {
  * @param {object} input.ledger - 台账内容。
  * @param {Record<string, object>} [input.targets] - 目标总表。
  * @param {boolean} [input.withSequence] - `true` 时**连带**跑时点判据 7（`n` == 台账现算值）。
+ * @param {string|null} [input.sequenceTarget] - 时点判据的**作用范围**限定（`checkPlanLineFor` 用）。
+ *   `null`（默认）= 全部行跑时点（`checkReleasePlan` 语义）；非 null = 只有该目标的行跑时点，
+ *   其余行按恒时处理——但 `note.current` 事实照记。为什么需要限定：决策发 next 线时，
+ *   计划里 alpha 行的 `n` 在 alpha 发布后必然已是历史值（发布后台账前进了）——
+ *   若此时点判据仍扫全计划，就等于**逼人乱改非目标行的 n**，与「n 不由人填」（ADR-061）直接矛盾。
+ *   （2026-10-10 next 线 `--apply` 首跑实锤：alpha 行历史 n=1 判红，阻断 next 派生。）
  *   缺省 `false` = 只跑恒时判据（门禁用法）。**默认必须是恒时**：默认跑时点判据会让
  *   「随便哪个 PR 都红」，而红得没道理的门禁最后会被绕过去。
  * @returns {{problems: string[], notes: Array<{target: string, upstreamDsh: string|null,
@@ -1075,7 +1081,7 @@ export function readReleasePlan(root = process.cwd()) {
  *   （恒时组也算得出），供 `--show` / `--validate` 打印「这条计划现在是当前值还是历史值」——
  *   调用方因此不必自己再推一遍（自己推 = `n` 出现第二个产地）。
  */
-export function diagnoseReleasePlan({ plan, ledger, targets = DSH_TARGETS, withSequence = false }) {
+export function diagnoseReleasePlan({ plan, ledger, targets = DSH_TARGETS, withSequence = false, sequenceTarget = null }) {
   const problems = [];
   const notes = [];
   const at = PLAN_RELATIVE;
@@ -1165,7 +1171,7 @@ export function diagnoseReleasePlan({ plan, ledger, targets = DSH_TARGETS, withS
     };
     if (!Number.isInteger(line.n) || line.n < 1) {
       problems.push(`${here}：n 必须是 ≥ 1 的整数（收到 ${JSON.stringify(line.n)}）`);
-    } else if (withSequence && line.n !== nextN) {
+    } else if (withSequence && (sequenceTarget === null || name === sequenceTarget) && line.n !== nextN) {
       // 时点判据：只在决策时刻跑（`withSequence`）。
       problems.push(
         `${here}：n 是 ${line.n}，但台账里上游 ${upstreamDsh} 现算的下一个序号是 ${nextN}。` +
@@ -1224,6 +1230,10 @@ export function checkReleasePlan({ plan, ledger, targets = DSH_TARGETS }) {
  *   3. 行的 `w` 与本次实际要用的 `w` 一致（`w` 是人读标签，但它**进版本号**：
  *      计划写 `w=batch` 而实际发 `w=null`，发出去的串与批准的不是同一个）。
  *
+ * **时点判据只作用于本目标行**（`sequenceTarget: target`）：计划里其他行的 `n` 若已是
+ * 历史快照值（那条线本轮已发过），不判红——非目标行只跑恒时判据 + 记 `current` 事实。
+ * 逼人改非目标行的 `n` 才能发版 = 「n 不由人填」被绕开（ADR-061）。
+ *
  * @param {object} input
  * @param {object} input.plan - 计划内容。
  * @param {object} input.ledger - 台账内容。
@@ -1233,7 +1243,7 @@ export function checkReleasePlan({ plan, ledger, targets = DSH_TARGETS }) {
  * @returns {string[]} problems（空数组 = 通过）。
  */
 export function checkPlanLineFor({ plan, ledger, target, w = null, targets = DSH_TARGETS }) {
-  const { problems, notes } = diagnoseReleasePlan({ plan, ledger, targets, withSequence: true });
+  const { problems, notes } = diagnoseReleasePlan({ plan, ledger, targets, withSequence: true, sequenceTarget: target });
   const line = plan?.lines?.[target];
   if (line === undefined) {
     problems.push(
@@ -2215,6 +2225,22 @@ export function selfTest() {
       target: 'alpha',
       targets: TARGETS,
     }).some((p) => p.includes('现算的下一个序号')),
+    true,
+  );
+  // 🔴 2026-10-10 next 线 --apply 实锤的缺陷：决策发 next 时，计划里 alpha 行的 n 在 alpha
+  //    发布后必然已是**历史值**——若时点判据扫全计划，就等于逼人乱改非目标行的 n
+  //    （与 ADR-061「n 不由人填」矛盾）。同一输入、两种意图、相反结论：
+  const historicalPlan = planOf({ alpha: { n: 2, w: null }, next: { n: 8, w: null } });
+  eq(
+    '前门：目标行是当前值、**非目标行**是历史值 ⇒ 通过（历史行不阻断决策）',
+    checkPlanLineFor({ plan: historicalPlan, ledger: ledger2e, target: 'next', w: null, targets: TARGETS }),
+    [],
+  );
+  eq(
+    '对照：同一输入走**全计划**时点判据（checkReleasePlan）⇒ alpha 历史行仍判红',
+    checkReleasePlan({ plan: historicalPlan, ledger: ledger2e, targets: TARGETS }).some(
+      (p) => p.includes('lines.alpha') && p.includes('现算的下一个序号'),
+    ),
     true,
   );
 
