@@ -94,3 +94,38 @@ jobs:
 
       - name: Updater channel check
         run: npm run gate -- update-channel
+
+  # Dependabot 安全更新开关（2026-10-09）：必须保持**关闭**。
+  # 为什么单独成 job：同 updater-channel 的理由——放同一个 job 里，前面那台红着（如 next 线
+  # 已知漂移）会让它永远轮不到执行。三台哨兵各自报告、互不遮蔽。
+  # 为什么是联网判据：开关住在**仓库设置**里（Settings → Advanced Security），与仓库内任何
+  # 文件无关；打开/关闭都不改变任何产物，因此本地再全的静态扫描也看不见它被重新打开。
+  # 它一打开，每条落在 harness-locks/ 快照目录的告警都会派生一个**在取文件阶段必然失败**的
+  # job（那里故意没有 package.json）——实测 2026-10-09 job 1618552559。
+  # 判据与裁定见 .github/dependabot.yml 头注释 + scripts/verify-dependabot-setting.mjs 文件头。
+  # 绿 = 开关仍在关闭位；红 = 有人把它打开了（改回去即可，与本次提交无关）。
+  # 取不到设置时脚本自行 skip 并在日志里写「未核对」（绝不冒充已核对）；但 slug 404 判红。
+  dependabot-setting:
+    name: dependabot security-updates switch
+    runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
+    steps:
+      # ⚠️ 必须 checkout：下面的步骤要执行仓库内的 scripts/（F13 的教训：缺它的 job 直到
+      #    第一次真跑才现形）。
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # 纯逻辑自检先跑：一个「字段看不见就判绿」的守卫比没有守卫更危险。
+      - name: Dependabot setting self-test
+        run: npm run gate -- dependabot-setting --self-test
+
+      # 真检查：读仓库设置。GH_TOKEN 不是可选——security_and_analysis 只对有 push 权限的
+      # 调用者返回；令牌不可见时脚本会 skip 并在日志里写明「未核对」（见文件头三个出口）。
+      - name: Dependabot setting check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run gate -- dependabot-setting

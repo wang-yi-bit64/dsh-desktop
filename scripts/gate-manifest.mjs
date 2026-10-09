@@ -299,6 +299,21 @@ export const GATES = [
     real: { tiers: ['sentinel'], args: ['--verify'] },
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
+  {
+    name: 'dependabot-setting',
+    script: 'scripts/verify-dependabot-setting.mjs',
+    title: 'Dependabot 安全更新开关（**联网**）',
+    why:
+      '断言仓库级 `dependabot_security_updates` 不是 `enabled`。依赖图会把 ' +
+      '`harness-locks/<target>/package-lock.json` 当 npm 清单（官方无按路径排除能力，那目录里**故意没有** ' +
+      'package.json），开关一打开，每条落在该目录的上游告警都会派生一个**在取文件阶段就失败**的 job —— ' +
+      '实测 2026-10-09 job 1618552559：`Error during file fetching; aborting: ' +
+      '/harness-locks/alpha/package.json not found`。2026-10-09 裁定关闭（.github/dependabot.yml 头注释）。' +
+      '⚠️ 它**只能**是联网判据：开关住在仓库设置里，打开/关闭都不改变任何产物，本地静态扫描看不见它。' +
+      '取不到 / 字段不可见 ⇒ skip 并**明写「未核对」**（绝不判绿）；slug 404 ⇒ 判红（配置缺陷，同 drift）。',
+    real: { tiers: ['sentinel'], args: [] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
 
   // ------------------------------------------------------------------
   // 依赖树 / 打包器

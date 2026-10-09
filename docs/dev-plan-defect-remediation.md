@@ -41,7 +41,7 @@
 
 ---
 
-## 2. 缺陷清单（D1~D12）
+## 2. 缺陷清单（D1~D13）
 
 | ID | 缺陷 | 严重度 | 关键证据 | 批次 |
 |----|------|--------|----------|------|
@@ -57,6 +57,7 @@
 | D10 | src-tauri 生产路径 unwrap 过多 | P2 | src-tauri/src/state.rs 15 处生产 unwrap（锁中毒会 panic 掉整个壳） | S4 |
 | D11 | 无 property test；ADR-047 的 P1 深潜未开工 | P2 | 无 proptest/quickcheck/rstest 依赖；无状态机不变式测试 | S6 |
 | D12 | 分发近零，「完成线」未对外声明 | 战略 | 11 star / 1 fork / 0 issue；ADR-047 已定完成线但 README 未承载 | S6 |
+| D13 | Dependabot 安全更新**不读** `dependabot.yml` 的 directory，故「只列根目录」**排除不掉** `harness-locks/`；而本仓把这条排除写成了已成立的结论（伪） | P2 | job 1618552559（2026-10-09）：`"command":"security"` + `directories:["/harness-locks/alpha"]` → `Error during file fetching; aborting: /harness-locks/alpha/package.json not found`（该目录里只有输入快照，**故意没有** package.json）；官方概念页「There is **no interaction** between the settings specified in the `dependabot.yml` file and Dependabot security **alerts**」，配置页说 directory「**must be** the path to the manifest files」⇒ 本配置是加法式、不是排除式 | S3 |
 
 ---
 
@@ -386,6 +387,20 @@
 | 实测 | ✅ | `npm run verify:fast` **44 步 / 22.4s 全绿**（含 `cargo test --tests` 7.7s，温编译；预算 ≤60s）；分档规模 fast 43 / ci 45 / release 42 / sentinel 2；`verify:gates` 与 `verify-release-workflow` 自检分别 27 / 63 项通过 |
 
 > ⚠️ **诚实边界（三条）**：① **组装树与联网的真检查仍不在任何分档里**——`target` / `harness-tree` 需组装树（由 `release.yml` 的 build / portable job 在 `prepare:harness` 之后按名点名，总表 `manual` 字段写明理由，元守卫的 M2 强制这一解释存在），`drift` / `update-channel` 需联网（sentinel 档）。② **S4-3 的「门禁内部先扫后验」普查仍是未开工主体**：本轮只做实了编排层（脚本级登记 + 分档非空 + 扫出数 > 0）。③ **历史文书里的旧 script 名刻意保持原样**（`CHANGELOG.md` / `docs/adr/` / `docs/archive/` / `docs/incidents/` / 计划台账）——它们是当时的记录，靠 gate CLI 的旧名兼容层仍可重放。
+
+**第六批（2026-10-09）：Dependabot 安全更新的排除无效（D13）——改判据，不改注释**
+
+发现路径是**顺手的**：2g + 2h 推送时 `git push` 的回显里带着 4 条 Dependabot 告警，查 `gh run list` 又看到两条**连续失败**的 Dependabot 运行。追下去不是「告警没处理」，而是「**处理不了的告警**」。
+
+| 项 | 状态 | 证据 |
+|----|------|------|
+| D13 登记 | ✅ | 见 §2 末行。job 定义与报错均为**日志原文**（非推断）：`"command":"security"` + `"security-updates-only":true` + `"directories":["/harness-locks/alpha"]`，随后 `Error during file fetching; aborting: /harness-locks/alpha/package.json not found`。两次失败分别落在 2026-10-09T03:09 与更早一条 |
+| 伪结论更正 | ✅ 已落地 | `.github/dependabot.yml` 头注释改写：删掉「只列根目录 ⇒ 等价于把 harness-locks/ 排除在安全更新之外」，改为**机制说明 + 三条证据**（两处官方口径 + 一次实测），并写明本仓处置与两条守卫的入口。**旧注释是「现状声明」，却零守卫**——与本仓已多次踩到的那一类同形 |
+| 处置（仓库设置） | ✅ 已落地 | `PATCH /repos/wang-yi-bit64/dsh-desktop` → `security_and_analysis.dependabot_security_updates.status = disabled`；复核由**新守卫自己**独立完成（真检查打印「安全更新处于关闭状态」）。裁定：告警保持可见，按 `docs/dsh-upgrade-checklist.md` 跟随上游版本处置 |
+| 新守卫 F（fast 档，离线） | ✅ 已落地 | `verify-github-config.mjs` 增规则 F：`dependabot.yml` 声明的每个目录必须**真有该生态的清单文件**（npm→package.json / cargo→Cargo.toml）；自检 **48 项**（含「真实形态 `/harness-locks/alpha` 必须报红」「同写法指向根目录必须放行」的成对夹具）。🔴 它**先剥整行注释再判**——本规则自己的说明里逐字写着那个被禁目录，不剥就会被自己的文档命中（本仓第五次踩这个陷阱） |
+| 新守卫 `dependabot-setting`（sentinel 档，联网） | ✅ 已落地 | `scripts/verify-dependabot-setting.mjs`：断言开关**不是 enabled**；三个出口互斥——`disabled`⇒绿 / `enabled`⇒红 / 取不到或字段不可见⇒skip 且日志**明写「未核对」**（绝不判绿）/ slug 404⇒红（配置缺陷，同 drift 的裁定）。自检 **30 项**（含「每条 skip 夹具都不得被判成 ok」——防判据静默退化成永远通过）。独立 job 进 `drift.yml`（不塞进既有 job：前置红灯会遮蔽后续哨兵，此教训已有先例） |
+| 注入与分支验证（实测） | ✅ 2/2 + 2/2 | **F**：真实文本原样 ⇒ 放行（注释里的目录未命中）；注入「列出 harness-locks/alpha」⇒ 点名报红（用真实磁盘探针 + 真实报错文本）。**dependabot-setting**：`DSH_UPDATER_REPO=<不存在>` ⇒ exit 1 并报「配置缺陷」；`GH_TOKEN=<无效>` ⇒ exit 0 且打印「**未核对**（不等于已核对）」 |
+| ⚠️ 未做（诚实边界） | ⚠️ | ① **自动分类规则这次没建**：官方 REST 规格（13 MB 全量）里**没有** auto-triage 端点（只有 `dependabot/alerts`、`dependabot/secrets`），只能走 Settings 网页；且文档两处口径互相矛盾（概念页说公共仓库可用，添加页说须属**组织**且持 Code Security 许可）。本轮只关了开关（噪音源）并把处置与判据写死，规则留待需要时手动建。② `enabled ⇒ exit 1` 这条链路**只由纯函数夹具证明**，未做端到端注入——那需要把真实开关短暂打开一次（会立刻派生必失败的 job），判定不值得。③ 依赖图仍会把 `harness-locks/**/package-lock.json` 当清单（官方无按路径排除能力）⇒ 这 3 条告警的**本体**依然存在，只是不再派生 job |
 
 ### 11.1 未开工条目（完整台账）
 

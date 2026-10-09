@@ -45,6 +45,23 @@
  *    而那种删除与「文件复活」一样静默（AGENTS.md §7.3：扫出 0 个不得冒充通过）。
  *    正当出路是**另立新工作流**（新文件名 + 新 ADR 过准入），不是复活旧文件。
  *
+ * F. **`dependabot.yml` 声明的目录必须真有清单文件**（2026-10-09 新增）。
+ *    Dependabot 按 `updates[].directory` / `directories[]` 找清单；目录里没有清单，
+ *    job 在**取文件阶段**就死掉——实测 2026-10-09（job 1618552559）：
+ *    `Error during file fetching; aborting: /harness-locks/alpha/package.json not found`
+ *    （那个目录里只有组装输入快照，旁边**故意没有** package.json）。
+ *
+ *    本条同时封掉一条**被证伪的既有结论**：本仓 `dependabot.yml` 曾把头注释写成
+ *    「只列根目录 ⇒ 等价于把 harness-locks/ 排除在安全更新之外」。这是**假的**——
+ *    安全更新按**告警的 `manifest_path`** 开 job，**不读**本文件的 directory。
+ *    官方两处口径：概念页「`no interaction between the settings specified in the
+ *    dependabot.yml file and Dependabot security alerts`」；配置页说 directory
+ *    「`must be` the path to the manifest files」⇒ 本配置是**加法式**、不是排除式。
+ *
+ *    所以本条守的**不是**「用 directory 排除某目录」（那条路不存在），而是
+ *    **声明与磁盘事实一致**：凡被列出的目录，必须真能被 Dependabot 解析，
+ *    否则必然产生永久失败的 job。裁定见 `.github/dependabot.yml` 头注释。
+ *
  * ## 为什么 B 有一张基线表
  * `PRE_EXISTING_FLOATING` 是**预先存在**的浮动 ref，属 docs/dev-plan-defect-remediation.md
  * 的 S3-3，尚未执行。本守卫对**新增**浮动 ref 一律报错（防回归），并在基线非空时打印
@@ -61,6 +78,11 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { argv, exit } from 'node:process'
+// 规则 F 必须**先剥整行注释再判**：`.github/dependabot.yml` 的说明里逐字引用了被禁的
+// 目录（`/harness-locks/alpha`），不剥就会被自己的文档命中——本仓在「不得出现 X」类
+// 判据上已踩过四次。复用既有实现而不是写第三份（`stripYamlComments` 在本仓已有两份
+// 逐字相同的副本，见 verify-release-assets.mjs 的注释；这里引的是带 main 守门的那份）。
+import { stripYamlComments } from './verify-release-workflow.mjs'
 
 const ROOT = process.cwd()
 const WORKFLOW_DIR = join('.github', 'workflows')
@@ -450,6 +472,136 @@ export function checkRetiredWorkflows(presentFiles, retired = RETIRED_WORKFLOWS)
   return { problems, checked: retired.length, revived }
 }
 
+/**
+ * 各生态 Dependabot 要读的清单文件（规则 F 的唯一产地）。
+ *
+ * ⚠️ 只登记**本仓实际使用**的生态。未登记的生态**不判**，这是有意的：生态 → 清单名
+ * 是一张会随生态增长而失真的表，宁可不判也不误判（误判会把守卫本身变成噪声源，
+ * 本仓对这种形态有明确裁定）。但未覆盖的生态会被 {@link checkDependabotDirectories}
+ * **点名计数并打印**，不静默吞掉（AGENTS.md §7.3「扫出 0 个必须报错」）。
+ *
+ * @type {Record<string, string[]>}
+ */
+export const DEPENDABOT_MANIFESTS = {
+  npm: ['package.json'],
+  cargo: ['Cargo.toml'],
+}
+
+/**
+ * 从 `dependabot.yml` 抽出 `updates[]` 的 (ecosystem, directory) 二元组（规则 F）。
+ *
+ * 🔴 **先剥整行注释**：本文件的说明里会逐字引用被禁的目录，不剥注释就会被自己的文档
+ * 命中（见文件头的 import 注释）。剥注释复用 {@link stripYamlComments}。
+ *
+ * 解析刻意保守、不引 YAML 解析器（本仓无 `yaml` 依赖）：
+ *   · `- package-ecosystem: X` 起一个新条目；
+ *   · 其下 `directory: "..."` 取单值；`directories:` 则取其后的 `- "..."` 列表项；
+ *   · 其它 `- ` 开头的新条目（如 `schedule:` 下的子键不会以 `- ` 开头，但
+ *     `groups:` 的成员会）⇒ 结束当前 directories 列表。
+ * 「解析不出来」与「没有条目」由 {@link checkDependabotDirectories} 的扫出数判据区分。
+ *
+ * @param {string} text dependabot.yml 全文
+ * @returns {{ ecosystem: string|null, directory: string, line: number }[]}
+ */
+export function parseDependabotUpdates(text) {
+  const out = []
+  const lines = stripYamlComments(text).split('\n')
+  let ecosystem = null
+  let inDirectories = false
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const eco = /^\s*-\s*package-ecosystem:\s*["']?([A-Za-z0-9_-]+)/.exec(line)
+    if (eco !== null) {
+      ecosystem = eco[1]
+      inDirectories = false
+      continue
+    }
+    const single = /^\s*directory:\s*["']?([^"'\s#]+)/.exec(line)
+    if (single !== null) {
+      out.push({ ecosystem, directory: single[1], line: i + 1 })
+      inDirectories = false
+      continue
+    }
+    if (/^\s*directories:\s*$/.test(line)) {
+      inDirectories = true
+      continue
+    }
+    if (inDirectories) {
+      const item = /^\s*-\s*["']?([^"'\s#]+)/.exec(line)
+      if (item !== null) {
+        out.push({ ecosystem, directory: item[1], line: i + 1 })
+        continue
+      }
+      inDirectories = false
+    }
+  }
+  return out
+}
+
+/**
+ * 规则 F：`dependabot.yml` 列出的每个目录都必须真有该生态的清单文件。
+ *
+ * 为什么这是真判据而不是风格偏好：目录里没有清单时 job **在取文件阶段**就失败，
+ * 产物零、日志里只有一行 `Error during file fetching; aborting: <dir>/package.json
+ * not found`；而失败原因写在**远端**，仓库内没有任何东西会变红。
+ *
+ * ⚠️ 通配目录（含 `*` / `?`）**跳过不判**并计入 `globbed`：磁盘探针无法判定 glob 的
+ * 展开结果，硬判会造出假红。跳过的事实必须被打印出来。
+ *
+ * @param {string} text dependabot.yml 全文
+ * @param {(rel: string) => string[]} listDir 给定仓库相对目录（posix 风格）返回其下文件名；
+ *        目录不存在返回 `[]`（与「存在但没有清单」同形——两者都必然让 job 失败）。
+ * @param {Record<string, string[]>} [manifests] 生态 → 清单文件名；默认 {@link DEPENDABOT_MANIFESTS}
+ * @returns {{ problems: string[], checked: number, globbed: string[], uncovered: string[] }}
+ */
+export function checkDependabotDirectories(text, listDir, manifests = DEPENDABOT_MANIFESTS) {
+  const problems = []
+  const globbed = []
+  const uncovered = []
+  const updates = parseDependabotUpdates(text)
+
+  if (updates.length === 0) {
+    problems.push(
+      'dependabot.yml 里扫出 0 条 updates 条目——这不是「没有依赖」：本仓 npm 与 cargo 都在扫描。' +
+        '扫出数为 0 时先怀疑解析器，再怀疑源码（AGENTS.md §7.3）。',
+    )
+    return { problems, checked: 0, globbed, uncovered }
+  }
+
+  let checked = 0
+  for (const u of updates) {
+    const expected = manifests[u.ecosystem]
+    if (expected === undefined) {
+      if (!uncovered.includes(u.ecosystem)) uncovered.push(u.ecosystem ?? '(无生态)')
+      continue
+    }
+    if (/[*?]/.test(u.directory)) {
+      if (!globbed.includes(u.directory)) globbed.push(u.directory)
+      continue
+    }
+    checked += 1
+    const dir = u.directory.replace(/^\.\//, '').replace(/^\/+|\/+$/g, '')
+    const files = listDir(dir)
+    if (expected.some((name) => files.includes(name))) continue
+    problems.push(
+      `dependabot.yml:${u.line}：生态 \`${u.ecosystem}\` 声明了目录 \`${u.directory}\`，` +
+        `但那里没有 ${expected.map((n) => '`' + n + '`').join(' / ')}（该目录下 ${files.length} 个条目）。` +
+        'Dependabot 会在取文件阶段直接失败，日志只有一行 ' +
+        '`Error during file fetching; aborting: <dir>/package.json not found`（2026-10-09 实测）。' +
+        '注意**不要**试图用 `directory` 把某目录「排除」掉——安全更新按告警的 manifest_path 走、' +
+        '不读本文件，那条路不存在；要么让目录里真的有清单，要么不要列它。',
+    )
+  }
+
+  if (checked === 0) {
+    problems.push(
+      '没有任何一个 updates 条目落在已登记的生态上——本规则覆盖不到任何东西，不得判通过' +
+        '（未覆盖生态：' + (uncovered.join(', ') || '无') + '；通配目录：' + (globbed.join(', ') || '无') + '）。',
+    )
+  }
+  return { problems, checked, globbed, uncovered }
+}
+
 function main() {
   const files = walk(join(ROOT, '.github')).map((full) => ({
     path: relative(ROOT, full),
@@ -520,6 +672,35 @@ function main() {
     '· 退役工作流禁令：' + retired.checked + ' 项在册 · 复活 ' + retired.revived + ' 项',
   )
   problems.push(...retired.problems)
+
+  // 规则 F：dependabot.yml 声明的目录必须真有清单文件。
+  // 注意它**不是**工作流形态，但 walk() 收的是 `.github` 下所有 .yml，所以文本已在 files 里。
+  // 探针直读磁盘（同 CODEOWNERS 那条）：这一条只用来区分「目录里没有清单」与「有」。
+  const depPath = '.github/dependabot.yml'
+  const depFile = files.find((f) => f.path.split(sep).join('/') === depPath)
+  if (depFile === undefined) {
+    problems.push(
+      '.github/dependabot.yml 不存在。它的缺席不是「没有依赖」——不配置目录列表时 Dependabot 会' +
+        '扫描仓库内所有目录，而 harness-locks/ 下的锁文件快照会被当成 npm 清单并派生出必然失败的 job' +
+        '（S3-1 引入本文件即为此）。若有意删除，请同时改掉 docs/dev-plan-defect-remediation.md 的 S3-1 与本条断言。',
+    )
+  } else {
+    const dep = checkDependabotDirectories(depFile.text, (rel) => {
+      const dir = join(ROOT, rel)
+      if (!existsSync(dir)) return []
+      try {
+        return readdirSync(dir)
+      } catch {
+        return []
+      }
+    })
+    console.log(
+      '· dependabot.yml：' + dep.checked + ' 个目录已核对清单' +
+        (dep.globbed.length > 0 ? ' · 通配跳过 ' + dep.globbed.join(', ') : '') +
+        (dep.uncovered.length > 0 ? ' · 未覆盖生态 ' + dep.uncovered.join(', ') : ''),
+    )
+    problems.push(...dep.problems)
+  }
 
   if (problems.length > 0) {
     for (const p of problems) console.error('❌ ' + p)
@@ -740,6 +921,94 @@ export function selfTest() {
   check(
     'E 分隔符归一：反斜杠路径也必须命中',
     checkRetiredWorkflows(['.github\\workflows\\pullfrog.yml']).problems.length > 0,
+  )
+
+  // ---------------------------------------------------------------------------
+  // 规则 F：dependabot 目录必须有清单（2026-10-09）
+  //
+  // 🔴 1 号夹具用的就是**真实形态**：`/harness-locks/alpha` 被列出来后，job 1618552559
+  //    在取文件阶段报 `package.json not found`。这不是假想分支。
+  // ---------------------------------------------------------------------------
+  const fsProbe = (map) => (rel) => map[rel] ?? []
+  const rootManifest = fsProbe({ '': ['package.json', 'Cargo.toml', 'Cargo.lock'] })
+  const npmAt = (directory) =>
+    ['version: 2', 'updates:', '  - package-ecosystem: npm', '    directory: "' + directory + '"', ''].join('\n')
+
+  const fReal = checkDependabotDirectories(npmAt('/harness-locks/alpha'), fsProbe({ 'harness-locks/alpha': ['inputs.json', 'package-lock.json'] }))
+  check(
+    'F 可伪证：列出没有 package.json 的快照目录必须报红（真实形态 job 1618552559）',
+    fReal.problems.some((p) => /package.json/.test(p) && /Error during file fetching/.test(p)),
+  )
+  check('F 报红时必须点名行号与目录', fReal.problems.some((p) => /dependabot\.yml:4/.test(p) && /harness-locks\/alpha/.test(p)))
+  check(
+    'F 报红时必须封掉「用 directory 排除」这条不存在的路',
+    fReal.problems.some((p) => /那条路不存在/.test(p)),
+  )
+  // 配对反证：同样的写法、换成真有清单的根目录 ⇒ 必须放行。
+  check(
+    'F 配对反证：同一写法指向有 package.json 的根目录必须放行',
+    checkDependabotDirectories(npmAt('/'), rootManifest).problems.length === 0,
+  )
+  // 目录根本不存在 ⇒ 也必然 fetch 失败。
+  check(
+    'F 可伪证：目录不存在必须报红',
+    checkDependabotDirectories(npmAt('/no-such-dir'), rootManifest).problems.length > 0,
+  )
+  // 🔴 剥注释两向：本文件的说明里逐字写着被禁的目录，不得被自己的文档命中。
+  check(
+    'F 剥注释：说明里引用被禁目录必须放行（守卫不得被自己的文档命中）',
+    checkDependabotDirectories(
+      ['# 实测：/harness-locks/alpha 曾报 package.json not found', 'version: 2', 'updates:', '  - package-ecosystem: npm', '    directory: "/"', ''].join('\n'),
+      rootManifest,
+    ).problems.length === 0,
+  )
+  check(
+    'F 剥注释反向：可执行位置的同一串仍必须判红',
+    checkDependabotDirectories(
+      ['# 说明', 'version: 2', 'updates:', '  - package-ecosystem: npm', '    directory: "/harness-locks/alpha"', ''].join('\n'),
+      fsProbe({}),
+    ).problems.some((p) => /harness-locks\/alpha/.test(p)),
+  )
+  // 空集判据：扫出 0 条不得冒充通过（AGENTS.md §7.3）。
+  check(
+    'F 可伪证：扫出 0 条 updates 必须报红而不是通过',
+    checkDependabotDirectories('version: 2\nupdates:\n', rootManifest).problems.some((p) => /扫出 0 条/.test(p)),
+  )
+  // `directories:` 列表形态必须被解析出多条（否则真文件改用复数写法就静默失守）。
+  const fList = parseDependabotUpdates(
+    ['version: 2', 'updates:', '  - package-ecosystem: npm', '    directories:', '      - "/"', '      - "/tools/web"', ''].join('\n'),
+  )
+  check('F 解析：directories 复数形态必须取出两条', fList.length === 2 && fList[1].directory === '/tools/web')
+  // 通配目录跳过（磁盘探针判不了 `**/*`），必须计数而不是硬判红。
+  const fGlob = checkDependabotDirectories(
+    ['version: 2', 'updates:', '  - package-ecosystem: npm', '    directories:', '      - "**/*"', '      - "/"', ''].join('\n'),
+    rootManifest,
+  )
+  check('F 通配目录必须跳过并计入 globbed（不得假红）', fGlob.problems.length === 0 && fGlob.globbed.includes('**/*'))
+  // 未登记生态不判、但必须被点名；且不得因此把 checked 归零（否则就是「覆盖不到却判通过」）。
+  const fUncovered = checkDependabotDirectories(
+    ['version: 2', 'updates:', '  - package-ecosystem: pip', '    directory: "/nonexistent-pip"', '  - package-ecosystem: npm', '    directory: "/"', ''].join('\n'),
+    rootManifest,
+  )
+  check(
+    'F 未覆盖生态必须点名但不误判，且 checked 不得归零',
+    fUncovered.problems.length === 0 && fUncovered.uncovered.includes('pip') && fUncovered.checked === 1,
+  )
+  // 🔴 真文件自证：本仓 shipped 的 dependabot.yml 必须自己过这一条。
+  //    这条专门守「守卫被自己的文档命中」——我为本规则写的说明里就有那个被禁目录。
+  const realDepPath = join(ROOT, '.github', 'dependabot.yml')
+  check(
+    'F 真文件自证：仓库内 dependabot.yml 必须通过本规则',
+    !existsSync(realDepPath) ||
+      checkDependabotDirectories(readFileSync(realDepPath, 'utf8'), (rel) => {
+        const dir = join(ROOT, rel)
+        if (!existsSync(dir)) return []
+        try {
+          return readdirSync(dir)
+        } catch {
+          return []
+        }
+      }).problems.length === 0,
   )
 
   if (failed > 0) { console.error('verify-github-config self-test 失败 ' + failed + ' 项'); return 1 }

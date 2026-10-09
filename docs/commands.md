@@ -220,10 +220,12 @@ npm run gate -- doc-facts --self-test
 npm run gate -- drift
 npm run gate -- drift --self-test
 
-# 20g. 上游**发布面**（GitHub Release）取用判据自检：tag 形态 `dsh-v<x.y.z>`（不是 `v<x>`）、
+# 20i. 上游**发布面**（GitHub Release）取用判据自检：tag 形态 `dsh-v<x.y.z>`（不是 `v<x>`）、
 #      四态取数（ok/empty/skip/error）、commit 必须经 commits 端点解析
 #      （`target_commitish` 实测多是分支名 `master`）。真检查要联网，故只登记自检；
 #      排障时可直跑：node scripts/upstream-release.mjs
+#      ⚠️ 本项 2026-10-09 由 `20g` 改号为 `20i`：`20g` 已被同文件的「.github 配置准入」
+#         （commit 1b9a323）占用，2f 那次新增时重号了——编号重复会让「§20x」失去指代力。
 npm run gate -- upstream-release
 
 # 20b. 双上游通道：目标表自检（目标键 ↔ 目录 ↔ 上游锚点 ↔ 桌面后缀；未知通道必须失败不得回退）。
@@ -262,8 +264,20 @@ npm run gate -- update-channel --self-test
 npm run gate -- update-channel
 
 # 20g. .github 配置准入（ADR-054）：工作流必须在 workflows/ 下；第三方 action 必须钉 40 位 SHA
+#      2026-10-09 增规则 F：`dependabot.yml` 声明的目录必须真有清单文件——目录里没有清单时
+#      Dependabot 在**取文件阶段**就失败（实测 job 1618552559：
+#      `Error during file fetching; aborting: /harness-locks/alpha/package.json not found`），
+#      而失败原因写在远端、仓库内没有任何东西会变红。判据**先剥整行注释**再扫。
 npm run gate -- github-config
 npm run gate -- github-config --self-test
+
+# 20j. Dependabot 安全更新开关（**联网**，sentinel 档；2026-10-09 裁定：必须保持关闭）
+#      开关住在仓库设置里，打开/关闭都不改变任何产物 ⇒ 本地静态扫描永远看不见它被重新打开；
+#      它一打开，每条落在 harness-locks/ 快照目录的告警都会派生一个必然失败的 job。
+#      三个出口：disabled ⇒ 绿；enabled ⇒ 红；取不到/字段不可见 ⇒ skip 且日志明写「未核对」
+#      （绝不判绿）；slug 404 ⇒ 红（配置缺陷）。真检查在 drift.yml 的独立 job 里每周跑。
+npm run gate -- dependabot-setting --self-test
+npm run gate -- dependabot-setting
 
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
 #     默认按 MANIFEST 里记录的 target 取补丁表，也可 --dsh-target=<name> 指定

@@ -1,17 +1,35 @@
-# Dependabot 配置（2026-09-23 加入）
+# Dependabot 配置（2026-09-23 加入；2026-10-09 更正一处伪结论）
 #
-# 为什么现在必须有这个文件：**不配置目录列表时，Dependabot 会扫描仓库内所有目录**。
-# 我们把组装用的提交式 lockfile 放在 `harness-locks/<target>/package-lock.json`
-# （见 AGENTS.md「依赖解析的堆爆炸」一节），它旁边**没有** package.json——那不是 npm
-# 项目，只是「输入快照 + 解析结果」。Dependabot 却把它当成一个独立的 npm 清单，
-# 2026-09-23 就为它跑了一次安全更新（`/harness-locks/alpha` for fflate）——那个 PR
-# 既装不上也验证不了。
+# ## 这份文件能管什么、不能管什么
 #
-# 官方口径：安全更新要使用本配置，`directory` 必须指向清单所在目录
-# （https://docs.github.com/en/code-security/dependabot/dependabot-security-updates/configuring-dependabot-security-updates）。
-# 因此这里**显式只列根目录**，等价于把 harness-locks/ 排除在安全更新之外。
+# **能管**：*版本更新*（version updates）的目录与开关。我们把组装用的提交式 lockfile 放在
+# `harness-locks/<target>/package-lock.json`（见 AGENTS.md「依赖解析的堆爆炸」一节），它旁边
+# **没有** package.json——那不是 npm 项目，只是「输入快照 + 解析结果」。因此这里显式只列
+# 根目录，并配 `open-pull-requests-limit: 0`（只保留安全更新、不开版本更新 PR）。
 #
-# `open-pull-requests-limit: 0`：只保留安全更新、不开版本更新 PR（该选项不影响安全更新）。
+# **不能管**：*安全更新*（security updates）的目标目录。三条证据：
+#   · 官方口径（概念页）：`There is no interaction between the settings specified in the
+#     dependabot.yml file and Dependabot security alerts`。
+#   · 官方口径（配置页）：要让它对安全更新生效，`directory` **must be** the path to the
+#     manifest files —— 所以本配置是**加法式**的，**不是排除式**的。
+#   · 实测（2026-10-09，job 1618552559）：安全更新按**告警的 `manifest_path`** 开 job，
+#     `directories` 直接就是 `["/harness-locks/alpha"]`，随即在取文件阶段死掉：
+#     `Error during file fetching; aborting: /harness-locks/alpha/package.json not found`。
+#
+# ⚠️ 所以下面「只列根目录」**不能**读成「把 harness-locks/ 排除在安全更新之外」——
+#    本文件此前的注释正是这么写的，那是**伪结论**（已实测证伪）。别再写回去。
+#
+# ## 本仓的处置（2026-10-09 裁定）
+#
+# 依赖图仍会把 `harness-locks/**/package-lock.json` 当 npm 清单（官方未提供按路径排除的
+# 能力），于是每条落在快照目录的上游告警都会派生一个**必然失败**的更新 job。裁定：
+# **仓库级关闭 Dependabot security updates**（Settings → Advanced Security），告警本身
+# 保持可见，按 `docs/dsh-upgrade-checklist.md` 跟随上游版本处置。
+#
+# 两条守卫（本文件里的声明与那个开关都各有执行者，不再只靠散文）：
+#   · 本文件声明的目录必须真有清单文件 —— `npm run gate -- github-config`（fast 档，
+#     规则 F；注意它**先剥整行注释再判**，就是怕被上面这段说明命中）。
+#   · 那个开关不得被重新打开 —— `npm run gate -- dependabot-setting`（sentinel 档，联网）。
 version: 2
 updates:
   - package-ecosystem: npm
