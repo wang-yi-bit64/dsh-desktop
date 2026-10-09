@@ -108,6 +108,13 @@ jobs:
   dependabot-setting:
     name: dependabot security-updates switch
     runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
+    # ⚠️ 实测（2026-10-09，run 37894060540）：`security_and_analysis` **不随 GITHUB_TOKEN 返回**，
+    #    该 job 只能打印「未核对」。这里多给 `security-events: read` 是为了**实测**它能否让该字段
+    #    可见——若仍不可见，见脚本文件头的「诚实边界」：真正的核验需要带 push 权限的令牌（本地/
+    #    人工），CI 这一台只承担「提醒这件事没在自动核对」的职责，绝不冒充已核对。
+    permissions:
+      contents: read
+      security-events: read
     steps:
       # ⚠️ 必须 checkout：下面的步骤要执行仓库内的 scripts/（F13 的教训：缺它的 job 直到
       #    第一次真跑才现形）。
