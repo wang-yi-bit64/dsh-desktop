@@ -95,7 +95,7 @@ runtime target / patch / vendored 管理、提交式 lockfile(`npm ci` 零解析
 
 通道锚点(唯一产地 `scripts/dsh-targets.mjs`):
 
-| target | channel(上游 dist-tag,不可改) | publishChannel(桌面后缀,本仓命名) | dshVersion(锚点) |
+| target | upstreamDistTag(上游 dist-tag,不可改;2026-10-09 前名为 `channel`) | publishChannel(桌面后缀,本仓命名) | dshVersion(锚点) |
 |---|---|---|---|
 | `next`(默认) | `next` | `rc` | `0.1.5-rc.3` |
 | `alpha` | `alpha` | `alpha` | `0.1.6-alpha.2` |
@@ -456,10 +456,14 @@ provider / model / tool / schema path / request id / runtime version,并在 Diag
 
 > 〔2026-10-03 更正:上表两行的锚点已于 2026-09-30 切换——`next` = `0.2.0-rc.2`、
 > `alpha` = `0.1.7-alpha.2`;alpha 的"保持不动"被 ADR-057 废止(复役)。"只保留两个
-> target"与 `channel`/`publishChannel` 解耦的结论不变。〕
+> target"与 `upstreamDistTag`/`publishChannel` 解耦的结论不变。〕
+> 〔2026-10-09 更正(计划 2e):字段 `channel` 已改名 `upstreamDistTag`——旧名与"发布通道"
+> 同形,而它其实是**上游客观事实**;本仓「`channel`」一词现在只指**桌面通道**
+> (`stable`/`rc`/`alpha`,由版本后缀推导)。以下两行的结论与所指字段不变,只是名字更新。〕
 
-`channel`(上游客观事实,不可改)≠ `publishChannel`(本仓命名,可改)的解耦设计保留;
-`targetForVersion` 查 `publishChannel`,漂移哨兵用 `channel`(`upstreamTagFor`)。
+`upstreamDistTag`(上游客观事实,不可改)≠ `publishChannel`(本仓命名,可改)的解耦设计保留;
+`targetForVersion` 查 `publishChannel`;漂移哨兵只在**自测**里断言 `upstreamDistTag` 形态
+(主流程的参考段查全局 npm dist-tags,见 2f);桌面通道由 `desktopChannelForVersion()` 推。
 
 **ADR-048(单通道收敛)已被本裁定取代,superseding 条目已补:ADR-052(2026-09-30)。**
 理由:双目标机制已建成且边际成本为零;alpha 线上游仍活跃;单通道收敛的收益被

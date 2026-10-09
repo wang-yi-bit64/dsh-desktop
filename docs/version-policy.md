@@ -189,6 +189,30 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 ⚠️ **`n` 的当前值不由人填**，从台账取：`next n = max(该 (x.y.z, 通道) 组的 n) + 1`。
 台账即 `harness-locks/dsh-releases.json` 的 `builds[]`（D4 定案）：
 `{ channel, n, w, desktopVersion, tag, date }`。
+其中 `channel` 是**桌面通道**（`rc` / `alpha`）——**不是**上游 dist-tag，见 §3.3 的命名规则。
+
+### 3.3 🔴 谁拥有哪个字段（2e 职责划分，2026-10-09）
+
+版本号链路上有**三个互斥的产地**。**一个概念只能有一个产地**——这是 2e 拆分的全部理由
+（此前目标表同时答「目录 / 上游锚点 / 发布通道 / 桌面版本」，读的人分不清哪个字段能被谁改）。
+
+| 产地 | 文件 | 它回答的问题 | 它**不**回答 |
+|---|---|---|---|
+| 运行时**目标表** | `scripts/dsh-targets.mjs` | 目标键 → 目录（`patches/` `packages/` `harness-deps/`）；上游锚点 `dshVersion`；桌面后缀 `publishChannel`；`upstreamDistTag`（**仅用于发现**）；`status` | 合成号 / 本仓序号 `n` / `w`；「上游精确版本 → `patchTarget`」 |
+| 上游**索引与台账** | `harness-locks/dsh-releases.json` + `scripts/release-ledger.mjs` | 「上游**精确**版本 → `patchTarget` + `status`」（`resolveReleaseFor()`）；`n` 与 `w`（`planNextDesktopVersion()`）；合成号（`composeDesktopVersion()`）；发布通道（`deriveReleaseChannel()`，由 `patchTarget` 现算） | 目录怎么摆；本仓钉的上游锚点是多少 |
+| 版本**写入面** | `scripts/version.mjs`、`scripts/sync-upstream-release.mjs` | 把上面两者组装成 `package.json` / `Cargo.toml` / `Cargo.lock` | 自己拼合成号（调台账）；自己查目标表选通道 |
+
+**命名规则（只有一条）**：本仓「`channel`」**只**指**桌面通道**
+（`stable` / `rc` / `alpha`，由**版本后缀**推导，见 `desktopChannelForVersion()`）；
+上游那条 npm dist-tag 一律叫 **`upstreamDistTag`**，且只用于发现/参考。
+目标表里那个旧名 `channel` 的字段已于 2026-10-09 改名（`release-ledger.mjs` 单向依赖
+`dsh-targets.mjs`，反向 import 会让「目录契约」与「发布事实」互相绑定）。
+
+⚠️ **`stable` 不是目标名**：目标表里没有 `stable` 键——正式线的载体仍是未决开口
+（ADR-061 决策 7；条件化等待项登记在 `docs/dsh-upgrade-checklist.md` §6）。
+因此 `targetForVersion('0.2.0')` 仍落**默认目标**（`next`），而
+`desktopChannelForVersion('0.2.0')` 给 `stable`——两者**刻意不同**：一个答「用哪套补丁目录」，
+一个答「这一版对外属于哪条通道」。自测同时钉住这两条，改动其一必红。
 
 ---
 
@@ -203,8 +227,8 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 | 🔴 锚点判据的口径 | 补丁文件名锚的是**上游精确版本段**（`dshVersion`），桌面号是**合成号**——两者**不是同一字符串**。判据须继续锚 `dshVersion`，**不得**锚桌面号 |
 
 ⚠️ **上游没有 `rc` 这条 dist-tag**（只有 `latest` / `next` / `alpha`）。因此
-`channel`（上游 dist-tag）与 `publishChannel`（桌面后缀）**必须解耦**：若两者同名，
-`tags['rc'] ?? latest` 会**静默退回 `latest`**，漂移哨兵永久误报。见 §3 的字段契约。
+`upstreamDistTag`（上游 dist-tag）与 `publishChannel`（桌面后缀）**必须解耦**：若两者同名，
+`tags['rc'] ?? latest` 会**静默退回 `latest`**，漂移哨兵永久误报。见 §3.3 的字段归属表。
 
 ---
 

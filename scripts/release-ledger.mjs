@@ -32,6 +32,19 @@
  * `harness-locks/dsh-releases.json`（D4 定案：**不新开第三个 lock 目录**）。
  * 各目标的 `inputs.json` 记「组装输入」，本台账记「发布事实」，两者不互相覆盖。
  *
+ * ## 🔴 职责边界（2e 拆分，2026-10-09）
+ *
+ * 本文件与 `scripts/dsh-targets.mjs` 的分工是**互斥**的，别让职责回涨：
+ *
+ * | 归属 | 唯一产地 | 它回答的问题 |
+ * |---|---|---|
+ * | 运行时**目标表** | `scripts/dsh-targets.mjs` | 目标键 → 目录（`patches/` `packages/`）、上游锚点 `dshVersion`、桌面后缀 `publishChannel`、`upstreamDistTag`（仅发现）、`status` |
+ * | 上游精确版本的**索引与台账** | 本文件 + `harness-locks/dsh-releases.json` | 「上游**精确**版本 → `patchTarget` + `status`」（{@link resolveReleaseFor}）、「本仓序号 `n` 与 `w`」（{@link planNextDesktopVersion}）、合成号（{@link composeDesktopVersion}）、发布通道（{@link deriveReleaseChannel}） |
+ *
+ * 两侧都**不**持有对方的字段：目标表不认识 `n` / `builds[]`；台账不存 `releaseChannel`
+ * 的副本（由 `patchTarget` 现算）。`dsh-targets.mjs` 是**被**依赖方，本文件**单向**依赖它
+ * （只为取 `publishChannel`）——反向 import 会让「目录契约」与「发布事实」互相绑定。
+ *
  * ## CLI
  *
  * ```
@@ -370,6 +383,58 @@ export function deriveReleaseChannel(patchTarget, targets = DSH_TARGETS) {
 }
 
 /**
+ * **唯一入口**：「上游**精确**版本 → 该用哪套补丁 + 本仓下一个序号」。
+ *
+ * 这是 2e（2026-10-09）**迁到台账侧**的那部分职责。拆分后的分工：
+ *   · `scripts/dsh-targets.mjs` 只答「目标键 → 目录 / 上游锚点 / 桌面后缀」；
+ *   · 本函数答「上游精确版本 → `patchTarget` + 已有几次交付」——因为台账的**键就是**
+ *     上游精确版本，计数由 `builds[]` 现算。`dsh-targets.mjs` **不能**回答这个，
+ *     它连 `n` 都不认识（越界即职责回涨，见该模块文档的职责边界表）。
+ *
+ * ⚠️ **为什么未知版本是抛错、不是返回 `null`**：返回 `null` 会让调用方有机会「回退默认
+ * 目标」，而那正是 2i 修掉的缺陷形态（`0.2.0.3-rc.1` 静默按 `next` 组装、产物看起来正常）。
+ * 抛错把「查不到」与「查到了」变成两种**不可混淆**的形态，调用方没有第三个可以静默吞掉的分支。
+ *
+ * ⚠️ **计数必须走 `allBuilds()`**：`builds[]` 里**不存** `upstreamDsh`（上游身份的唯一产地
+ * 是索引键），而 {@link nextSequenceFor} 按 `upstreamDsh` 过滤 ⇒ 直接喂 `entry.builds`
+ * 会过滤掉全部记录、**恒返回 1**（静默算错 n）。台账里有一条专门的夹具钉住这一点。
+ *
+ * @param {{releases: Record<string, {patchTarget?: string, upstreamDistTag?: string,
+ *   status?: string, builds?: object[]}>}} ledger - 台账内容。
+ * @param {string} upstreamDsh - 上游**精确**版本（含上游自己的预发布段，如 `0.2.0-rc.2`）。
+ * @returns {{upstreamDsh: string, patchTarget: string|undefined, upstreamDistTag: string|undefined,
+ *   status: string|undefined, nextSequence: number, releaseChannel: string|null, builds: object[]}}
+ *   解析结果；`releaseChannel` 由 `patchTarget` **现算**（台账刻意不存该字段）。
+ * @throws {Error} 版本为空、或该精确版本不在台账索引里时。
+ */
+export function resolveReleaseFor(ledger, upstreamDsh) {
+  const key = String(upstreamDsh ?? '').trim();
+  if (key.length === 0) {
+    throw new Error(
+      'resolveReleaseFor：上游精确版本不能为空——台账键就是它，缺了无法选出 patchTarget。',
+    );
+  }
+  const entry = ledger?.releases?.[key];
+  if (entry === undefined) {
+    throw new Error(
+      `台账 ${LEDGER_RELATIVE} 里没有上游精确版本 ${JSON.stringify(key)} 这个键。` +
+        `「用哪套补丁 / 已交付几次」只能由台账回答（键 = 上游精确版本）；` +
+        `补登键要走 scripts/sync-upstream-release.mjs，**不得**在此回退默认目标。`,
+    );
+  }
+  const builds = entry.builds ?? [];
+  return {
+    upstreamDsh: key,
+    patchTarget: entry.patchTarget,
+    upstreamDistTag: entry.upstreamDistTag,
+    status: entry.status,
+    nextSequence: nextSequenceFor(allBuilds(ledger), key),
+    releaseChannel: entry.patchTarget === undefined ? null : deriveReleaseChannel(entry.patchTarget),
+    builds,
+  };
+}
+
+/**
  * **索引层**的非空化校验：台账必须**覆盖所有在役目标**，且映射方向自洽。
  *
  * 为什么必须单独有这一条：`builds[]` 全为空时，其余守卫全部**空转**（没有可断言的对象）。
@@ -620,8 +685,49 @@ export function selfTest() {
     '0.2.1-alpha.1': { patchTarget: 'alpha', upstreamDistTag: 'alpha', status: 'active', builds: [goodBuild] },
   });
 
-  eq('索引：覆盖所有在役目标 → 通过', checkIndexAgainstTargets(fullLedger.releases, TARGETS), []);
-  eq(
+
+  // === 2e（2026-10-09）：台账侧唯一入口 =====================================
+  // 「上游**精确**版本 → patchTarget + 下一个 n」。这是从目标表**迁过来**的职责：
+  // 目标表只知道目录与锚点，不认识 n，也不认识台账。
+  const ledger2e = ledgerOf({
+    '0.2.1-alpha.1': {
+      patchTarget: 'alpha',
+      upstreamDistTag: 'alpha',
+      status: 'active',
+      builds: [
+        { channel: 'alpha', n: 1, desktopVersion: '0.2.1-alpha.1.1', tag: 'v0.2.1-alpha.1.1', date: '2026-10-08' },
+        { channel: 'alpha', n: 2, desktopVersion: '0.2.1-alpha.1.2', tag: 'v0.2.1-alpha.1.2', date: '2026-10-09' },
+      ],
+    },
+    '0.2.0-rc.2': {
+      patchTarget: 'next',
+      upstreamDistTag: 'next',
+      status: 'active',
+      builds: [
+        { channel: 'rc', n: 7, desktopVersion: '0.2.0-rc.2.7', tag: 'v0.2.0-rc.2.7', date: '2026-10-09' },
+      ],
+    },
+  });
+  const resolvedAlpha = resolveReleaseFor(ledger2e, '0.2.1-alpha.1');
+  eq('2e：精确版本 → patchTarget', resolvedAlpha.patchTarget, 'alpha');
+  eq('2e：精确版本 → upstreamDistTag（仅发现）', resolvedAlpha.upstreamDistTag, 'alpha');
+  eq('2e：builds 原样带出', resolvedAlpha.builds.length, 2);
+  // 🔴 这条钉住一个**静默算错**的实现：把 `entry.builds`（不带 upstreamDsh）直接喂给
+  //    nextSequenceFor ⇒ 过滤不到任何记录 ⇒ 恒返回 1。期望 3（组内 max 2 + 1）。
+  eq('2e：下一个 n = 组内 max+1（**不是** 1）', resolvedAlpha.nextSequence, 3);
+  eq('2e：releaseChannel 由 patchTarget 现算', resolvedAlpha.releaseChannel, 'alpha');
+  // 🔴 跨组不得污染：next 组的 n=7 ⇒ 下一个 8；若实现用了「全局 max」会得到 3。
+  const resolvedRc = resolveReleaseFor(ledger2e, '0.2.0-rc.2');
+  eq('2e：计数按上游精确版本分组，不跨组污染', resolvedRc.nextSequence, 8);
+  eq('2e：next 线的 releaseChannel 是 rc（其上游 dist-tag 却是 next）', resolvedRc.releaseChannel, 'rc');
+  eq('2e：此处两字段确实不同（解耦的证明）', resolvedRc.upstreamDistTag !== resolvedRc.releaseChannel, true);
+  // 🔴 未知版本必须**抛错**，不得返回 `null` 让调用方回退默认目标——那正是 2i 的同类形态。
+  throws('2e：台账无此精确版本必须抛错', () => resolveReleaseFor(ledger2e, '9.9.9-alpha.1'));
+  throws('2e：空版本必须抛错', () => resolveReleaseFor(ledger2e, '   '));
+  // 上游正式线（无预发布段）在本仓尚无载体（ADR-061 决策 7）⇒ 台账里没有该键，同样抛错。
+  throws('2e：上游正式线版本未登记 ⇒ 抛错（决策 7 的开口）', () => resolveReleaseFor(ledger2e, '0.2.2'));
+
+  eq('索引：覆盖所有在役目标 → 通过', checkIndexAgainstTargets(fullLedger.releases, TARGETS), []);  eq(
     '索引：**漏掉一个在役目标的键**必须报红（这是空转的解法）',
     checkIndexAgainstTargets(ledgerOf({ '0.2.0-rc.2': { patchTarget: 'next', status: 'active' } }).releases, TARGETS).some((p) =>
       p.includes('alpha'),

@@ -67,7 +67,7 @@
 import { argv, env, exit } from 'node:process'
 import { pathToFileURL } from 'node:url'
 
-import { DSH_TARGETS, listTargetNames, resolveTarget, targetForVersion } from './dsh-targets.mjs'
+import { listTargetNames, resolveTarget, targetForVersion } from './dsh-targets.mjs'
 import {
   UPSTREAM_REPO,
   fetchUpstreamReleases,
@@ -419,19 +419,26 @@ async function selfTest() {
   check('叫号器：叫的时候必须点名登记页与条目号', [stableNote.includes('dsh-v0.2.1'), stableNote.includes('§6')], [true, true])
   check('叫号器：只点名正式版那一条（不把 prerelease 也列进去）', stableNote.includes('dsh-v0.2.1-alpha.1'), false)
 
-  // 双通道：每个目标都要能被解析、且 channel 是一个真实存在的 npm dist-tag 名。
-  // 注意**不能**要求版本后缀等于 channel：上游的 `next` 现在就指向一个 `rc` 版本
+  // 双通道：每个目标都要能被解析、且 upstreamDistTag 是一个真实存在的 npm dist-tag 名。
+  // 注意**不能**要求版本后缀等于 upstreamDistTag：上游的 `next` 现在就指向一个 `rc` 版本
   // （dist-tag 是「哪条发布线」，预发布阶段是「这条线走到哪一步了」，两者独立）。
-  // 真正要守的是 channel 别写成不存在的 tag——那样参考段会去查一个不存在的名字。
+  // 真正要守的是这个字段别写成不存在的 tag——那样有人照它去查就会查一个不存在的名字。
   //
-  // 🔴 2026-09-24 解耦后这条更硬：目标的 `channel`（上游 tag）与 `publishChannel`
+  // 🔴 2026-09-24 解耦后这条更硬：目标的 `upstreamDistTag`（上游 tag）与 `publishChannel`
   //    （桌面 tag 后缀）**本来就不该相等**——`next` 目标的桌面后缀是 `rc` 而
   //    上游 tag 是 `next`。此处因此**删掉了**早先那条「channel 与键一致」的断言：
   //    它当时之所以能过，只是因为字段名恰好撞上，而不是因为存在真实约束。
+  // 🔴 2026-10-09（2e）字段改名 `channel` → `upstreamDistTag`：旧名会被读成「发布通道」，
+  //    而它其实是**上游客观事实**（本仓改不了），与桌面通道是两回事（桌面通道由
+  //    `desktopChannelForVersion()` 从版本后缀推导）。此处断言跟着改名。
   check('目标数 ≥ 2（双通道并存）', listTargetNames().length >= 2, true)
   for (const name of listTargetNames()) {
     const t = resolveTarget(name)
-    check(`目标 ${name} 的 channel 是已知 dist-tag 名`, ['latest', 'next', 'alpha'].includes(t.channel), true)
+    check(
+      `目标 ${name} 的 upstreamDistTag 是已知 dist-tag 名`,
+      ['latest', 'next', 'alpha'].includes(t.upstreamDistTag),
+      true
+    )
     check(`目标 ${name} 的 status 合法`, ['active', 'dormant'].includes(t.status), true)
     // publishChannel 才是桌面后缀，它必须非空且能反查回同一个目标。
     check(`目标 ${name} 的 publishChannel 非空且可反查`, targetForVersion(`9.9.9-${t.publishChannel}.1`), name)
@@ -443,8 +450,12 @@ async function selfTest() {
   check('目标状态：alpha 已复役（ADR-057 修订 ADR-056）', resolveTarget('alpha').status, 'active')
   check('默认目标必须在役', resolveTarget('next').status, 'active')
   // 可伪证性：把 publishChannel 改成上游不存在的值仍应能反查（它不过是本仓命名），
-  // 但把 channel 改成不存在的 dist-tag 必须判红——这两条一起守住解耦的两侧。
-  check('可伪证性：channel 写成不存在的 dist-tag 必须判红', ['latest', 'next', 'alpha'].includes('rc'), false)
+  // 但把 upstreamDistTag 改成不存在的 dist-tag 必须判红——这两条一起守住解耦的两侧。
+  check(
+    '可伪证性：upstreamDistTag 写成不存在的 dist-tag 必须判红',
+    ['latest', 'next', 'alpha'].includes('rc'),
+    false
+  )
 
   // 上游 slug 的唯一产地必须非空且是 owner/name（否则 `gh api` 会去查一个畸形路径）
   check('上游 slug 形态', /^[^/\s]+\/[^/\s]+$/.test(UPSTREAM_REPO), true)
@@ -470,11 +481,14 @@ async function main() {
   const repo = env.DSH_UPSTREAM_REPO || UPSTREAM_REPO
   const targets = listTargetNames().map((name) => ({
     name,
-    // 🔴 这里取的是 `channel`（**上游** npm dist-tag 名），只用于**参考段**与目标表完整性；
-    //    基准已换成上游 Release（见文件头）。`next` 目标的桌面后缀是 `rc` 而上游 tag 是 `next`。
-    channel: DSH_TARGETS[name].channel,
     status: resolveTarget(name).status,
     current: resolveTarget(name).dshVersion
+    // ⚠️ 这里**刻意不再**带目标表的 `upstreamDistTag`（旧名 `channel`；2026-10-09，2e）。
+    //    基准换成「上游 Release」后，参考段查的是**全局** npm dist-tags
+    //    （见下方 `fetchDistTags`），与「每个目标各自跟哪条 dist-tag」无关
+    //    ⇒ 那个属性自 2f 起就**没有任何读者**（旧基准的残留）。留着它会让下次
+    //    读代码的人以为「哨兵按目标逐个查上游 dist-tag」——事实并非如此。
+    //    目标表字段本身仍在自测里被断言（它是上游客观事实，需要形态守卫）。
   }))
 
   const result = fetchUpstreamReleases({ repo })

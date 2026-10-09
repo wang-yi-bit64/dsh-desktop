@@ -226,7 +226,11 @@ npm run gate -- drift --self-test
 #      排障时可直跑：node scripts/upstream-release.mjs
 npm run gate -- upstream-release
 
-# 20b. 双上游通道：目标表自检（目标名 ↔ 通道 ↔ 版本；未知通道必须失败不得回退）
+# 20b. 双上游通道：目标表自检（目标键 ↔ 目录 ↔ 上游锚点 ↔ 桌面后缀；未知通道必须失败不得回退）。
+#      2e（2026-10-09）起本表**只**拥有目标表：桌面合成号与「上游精确版本 → patchTarget + n」
+#      归台账（harness-locks/dsh-releases.json + scripts/release-ledger.mjs 的 resolveReleaseFor）。
+#      字段 `channel` 已改名 `upstreamDistTag`（仅用于发现）；桌面通道由版本后缀推
+#      （desktopChannelForVersion）。自测成对钉「通道不可挪位」：0.2-rc.3 判红 / 0.2.0-rc.3 判绿
 npm run gate -- targets
 
 # 20c. 提交式 lockfile 纯逻辑自检（inputs 一致性三规则 + 家族钉死推导 +

@@ -18,13 +18,32 @@
  * 两个目标各自持有一套**补丁集**（`patches/<target>/`）与**vendored 覆盖包**
  * （`packages/<target>/`），互不干扰；`prepare:harness` 按 `--dsh-target` 选一套。
  *
- * ## 🔴 两个「通道名」不是一回事（2026-09-24 解耦）
+ * ## 🔴 本模块的职责边界（计划 §4.6 **2e** 拆分：2026-10-09）
  *
- * 每个目标条目有**两个**通道字段，它们回答的是两个独立的问题：
+ * 它**只**拥有「运行时目标表」这一件事——目标键 → 目录契约与上游锚点：
+ *
+ * | 它拥有 | 含义 |
+ * |---|---|
+ * | 目标键 ↔ 目录 | `patches/<key>/`、`packages/<key>/`、`harness-deps/<key>/`（**目录键保持不动**） |
+ * | `dshVersion` | 该目标钉的**上游精确版本**；补丁文件名的版本段锚它（**不得**改成锚桌面号） |
+ * | `publishChannel` | 桌面 tag 的**预发布后缀**（本仓命名，可改） |
+ * | `upstreamDistTag` | 上游 npm dist-tag 名 —— **仅用于发现/参考**，不是发布依据 |
+ * | `status` | 在役 / 休眠（ADR-056 / ADR-057） |
+ *
+ * 它**刻意不拥有**（越界即职责回涨；`docs/version-policy.md` §职责划分 有同一张表）：
+ *
+ * - ❌ **桌面合成版本号**的推导（`n` / `w` 与逐位复算）→ `harness-locks/dsh-releases.json`
+ *   与 `scripts/release-ledger.mjs`（`composeDesktopVersion()` / `planNextDesktopVersion()`）；
+ * - ❌ 「上游**精确**版本 → `patchTarget` + 本仓计数」的解析 → 同上（`resolveReleaseFor()`）；
+ * - ❌ 任何「桌面版本 ⇒ 选哪条上游线」的映射：V3（ADR-061）下该关系**不存在**。
+ *
+ * ## 🔴 `upstreamDistTag` 不是发布通道（2026-09-24 解耦，2026-10-09 改名）
+ *
+ * 两个字段回答两个独立的问题，**且都不叫 `channel`**（旧名易被读成「发布通道」）：
  *
  * | 字段 | 回答的问题 | 值的来源 | 可否随意改 |
  * |---|---|---|---|
- * | `channel` | 组装时**拉上游哪条 npm dist-tag 线** | 上游客观事实（`next` / `alpha`） | ❌ **不能**——上游就叫这个名 |
+ * | `upstreamDistTag` | 组装/发现时**上游有哪条 npm dist-tag 线** | 上游客观事实（`next` / `alpha`） | ❌ **不能**——上游就叫这个名 |
  * | `publishChannel` | 桌面 tag 的**预发布后缀**叫什么 | 本仓自己的命名决定 | ✅ 能（`next` → `rc` 就是这么改的） |
  *
  * 混为一谈的代价（这正是 2026-09-24 要修的东西）：上游的 `next` dist-tag 现在
@@ -33,7 +52,10 @@
  * 若强行让两者同名，想把桌面后缀改成语义更准的 `rc` 时，就会连带去查一个
  * **上游根本不存在的 `rc` dist-tag**，让漂移哨兵静默退回 `latest`、永久误报。
  *
- * `targetForVersion` 走 `publishChannel`；漂移哨兵走 `channel`。各取所需。
+ * `targetForVersion` / `desktopChannelForVersion` 走**版本后缀**；
+ * `upstreamDistTagFor` 只把 dist-tag 名交给**发现/参考**用途（漂移哨兵参考段）。
+ * 两条路互不读取对方 ⇒ 自测里 `upstreamDistTagFor('next') === 'next'` 与
+ * `desktopChannelForVersion('0.2.0-rc.3') === 'rc'` **同时**成立。
  *
  * ## 目标状态（status）：在役 / 休眠（ADR-056）
  *
@@ -57,7 +79,7 @@
  * ```bash
  * node scripts/dsh-targets.mjs                      # 打印目标表
  * node scripts/dsh-targets.mjs --self-test          # 纯逻辑自检（不联网）
- * node scripts/dsh-targets.mjs --channel-of v0.5.0-rc.1   # tag/版本 → 目标名
+ * node scripts/dsh-targets.mjs --channel-of v0.5.0-rc.1   # 版本/桌面 tag → 目标名（走 publishChannel）
  * ```
  *
  * 退出码：`0` 正常 · `1` 自检失败或未知通道 · `2` 参数错误。
@@ -76,10 +98,15 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 与补丁文件名里的版本段都由它推导，不要在任何别处再写一遍版本字符串。
  * （`check-patch-applicability` 会用「补丁文件名里的版本段是否等于当前目标版本」
  * 判断该包的版本要不要跟着上移，见其 `targetPackageVersion()`。）
+ *
+ * ⚠️ **字段名 `channel` 已于 2026-10-09（2e）改名为 `upstreamDistTag`**：旧名与
+ * 「发布通道」同形，读的人会把「上游 dist-tag」误当成「本仓发布通道」。改名后
+ * 与台账（`harness-locks/dsh-releases.json`）的同名字段一致，且**不再有** `channel`
+ * 字段（自测里有一条「旧字段名不得残留」的判据）。
  */
 export const DSH_TARGETS = {
   next: {
-    channel: 'next',
+    upstreamDistTag: 'next',
     publishChannel: 'rc',
     status: 'active',
     dshVersion: '0.2.0-rc.2',
@@ -87,7 +114,7 @@ export const DSH_TARGETS = {
       '上游 rc 线（当前 0.2.0-rc.2，2026-09-30 从 0.1.5-rc.3 跨两个 minor 推进；补丁按 retireWhen 退役 4 个、语义重做 3 个，10 个落盘——见 patches/LAYERS.md「next 线（0.2.0-rc.2）的移植裁定」）'
   },
   alpha: {
-    channel: 'alpha',
+    upstreamDistTag: 'alpha',
     publishChannel: 'alpha',
     status: 'active',
     dshVersion: '0.2.1-alpha.1',
@@ -99,6 +126,13 @@ export const DSH_TARGETS = {
 /** 未显式指定 `--dsh-target` 时使用的目标。 */
 export const DEFAULT_TARGET = 'next'
 
+/**
+ * **正式版**（无预发布段）的桌面通道名。
+ *
+ * 它不是目标名（目标表里没有 `stable` 键，见 {@link desktopChannelForVersion} 的说明）。
+ */
+export const STABLE_CHANNEL = 'stable'
+
 /** 列出全部目标名（稳定顺序：`DSH_TARGETS` 的键序）。 */
 export function listTargetNames() {
   return Object.keys(DSH_TARGETS)
@@ -108,8 +142,8 @@ export function listTargetNames() {
  * 取目标定义。
  *
  * @param {string} name 目标名（如 `next`）。
- * @returns {{name: string, channel: string, publishChannel: string, status: 'active'|'dormant', dshVersion: string, summary: string}}
- *   目标定义（含名字）。
+ * @returns {{name: string, upstreamDistTag: string, publishChannel: string, status: 'active'|'dormant', dshVersion: string, summary: string}}
+ *   目标定义（含名字）。`upstreamDistTag` **仅用于发现**，不决定发布通道。
  * @throws {Error} 名字不在总表里——**不**回退到默认目标：静默回退会让产物捆错运行时。
  */
 export function resolveTarget(name) {
@@ -258,17 +292,51 @@ export function targetForPublishChannel(suffix) {
 }
 
 /**
- * 组装目标名 → 它跟踪的上游 npm dist-tag 名。
+ * 桌面**发布通道名**：由**版本后缀**推导，与 {@link targetForVersion} 同源、不同出口。
  *
- * 与 {@link targetForPublishChannel} 方向相反、字段不同：这里取的是 `channel`
- * （上游客观事实），不是 `publishChannel`（本仓命名）。漂移哨兵用这个。
+ * | 输入 | 结果 |
+ * |---|---|
+ * | `0.2.0`（无预发布段） | `'stable'`（{@link STABLE_CHANNEL}） |
+ * | `0.2.0-rc.3` / `0.2.0-rc.3+w3` | `'rc'`（命中 `next` 目标的 `publishChannel`） |
+ * | `0.2.1-alpha.1` / `0.2.1-alpha.1.3` | `'alpha'` |
+ * | `0.5.0-next.1` | `null`——`next` 是**上游 dist-tag 名**，不是桌面通道名 |
+ * | 形状非法（`0.2-rc.3`、`0.2.1.3-rc.1`） | **抛错**（沿用 2i 纪律：形状不可识别 ≠ 正式版） |
+ *
+ * ⚠️ **`stable` 不是目标名**：目标表里没有 `stable` 键（正式线的载体是 ADR-061 决策 7 的
+ * 未决开口）。因此 {@link targetForVersion} 对正式版**照旧落默认目标**（`next`），
+ * 而本函数对同一版本给出 `stable`——两者**刻意不同**：一个答「用哪套补丁目录」，
+ * 一个答「这一版对外属于哪条通道」。自测同时钉住这两条。
+ *
+ * 🔴 **本函数只读版本后缀，不读 `upstreamDistTag`**。若实现改成读目标表的
+ * `upstreamDistTag`，`desktopChannelForVersion('0.2.0-rc.3')` 会变成 `'next'`，
+ * 自测里那条期望 `'rc'` 的断言立刻变红——这正是 2e 拆分要守的边界。
+ *
+ * @param {string} version 语义化版本（可带前导 `v`）。
+ * @returns {'stable'|'rc'|'alpha'|null} 通道名；后缀未命中任何 `publishChannel` 时为 `null`。
+ * @throws {Error} 版本形状不合法时（由 {@link channelOfPrerelease} 抛出）。
+ */
+export function desktopChannelForVersion(version) {
+  const suffix = channelOfPrerelease(version)
+  // 无预发布段 ⇒ 正式版；**不**回退默认目标（那是 targetForVersion 的出口）。
+  if (suffix === null) return STABLE_CHANNEL
+  return targetForPublishChannel(suffix) === null ? null : suffix
+}
+
+/**
+ * 组装目标名 → 它**发现/参考**用的上游 npm dist-tag 名。
+ *
+ * ⚠️ **降级说明（2e）**：本函数返回的是 `upstreamDistTag`——上游客观事实，**仅用于
+ * 发现**（如漂移哨兵的参考段打印「上游现有哪些 dist-tag」）。它**不**参与：
+ *   · 桌面通道判定（那是 {@link desktopChannelForVersion}，只看版本后缀）；
+ *   · 目标解析（那是 {@link targetForVersion}，只看 `publishChannel`）。
+ * 旧名 `upstreamTagFor` 与之同名易混（`Tag` 到底指上游 tag 还是桌面 tag），2026-10-09 改名。
  *
  * @param {string} name 目标名。
  * @returns {string} 上游 dist-tag 名。
  * @throws {Error} 目标名未知。
  */
-export function upstreamTagFor(name) {
-  return resolveTarget(name).channel
+export function upstreamDistTagFor(name) {
+  return resolveTarget(name).upstreamDistTag
 }
 
 /**
@@ -396,22 +464,66 @@ export function selfTest() {
     null
   )
 
-  // publishChannel 反查：后缀 → 目标名，独立于 channel。
+  // publishChannel 反查：后缀 → 目标名，独立于 upstreamDistTag。
   eq('publishChannel：rc → next', targetForPublishChannel('rc'), 'next')
   eq('publishChannel：alpha → alpha', targetForPublishChannel('alpha'), 'alpha')
   eq('publishChannel：未知后缀 → null', targetForPublishChannel('beta'), null)
   eq('publishChannel：空串 → null', targetForPublishChannel('  '), null)
   // 两个名字**必须**不同：这是解耦的立论点，也是「上游 next dist-tag 指向 rc 版本」的编码。
-  eq('next 目标的 channel（上游 tag）', upstreamTagFor('next'), 'next')
+  eq('next 目标的 upstreamDistTag（上游 tag，仅发现）', upstreamDistTagFor('next'), 'next')
   eq('next 目标的 publishChannel（桌面后缀）', resolveTarget('next').publishChannel, 'rc')
-  eq('两个字段确实不同（解耦的证明）', upstreamTagFor('next') !== resolveTarget('next').publishChannel, true)
+  eq(
+    '两个字段确实不同（解耦的证明）',
+    upstreamDistTagFor('next') !== resolveTarget('next').publishChannel,
+    true
+  )
 
-  // 目标表本身：`channel` 必须与键一致（键名即上游 dist-tag 名），
+  // === 2e（2026-10-09）：职责边界 ==========================================
+  // 通道**由版本后缀推导**，不由 upstreamDistTag 推导——这是 2e 拆分的正面判据。
+  eq(
+    '2e：正式版 ⇒ stable（不是目标名，见 desktopChannelForVersion 文档）',
+    desktopChannelForVersion('0.2.0'),
+    STABLE_CHANNEL
+  )
+  eq('2e：rc 后缀 ⇒ rc', desktopChannelForVersion('0.2.0-rc.3'), 'rc')
+  eq('2e：合成号（带 +w）⇒ rc —— build 段不得污染通道', desktopChannelForVersion('0.2.0-rc.3+w3'), 'rc')
+  eq('2e：alpha 后缀 ⇒ alpha', desktopChannelForVersion('0.2.1-alpha.1'), 'alpha')
+  eq('2e：合成号（多段）⇒ alpha', desktopChannelForVersion('0.2.1-alpha.1.3'), 'alpha')
+  // 🔴 边界反证：`next` 是**上游 dist-tag 名**，不是桌面通道名。若把 desktopChannelForVersion
+  //    改成读目标表的 upstreamDistTag，上面「0.2.0-rc.3 ⇒ rc」会变成 'next'，本条与那条
+  //    **同时**变红——两个方向都钉住了。
+  eq('2e：上游 dist-tag 名（next）不得当桌面通道', desktopChannelForVersion('0.5.0-next.1'), null)
+  eq('2e：未知后缀 ⇒ null', desktopChannelForVersion('0.5.0-beta.1'), null)
+  throws('2e：形状非法必须抛错（0.2-rc.3）', () => desktopChannelForVersion('0.2-rc.3'))
+  // 正式版的两条口径**刻意不同**：通道名 `stable`（后缀推的）vs 目标 `next`（默认线）。
+  // 若有人把二者「统一」，必有一条变红——这是 ADR-061 决策 7 的未决开口在代码里的显式位置。
+  eq('2e：正式版的目标仍是默认目标（既有语义保留，不得改）', targetForVersion('0.2.0'), DEFAULT_TARGET)
+  eq(
+    '2e：stable 与默认目标刻意不同名（决策 7 的开口）',
+    desktopChannelForVersion('0.2.0') !== DEFAULT_TARGET,
+    true
+  )
+
+  // 🔴 §4.9 判据 9：**通道不可挪位**——把通道名写进核心三段（`0.2-rc.3`）必须判红。
+  //    关键在**成对**：同一个通道名位置正确时（`0.2.0-rc.3`）必须绿，否则「一律抛错」也能过。
+  throws('2e：通道名挪进前两段（0.2-rc.3）⇒ targetForVersion 必须报错', () =>
+    targetForVersion('0.2-rc.3')
+  )
+  eq('2e：同一通道名位置正确 ⇒ next（正控）', targetForVersion('0.2.0-rc.3'), 'next')
+  eq('2e：语料扫描入口对挪位版本只判「不可解析」，不炸整趟扫描', parseVersionShape('0.2-rc.3').ok, false)
+
+  // 目标表本身：`upstreamDistTag` 必须与键一致（本仓两条线的 dist-tag 名恰好同键），
   // 而「版本后缀能反推回自己」要走 **publishChannel** —— 这正是解耦后的分工。
+  // 另：**旧字段名 `channel` 不得残留**（改名半途 = 两套名字并存，读的人不知道信哪个）。
   for (const name of listTargetNames()) {
     const target = resolveTarget(name)
-    eq(`目标 ${name} 的 channel 与键一致`, target.channel, name)
-    eq(`目标 ${name} 的 channel 是已知 npm dist-tag 名`, ['latest', 'next', 'alpha'].includes(target.channel), true)
+    eq(`目标 ${name} 的 upstreamDistTag 与键一致`, target.upstreamDistTag, name)
+    eq(
+      `目标 ${name} 的 upstreamDistTag 是已知 npm dist-tag 名`,
+      ['latest', 'next', 'alpha'].includes(target.upstreamDistTag),
+      true
+    )
+    eq(`目标 ${name} 已无旧字段 channel（2e 改名）`, Object.hasOwn(DSH_TARGETS[name], 'channel'), false)
     eq(`目标 ${name} 的 status 合法`, ['active', 'dormant'].includes(target.status), true)
     eq(
       `目标 ${name} 的 publishChannel 能反推回自己`,
@@ -508,8 +620,8 @@ function main() {
     const statusMark = target.status === 'dormant' ? '  🗄️ 休眠（ADR-056）' : ''
     console.log(`  ${name.padEnd(6)} DSH ${target.dshVersion.padEnd(14)} ${target.summary}${mark}${statusMark}`)
     console.log(
-      `         上游 tag：${target.channel}   桌面后缀：${target.publishChannel}   状态：${target.status}   ` +
-        `补丁：patches/${name}/   vendored：packages/${name}/`
+      `         上游 dist-tag（仅发现）：${target.upstreamDistTag}   桌面后缀：${target.publishChannel}   ` +
+        `状态：${target.status}   补丁：patches/${name}/   vendored：packages/${name}/`
     )
   }
 }

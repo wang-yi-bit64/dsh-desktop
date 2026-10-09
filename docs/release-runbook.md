@@ -302,7 +302,7 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 自 2026-09-15 起，本仓**同时维护两条上游运行时通道**，各自钉一个 DSH 版本、持有一套
 补丁与 vendored 覆盖包：
 
-| 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
+| 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2`（2026-09-30 推进） | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
 | `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1`（2026-10-07 跨 minor 推进） | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
@@ -323,14 +323,20 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
 - **唯一事实源是 [`scripts/dsh-targets.mjs`](scripts/dsh-targets.mjs)** 的 `DSH_TARGETS`：
-  目标名 ↔ 通道 ↔ 版本号。`prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target=<name>`
+  目标名 ↔ 目录 ↔ 上游锚点 ↔ 桌面后缀。`prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target=<name>`
   从该表推导（含该目标的补丁目录、vendored 目录与 staging 目录 `harness-deps/<target>/`）。
-- 🔴 **两个「通道名」不是一回事（2026-09-24 解耦，此前被混为一谈）**：
+  🔴 **该表只拥有目标表**（计划 2e，2026-10-09）：桌面**合成号**与「上游精确版本 → `patchTarget` +
+  本仓序号 `n`」归 `harness-locks/dsh-releases.json` + `release-ledger.mjs`。字段归属表见
+  [`docs/version-policy.md`](version-policy.md) §3.3。
+- 🔴 **`upstreamDistTag` 不是发布通道（2026-09-24 解耦，2026-10-09 改名）**：
 
   | 字段 | 回答的问题 | 值的来源 | 现取值（`next` 目标） |
   |---|---|---|---|
-  | `channel` | 组装时**拉上游哪条 npm dist-tag** | 上游客观事实，**不可改** | `next` |
+  | `upstreamDistTag` | 组装时**上游有哪条 npm dist-tag 线** | 上游客观事实，**不可改** | `next` |
   | `publishChannel` | 桌面 tag 的**预发布后缀** | 本仓命名，**可改** | `rc` |
+
+  ⚠️ 旧名 `channel` 已废弃（它会被读成「本仓发布通道」，而它其实是上游事实）。本仓
+  「`channel`」一词现在**只**指**桌面通道**（`stable` / `rc` / `alpha`，由版本后缀推导）。
 
   造成为何必须分开：上游 `next` dist-tag 现在**指向一个 `rc` 阶段版本**——dist-tag 是
   「哪条发布线」，预发布标识是「这条线走到哪一步了」，两者独立。本仓想把桌面后缀改成语义

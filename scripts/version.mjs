@@ -61,8 +61,17 @@ import path from 'node:path';
 
 import { compareSemver, latestTag, readCommits, suggestBump } from './conventional-commits.mjs';
 import { insertSection, renderSection, repoUrl } from './changelog.mjs';
-import { DEFAULT_TARGET, DSH_TARGETS } from './dsh-targets.mjs';
-import { LEDGER_RELATIVE, allBuilds, deriveReleaseChannel, readLedger, splitRepoSequence } from './release-ledger.mjs';
+// ⚠️ 本文件**不**从 `dsh-targets.mjs` 取任何东西：目标表答「目标键 → 目录/锚点/后缀」，
+// 而版本推导只需要台账（上游精确版本 → patchTarget + 计数 + 通道）。此前这里留着
+// `DEFAULT_TARGET, DSH_TARGETS` 两个**从未被使用**的导入（2d 重构的残留，无 linter 因而
+// 一直没现形）——那正是「版本推导面不该依赖目标表」这条边界被拖着的证据。2e 已清掉。
+import {
+  LEDGER_RELATIVE,
+  allBuilds,
+  readLedger,
+  resolveReleaseFor,
+  splitRepoSequence,
+} from './release-ledger.mjs';
 
 /** 需要保持同步的 Cargo 工作区成员（Cargo.lock 里的校验对象）。 */
 const CARGO_CRATES = ['dsh-desktop', 'dsh-contracts', 'dsh-host', 'dsh-host-cli'];
@@ -510,8 +519,10 @@ export function explainComposite({ version, ledger }) {
 
   // 上游身份只认**索引键**（allBuilds 把它附着在 upstreamDsh 上），不从头解析。
   const upstreamDsh = build.upstreamDsh;
-  const entry = ledger.releases[upstreamDsh] ?? {};
-  const channel = deriveReleaseChannel(entry.patchTarget);
+  // 2e：走台账侧的**唯一入口**（上游精确版本 → patchTarget + 计数 + 发布通道）。
+  // 不在这里自己 `ledger.releases[...]` 拼一份——拼法多一处 = 同一事实多一个产地。
+  const resolved = resolveReleaseFor(ledger, upstreamDsh);
+  const channel = resolved.releaseChannel;
   const shape = parseSemver(upstreamDsh);
   const upstreamPrerelease = shape?.prerelease ?? null;
 
@@ -523,9 +534,9 @@ export function explainComposite({ version, ledger }) {
     `  · 上游预发布段            ${upstreamPrerelease ?? '(无)'}`,
     `  · 本仓序号 n              ${build.n}`,
     `  · 人读标签 w              ${build.w ?? '(无)'}`,
-    `  · 补丁/目录目标           ${entry.patchTarget ?? '(未知)'}`,
+    `  · 补丁/目录目标           ${resolved.patchTarget ?? '(未知)'}`,
     `  · 桌面通道 publishChannel ${channel ?? '(无法由 patchTarget 派生)'}`,
-    `  · 上游 dist-tag（仅发现） ${entry.upstreamDistTag ?? '(未知)'}`,
+    `  · 上游 dist-tag（仅发现） ${resolved.upstreamDistTag ?? '(未知)'}`,
     `  · 发布日期                ${build.date}`,
     `  · tag                     ${build.tag}`,
     '',

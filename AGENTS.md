@@ -201,7 +201,7 @@
 自 2026-09-15 起，本仓**同时维护两条上游运行时通道**，各自钉一个 DSH 版本、持有一套
 补丁与 vendored 覆盖包：
 
-| 目标 | 上游线（`channel`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
+| 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
 | `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
 | `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1` | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须**严格大于**最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057 后果段） |
@@ -225,4 +225,4 @@
 > 2026-10-07 alpha 线推进到 `0.2.1-alpha.1` 后该补丁在 alpha 线也退役，**两线各 10 个**。
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
-> 📖 通道解耦（`channel` vs `publishChannel`）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6。
+> 📖 通道解耦（`upstreamDistTag` vs `publishChannel`；旧名 `channel` 已于 2026-10-09 按计划 2e 改名）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6；字段归属（谁拥有哪个字段）见 `docs/version-policy.md` §3.3。

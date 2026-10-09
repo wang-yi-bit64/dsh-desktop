@@ -250,6 +250,12 @@ export function verifyUpstreamRelease(upstreamTag, upstreamRepo = UPSTREAM_REPO,
  * `channel` 取 **`deriveReleaseChannel(patchTarget)`**——台账刻意不存 `releaseChannel`，
  * 它是 `DSH_TARGETS[patchTarget].publishChannel` 的纯函数（见 release-ledger.mjs 的偏离说明）。
  *
+ * 🔑 **命名规则（2e，2026-10-09）**：本仓「`channel`」**只**指**桌面通道**
+ * （`rc` / `alpha`，由版本后缀推导，见 `desktopChannelForVersion()`）；上游那条 npm
+ * dist-tag 一律叫 **`upstreamDistTag`**，且只用于发现。目标表里那个旧名 `channel` 的
+ * 字段已改名——它当年之所以叫 `channel`，正是因为把这两个概念混成了一个词。
+ * 所以：`entry.channel`（本字段）是**桌面通道**，`entry.upstreamDistTag` 是**上游事实**。
+ *
  * @param {object} input
  * @param {string} input.target - 目标名（也是 patchTarget）。
  * @param {string} input.upstreamDsh - 上游精确版本（= 台账索引键）。
@@ -297,7 +303,7 @@ export function buildLedgerEntry({
 
 /**
  * **把一条新记录合入台账**（纯函数）。同键已存在就追加进它的 `builds[]`，
- * 否则新建索引条目（`upstreamDistTag` 由目标的 `channel` 推出——它只用于发现）。
+ * 否则新建索引条目（`upstreamDistTag` 取自**目标表的同名字段**——它仅用于发现）。
  *
  * @param {object} ledger - 台账内容。
  * @param {string} upstreamDsh - 上游精确版本（索引键）。
@@ -369,7 +375,7 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
   if (hypotheticalEntry.entry === null) {
     return { problems: [...problems, ...hypotheticalEntry.problems], notices, plan: null };
   }
-  const hypothetical = withLedgerEntry(ledger, upstreamDsh, hypotheticalEntry.entry, target, t.channel);
+  const hypothetical = withLedgerEntry(ledger, upstreamDsh, hypotheticalEntry.entry, target, t.upstreamDistTag);
   problems.push(...checkLedgerAgainstVersion({ ledger: hypothetical, version: planned.desktopVersion }));
   return {
     problems,
@@ -383,7 +389,7 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
       desktopVersion: planned.desktopVersion,
       tag: `v${planned.desktopVersion}`,
       channel: deriveReleaseChannel(target),
-      upstreamDistTag: t.channel,
+      upstreamDistTag: t.upstreamDistTag,
       writes: [
         `${LEDGER_RELATIVE}：releases[${upstreamDsh}].builds 追加 1 条（n=${planned.n}）`,
         'package.json / Cargo.toml：version ← 合成号（复用 version.mjs writeVersion）',
@@ -825,7 +831,7 @@ function main(args) {
   const snapshot = snapshotFiles([ledgerPath(), ...versionFiles]);
   console.log(`📸 快照：${snapshot.dir}`);
 
-  const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.channel);
+  const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
   writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
   const backfilled = [release.tag ? `upstreamTag=${release.tag}` : '', release.commit ? `upstreamCommit=${release.commit.slice(0, 7)}…（${release.commitSource}）` : '']
     .filter(Boolean)

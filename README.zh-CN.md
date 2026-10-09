@@ -278,14 +278,14 @@ git push origin "<tag>"                     # 第二步：显式推 tag（触发
 
 壳层内置的上游运行时**双通道并行维护**：每条通道各自钉一个 `@deepseek-ai/dsh` 版本，并各持一套补丁（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）：
 
-| 目标 | 上游线（`channel`） | 固定的 DSH | 桌面后缀（`publishChannel`） | 桌面版本示例 |
+| 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 桌面后缀（`publishChannel`） | 桌面版本示例 |
 |---------|---------------|-----------|-------------------------|-------------------------|
 | `next`（默认） | npm `next` dist-tag（rc 阶段） | `0.2.0-rc.2` | `rc` | `0.7.2-rc.1` |
 | `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.2.1-alpha.1` | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
 
-**两个「通道名」不是一回事，别混用。** 每个目标带两个字段：`channel` 是**组装时拉哪条上游 npm dist-tag**（上游客观事实，改不了名），`publishChannel` 是**桌面 tag 的预发布后缀**（本仓自己的命名）。上游 `next` dist-tag 当下指向一个 `rc` 阶段版本，所以桌面后缀是 `rc` 而目标键仍是 `next`。**若把两者强行同名**，一改桌面后缀就会让漂移哨兵去查一个上游不存在的 `rc` tag，静默退回 `latest`。
+**两个「通道名」不是一回事，别混用。** 每个目标带两个字段：`upstreamDistTag` 是**组装时拉哪条上游 npm dist-tag**（上游客观事实，改不了名；2026-10-09 由 `channel` 改名——旧名会被读成「本仓发布通道」），`publishChannel` 是**桌面 tag 的预发布后缀**（本仓自己的命名）。上游 `next` dist-tag 当下指向一个 `rc` 阶段版本，所以桌面后缀是 `rc` 而目标键仍是 `next`。**若把两者强行同名**，一改桌面后缀就会让漂移哨兵去查一个上游不存在的 `rc` tag，静默退回 `latest`。本仓「通道」一词现在**只**指**桌面通道**（`stable` / `rc` / `alpha`，由版本后缀推导）。
 
-> ⚠️ **目标键告诉不了你钉的是哪个上游版本。** 目标的 `channel` 是它**对着哪条上游 dist-tag 定义**的，而 `dshVersion` 是本仓**实际钉住**的版本——两者历史上可以不一致。截至 2026-10-07 alpha 线推进后，`next` 与 `alpha` 两条线均已各自对齐（next `0.2.0-rc.2`、alpha `0.2.1-alpha.1`，与上游 dist-tag 于 2026-10-08 实测一致）。要看实时值请跑 `node scripts/dsh-targets.mjs`；**不要按目标键推断版本**。
+> ⚠️ **目标键告诉不了你钉的是哪个上游版本。** 目标的 `upstreamDistTag` 是它**对着哪条上游 dist-tag 定义**的，而 `dshVersion` 是本仓**实际钉住**的版本——两者历史上可以不一致。截至 2026-10-07 alpha 线推进后，`next` 与 `alpha` 两条线均已各自对齐（next `0.2.0-rc.2`、alpha `0.2.1-alpha.1`，与上游 dist-tag 于 2026-10-08 实测一致）。要看实时值请跑 `node scripts/dsh-targets.mjs`；**不要按目标键推断版本**。
 
 桌面版本号的**预发布后缀就是 `publishChannel`**：`0.7.0-rc.1` 捆的是 DSH `next` 目标，`0.7.0-alpha.1` 捆 DSH alpha 线。发布流程从 tag 本身反推构建目标（`scripts/dsh-targets.mjs --channel-of`），**tag 后缀因此自动决定组装哪条运行时**——不需要在 tag 之外再声明一次通道。后缀不对应任何已知通道的 tag（例如 `beta`）会**直接让发布失败**，而不是回退到默认目标：静默回退会产出「版本号说一条线、运行时却是另一条线」的包，这类错配只有用户装上之后才会被发现。⚠️ 旧的 `0.7.0-next.1` 后缀**已不再是合法输入**——随本次改名退役。
 

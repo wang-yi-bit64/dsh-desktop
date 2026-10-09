@@ -35,13 +35,14 @@
   - `harness-lockfile.mjs`：提交式 lockfile 的**纯逻辑层**（路径推导 / `inputs.json` 一致性三规则 / 家族钉死推导 / 闭包字段抽取 / 安装位置推导），含 `--self-test`（34 项）；I/O、registry 查询与 npm 调用留在 `prepare-harness.mjs`。
   - `remove-tree.mjs`：**尽力而为**的临时目录删除（三级降级：直接删 → 递归恢复写权限 → OS 命令；**永不抛错**，返回 `{ ok, error, attempts }`），含 `--self-test`（21 项）。守的是「**辅助动作不得否决主结论**」——2026-09-23 alpha.5 的发布死在 `finally` 里一句 `rmSync` 的 EACCES 上，把一次**通过**的 portable 核验判成了发布失败。`package-cli.mjs` / `package-portable.mjs` 的生产路径清理点全部用它。
   - `../harness-locks/<target>/`：与该目标绑定、**必须成对提交**的 `package-lock.json` + `inputs.json`（输入快照——lockfile 本身不记录 overrides）。生成/再生成：`npm run harness:lockfile -- --dsh-target=<t>`（next 解析约 40 分钟、alpha 数分钟；版本锚点/补丁集/vendored 变更后必跑，见升级清单 Step 1 与「依赖解析的堆爆炸」一节）。
-  - `dsh-targets.mjs`：**双上游通道的唯一事实源**——目标名 ↔ npm dist-tag ↔ DSH 版本，以及「版本号 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
-    > 🔴 **两个「通道名」不是一回事（2026-09-24 解耦）**：目标条目有两个字段，回答两个独立问题——
-    > `channel` 是**上游 npm dist-tag 名**（组装时拉哪条线，上游客观事实，不可改），
+  - `dsh-targets.mjs`：**双上游通道「目标表」的唯一事实源**——目标名 ↔ 目录（`patches/` `packages/` `harness-deps/`）↔ 上游锚点 `dshVersion` ↔ 桌面后缀，以及「版本后缀 → 构建目标」的推导（`--channel-of`）。未知通道返回失败而非回退默认目标。含 `--self-test`。
+    > 🔴 **职责边界（计划 2e，2026-10-09）**：本模块**只**拥有目标表。「桌面**合成号**」与「上游**精确**版本 → `patchTarget` + 本仓序号 `n`」**归台账**——`harness-locks/dsh-releases.json` + `release-ledger.mjs`（`resolveReleaseFor()` / `planNextDesktopVersion()`）。目录键（`patches/next`、`packages/next`）**保持不动**，由 `patchTarget` 映射过去。字段归属表见 `docs/version-policy.md` §3.3。
+    > 🔴 **`upstreamDistTag` 不是发布通道（2026-09-24 解耦，2026-10-09 改名）**：目标条目有两个字段，回答两个独立问题——
+    > `upstreamDistTag` 是**上游 npm dist-tag 名**（组装时拉哪条线，上游客观事实，不可改），
     > `publishChannel` 是**桌面 tag 的预发布后缀**（本仓命名，可改）。
-    > 当前 `next` 目标：`channel: 'next'` 而 `publishChannel: 'rc'`——上游 `next` dist-tag 当下
+    > 当前 `next` 目标：`upstreamDistTag: 'next'` 而 `publishChannel: 'rc'`——上游 `next` dist-tag 当下
     > 就指向一个 `rc` 阶段版本，所以桌面发 `v0.7.0-rc.1` 却要组装 `next` 目标的补丁集，这是**正常**的。
-    > `targetForVersion` / `--channel-of` 查 `publishChannel`；漂移哨兵查 `channel`（用 `upstreamTagFor`）。
+    > 解析入口：`targetForVersion` / `--channel-of` 查 `publishChannel`；`desktopChannelForVersion` 从**版本后缀**推桌面通道（`stable` / `rc` / `alpha`）。漂移哨兵只在**自测**里断言 `upstreamDistTag` 的形态，主流程已不再按目标查 dist-tag（参考段查的是全局 npm dist-tags，见 2f）。
     > **若把两者强行同名**，想改桌面后缀时就会连带去查一个上游不存在的 dist-tag，让哨兵静默退回 `latest` 并永久误报。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
     > ⚠️ **同一份补丁只用下面两条路径中的一条**：两者都能把行号算对，但**产出的补丁不完全相同**（重生成会顺带规范化上下文与计数行）。混用会让同一补丁在两次操作间来回变动，且看不出版本差异是「上游变了」还是「工具换了一条」。

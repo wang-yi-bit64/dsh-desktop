@@ -116,7 +116,7 @@ export const GATES = [
     name: 'release-ledger',
     script: 'scripts/release-ledger.mjs',
     title: '发布台账自洽（合成号序号不重复 / 记录与版本号逐字自洽）',
-    why: '合成号（ADR-061）的 <n> 只能由台账推导，「这一版是第几次交付」这件事没有任何别的地方记录。守卫 1：已发布构建不得共享 (上游, n) 二元组——重复意味着两次发布声称同一版，updater 会把其中一个当作已安装 ⇒ 那份更新永远推不出去。字段自洽断言 desktopVersion 必须逐字等于由 (upstreamDsh, n, w) 合成出来的串，否则「台账里的 n」与「版本号里的 n」可以各说各话而无人发现。⚠️ 台账为空时它打印「空集判据」而不是静默通过——「没有可断言的东西」不得冒充「已断言且通过」。',
+    why: '合成号（ADR-061）的 <n> 只能由台账推导，「这一版是第几次交付」这件事没有任何别的地方记录。守卫 1：已发布构建不得共享 (上游, n) 二元组——重复意味着两次发布声称同一版，updater 会把其中一个当作已安装 ⇒ 那份更新永远推不出去。字段自洽断言 desktopVersion 必须逐字等于由 (upstreamDsh, n, w) 合成出来的串，否则「台账里的 n」与「版本号里的 n」可以各说各话而无人发现。⚠️ 台账为空时它打印「空集判据」而不是静默通过——「没有可断言的东西」不得冒充「已断言且通过」。2e（2026-10-09）起台账同时是「上游**精确**版本 → patchTarget + 本仓下一个 n」的**唯一入口**（`resolveReleaseFor()`）：未知版本**抛错**而非返回 null（返回 null 会诱出「回退默认目标」，正是 2i 的形态），且计数必须走 allBuilds（`builds[]` 不存 upstreamDsh，直接喂 entry.builds 会恒返回 1 —— 静默算错，已有专门夹具）。',
     real: { tiers: ['fast', 'ci', 'release'], args: ['--validate'] },
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
@@ -242,8 +242,8 @@ export const GATES = [
   {
     name: 'targets',
     script: 'scripts/dsh-targets.mjs',
-    title: '构建目标总表自检（目标 ↔ 通道 ↔ 版本）',
-    why: '含「未知通道不得回退默认目标」这条硬约束——通道解析决定装哪个运行时，回退 = 出错包的运行时。',
+    title: '构建目标总表自检（目标 ↔ 上游 dist-tag ↔ 桌面通道 ↔ 版本）',
+    why: '含「未知通道不得回退默认目标」这条硬约束——通道解析决定装哪个运行时，回退 = 出错包的运行时。2e（2026-10-09）后本表**只**拥有「目标键 → 目录 / 上游锚点 / 桌面后缀」，合成号与序号归 release-ledger，越界即职责回涨；原字段 `channel` 已改名 `upstreamDistTag`（旧名会把它读成「发布通道」，而它其实是上游客观事实），并新增由**版本后缀**推导桌面通道的 desktopChannelForVersion。自测成对钉两件事：①「通道不可挪位」——`0.2-rc.3`（通道名写进核心三段）必须判红，而 `0.2.0-rc.3` 必须判绿；②「upstreamDistTag 不是桌面通道」——`0.5.0-next.1` 必须判 null（若有人把桌面通道改成读 dist-tag，这条与「rc 后缀 ⇒ rc」同时变红）。',
     real: null,
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
