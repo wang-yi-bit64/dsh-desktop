@@ -95,44 +95,11 @@ jobs:
       - name: Updater channel check
         run: npm run gate -- update-channel
 
-  # Dependabot 安全更新开关（2026-10-09）：必须保持**关闭**。
-  # 为什么单独成 job：同 updater-channel 的理由——放同一个 job 里，前面那台红着（如 next 线
-  # 已知漂移）会让它永远轮不到执行。三台哨兵各自报告、互不遮蔽。
-  # 为什么是联网判据：开关住在**仓库设置**里（Settings → Advanced Security），与仓库内任何
-  # 文件无关；打开/关闭都不改变任何产物，因此本地再全的静态扫描也看不见它被重新打开。
-  # 它一打开，每条落在 harness-locks/ 快照目录的告警都会派生一个**在取文件阶段必然失败**的
-  # job（那里故意没有 package.json）——实测 2026-10-09 job 1618552559。
-  # 判据与裁定见 .github/dependabot.yml 头注释 + scripts/verify-dependabot-setting.mjs 文件头。
-  # 绿 = 开关仍在关闭位；红 = 有人把它打开了（改回去即可，与本次提交无关）。
-  # 取不到设置时脚本自行 skip 并在日志里写「未核对」（绝不冒充已核对）；但 slug 404 判红。
-  dependabot-setting:
-    name: dependabot security-updates switch
-    runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
-    # ⚠️ 实测（2026-10-09，run 37894060540）：`security_and_analysis` **不随 GITHUB_TOKEN 返回**，
-    #    该 job 只能打印「未核对」。这里多给 `security-events: read` 是为了**实测**它能否让该字段
-    #    可见——若仍不可见，见脚本文件头的「诚实边界」：真正的核验需要带 push 权限的令牌（本地/
-    #    人工），CI 这一台只承担「提醒这件事没在自动核对」的职责，绝不冒充已核对。
-    permissions:
-      contents: read
-      security-events: read
-    steps:
-      # ⚠️ 必须 checkout：下面的步骤要执行仓库内的 scripts/（F13 的教训：缺它的 job 直到
-      #    第一次真跑才现形）。
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
-
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      # 纯逻辑自检先跑：一个「字段看不见就判绿」的守卫比没有守卫更危险。
-      - name: Dependabot setting self-test
-        run: npm run gate -- dependabot-setting --self-test
-
-      # 真检查：读仓库设置。GH_TOKEN 不是可选——security_and_analysis 只对有 push 权限的
-      # 调用者返回；令牌不可见时脚本会 skip 并在日志里写明「未核对」（见文件头三个出口）。
-      - name: Dependabot setting check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run gate -- dependabot-setting
+  # ⚠️ 这里**刻意没有** dependabot-setting 的 job（2026-10-09 加了又撤掉）。
+  #    原因：该判据要读仓库设置里的 `security_and_analysis`，而 Actions 的 GITHUB_TOKEN
+  #    **没有 push 身份**，这个字段根本不返回。实测两次：只给 `contents: read` ⇒ 字段缺席；
+  #    再加 `security-events: read` ⇒ 仍然缺席（run 37894060540 / 37894189469）。
+  #    于是那台 job 只会「每周全绿 + 日志里写未核对」——绿色的日志没人看，等于替一段并不
+  #    存在的检查背书（ADR-030 的形态）。自检照常进 fast/ci/release；真检查改登记为
+  #    **人工运行**（总表 manual 字段写明理由与恢复条件：配上带 push 权限的 PAT secret
+  #    后可再接回来）。手动核验：npm run gate -- dependabot-setting

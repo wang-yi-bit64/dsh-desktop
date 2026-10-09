@@ -271,11 +271,15 @@ npm run gate -- update-channel
 npm run gate -- github-config
 npm run gate -- github-config --self-test
 
-# 20j. Dependabot 安全更新开关（**联网**，sentinel 档；2026-10-09 裁定：必须保持关闭）
+# 20j. Dependabot 安全更新开关（**联网**；2026-10-09 裁定：必须保持关闭）
 #      开关住在仓库设置里，打开/关闭都不改变任何产物 ⇒ 本地静态扫描永远看不见它被重新打开；
 #      它一打开，每条落在 harness-locks/ 快照目录的告警都会派生一个必然失败的 job。
 #      三个出口：disabled ⇒ 绿；enabled ⇒ 红；取不到/字段不可见 ⇒ skip 且日志明写「未核对」
-#      （绝不判绿）；slug 404 ⇒ 红（配置缺陷）。真检查在 drift.yml 的独立 job 里每周跑。
+#      （绝不判绿）；slug 404 ⇒ 红（配置缺陷）。
+#      🔴 **CI 核不了**（实测两次）：security_and_analysis 只对有 push 权限的调用者返回，
+#         Actions 的 GITHUB_TOKEN 没有 push 身份（加 security-events: read 也一样缺席）。
+#         故真检查刻意**不进任何分档**，只能人工用带权限的令牌跑；接进 drift.yml 会得到一台
+#         「每周全绿、日志只写未核对」的 job —— 绿色没人看 = 变相背书（ADR-030）。
 #      ⚠️ 本条在总表里带 `echoOutput: true`：编排器默认**只在失败时**回显脚本输出，于是
 #         「已核对」与「skip 未核对」都是 ✅，日志里分不出来——那正是本仓最怕的假绿。
 npm run gate -- dependabot-setting --self-test

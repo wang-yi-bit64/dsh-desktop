@@ -29,7 +29,8 @@
 # 两条守卫（本文件里的声明与那个开关都各有执行者，不再只靠散文）：
 #   · 本文件声明的目录必须真有清单文件 —— `npm run gate -- github-config`（fast 档，
 #     规则 F；注意它**先剥整行注释再判**，就是怕被上面这段说明命中）。
-#   · 那个开关不得被重新打开 —— `npm run gate -- dependabot-setting`（sentinel 档，联网）。
+#   · 那个开关不得被重新打开 —— `npm run gate -- dependabot-setting`（联网；**需人工用带
+#     push 权限的令牌跑**——CI 的 GITHUB_TOKEN 读不到该字段，实测两次，故它没有自动哨兵）。
 version: 2
 updates:
   - package-ecosystem: npm

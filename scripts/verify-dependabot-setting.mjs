@@ -42,6 +42,21 @@
  * ⚠️ 唯一的例外：**slug 404 判红**，不 skip。slug 是本仓写死的常量（`repoSlug()`），
  * 它 404 意味着配置或权限出错——那是缺陷，不是「上游没动静」（与 drift 同款裁定）。
  *
+ * ## 🔴 诚实边界：**这台检查在 CI 里核不了**（2026-10-09 两次实测）
+ *
+ * `security_and_analysis` 只对有 push 权限的调用者返回，而 Actions 的 `GITHUB_TOKEN`
+ * 没有 push 身份。实测（run 37894060540 / 37894189469）：只给 `contents: read` ⇒ 字段缺席；
+ * 再加 `security-events: read` ⇒ **仍然缺席**。
+ *
+ * 因此本判据的真检查**刻意不进任何分档**（`real.tiers = []` + 总表 `manual` 写明理由），
+ * 需要**人工用带 push 权限的令牌**运行。不把它接进 drift.yml 是有意的：那会得到一台
+ * 「每周全绿、日志里只写未核对」的 job，而绿色的日志没人看 —— 那等于替一段并不存在的
+ * 检查背书（ADR-030 的形态）。恢复条件：仓库配上带 push / administration 读权限的
+ * PAT secret 之后，可以把它接回 drift.yml 的**独立 job**（并保留 `echoOutput: true`）。
+ *
+ * ⚠️ 因此本文件的价值集中在两处：**自检**（进 fast/ci/release，守判定函数本身）
+ * 与**人工核验**（开关是否被人重新打开）。别把它当成一台自动哨兵——它不是。
+ *
  * ## 可证伪性
  *
  * `--self-test` 的夹具覆盖全部出口，且**成对**：`disabled` 必须 ok、`enabled` 必须 fail；

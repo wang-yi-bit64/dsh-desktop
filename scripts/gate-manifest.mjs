@@ -333,9 +333,16 @@ export const GATES = [
       '/harness-locks/alpha/package.json not found`。2026-10-09 裁定关闭（.github/dependabot.yml 头注释）。' +
       '⚠️ 它**只能**是联网判据：开关住在仓库设置里，打开/关闭都不改变任何产物，本地静态扫描看不见它。' +
       '取不到 / 字段不可见 ⇒ skip 并**明写「未核对」**（绝不判绿）；slug 404 ⇒ 判红（配置缺陷，同 drift）。',
-    real: { tiers: ['sentinel'], args: [] },
-    // 🔴 本条**必开** echoOutput：它的三个出口里 skip 是「未核对」，与「已核对且关闭」
-    //    都是 exit 0。不回声就必须靠猜——那就是本仓反复踩的假绿。
+    real: { tiers: [], args: [] },
+    // 🔴 真检查**刻意不进任何分档**：它需要**带 push 权限的令牌**才能读到
+    //    `security_and_analysis`。实测两次（2026-10-09，run 37894060540 / 37894189469）：
+    //    只给 `contents: read` ⇒ 字段缺席；再加 `security-events: read` ⇒ 仍然缺席。
+    //    Actions 的 GITHUB_TOKEN 没有 push 身份，因此把它放进 drift.yml 只会得到一台
+    //    「每周全绿、日志里写未核对」的 job —— 绿色没人看 = 变相背书（ADR-030 的形态）。
+    //    恢复条件：仓库配置了带 push/administration 读权限的 PAT secret 后，把真检查
+    //    接回 drift.yml 的独立 job（并给它 echoOutput，理由见下）。
+    manual: '需带 push 权限的令牌读仓库设置（CI 的 GITHUB_TOKEN 读不到 security_and_analysis，实测）；自检照常进 fast/ci/release',
+    // 三个出口里 skip 是「未核对」、与「已核对且关闭」同为 exit 0 ⇒ 人工跑时必须能看到结论。
     echoOutput: true,
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
