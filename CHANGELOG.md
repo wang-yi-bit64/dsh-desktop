@@ -7,6 +7,45 @@
 
 <!-- changelog-entries -->
 
+## [0.2.1-alpha.1.1] - 2026-10-09
+
+### ✨ 新功能
+
+- **release**: ADR-063 桥接版机制 + Release Plan 可校验化（登记/豁免/注入/门禁） ([7946100](https://github.com/wang-yi-bit64/dsh-desktop/commit/7946100c3dc67e02fdd289af413be5793f1eae46))
+- **gates**: 恢复 Dependabot 哨兵 —— 症状面零 secret 自动跑，前提面改由 PAT 驱动 ([fb95226](https://github.com/wang-yi-bit64/dsh-desktop/commit/fb95226a833aca9cee24334da9903dcaadce6105))
+- **release**: MANIFEST v3 与 C1 改指台账 SSOT（2g + 2h 同批） ([7ef96db](https://github.com/wang-yi-bit64/dsh-desktop/commit/7ef96dbad9391ca37a88b292f92a43d16bc91a53))
+- **release**: 2f 漂移哨兵换基准（npm dist-tag → 上游 GitHub Release）+ 修复前门步骤①② ([a1605d3](https://github.com/wang-yi-bit64/dsh-desktop/commit/a1605d3d9d9c06c9f82e1f452d4932e9736ad125))
+- **release**: 2d version.mjs 子命令 + 修复步骤⑦ 恒判失败（writeVersion 契约不一致） ([0251178](https://github.com/wang-yi-bit64/dsh-desktop/commit/0251178014aa1f914b668d1a0c4136f4216d2528))
+- **version**: 2c 落地 sync-upstream-release.mjs（--plan 默认只读 / --apply 显式写） ([51caac8](https://github.com/wang-yi-bit64/dsh-desktop/commit/51caac8ce4a1ee7894b9db4df6cee25b5fc0ca2a))
+- **version**: 落地合成版本号模型（ADR-061）—— 2b 台账 + 2i 缺口修复 + 两条门禁 ([60d703f](https://github.com/wang-yi-bit64/dsh-desktop/commit/60d703fab269499a93961238808d4d81646b7472))
+
+### 🐛 修复
+
+- **release**: 前门步骤⑧补传 --target/--dsh-target——--apply 首次端到端即失败 ([d5a5865](https://github.com/wang-yi-bit64/dsh-desktop/commit/d5a58659c9818c6f1f734ebb19f3f52ad3499611))
+- **gates**: github-config 分隔符归一改字面替换——posix 上反斜杠路径夹具恒红 ([268c36c](https://github.com/wang-yi-bit64/dsh-desktop/commit/268c36cb4172df072f1fde5513950a4db2a4ba17))
+- **deps**: 删除孤儿 src-tauri/Cargo.lock —— 消幽灵 Dependabot 告警，补 cargo-lock-scope 守卫 ([eabbb7f](https://github.com/wang-yi-bit64/dsh-desktop/commit/eabbb7fe53739fe2e80246368f7b93c7eec50bb3))
+- **gates**: 令牌纪律收口 —— 提供了令牌时 skip 不成立（D13 前提面残余漏洞） ([1b19b62](https://github.com/wang-yi-bit64/dsh-desktop/commit/1b19b62b1093334271929774b6d4d62f006ee141))
+- **gates**: 哨兵成功时也回显输出（echoOutput）+ M6 字段白名单 ([853d78f](https://github.com/wang-yi-bit64/dsh-desktop/commit/853d78f222735995c15e9a31e58e2f3430b7f5d0))
+- **deps**: Dependabot 安全更新不读 dependabot.yml 的 directory（D13）—— 关闭开关 + 两条守卫 ([b318252](https://github.com/wang-yi-bit64/dsh-desktop/commit/b3182529c15e2b21010200f7b097eadf971e48b3))
+
+### ♻️ 重构
+
+- **gates**: 撤回 dependabot-setting 的 CI job —— 实测 CI 核不了，不做变相背书 ([a7ce8ed](https://github.com/wang-yi-bit64/dsh-desktop/commit/a7ce8ed6e8d35b95a0fec2d53041896244573882))
+- **targets**: 2e 拆分 dsh-targets 职责（目标表 / 台账 / 写入面三产地互斥） ([856876f](https://github.com/wang-yi-bit64/dsh-desktop/commit/856876ffa4227978a86b3375b73f8f523bec7517))
+
+### 📝 文档
+
+- **upgrade-checklist**: §6 登记上游依赖漏洞等待项（第 4 条）+ 区分本仓 rustls ([e1e9210](https://github.com/wang-yi-bit64/dsh-desktop/commit/e1e92103738d42238b47a67928e0b3206cf4a268))
+- **github**: CODEOWNERS 头部状态同步——ruleset 已接通 code owners review ([8f4421b](https://github.com/wang-yi-bit64/dsh-desktop/commit/8f4421b59da421b1f2d92234c35bcdfc33e72dea))
+
+### 🧹 其他
+
+- **release**: 0.7.4-alpha.1 ([c2296a0](https://github.com/wang-yi-bit64/dsh-desktop/commit/c2296a0b18262e8db0d42f41dd719adca0c99399))
+- **release**: 0.7.3-rc.1 ([a511e2a](https://github.com/wang-yi-bit64/dsh-desktop/commit/a511e2aeb9a0f049b08c6928075fa89062873d6d))
+- **drift**: 探测 GITHUB_TOKEN 能否读到 security_and_analysis ([915c07d](https://github.com/wang-yi-bit64/dsh-desktop/commit/915c07dec659757a3135adff53bfdafbe824172e))
+- **workflows**: 永久移除 pullfrog.yml（ADR-062 关闭 ADR-058 决策 1 的恢复路径） ([cacc9b9](https://github.com/wang-yi-bit64/dsh-desktop/commit/cacc9b9c8e92b843ddef7732318fb36f4dd6f682))
+- **github**: 新增 CODEOWNERS 并为其补可证伪守卫 ([1e0ea04](https://github.com/wang-yi-bit64/dsh-desktop/commit/1e0ea04188c2af338707bb0ba69d03a5d4de6819))
+
 ## [0.7.3-rc.1] - 2026-10-09
 
 ### ✨ 新功能
