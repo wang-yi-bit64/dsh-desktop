@@ -80,9 +80,9 @@ export const ALLOWED_GATE_FIELDS = [
  *   · needsAssembly —— 可选，需要组装好的运行时资源树（本地/发布链路才有）
  *   · echoOutput —— 可选，**成功时也回显该脚本的 stdout**。默认只在失败时回显末尾 6 行，
  *                   于是「已核对」与「跳过未核对」在日志里长得一模一样——而哨兵类门禁
- *                   （drift / update-channel / dependabot-setting）的**语义本身就包含
- *                   「这次到底核对了没有」**，它们的 skip 必须可见（2026-10-09 实测：
- *                   新哨兵在 CI 里全绿，却从日志看不出它读没读到远端设置）。
+ *                   （drift / update-channel / dependabot-setting / dependabot-scope）的
+ *                   **语义本身就包含「这次到底核对了没有」**，它们的 skip 必须可见
+ *                   （2026-10-09 实测：新哨兵在 CI 里全绿，却从日志看不出它读没读到远端设置）。
  *                   可选字段拼错会**静默失效**，故由 verify-gates 的 M6 白名单封住。
  */
 export const GATES = [
@@ -324,25 +324,55 @@ export const GATES = [
   {
     name: 'dependabot-setting',
     script: 'scripts/verify-dependabot-setting.mjs',
-    title: 'Dependabot 安全更新开关（**联网**）',
+    title: 'Dependabot 安全更新开关（**联网**，前提面）',
     why:
-      '断言仓库级 `dependabot_security_updates` 不是 `enabled`。依赖图会把 ' +
+      '断言仓库级 Dependabot security updates **处于关闭状态**。依赖图会把 ' +
       '`harness-locks/<target>/package-lock.json` 当 npm 清单（官方无按路径排除能力，那目录里**故意没有** ' +
       'package.json），开关一打开，每条落在该目录的上游告警都会派生一个**在取文件阶段就失败**的 job —— ' +
       '实测 2026-10-09 job 1618552559：`Error during file fetching; aborting: ' +
       '/harness-locks/alpha/package.json not found`。2026-10-09 裁定关闭（.github/dependabot.yml 头注释）。' +
       '⚠️ 它**只能**是联网判据：开关住在仓库设置里，打开/关闭都不改变任何产物，本地静态扫描看不见它。' +
-      '取不到 / 字段不可见 ⇒ skip 并**明写「未核对」**（绝不判绿）；slug 404 ⇒ 判红（配置缺陷，同 drift）。',
-    real: { tiers: [], args: [] },
-    // 🔴 真检查**刻意不进任何分档**：它需要**带 push 权限的令牌**才能读到
-    //    `security_and_analysis`。实测两次（2026-10-09，run 37894060540 / 37894189469）：
-    //    只给 `contents: read` ⇒ 字段缺席；再加 `security-events: read` ⇒ 仍然缺席。
-    //    Actions 的 GITHUB_TOKEN 没有 push 身份，因此把它放进 drift.yml 只会得到一台
-    //    「每周全绿、日志里写未核对」的 job —— 绿色没人看 = 变相背书（ADR-030 的形态）。
-    //    恢复条件：仓库配置了带 push/administration 读权限的 PAT secret 后，把真检查
-    //    接回 drift.yml 的独立 job（并给它 echoOutput，理由见下）。
-    manual: '需带 push 权限的令牌读仓库设置（CI 的 GITHUB_TOKEN 读不到 security_and_analysis，实测）；自检照常进 fast/ci/release',
-    // 三个出口里 skip 是「未核对」、与「已核对且关闭」同为 exit 0 ⇒ 人工跑时必须能看到结论。
+      '两个来源并读、**危险优先**取并集：`GET /repos/{owner}/{repo}/automated-security-fixes`（规格要求 ' +
+      '**admin 读**）+ 仓库对象的 `security_and_analysis`（要求 **push 身份**）—— 两者权限要求不同，' +
+      '只读其中一个会让某类令牌白配。' +
+      '取不到 / 都看不见 ⇒ skip 并**明写「未核对」**（绝不判绿）；slug 404 ⇒ 判红（配置缺陷，同 drift）；' +
+      '**配了令牌却 401/403** ⇒ 判红（那时这条检查实际上没跑，不许静默退化）。',
+    // 真检查进 sentinel 档：2026-10-09 起由 drift.yml 的独立 job 跑，令牌来源是
+    // **仓库 secret `DSH_REPO_ADMIN_TOKEN`**（细粒度 PAT，Administration: Read）。
+    // 为什么不能用 GITHUB_TOKEN：两个来源都要求比它更强的身份——Actions 的 `permissions`
+    // 里根本没有 `administration` 这一项，push 身份也拿不到。实测三次（run 37893438935 /
+    // 37894060540 / 37894189469）：只给 `contents: read` ⇒ `security_and_analysis` 缺席；
+    // 再加 `security-events: read` ⇒ 仍然缺席。
+    real: { tiers: ['sentinel'], args: [] },
+    manual:
+      'CI 里由 drift.yml 的 dependabot-setting job 提供 secret DSH_REPO_ADMIN_TOKEN（缺 secret 时该 job 的' +
+      '前置步判红，不退化成「未核对」）。本机手动核验直接 `npm run gate -- dependabot-setting`（走本机 gh 登录态）。' +
+      '自检照常进 fast/ci/release。',
+    // 三个出口里 skip 是「未核对」、与「已核对且关闭」同为 exit 0 ⇒ 必须能看到结论，
+    // 以及**逐来源明细**（哪一路看得见、哪一路看不见决定了 ok 是几条证据支持的）。
+    echoOutput: true,
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
+    name: 'dependabot-scope',
+    script: 'scripts/verify-dependabot-scope.mjs',
+    title: 'Dependabot 更新 job 的目标目录范围（**联网**，症状哨兵）',
+    why:
+      '断言：基线之后不存在「目标目录未被 `.github/dependabot.yml` 声明」的 Dependabot 更新 job。' +
+      '这是 D13 的**症状面**，与 dependabot-setting（前提面）互补：`dependabot.yml` 的 `directory` ' +
+      '**只**约束版本更新，安全更新按**告警的 manifest_path** 开 job、不读该文件 ⇒ 目标目录超出声明范围' +
+      '就成了开关被打开的**直接函数**（本仓只声明 `/`，而历史全部 11 个 job 的目标都是 ' +
+      '`/harness-locks/*` 或 `/src-tauri`，根目录一个都没有）。' +
+      '⚠️ 为什么这台**不需要** PAT 而 dependabot-setting 需要：它读的是 Actions **运行记录**，' +
+      '`GITHUB_TOKEN` 的 `actions: read` 就够（公开仓库连匿名都可读，实测 http=200）；' +
+      '而「开关状态」住在仓库设置里，任何 GITHUB_TOKEN 权限都读不到。' +
+      '⚠️ 窗口左端取**固定基线**而不是「最近 N 天」：关闭当天的历史 job 会落在滚动窗口里，' +
+      '让目标状态常驻红灯（ADR-030）；代价是补救后必须把基线前移，这是**显式记账**。' +
+      '⚠️ 「job 名解不出目录」**判红**（判据失效＝我们的缺陷，有明确修法），与「取不到」（环境，走 skip ' +
+      '并明写「未核对」）**分开**——本仓对这两类的区分见 drift 的 slug 404 裁定。',
+    real: { tiers: ['sentinel'], args: [] },
+    // 「扫到 0 个 job」与「根本没去扫」都是 exit 0：前者是目标状态，后者走 skip。
+    // 只有回显输出才能把两者分开 —— 这正是本门禁存在意义的一半。
     echoOutput: true,
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },

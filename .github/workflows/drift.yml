@@ -27,6 +27,19 @@ name: Drift
 # 因此：`ci.yml` 只跑它的 **self-test**（纯逻辑，必过），真检查在这里按天跑，
 # 失败时由 GitHub 的失败通知叫人——这正是「哨兵」该有的行为。
 #
+# ## 本工作流里的四台哨兵
+#
+#   · `drift`            —— 上游 DSH 版本漂移（读上游 GitHub Release）
+#   · `updater-channel`  —— 每条在役通道的更新端点是否 ≥ 该通道最新已发布 tag
+#   · `dependabot-scope` —— 「不存在目标目录未被 dependabot.yml 声明的 Dependabot 更新 job」
+#                          （= security updates 被重新打开的**症状**；只读 Actions 运行记录，
+#                            GITHUB_TOKEN 的 actions: read 就够）
+#   · `dependabot-setting` —— 直读仓库设置里的安全更新开关（= **前提**；需要 admin 读权限，
+#                            故用 PAT secret，见该 job 的说明）
+#
+# 后两台是 D13 的两条互补哨兵（2026-10-09）：一条抓**后果**（滞后但零 secret、全自动），
+# 一条抓**前提**（即时但依赖一个需要人工保管的令牌）。
+#
 # ## 触发
 #   · schedule：每天 03:17 UTC 一次
 #   · workflow_dispatch：随时手动跑
@@ -95,11 +108,101 @@ jobs:
       - name: Updater channel check
         run: npm run gate -- update-channel
 
-  # ⚠️ 这里**刻意没有** dependabot-setting 的 job（2026-10-09 加了又撤掉）。
-  #    原因：该判据要读仓库设置里的 `security_and_analysis`，而 Actions 的 GITHUB_TOKEN
-  #    **没有 push 身份**，这个字段根本不返回。实测两次：只给 `contents: read` ⇒ 字段缺席；
-  #    再加 `security-events: read` ⇒ 仍然缺席（run 37894060540 / 37894189469）。
-  #    于是那台 job 只会「每周全绿 + 日志里写未核对」——绿色的日志没人看，等于替一段并不
-  #    存在的检查背书（ADR-030 的形态）。自检照常进 fast/ci/release；真检查改登记为
-  #    **人工运行**（总表 manual 字段写明理由与恢复条件：配上带 push 权限的 PAT secret
-  #    后可再接回来）。手动核验：npm run gate -- dependabot-setting
+  # Dependabot 更新 job 的**范围症状**哨兵（D13，2026-10-09）。
+  #
+  # 断言：基线之后不存在「目标目录未被 `dependabot.yml` 声明」的 Dependabot 更新 job。
+  # 为什么这等于「安全更新没被重新打开」：`dependabot.yml` 的 `directory` 只管版本更新，
+  # 安全更新按**告警的 manifest_path** 开 job、不读该文件；本仓只声明了 `/`，而历史全部
+  # 11 个 job 的目标都是 `/harness-locks/*` 或 `/src-tauri` ⇒ 这类 job 只可能来自安全更新。
+  # 判据与基线常量的完整理由见 scripts/verify-dependabot-scope.mjs 文件头。
+  #
+  # 为什么这台**能**进 CI，而下面 dependabot-setting 那台要 PAT：它读的是 Actions 运行
+  # 记录，`actions: read` 就够（公开仓库连匿名都可读，实测 http=200）；而「开关状态」住在
+  # 仓库设置里，任何 `GITHUB_TOKEN` 权限都读不到（Actions 的 permissions 里没有
+  # administration 这一项；实测三次，见 dependabot-setting job 的说明）。
+  dependabot-scope:
+    name: dependabot update job scope
+    runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
+    # 读 Actions 运行记录需要 actions: read。**必须逐 job 写**：顶层是 contents: read，
+    # 而 job 级 permissions 会整体覆盖顶层（不是合并）。
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
+        # 判据要读仓库内的 .github/dependabot.yml 作对照面，故必须有工作树。
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Dependabot scope self-test
+        run: npm run gate -- dependabot-scope --self-test
+
+      # 真检查。三个出口里 skip 是「未核对」（与「已核对且没问题」同为 exit 0），
+      # 所以总表给它 echoOutput: true —— 日志必须自证这次到底核对了没有。
+      - name: Dependabot scope check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run gate -- dependabot-scope
+
+  # 直读「仓库级 Dependabot security updates」开关（D13 的**前提**面）。
+  #
+  # 为什么它需要 PAT secret：两个来源都要求比 GITHUB_TOKEN 更强的身份 ——
+  #   · `GET /repos/{owner}/{repo}/automated-security-fixes` 的规格原文是
+  #     "The authenticated user must have admin read access to the repository"；
+  #   · `GET /repos/{owner}/{repo}` 的 `security_and_analysis` 只对有 push 身份的调用者返回。
+  # 2026-10-09 实测三次（run 37893438935 / 37894060540 / 37894189469）：只给 `contents: read`
+  # ⇒ 字段缺席；再加 `security-events: read` ⇒ 仍然缺席。
+  #
+  # ⚠️ 所以**不要**把 GH_TOKEN 改回 secrets.GITHUB_TOKEN —— 那样这台 job 会「每周全绿 +
+  #    日志里写未核对」，绿色没人看 = 替一段并不存在的检查背书（ADR-030 的形态）。
+  #    secret 的创建步骤与权限要求见 docs/commands.md §20j。
+  dependabot-setting:
+    name: dependabot security updates switch
+    runs-on: ubuntu-24.04   # 钉死：ubuntu-latest 自 2026-10-19 起滚动迁往 Ubuntu 26.04（runner-images#14748）
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5
+        # 要用仓库内的 scripts/ 跑判据，故必须有工作树（`download-artifact` 那种只放资产的
+        # 模式在这里不适用——F13 事故：publish-assets job 少了 checkout，脚本找不到）。
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # 🔴 「secret 没配」必须**在这里**变红，不能让它退化到脚本里变成一次 exit 0 的
+      #    「未核对」。`${{ secrets.X }}` 在 secret 不存在时展开成**空串**，于是脚本会走
+      #    skip 分支、job 全绿——正是本仓最怕的「检查悄悄停摆」。
+      #    ⚠️ 不要把这个判断改写成 step 的 `if:`：GitHub 的 step 级 `if` **拿不到
+      #    `secrets` 上下文**（可用上下文里没有它），写了只会恒为空/报错。
+      #    令牌**配了但失效**（401/403）由脚本自己判红，见其文件头的「认证类失败」一节。
+      - name: Require PAT secret
+        env:
+          TOKEN: ${{ secrets.DSH_REPO_ADMIN_TOKEN }}
+        # 显式写 `shell: bash`：本步是 POSIX 语法（`[ -z ]`）。今天跑在 ubuntu 上默认就是
+        # bash，但**将来若有人改 runs-on**，Windows 的默认 shell 是 PowerShell，这行会
+        # 解析期即死——本仓的续行守卫刻意不看 runs-on，就是为这一类留的（AGENTS.md §7）。
+        shell: bash
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::secret DSH_REPO_ADMIN_TOKEN 未配置或为空 —— 这条检查不会执行，故不得判绿。"
+            echo "创建步骤与权限要求见 docs/commands.md §20j；本 job 的说明见 .github/workflows/drift.yml。"
+            exit 1
+          fi
+
+      - name: Dependabot switch self-test
+        run: npm run gate -- dependabot-setting --self-test
+
+      # 真检查：两个来源并读（automated-security-fixes + security_and_analysis），
+      # 「危险优先」取并集。逐来源明细在成功时也会打印（总表 echoOutput: true）。
+      - name: Dependabot switch check
+        env:
+          GH_TOKEN: ${{ secrets.DSH_REPO_ADMIN_TOKEN }}
+        run: npm run gate -- dependabot-setting
+

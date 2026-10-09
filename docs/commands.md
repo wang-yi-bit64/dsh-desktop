@@ -271,19 +271,43 @@ npm run gate -- update-channel
 npm run gate -- github-config
 npm run gate -- github-config --self-test
 
-# 20j. Dependabot 安全更新开关（**联网**；2026-10-09 裁定：必须保持关闭）
+# 20j. Dependabot 安全更新开关（**联网**；2026-10-09 裁定：必须保持关闭）——**前提面**
 #      开关住在仓库设置里，打开/关闭都不改变任何产物 ⇒ 本地静态扫描永远看不见它被重新打开；
 #      它一打开，每条落在 harness-locks/ 快照目录的告警都会派生一个必然失败的 job。
-#      三个出口：disabled ⇒ 绿；enabled ⇒ 红；取不到/字段不可见 ⇒ skip 且日志明写「未核对」
-#      （绝不判绿）；slug 404 ⇒ 红（配置缺陷）。
-#      🔴 **CI 核不了**（实测两次）：security_and_analysis 只对有 push 权限的调用者返回，
-#         Actions 的 GITHUB_TOKEN 没有 push 身份（加 security-events: read 也一样缺席）。
-#         故真检查刻意**不进任何分档**，只能人工用带权限的令牌跑；接进 drift.yml 会得到一台
-#         「每周全绿、日志只写未核对」的 job —— 绿色没人看 = 变相背书（ADR-030）。
+#      两个来源并读、**危险优先**取并集：
+#        · GET /repos/{owner}/{repo}/automated-security-fixes（规格原文：需要 **admin 读**）
+#        · 仓库对象的 security_and_analysis（需要 **push 身份**；两者权限要求不同）
+#      出口：至少一路说 disabled 且无人说 enabled ⇒ 绿；任一来源说 enabled ⇒ 红（两来源矛盾时
+#      以危险为准并明写「矛盾」）；形态不认识 ⇒ skip 且不得判绿；都看不见 ⇒ skip 并明写
+#      「未核对」；slug 404 ⇒ 红（配置缺陷）；**配了令牌却 401/403 ⇒ 红**（那时这条检查实际
+#      上一行都没查，不许静默退化成「未核对」）。
+#      ⚠️ 令牌来源是仓库 secret `DSH_REPO_ADMIN_TOKEN`（细粒度 PAT，Administration: Read）。
+#         **不能**用 GITHUB_TOKEN：两个来源都要求更强身份（Actions 的 permissions 里根本没有
+#         administration 这一项），实测三次只给 contents: read / 再加 security-events: read
+#         都一样看不见。secret 缺失时由 drift.yml 的前置步判红，不退化成「未核对」。
 #      ⚠️ 本条在总表里带 `echoOutput: true`：编排器默认**只在失败时**回显脚本输出，于是
 #         「已核对」与「skip 未核对」都是 ✅，日志里分不出来——那正是本仓最怕的假绿。
 npm run gate -- dependabot-setting --self-test
 npm run gate -- dependabot-setting
+
+# 20k. Dependabot 更新 job 的**目标目录范围**（**联网**）——**症状面**（D13）
+#      断言：基线之后不存在「目标目录未被 .github/dependabot.yml 声明」的 Dependabot 更新 job。
+#      dependabot.yml 的 directory **只**约束版本更新，安全更新按**告警的 manifest_path** 开 job、
+#      不读该文件 ⇒ 目标目录超出声明范围就是开关被打开的**直接函数**（本仓只声明 `/`，而历史
+#      全部 11 个 job 的目标都是 /harness-locks/* 或 /src-tauri，根目录一个都没有）。
+#      ⚠️ 这条**不需要** PAT，正是它与 20j 并存的意义：它读 Actions **运行记录**，
+#         GITHUB_TOKEN 的 `actions: read` 就够（公开仓库连匿名都可读，实测 http=200）。
+#         跑在 drift.yml 的独立 job 里。两条互补：20j 抓**前提**（即时，依赖令牌），
+#         20k 抓**后果**（滞后，但零 secret、全自动）。
+#      ⚠️ 窗口左端取**固定基线**（脚本内的 SCOPE_BASELINE_ISO）而不是「最近 N 天」：关闭当天的
+#         历史 job 会落在滚动窗口里，让目标状态常驻红灯（ADR-030）。代价是补救（重新关闭开关）
+#         之后要把基线前移到补救时刻 —— 那是**显式记账**，不是可省的步骤。
+#      ⚠️ 「job 名解不出目录」**判红**（判据失效＝我们这边的缺陷，有明确修法），与「取不到」
+#         （环境问题，skip 并明写「未核对」）**分开** —— 同 drift 的 slug 404 裁定。
+#      三出口：窗口内 job 全落在声明目录内（含 0 个）⇒ 绿；落在未声明目录 / 名字解不出 /
+#      声明集合为空 / run 清单没扫完 ⇒ 红；取不到 Actions 数据 ⇒ skip。
+npm run gate -- dependabot-scope --self-test
+npm run gate -- dependabot-scope
 
 # 21. 补丁健康度报告（层 / 退役条件 ↔ MANIFEST 实际结果；报告，非门禁）
 #     默认按 MANIFEST 里记录的 target 取补丁表，也可 --dsh-target=<name> 指定

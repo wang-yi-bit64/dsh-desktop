@@ -26,11 +26,15 @@
 # **仓库级关闭 Dependabot security updates**（Settings → Advanced Security），告警本身
 # 保持可见，按 `docs/dsh-upgrade-checklist.md` 跟随上游版本处置。
 #
-# 两条守卫（本文件里的声明与那个开关都各有执行者，不再只靠散文）：
+# 三条守卫（本文件里的声明与那个开关都各有执行者，不再只靠散文）：
 #   · 本文件声明的目录必须真有清单文件 —— `npm run gate -- github-config`（fast 档，
 #     规则 F；注意它**先剥整行注释再判**，就是怕被上面这段说明命中）。
-#   · 那个开关不得被重新打开 —— `npm run gate -- dependabot-setting`（联网；**需人工用带
-#     push 权限的令牌跑**——CI 的 GITHUB_TOKEN 读不到该字段，实测两次，故它没有自动哨兵）。
+#   · 那个开关不得被重新打开（**前提面**）—— `npm run gate -- dependabot-setting`（联网；
+#     需要 **admin 读**权限的令牌，CI 里由仓库 secret `DSH_REPO_ADMIN_TOKEN` 提供）。
+#   · 那个开关的**后果**不得出现（**症状面**）—— `npm run gate -- dependabot-scope`（联网；
+#     断言「基线之后不存在目标目录未被本文件声明的 Dependabot 更新 job」）。这条**不需要
+#     任何 secret**，2026-10-09 起跑在 drift.yml 的独立 job 里。两条互补：前提面即时但依赖
+#     令牌，症状面滞后但全自动。细节见各自脚本的文件头与 docs/dev-plan-defect-remediation.md。
 version: 2
 updates:
   - package-ecosystem: npm
