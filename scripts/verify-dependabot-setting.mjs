@@ -35,32 +35,40 @@
  * 前一个可用，给 `Contents: Write` 时通常两个都可用，而两者要求并不相同。判定规则：
  *
  *   · 任一来源说 `enabled` ⇒ **fail**（两来源互相矛盾时**以危险为准**并明写「矛盾」）；
- *   · 任一来源给出**枚举外**的取值 ⇒ **skip**（形态变了，不得判绿）；
  *   · 至少一个来源说 `disabled` ⇒ **ok**；
- *   · 全部来源都看不见 ⇒ **skip** 并明写「未核对」。
+ *   · 其余（取值不认识 / 全部看不见 / 取数失败）⇒ **skip**，再由下面的令牌纪律收口。
  *
- * ⚠️ skip 为什么**不判红**：看不见是**环境**问题（未配令牌 / 公开仓库的字段可见性），
- * 把「看不见」判红会造出一台永久红灯，而本仓对哨兵噪声有明确裁定（ADR-030：长期无法
- * 通过的红灯最后只会被人无视）。但它**绝不判绿**——「未核对」与「已核对且没问题」在
- * 日志里必须可区分，否则就是本仓反复踩过的**假绿**（因此本门禁带 `echoOutput: true`）。
+ * ⚠️ skip 为什么**不判绿**：「未核对」与「已核对且没问题」在日志里必须可区分，否则就是
+ * 本仓反复踩过的**假绿**（因此本门禁带 `echoOutput: true`）。
  *
- * ⚠️ 唯一的例外：**slug 404 判红**，不 skip。slug 是本仓写死的常量（`repoSlug()`），
- * 它 404 意味着配置或权限出错——那是缺陷，不是「上游没动静」（与 drift 同款裁定）。
+ * ⚠️ 另外两条例外：**slug 404 判红**（slug 是本仓写死的常量，404 意味着配置或权限出错，
+ * 不是「上游没动静」，与 drift 同款裁定）；**job 名/响应形态不认识**在这里落进 skip，
+ * 由下面的令牌纪律判红（见下）。
  *
- * ## 令牌是「配了就不得失效」的：认证类失败判红（2026-10-09 新增）
+ * ## 🔴 令牌纪律：**提供了令牌时，skip 不成立**（2026-10-09，两轮才收敛）
  *
- * 本判据在 CI 里靠一个 PAT secret 运行。**令牌没配**与**令牌失效**完全是两件事：
- *   · 没配（`GH_TOKEN` 为空）⇒ 环境问题 ⇒ skip（本仓用工作流里的前置步显式拦住它）；
- *   · **配了却认证失败**（401 / `Bad credentials` / 403 / `Resource not accessible`）⇒
- *     **判红**。那种情况下这条检查实际上**一行都没查**，而它此前会静默退化成「未核对」
- *     并全绿——正是本仓最怕的「检查悄悄停摆」。限流（429 / rate limit）不算，
- *     那是暂时的外部状况，走 skip。
+ * 本判据在 CI 里靠一个 PAT secret 运行。**「没配令牌」与「配了却查不动」完全是两件事**：
+ *
+ * | 情形 | 出口 | 为什么 |
+ * |---|---|---|
+ * | `GH_TOKEN` 为空（没配 secret / 人工本机跑） | skip | 环境问题。CI 那一侧由工作流的前置步显式判红，不退化成「未核对」 |
+ * | 配了令牌，但**取数失败属于暂时性**（429 / 限流 / 5xx / 网络） | skip | 外部状况，下次自愈。判红会造出没人能修的永久红灯（ADR-030） |
+ * | 配了令牌，**其余一切**查不出结论 | **fail** | 这是令牌/权限/形态问题，**有明确修法** |
+ *
+ * 最后一条是关键，也是本轮补的**残余漏洞**：只把「401/403」判红是不够的——如果 GitHub
+ * 把 `enabled` 改成字符串（形态漂移），或令牌权限恰好让两路都返回 200 但都看不见，
+ * 旧规则会走 skip，于是 CI 里又出现一台「绿着写未核对」的 job，正是 ADR-030 的形态。
+ * 判据：**配上正确权限的令牌后，至少有一路必然可读**（实测：本机 owner 令牌两路都读到
+ * `disabled`）⇒ 给不出任何一路证据，就不是环境问题。
+ *
+ * ⇒ 于是 CI 里这台 job 只有**红与绿两种结果**，绿的含义唯一：真核对过，且开关是关的。
  *
  * ## 可证伪性
  *
  * `--self-test` 的夹具覆盖全部出口，且**成对**：`disabled` 必须 ok、`enabled` 必须 fail；
  * 且专门有一条断言「字段不可见时**不得**被判成 ok」——防的正是「判据静默退化成永远通过」。
- * 另有一条断言「两个来源矛盾时必须判红、且理由里要出现『矛盾』字样」。
+ * 另有三条：两个来源矛盾时必须判红且理由出现「矛盾」；**提供了令牌时任何 skip 都要被
+ * 改判红**（除暂时性失败外）；宽松化永远不产生 ok。
  */
 import { argv, env as processEnv, exit } from 'node:process'
 
@@ -80,6 +88,65 @@ export function isAuthFailure(detail) {
   return /401|403|Bad credentials|Not authenticated|Resource not accessible|Must have admin|requires authentication/i.test(
     String(detail ?? ''),
   )
+}
+
+/**
+ * 暂时性失败：**唯一**允许在「已提供令牌」时仍然走 skip 的一类。
+ *
+ * 判据是「外部状况、下次自愈、没人能修」——限流、5xx、网络。除此之外的一切
+ * （含 404 与形态漂移）都算我们这边的缺陷，必须判红。
+ *
+ * @param {unknown} detail 子进程的 stderr/stdout
+ * @returns {boolean}
+ */
+export function isTransientFailure(detail) {
+  // ⚠️ 数字状态码**不够**：实测（本机 2026-10-09）`GH_HOST=<不存在>` 时子进程只给出文字形态
+  //    `Bad Gateway`（代理返回 502），**没有任何数字**。只认 `50[0-4]` 会把网络故障误判成
+  //    缺陷 ⇒ 造出「令牌没问题却红着」的假红。故文字形态与数字形态**都要认**。
+  return /429|rate limit|secondary rate|abuse detection|50[0-4]\b|timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|no such host|dial tcp|network is unreachable|TLS handshake|Bad Gateway|Gateway Time-?out|Service Unavailable|Internal Server Error|proxyconnect|socket hang up/i.test(
+    String(detail ?? ''),
+  )
+}
+
+/**
+ * 令牌纪律的收口：**提供了令牌时，skip 不成立**（除暂时性失败外）。
+ *
+ * 为什么这是一条不变量而不是偏好：CI 里这台 job 的目的就是「每周真核对」。允许它在
+ * 配了令牌的情况下静默 skip，等于允许它变成一台「绿着写未核对」的 job —— ADR-030 的形态。
+ * 而「配上正确权限的令牌后至少有一路必然可读」已被实测确认，所以「一路证据都没有」不是
+ * 环境问题，是缺陷。
+ *
+ * @param {{ sources?: { name: string, kind: string }[], tokenProvided: boolean,
+ *   requests?: { ok: boolean, detail?: string }[] }} input
+ * @returns {{ verdict: 'fail'|'skip', reason: string }}
+ */
+export function applyTokenStrictness({ sources, tokenProvided, requests = [] } = {}) {
+  if (tokenProvided !== true) {
+    return { verdict: 'skip', reason: '未提供令牌（人工 / 本机运行）⇒ skip 成立，但日志必须写明「未核对」' }
+  }
+  const unrecognized = (Array.isArray(sources) ? sources : []).filter((s) => s.kind === KIND.unrecognized)
+  if (unrecognized.length > 0) {
+    return {
+      verdict: 'fail',
+      reason:
+        '提供了令牌，却有一路响应**形态不认识**（' +
+        unrecognized.map((s) => '`' + s.name + '`').join('、') +
+        '）—— 形态漂移会让判据瞎掉，CI 里不许 skip',
+    }
+  }
+  const failed = (Array.isArray(requests) ? requests : []).filter((r) => r && r.ok !== true)
+  const allTransient = failed.length > 0 && failed.every((r) => isTransientFailure(r.detail))
+  if (allTransient) {
+    return {
+      verdict: 'skip',
+      reason: '提供了令牌，但取数失败**全部属于暂时性**（限流 / 5xx / 网络）⇒ 明写未核对，下次运行自愈',
+    }
+  }
+  return {
+    verdict: 'fail',
+    reason:
+      '提供了令牌，却**没有任何一路**给出可用证据 —— 这是令牌权限 / 有效期或响应形态的问题，不是环境问题，故不许判绿',
+  }
 }
 
 /** `automated-security-fixes` 端点 → 证据。 */
@@ -247,7 +314,12 @@ function main() {
   }
 
   // 🔴 配了令牌却认证失败 ⇒ 判红：那条检查实际上**一行都没查**，不许静默退化（文件头）。
-  const authProblem = [fixes, repo].find((x) => !x.ok && x.authFailure)
+  //    ⚠️ 必须排除暂时性失败：GitHub 的**二级限流**也返回 403（`secondary rate limit`），
+  //    那是外部状况、下次自愈，判红会造出没人能修的永久红灯（ADR-030）。不排除的话，
+  //    文件头承诺的「暂时性可 skip」就会被这条更早的分支吃掉。
+  const authProblem = [fixes, repo].find(
+    (x) => !x.ok && x.authFailure && !isTransientFailure(x.detail),
+  )
   if (authProblem && tokenProvided) {
     console.error('❌ 提供了令牌（GH_TOKEN 非空）却认证/授权失败 —— 这条检查**实际上没跑**，不得判绿。')
     console.error('   ' + authProblem.detail)
@@ -285,7 +357,17 @@ function main() {
     return 1
   }
   if (verdict === 'skip') {
+    // 🔴 令牌纪律的收口：提供了令牌时 skip 不成立（除暂时性失败外）。见文件头「令牌纪律」。
+    const strict = applyTokenStrictness({ sources, tokenProvided, requests: [fixes, repo] })
+    if (strict.verdict === 'fail') {
+      console.error('❌ ' + reason)
+      console.error('❌ ' + strict.reason)
+      console.error('   修法：确认 secret 里的令牌未过期、且权限够（细粒度 PAT 需 Administration: Read；')
+      console.error('   规格原文要求 admin read access）。若权限确认无误，那就是响应形态变了 —— 先修本判据。')
+      return 1
+    }
     console.log('⚠️  ' + reason)
+    console.log('   ' + strict.reason)
     return 0
   }
   console.log('✅ Dependabot 安全更新：' + reason)
@@ -376,6 +458,45 @@ export function selfTest() {
   check('403 / Resource not accessible 必须算认证失败（PAT 权限不足是缺陷）', isAuthFailure('HTTP 403: Resource not accessible by personal access token'))
   check('404 Not Found 不算认证失败（由 slug 404 那条路单独判红）', !isAuthFailure('gh: Not Found (HTTP 404)'))
   check('限流不算认证失败（暂时状况 ⇒ skip，不造永久红灯）', !isAuthFailure('API rate limit exceeded for 1.2.3.4 (HTTP 429)'))
+
+  // ── 暂时性失败的正反两面（它是「已提供令牌仍可 skip」的唯一通道，边界必须钉死） ──
+  check('429 / rate limit 必须算暂时性', isTransientFailure('API rate limit exceeded for 1.2.3.4 (HTTP 429)'))
+  check('secondary rate limit 也算暂时性', isTransientFailure('You have exceeded a secondary rate limit (HTTP 403)'))
+  check('5xx 必须算暂时性', isTransientFailure('HTTP 503: Service Unavailable'))
+  check('网络类错误必须算暂时性', isTransientFailure('dial tcp 140.82.121.6:443: i/o timeout'))
+  // 🔴 文字形态专项（实测踩到）：本机 `GH_HOST=<不存在>` 时 gh 只给 `Bad Gateway`，**无数字**。
+  //    只认数字 5xx 会让网络故障被判成缺陷 ⇒ 「令牌没问题却红着」的假红。
+  check('🔴 文字形态的网关错误必须算暂时性（代理 502 没有数字状态码）', isTransientFailure('Get "https://x.invalid/api/v3/repos/a/b": Bad Gateway'))
+  check('文字形态 503/504 也算暂时性', isTransientFailure('Service Unavailable') && isTransientFailure('Gateway Timeout'))
+  check('DNS 解析失败算暂时性', isTransientFailure('dial tcp: lookup nonexistent.invalid: no such host'))
+  check('🔴 401/403 认证失败**不算**暂时性（否则令牌失效会被静默放过）', !isTransientFailure('gh: Bad credentials (HTTP 401)') && !isTransientFailure('HTTP 403: Resource not accessible by personal access token'))
+  check('🔴 404 **不算**暂时性（配置/形态缺陷要判红）', !isTransientFailure('gh: Not Found (HTTP 404)'))
+  check('空 detail 不算暂时性（不认识的失败一律按缺陷处理）', !isTransientFailure('') && !isTransientFailure(undefined))
+
+  // ── 令牌纪律的收口：提供了令牌时，skip 只在「全部暂时性」下成立 ──
+  const invisible = evaluateSecurityUpdates({}).sources
+  const unrecogn = evaluateSecurityUpdates({ automatedSecurityFixes: { enabled: 'false' } }).sources
+  const t429 = { ok: false, detail: 'API rate limit exceeded (HTTP 429)' }
+  const t500 = { ok: false, detail: 'HTTP 502: Bad Gateway' }
+  const t401 = { ok: false, detail: 'gh: Bad credentials (HTTP 401)' }
+  const okReq = { ok: true }
+
+  check('没提供令牌 ⇒ skip 成立（人工 / 本机场景不得被误判红）', applyTokenStrictness({ sources: invisible, tokenProvided: false, requests: [t401] }).verdict === 'skip')
+  check('🔴 提供了令牌 + 两路都看不见 ⇒ 改判红（本轮补的残余漏洞）', applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [okReq, okReq] }).verdict === 'fail')
+  check('🔴 提供了令牌 + 一路形态不认识 ⇒ 改判红', applyTokenStrictness({ sources: unrecogn, tokenProvided: true, requests: [okReq, okReq] }).verdict === 'fail')
+  check('提供了令牌 + 全部失败都是暂时性 ⇒ 保留 skip（下次自愈）', applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [t429, t500] }).verdict === 'skip')
+  check('提供了令牌 + 暂时性与非暂时性混在一起 ⇒ 判红（不能借暂时性蒙混）', applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [t429, t401] }).verdict === 'fail')
+  check('提供了令牌 + 只赌一个请求失败且非暂时性 ⇒ 判红', applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [{ ok: false, detail: 'gh: Not Found (HTTP 404)' }] }).verdict === 'fail')
+  check('提供了令牌 + 无任何失败记录却仍无证据 ⇒ 判红（形态问题不许逃）', applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [] }).verdict === 'fail')
+  // 🔴 宽松化永远不得制造 ok —— 收口只可能在 fail/skip 之间移动。
+  const strictCases = [
+    applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [okReq] }),
+    applyTokenStrictness({ sources: unrecogn, tokenProvided: true, requests: [okReq] }),
+    applyTokenStrictness({ sources: invisible, tokenProvided: true, requests: [t429] }),
+    applyTokenStrictness({ sources: invisible, tokenProvided: false, requests: [] }),
+  ]
+  check('🔴 令牌纪律只产出 fail/skip，绝不产出 ok', strictCases.every((r) => r.verdict !== 'ok'))
+  check('令牌纪律的三条分支都必须给出理由', strictCases.every((r) => typeof r.reason === 'string' && r.reason.length > 0))
 
   if (failed > 0) {
     console.error('verify-dependabot-setting self-test 失败 ' + failed + ' 项')

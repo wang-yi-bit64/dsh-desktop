@@ -278,9 +278,16 @@ npm run gate -- github-config --self-test
 #        · GET /repos/{owner}/{repo}/automated-security-fixes（规格原文：需要 **admin 读**）
 #        · 仓库对象的 security_and_analysis（需要 **push 身份**；两者权限要求不同）
 #      出口：至少一路说 disabled 且无人说 enabled ⇒ 绿；任一来源说 enabled ⇒ 红（两来源矛盾时
-#      以危险为准并明写「矛盾」）；形态不认识 ⇒ skip 且不得判绿；都看不见 ⇒ skip 并明写
-#      「未核对」；slug 404 ⇒ 红（配置缺陷）；**配了令牌却 401/403 ⇒ 红**（那时这条检查实际
-#      上一行都没查，不许静默退化成「未核对」）。
+#      以危险为准并明写「矛盾」）；slug 404 ⇒ 红（配置缺陷）；其余（形态不认识 / 都看不见 /
+#      取数失败）先落 skip，**再由下面的令牌纪律收口**。
+#      🔴 令牌纪律：**提供了令牌时，skip 不成立**（除暂时性失败外）—— 收口在 `applyTokenStrictness()`。
+#        · GH_TOKEN 为空 ⇒ skip（环境问题；CI 那侧由 job 的前置步显式判红，不退化成「未核对」）；
+#        · 配了令牌、失败**全属暂时性**（429 / 限流 / 5xx / 网络，**含文字形态** —— 实测
+#          `GH_HOST=<不存在>` 时 gh 只给 `Bad Gateway`，**一个数字都没有**）⇒ skip，下次自愈；
+#        · 配了令牌、**其余一切** ⇒ 红：401/403、响应形态漂移、以及「两路都 200 却都看不见」。
+#      收口的判据：**配上正确权限的令牌后，至少有一路必然可读**（实测 owner 令牌两路都读到
+#      `disabled`）⇒ 一路证据都拿不到就不是环境问题，是有明确修法的缺陷。
+#      ⇒ 于是 CI 里这台 job **只有红与绿两种结果**，绿的含义唯一：真核对过，且开关是关的。
 #      ⚠️ 令牌来源是仓库 secret `DSH_REPO_ADMIN_TOKEN`（细粒度 PAT，Administration: Read）。
 #         **不能**用 GITHUB_TOKEN：两个来源都要求更强身份（Actions 的 permissions 里根本没有
 #         administration 这一项），实测三次只给 contents: read / 再加 security-events: read
