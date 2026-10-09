@@ -455,7 +455,14 @@ export function checkRetiredWorkflows(presentFiles, retired = RETIRED_WORKFLOWS)
     )
     return { problems, checked: 0, revived: 0 }
   }
-  const present = new Set(presentFiles.map((p) => String(p).split(sep).join('/')))
+  // 🔴 分隔符归一必须**字面**替换两种分隔符，不得用平台 `sep`：
+  //    本函数的输入不只是真实文件系统走查（那总是平台原生分隔符），还有**跨平台字面量**
+  //    ——E 段自测就刻意喂 Windows 反斜杠路径。用 `sep` 归一时，posix 上 `sep === '/'`，
+  //    反斜杠原样留在串里 ⇒ 「反斜杠路径也必须命中」这条夹具在 Linux/macOS 恒红
+  //    （2026-10-09 实测：夹具随 b318252 落地后 CI 首次在 ubuntu/macos 上跑即暴露）。
+  //    字面替换对原生路径无行为变化（`\` 只在 Windows 路径里出现），对字面量则两个平台一致。
+  const toPosix = (p) => String(p).replace(/\\/g, '/')
+  const present = new Set(presentFiles.map(toPosix))
   let revived = 0
   for (const item of retired) {
     if (!present.has(item.file)) continue
