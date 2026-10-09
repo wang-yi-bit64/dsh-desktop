@@ -5,14 +5,20 @@ name: Drift
 # ## 为什么独立成工作流、且跑真检查
 #
 # 本仓把 `@deepseek-ai/dsh` 的目标版本钉在 `scripts/dsh-targets.mjs`（唯一产地），
-# 并在其上按通道叠加 patch-package 行级补丁（当前 next 10 个 / alpha 11 个）。
+# 并在其上按通道叠加 patch-package 行级补丁。
 # 上游处于灰度迭代期、**明确声明会有
 # 破坏性变更**——落后越多，补丁冲突越会集中到某一次升级里一起爆发。
 #
 # `npm run gate -- drift` 把这件事从「升级时才发现」变成「落后了就有人叫」：
-#   · 落后 ≥1 个 minor，或上游进入更晚的预发布阶段（alpha → rc）→ **失败**；
-#   · 同一预发布阶段内只落后补丁位 → 仅提示；
-#   · registry 取不到 → SKIP（**不等于「已核对」**）。
+#   基准 = **上游最新 GitHub Release**（2026-10-09 / 计划 2f 由 npm dist-tag 换过来：
+#   dist-tag 滞后可见，且上游出现过「tag 已动、依赖树未齐」的波次）；
+#   · 落后 ≥1 个 minor / 上游进入更晚的预发布阶段（alpha → rc）→ **失败**；
+#   · 上游在新补丁线上重新起预发布（patch 前进 **且** 阶段回退）→ **失败**
+#     （`patch-line-behind`；定级是否该继续阻断待重算，见脚本文件头）；
+#   · 同一预发布阶段内只落后补丁位/阶段内序号 → 仅提示；
+#   · npm dist-tag 仍会打印，但**只作参考、不参与判定**；
+#   · 取不到上游 Release → SKIP（**不等于「已核对」**）；
+#     ⚠️ 例外：仓库 slug 404 是**配置缺陷**（slug 是本仓写死的常量）⇒ 判红，不 SKIP。
 #
 # ## 为什么不放进 ci.yml
 #
@@ -53,9 +59,14 @@ jobs:
       - name: Drift sentinel self-test
         run: npm run gate -- drift --self-test
 
-      # 真检查：联网比对 npm dist-tag。落后到阈值即非零退出，让定时任务变红。
-      # 网络不可达时脚本自行 SKIP（exit 0）并在日志里说明「未核对」。
+      # 真检查：联网取上游最新 GitHub Release 并比对（基准见文件头）。
+      # 落后到阈值即非零退出，让定时任务变红。
+      # 取不到时脚本自行 SKIP（exit 0）并在日志里说明「未核对」；但 slug 404 判红（配置缺陷）。
+      # GH_TOKEN 不是必需（公共仓库匿名可读），但共享 runner IP 的匿名限额很低，
+      # 认证一次可避免把「被限流」误读成「上游没动静」。
       - name: Upstream drift check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run gate -- drift
 
   # 更新通道健康（ADR-053）：每条**在役**通道的端点 version ≥ 该通道最新已发布 tag。

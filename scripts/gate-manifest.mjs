@@ -266,10 +266,20 @@ export const GATES = [
     selfTest: { tiers: ['ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'upstream-release',
+    script: 'scripts/upstream-release.mjs',
+    title: '上游发布面（GitHub Release）取用判据自检',
+    why: '上游 Release 是漂移哨兵与发布前门（步骤①②）的共同基准，而它的取用有三处**实测**的反直觉事实：① tag 形态是 `dsh-v<x.y.z>` 而不是 `v<x.y.z>`（旧实现写错 ⇒ 一旦配上 slug 就恒报「Release 不存在」）；② 上游**全部** Release 都是 prerelease ⇒ `/releases/latest` 恒 404，必须列清单按 semver 取最大；③ `target_commitish` 实测多数是分支名 `master` 而不是 commit（照抄会把分支名写进台账的 upstreamCommit = 伪造一个不存在的 commit 身份）。另守「排除项必须如实报出」——上游若改了 tag 形态，过滤后清单会变成空的，而「空的」与「没有漂移」长得一样。',
+    real: null,
+    // 真检查要联网（gh api）且会把整份 Release 清单打出来；它承载的判据是纯逻辑的，
+    // 联网那部分由 drift 的 sentinel 档覆盖（同一个 slug、同一条取数路径）。
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'drift',
     script: 'scripts/verify-upstream-drift.mjs',
     title: '上游版本漂移哨兵（**联网**）',
-    why: '落后上游是「该规划升级了」，不是「这次发布有问题」。因此真检查**刻意不进** fast/ci：挂在每次提交上会长期制造红灯噪声（ADR-030 / S1-3）。真检查跑在 drift.yml 的定时任务里。',
+    why: '落后上游是「该规划升级了」，不是「这次发布有问题」。因此真检查**刻意不进** fast/ci：挂在每次提交上会长期制造红灯噪声（ADR-030 / S1-3）。真检查跑在 drift.yml 的定时任务里。基准已于 2026-10-09（计划 2f）由 npm dist-tag 换成**上游 GitHub Release**：dist-tag 滞后可见（同一天内前进过一版），且上游出现过「tag 已动、依赖树未齐」的波次。⚠️ 换基准带来一个**新形状** `patch-line-behind`（上游在新补丁线上重新起预发布：patch 前进 + 阶段回退）——旧实现会把它误报成「上游已进入**更晚**的预发布阶段」（与事实相反），本哨兵沿用阻断但把归因说准，是否继续阻断**待重算**（计划 §17 → P0-2）。',
     real: { tiers: ['sentinel'], args: [] },
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },

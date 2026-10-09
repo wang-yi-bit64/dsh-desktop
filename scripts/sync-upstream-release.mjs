@@ -6,8 +6,8 @@
  *
  * | # | 步骤 | 本脚本的实现 |
  * |---|---|---|
- * | ① | 查上游 Release 存在 | 仅当给了 `--upstream-repo <slug>` 才做**硬**检查；否则**显式**记 `SKIPPED` 及理由（§7.1 规则 3：禁止**无声**降级） |
- * | ② | 取上游 commit | 同 ①（同一 API 调用）；写进台账的 `upstreamCommit` |
+ * | ① | 查上游 Release 存在 | `fetchUpstreamReleaseByTag(tagForVersion(v))`——**默认就是真检查**（slug 见 `upstream-release.mjs` 的 `UPSTREAM_REPO`）；`--upstream-repo ''` 可显式关掉并记 `SKIPPED`（§7.1 规则 3：禁止**无声**降级） |
+ * | ② | 取上游 commit | 同 ①（同一 Release 查询）+ **另走 `commits/<tag>` 解析 SHA**；写进台账的 `upstreamCommit` |
  * | ③ | 校验 npm 上该精确版本**可安装** | `npm view @deepseek-ai/dsh@<精确版本> version`——判据是**精确版本可解析**，不是 dist-tag 可解析 |
  * | ④ | 锁 exact | {@link validateExactSpec}：拒绝 `^` / `~` / `>=` / `*` / dist-tag / 空格 |
  * | ⑤ | 更新 lock | **委托** `prepare-harness.mjs --update-lockfile`（家族钉死 + `npm install --package-lock-only` 已在那里实现，不重造） |
@@ -64,6 +64,13 @@ import {
   planNextDesktopVersion,
   readLedger,
 } from './release-ledger.mjs';
+import {
+  UPSTREAM_REPO,
+  fetchUpstreamReleaseByTag,
+  isCommitSha,
+  resolveTagCommit,
+  tagForVersion,
+} from './upstream-release.mjs';
 import { refreshLock, writeVersion } from './version.mjs';
 
 /** 上游 npm 包名（唯一产地：`prepare-harness.mjs` 的家族钉死也用它）。 */
@@ -129,58 +136,112 @@ export function verifyNpmInstallable(upstreamDsh) {
 }
 
 /**
- * 步骤①②：查上游 GitHub Release（**仅当**给了 slug 才执行）。
+ * 步骤①②：查上游 GitHub Release 并解析**真实 commit**。
  *
- * 为什么是「可选的硬检查」而不是「必做」：本仓**没有任何**配置指向上游 GitHub 仓库
- * （grep 全 `scripts/` 零命中），凭空编一个 slug 才是伪造。缺省时降级**必须写进输出**
- * （§7.1 规则 3），并留待 2f（漂移哨兵换 GitHub Release 基准）落地时接上真 slug。
+ * ## 为什么默认就是真检查（2026-10-09 起）
  *
- * @param {string} upstreamTag - 上游 tag（本仓约定为 `v<上游版本>`）。
- * @param {string|null} upstreamRepo - `owner/name`；`null` = 未配置。
- * @returns {{ status: 'verified'|'skipped', problems: string[], notices: string[], commit: string|null }}
+ * 这两个步骤此前**只在显式给了 `--upstream-repo` 时才跑**，而全仓没有任何地方传过它
+ * ⇒ 它们**从未被执行过**（本仓缺陷族「新增的步骤从未执行过」）。从未执行过的东西里
+ * 藏着两处实打实的缺陷（2026-10-09 实测发现）：
+ *
+ * 1. **tag 形态写成了 `v<x>`**，而上游是 **`dsh-v<x>`** ⇒ 一旦配上 slug 就恒报
+ *    「上游 Release 不存在」。现在 tag 由 {@link tagForVersion} 拼，调用方再没有
+ *    「自己拼 tag」的机会（前缀的唯一产地在 `upstream-release.mjs`）。
+ * 2. **`target_commitish` 不是 commit**：实测 25 条 Release 里绝大多数该字段是分支名
+ *    `master`。照抄它会往台账写一个不存在的 commit 身份（§7.1 规则 2 的伪造成功）。
+ *    ⇒ 只有它**本身就是 40 位 SHA** 时才采用，否则另走 `commits/<tag>` 解析。
+ *
+ * ## 参数
+ *
+ * @param {string} upstreamTag - 上游 Release tag（由 `tagForVersion()` 拼）。
+ * @param {string} upstreamRepo - `owner/name`；缺省由调用方传 {@link UPSTREAM_REPO}。
+ *   传空串 = **显式**关闭步骤①②（会记 `skipped` 并说明，不静默）。
+ * @param {(cmd: string, args: string[]) => object} [runner] - 子进程调用器（自测注入）。
+ * @returns {{ status: 'verified'|'skipped'|'failed', problems: string[], notices: string[],
+ *   commit: string|null, tag: string|null, commitSource: 'target_commitish'|'commits-api'|null,
+ *   publishedAt: string|null }}
  */
-export function verifyUpstreamRelease(upstreamTag, upstreamRepo) {
+export function verifyUpstreamRelease(upstreamTag, upstreamRepo = UPSTREAM_REPO, runner) {
   if (upstreamRepo === null || upstreamRepo === undefined || upstreamRepo === '') {
     return {
       status: 'skipped',
       problems: [],
       notices: [
-        `步骤①②（上游 GitHub Release / commit）**未执行**：未配置 --upstream-repo。` +
+        `步骤①②（上游 GitHub Release / commit）**未执行**：显式关闭了上游仓库 slug。` +
           `npm 精确可安装（步骤③）仍被强制核验。此降级已按 §7.1 规则 3 显式记录。`,
       ],
       commit: null,
+      tag: null,
+      commitSource: null,
+      publishedAt: null,
     };
   }
-  const result = spawnSync(
-    'gh',
-    ['api', `repos/${upstreamRepo}/releases/tags/${upstreamTag}`, '--jq', '{tag: .tag_name, commit: .target_commitish}'],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' },
-  );
-  if (result.status !== 0) {
-    const detail = ((result.stderr ?? '') + (result.stdout ?? '')).trim().split(/\r?\n/)[0] || 'gh api 无输出';
+
+  const found = fetchUpstreamReleaseByTag({ tag: upstreamTag, repo: upstreamRepo, runner });
+  if (found.status !== 'ok') {
     return {
       status: 'failed',
-      problems: [`步骤①：上游 ${upstreamRepo} 没有 Release ${JSON.stringify(upstreamTag)}：${detail}`],
+      problems: [`步骤①：${found.detail}`],
       notices: [],
       commit: null,
+      tag: null,
+      commitSource: null,
+      publishedAt: null,
     };
   }
-  try {
-    const parsed = JSON.parse(result.stdout);
-    return {
-      status: 'verified',
-      problems: [],
-      notices: [`步骤①②：上游 Release ${upstreamTag} 存在，commit ${JSON.stringify(parsed.commit ?? 'unknown')}`],
-      commit: typeof parsed.commit === 'string' ? parsed.commit : null,
-    };
-  } catch {
+  const release = found.release;
+  // draft 未发布 ⇒ 用户拿不到它，不能作为「上游已交付这一版」的依据。
+  if (release.draft === true) {
     return {
       status: 'failed',
-      problems: [`步骤①：上游 Release 响应不可解析：${(result.stdout ?? '').slice(0, 120)}`],
+      problems: [`步骤①：上游 Release ${release.tag} 仍是 draft（未发布）——draft 不构成交付，不能据此发版。`],
       notices: [],
       commit: null,
+      tag: null,
+      commitSource: null,
+      publishedAt: null,
     };
   }
+
+  // 步骤②：先看 `target_commitish` 是不是本身就是 SHA（少数条目如此，省一次 API 调用）；
+  // 否则另走 commits 端点。**不回落成分支名**——那会伪造 commit 身份。
+  let sha;
+  let source;
+  if (isCommitSha(release.commitish)) {
+    sha = { status: 'ok', sha: release.commitish };
+    source = 'target_commitish';
+  } else {
+    sha = resolveTagCommit({ tag: release.tag, repo: upstreamRepo, runner });
+    source = 'commits-api';
+  }
+  if (sha.status !== 'ok') {
+    return {
+      status: 'failed',
+      problems: [`步骤②：${sha.detail}`],
+      notices: [],
+      commit: null,
+      tag: release.tag,
+      commitSource: null,
+      publishedAt: release.publishedAt,
+    };
+  }
+
+  const commitishNote = isCommitSha(release.commitish)
+    ? ''
+    : `（Release 的 target_commitish 是 ${JSON.stringify(release.commitish)}——那是分支名不是 commit，故经 commits 端点解析）`;
+  return {
+    status: 'verified',
+    problems: [],
+    notices: [
+      `步骤①②：上游 Release ${release.tag} 存在（${release.prerelease ? 'prerelease' : 'release'}${
+        release.publishedAt ? `，${release.publishedAt}` : ''
+      }），commit ${sha.sha.slice(0, 7)}…${commitishNote}`,
+    ],
+    commit: sha.sha,
+    tag: release.tag,
+    commitSource: source,
+    publishedAt: release.publishedAt,
+  };
 }
 
 /**
@@ -196,9 +257,20 @@ export function verifyUpstreamRelease(upstreamTag, upstreamRepo) {
  * @param {string|null} [input.w] - 可选人读标签。
  * @param {string} [input.date] - ISO 日期（YYYY-MM-DD）；缺省今天。
  * @param {string|null} [input.upstreamCommit] - 步骤②核验到的上游 commit（未核验为 `null`）。
+ * @param {string|null} [input.upstreamTag] - 步骤①核验到的上游 Release tag（未核验为 `null`）。
+ *   ⚠️ 它**只在核验通过后**才写：按计划 2c，`upstreamTag` / `upstreamCommit` 都不许填猜测值
+ *   （台账 `$comment` 明写），填猜测值 = 伪造成功（§7.1 规则 2）。
  * @returns {{ entry: object, problems: string[] }} 记录与构造期判出的问题。
  */
-export function buildLedgerEntry({ target, upstreamDsh, n, w = null, date = new Date().toISOString().slice(0, 10), upstreamCommit = null }) {
+export function buildLedgerEntry({
+  target,
+  upstreamDsh,
+  n,
+  w = null,
+  date = new Date().toISOString().slice(0, 10),
+  upstreamCommit = null,
+  upstreamTag = null,
+}) {
   const problems = [];
   const channel = deriveReleaseChannel(target);
   if (channel === null) {
@@ -217,6 +289,7 @@ export function buildLedgerEntry({ target, upstreamDsh, n, w = null, date = new 
     desktopVersion,
     tag: `v${desktopVersion}`,
     date,
+    ...(upstreamTag ? { upstreamTag } : {}),
     ...(upstreamCommit ? { upstreamCommit } : {}),
   };
   return { entry, problems };
@@ -494,9 +567,79 @@ export function selfTest() {
   eq('核算：--no-counter 不推 n', noCounter.plan.mode, 'no-counter');
 
   // 🔴 步骤①②的降级必须**显式可见**（§7.1 规则 3）——静默跳过 = 伪造成功。
-  const skipped = verifyUpstreamRelease('v0.2.1-alpha.1', null);
-  eq('步骤①②：未配 slug ⇒ skipped 且带显式说明', [skipped.status, skipped.notices.length > 0], ['skipped', true]);
+  const skipped = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', null);
+  eq('步骤①②：关掉 slug ⇒ skipped 且带显式说明', [skipped.status, skipped.notices.length > 0], ['skipped', true]);
   eq('步骤①②：skipped 不产生 problem（它不是失败，是已声明的降级）', skipped.problems, []);
+
+  // ---------------------------------------------------------------------------
+  // 🔴 步骤①② 的两处真实缺陷（2026-10-09 实测；两者都因为「这段代码从未执行过」而存活）
+  //
+  //   ① tag 形态：旧实现拼 `v<x>`，上游实际是 `dsh-v<x>` ⇒ 配上 slug 后恒报「Release 不存在」。
+  //   ② `target_commitish` 实测多数是**分支名** `master`，不是 commit ⇒ 照抄会往台账写一个
+  //      不存在的 commit 身份（§7.1 规则 2）。
+  // ---------------------------------------------------------------------------
+  eq('接线：tag 走 dsh-v 前缀（唯一产地是 upstream-release.mjs）', tagForVersion('0.2.1-alpha.1'), 'dsh-v0.2.1-alpha.1');
+
+  const SHA = '5badb15009ae1756c3afe0ae0cef1faafc290ccc';
+  const fixtureRunner = (responses) => (_cmd, args) => {
+    const path = String(args[1] ?? '');
+    const hit = responses.find((entry) => path.includes(entry.match));
+    if (hit === undefined) return { status: 1, stdout: '', stderr: `自测夹具未覆盖 ${path}`, error: null };
+    return { status: hit.status ?? 0, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '', error: null };
+  };
+  const releasePayload = {
+    tag_name: 'dsh-v0.2.1-alpha.1',
+    draft: false,
+    prerelease: true,
+    published_at: '2026-10-03T06:42:19Z',
+    target_commitish: 'master',
+  };
+  const branchCommitish = fixtureRunner([
+    { match: '/releases/tags/', stdout: JSON.stringify(releasePayload) },
+    { match: '/commits/', stdout: JSON.stringify({ sha: SHA }) },
+  ]);
+  const verified = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', UPSTREAM_REPO, branchCommitish);
+  eq('步骤①②：正常路径 → verified', verified.status, 'verified');
+  eq('步骤①②：commit 取的是真 SHA', verified.commit, SHA);
+  eq('步骤①②：target_commitish=master 时必须再走 commits 端点', verified.commitSource, 'commits-api');
+  eq('反证：commit 不得等于分支名', verified.commit === 'master', false);
+  eq('步骤①②：verified 带出上游 tag（供台账回填）', verified.tag, 'dsh-v0.2.1-alpha.1');
+
+  const shaCommitish = fixtureRunner([
+    { match: '/releases/tags/', stdout: JSON.stringify({ ...releasePayload, target_commitish: SHA }) },
+  ]);
+  const shaVerified = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', UPSTREAM_REPO, shaCommitish);
+  eq('步骤①②：target_commitish 本身就是 SHA 时直接采用', shaVerified.commitSource, 'target_commitish');
+  eq('步骤①②：同上，commit 正确', shaVerified.commit, SHA);
+
+  const draftRunner = fixtureRunner([
+    { match: '/releases/tags/', stdout: JSON.stringify({ ...releasePayload, draft: true }) },
+  ]);
+  const draftResult = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', UPSTREAM_REPO, draftRunner);
+  eq('步骤①②：draft 不算交付 ⇒ 判红', draftResult.status, 'failed');
+  eq('步骤①②：draft 的理由必须点明 draft', draftResult.problems[0].includes('draft'), true);
+
+  const notFoundRunner = fixtureRunner([{ match: '/releases/tags/', status: 1, stderr: 'gh: Not Found (HTTP 404)' }]);
+  eq('步骤①②：上游没有该 Release ⇒ 判红', verifyUpstreamRelease('dsh-v9.9.9', UPSTREAM_REPO, notFoundRunner).status, 'failed');
+  eq(
+    '步骤①②：理由定位到步骤①',
+    verifyUpstreamRelease('dsh-v9.9.9', UPSTREAM_REPO, notFoundRunner).problems[0].startsWith('步骤①'),
+    true,
+  );
+
+  const noCommitRunner = fixtureRunner([
+    { match: '/releases/tags/', stdout: JSON.stringify(releasePayload) },
+    { match: '/commits/', status: 1, stderr: 'gh: Not Found (HTTP 404)' },
+  ]);
+  const noCommit = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', UPSTREAM_REPO, noCommitRunner);
+  eq('步骤①②：commit 解析不出来 ⇒ 判红（不回落成分支名）', noCommit.status, 'failed');
+  eq('步骤①②：理由定位到步骤②', noCommit.problems[0].startsWith('步骤②'), true);
+  eq('步骤①②：commit 拿不到时 commit 为 null（不给半个答案）', noCommit.commit, null);
+
+  // 台账回填：**只有核验过才写**上游字段。填猜测值 = 伪造成功（§7.1 规则 2）。
+  eq('台账：核验过才写 upstreamTag', 'upstreamTag' in buildLedgerEntry({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1', n: 1, upstreamTag: 'dsh-v0.2.1-alpha.1' }).entry, true);
+  eq('台账：核验过才写 upstreamCommit', 'upstreamCommit' in buildLedgerEntry({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1', n: 1, upstreamCommit: SHA }).entry, true);
+  eq('台账：未核验时两个上游字段都不许出现', ['upstreamTag', 'upstreamCommit'].filter((k) => k in buildLedgerEntry({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1', n: 1 }).entry), []);
 
   // 伪证夹具：内部空白 / 非版本串必须判红。（首尾空白被有意 `trim()` 归一——那是宽容，不是漏洞。）
   eq('锁 exact：内部空格判红', validateExactSpec('0.2.1 alpha.1').length > 0, true);
@@ -552,7 +695,8 @@ const USAGE = `sync-upstream-release.mjs — 合成号发布的前门（计划 2
   --target <next|alpha>     目标（默认 ${DEFAULT_TARGET}）
   --upstream <版本>         上游精确版本；缺省 = 当前锚点 dshVersion
   --w <标签>                可选人读标签
-  --upstream-repo <slug>    可选：上游 GitHub 仓库（启用步骤①②硬检查）
+  --upstream-repo <slug>    覆盖上游 GitHub 仓库（默认 ${UPSTREAM_REPO}）
+  --no-upstream-release     显式关闭步骤①②（会记 SKIPPED 及理由，不静默）
   --no-counter              纯查询：只核上游，不推 n
   --self-test               纯逻辑自测
   --help                    显示本帮助`;
@@ -585,7 +729,15 @@ function main(args) {
   };
   const target = at('--target') ?? DEFAULT_TARGET;
   const w = at('--w') ?? null;
-  const upstreamRepo = at('--upstream-repo') ?? null;
+  // 步骤①②**缺省即真检查**（slug 的唯一产地在 upstream-release.mjs 的 UPSTREAM_REPO）。
+  // `--no-upstream-release` 是显式的关闭开关——要关闭就得说出来，不许靠「忘了传 slug」。
+  const noUpstreamRelease = args.includes('--no-upstream-release');
+  const upstreamRepoArg = at('--upstream-repo');
+  if (noUpstreamRelease && upstreamRepoArg !== undefined) {
+    console.error(`❌ 用法错误：--no-upstream-release 与 --upstream-repo 互斥（前者关掉步骤①②，后者指定去哪查）`);
+    return 2;
+  }
+  const upstreamRepo = noUpstreamRelease ? '' : (upstreamRepoArg ?? UPSTREAM_REPO);
 
   const t = DSH_TARGETS[target];
   if (t === undefined) {
@@ -609,10 +761,18 @@ function main(args) {
   const notices = [];
   const ledger = readLedger();
 
-  // 步骤①②：上游 Release（可选硬检查；缺省显式降级）。
-  const release = verifyUpstreamRelease(`v${upstreamDsh}`, upstreamRepo);
+  // 步骤①②：上游 Release（缺省真检查；`--no-upstream-release` 才降级，且降级写进输出）。
+  // ⚠️ tag 由 tagForVersion() 拼（`dsh-v<x.y.z>`）——**不要**在这里手写 `v${...}`：
+  //    前缀写错会让 404 看起来像「上游没发这一版」（该缺陷真实发生过，见 verifyUpstreamRelease）。
+  const release = verifyUpstreamRelease(tagForVersion(upstreamDsh), upstreamRepo);
   problems.push(...release.problems);
-  notices.push(...release.notices);
+  if (release.status === 'verified') {
+    // 成功用 ✅ 而不是 ⚠️：降级与成功**必须一眼可分**（§7.1 规则 3 的另一半——
+    // 只说「禁止无声降级」不够，还得让成功看起来像成功，否则人会把两者一并忽略）。
+    for (const notice of release.notices) console.log(`✅ ${notice}`);
+  } else {
+    notices.push(...release.notices);
+  }
 
   // 步骤③④：npm 精确可安装 + 锁 exact（**必做**，是「上游可信」的最强判据）。
   const npm = verifyNpmInstallable(upstreamDsh);
@@ -649,7 +809,14 @@ function main(args) {
   }
 
   // ---- --apply：快照 → 改 → 守卫 → 失败回滚 ----
-  const { entry, problems: entryProblems } = buildLedgerEntry({ target, upstreamDsh, n: plan.n, w, upstreamCommit: release.commit });
+  const { entry, problems: entryProblems } = buildLedgerEntry({
+    target,
+    upstreamDsh,
+    n: plan.n,
+    w,
+    upstreamCommit: release.commit,
+    upstreamTag: release.tag,
+  });
   if (entryProblems.length > 0 || entry === null) {
     for (const problem of entryProblems) console.error(`❌ ${problem}`);
     return 1;
@@ -660,7 +827,12 @@ function main(args) {
 
   const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.channel);
   writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
-  console.log(`✅ 步骤⑥⑨：台账 ${LEDGER_RELATIVE} 追加 n=${plan.n}${release.commit ? `，回填 upstreamCommit` : ''}`);
+  const backfilled = [release.tag ? `upstreamTag=${release.tag}` : '', release.commit ? `upstreamCommit=${release.commit.slice(0, 7)}…（${release.commitSource}）` : '']
+    .filter(Boolean)
+    .join('，');
+  console.log(
+    `✅ 步骤⑥⑨：台账 ${LEDGER_RELATIVE} 追加 n=${plan.n}${backfilled ? `，回填 ${backfilled}` : '（上游未核验 ⇒ 两个上游字段都不写，填猜测值等于伪造）'}`,
+  );
 
   // 🔴 不得写 `if (!writeVersion(...).ok)`：writeVersion 失败靠**抛**、成功返回 `{ changed }`，
   //    没有 `ok` 字段 ⇒ 该判断恒成立，成功也会被当成失败并回滚（真实缺陷，见 attemptVersionWrite）。

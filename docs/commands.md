@@ -214,10 +214,17 @@ npm run gate -- plan-facts --self-test
 npm run gate -- doc-facts
 npm run gate -- doc-facts --self-test
 
-# 20. 上游版本漂移哨兵（**逐通道**对照各自的 dist-tag；真检查会因上游领先而红，
-#     跑在 nightly；CI 只跑自测）
+# 20. 上游版本漂移哨兵（基准 = **上游最新 GitHub Release**；2026-10-09 / 计划 2f 由
+#      npm dist-tag 换过来。真检查会因上游领先而红，跑在 nightly；CI 只跑自测。
+#      npm dist-tag 仍打印但只作参考；slug 404 判红（配置缺陷），离线才 SKIP）
 npm run gate -- drift
 npm run gate -- drift --self-test
+
+# 20g. 上游**发布面**（GitHub Release）取用判据自检：tag 形态 `dsh-v<x.y.z>`（不是 `v<x>`）、
+#      四态取数（ok/empty/skip/error）、commit 必须经 commits 端点解析
+#      （`target_commitish` 实测多是分支名 `master`）。真检查要联网，故只登记自检；
+#      排障时可直跑：node scripts/upstream-release.mjs
+npm run gate -- upstream-release
 
 # 20b. 双上游通道：目标表自检（目标名 ↔ 通道 ↔ 版本；未知通道必须失败不得回退）
 npm run gate -- targets
@@ -307,6 +314,8 @@ npm run version:bump -- minor --commit --tag   # 改文件 + 提交 + 打本地 
 npm run version:sync-upstream -- --plan     # 只读：打印将写的文件与委托步骤（--plan 是默认）
 npm run version:sync-upstream -- --apply    # 显式写：快照 → 台账 + 版本真源 → 跑守卫 → 失败回滚
 npm run version:verify-upstream             # 只核上游可信性（不推 n、不写盘；= 前门 --no-counter）
+#     步骤①②（上游 Release / commit）**缺省即真检查**（slug 唯一产地 scripts/upstream-release.mjs）；
+#     离线时可显式关闭，但必须说出来：node scripts/sync-upstream-release.mjs --plan --no-upstream-release
 
 # 27. 变更日志（产物入库 / 供 Release 正文使用）
 npm run changelog:write -- --version 0.2.0     # 写入 CHANGELOG.md

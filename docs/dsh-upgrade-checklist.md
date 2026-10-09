@@ -76,10 +76,16 @@ boot / config-dump / 插件管理。
 
 ### 约束三：上游版本漂移要主动监测，不要等升级时才发现
 
-- [ ] 跑 `npm run gate -- drift`：把**两条通道各自**钉住的版本与它对应的 npm dist-tag 比一次
-      （`next` 对 `next` tag、`alpha` 对 `alpha` tag；上游没有对应 tag 时退回 `latest`）。
-      落后 ≥1 个 minor 或出现更晚的预发布阶段（如 alpha → rc）即非零退出；
-      网络不可用时打印 SKIP（**不等于「已核对」**）。
+- [ ] 跑 `npm run gate -- drift`：把**两条通道各自**钉住的版本与**上游最新 GitHub Release** 比一次。
+      🔄 **基准已于 2026-10-09 由 npm dist-tag 换成上游 Release**（计划 2f；理由与实测见
+      `scripts/verify-upstream-drift.mjs` 文件头：dist-tag 滞后可见，且上游出现过「tag 已动、
+      依赖树未齐」的波次）。判定分档：
+      - **阻断**：落后 ≥1 个 minor / 上游进入更晚的预发布阶段（如 alpha → rc）/
+        上游在**新补丁线**上重新起预发布（patch 前进 **且** 阶段回退 ⇒ `patch-line-behind`）；
+      - **仅提示**：同一 major.minor 且同一阶段，只落后补丁位或阶段内序号；
+      - npm dist-tag 仍会打印，但**只作参考、不参与判定**（两者的差值＝「上游已宣布、npm 还没跟上」）；
+      - 取不到上游 Release ⇒ 打印 SKIP（**不等于「已核对」**）；
+        ⚠️ 例外：仓库 slug 404 属**配置缺陷**（slug 是本仓写死的常量），那种情形**判红**。
 
 ---
 
@@ -463,3 +469,25 @@ npm run smoke:headless
 | 补丁文件名内嵌版本号 | `patch-package` 的命名约定 | 本文 Step 2.1 强制项；`npm run gate -- patches` **逐目标**校验包名可推导性与版本段一致 |
 | 无头门禁覆盖不到 Harness 行为变更 | 壳把 Harness 当黑盒派生 | Step 5 的 L1/L2 烟雾是**唯一**能发现此类回归的门禁 |
 | 体积随上游增长 | 内置完整依赖树以换取宿主机零依赖 | Step 6 的体积对比 + [`harness-packaging-and-compatibility.md`](harness-packaging-and-compatibility.md) 的瘦身方案 |
+
+---
+
+## 6. 等上游：条件化条目登记（**上游到位后才动手**）
+
+> 本节条目**不是待办**，是**条件化等待项**：本仓做不了，必须等上游先交付某个东西。
+> 每条写死四件事：**在等什么**、**触发条件**（可证伪）、**核验方式**（可复现命令）、
+> **上游到位后做什么**（含谁来发布）。
+>
+> ⚠️ **纪律**（继承 [ADR-042](adr/042-recovery-non-destructive-actions.md) 后果段）：
+> ① 核验日期到期要**重走**，条目不许永远挂着；② 触发条件必须是**能跑出结论的命令**，
+> 不写「留意上游动态」这类没有执行者的句子；③ 每条的落点都包含**由维护者发布一版**——
+> 上游到位只是解除阻塞，交付仍要走 §5 的九步流程。
+>
+> 🔗 与漂移哨兵的分工：`verify-upstream-drift.mjs` 负责**自动叫号**（上游前进了就红），
+> 本节记「叫号之后做什么」。哨兵在检测到**非预发布 Release** 时会直接点名 §6 第 1 条。
+
+| # | 在等什么 | 触发条件（可证伪） | 核验方式（可复现） | 上次核验 | 上游到位后做什么 |
+|---|---|---|---|---|---|
+| 1 | **上游发布非预发布版本**（`stable` 线的存在前提） | `@deepseek-ai/dsh` 的 dist-tag 指向一个**无预发布段**的版本；或上游出现无 `-` 段的 Release tag `dsh-v<x.y.z>` | `npm view @deepseek-ai/dsh dist-tags --json`<br>`node scripts/upstream-release.mjs`（列出全部 Release 及其 `prerelease` 标记） | **2026-10-09**：❌ 未到位——25 条 Release **全部** `prerelease: true`；`dist-tags` 三条（`latest`/`next`/`alpha`）全为预发布 | ①**先定 stable 线的序号载体**（ADR-061 决策 7 的开口：`0.2.1-<n>` 会让合成号首个预发布标识符变成纯数字）——注意 `release-ledger.mjs::composeDesktopVersion()` 对无预发布段的上游**当前直接抛错**，这是**硬阻塞**；②新增/修订 ADR（计划无权改 ADR，**先决策再写代码**）；③接线 `stable` 目标（`DSH_TARGETS` + 目录 + 补丁集）；④**由维护者发布一版**（该上游版本 `n=1`，`w` 标批次） |
+| 2 | **上游提供「停用插件而不卸载」的可逆语义** | 上游 market / profile 加载体系出现 disable / quarantine 入口，且**不靠改名、不摘 `desired.json` 条目、不被 `sweepRegistry()` 真删** | 按 [`dev-plan-0.2-hardening.md`](dev-plan-0.2-hardening.md) **§B4** 的三步重走证据链（产物是**核验记录**，不是代码） | **2026-09-10** 结论「不可逆」（批次 C 裁决）；**2026-10-09 本轮未重走**（§B4 仍标 ❌ 未开工） | 立项 `recovery_action: "disable"` + 恢复页按钮（`dev-plan-0.2-hardening.md` 0.2-决策点 3）→ **由维护者发布一版**（`fix` / `feat`，`n+1`）。⚠️ 按钮必须**有可见反馈**：判据见 `npm run gate -- shell-pages`（恢复页曾因按钮无监听「点了没反应」） |
+| 3 | **上游公开发布官方桌面版**（`apps/desktop` 目前 `private: true`） | `@deepseek-ai/dsh-desktop` 在 npm 上可取；或上游出现 desktop 命名的 Release | `npm view @deepseek-ai/dsh-desktop version`<br>`gh api repos/deepseek-ai/deepseek-harness/contents/apps/desktop/package.json`（看 `private`）<br>`gh api "repos/deepseek-ai/deepseek-harness/releases?per_page=100" --jq '[.[]\|select(.tag_name\|test("desktop"))]\|length'` | **2026-10-09**：❌ 未发布——`@deepseek-ai/dsh-desktop@0.2.1-alpha.1` 且 **`private: true`**；desktop 命名 Release 数 = **0**（`apps/` 下已有 `cli` / `desktop-host` / `desktop` / `web`） | 立刻复核 §0.1 的**约束一**（`desktop` 是保留 profile 名，含大小写变体）与**约束二**（官方桌面版采用更深的宿主协议，不要逼近它）是否被违反 → 违反则改本仓命名 / 协议姿态 → **由维护者发布一版**（`n+1`，`w` 标该批次） |
