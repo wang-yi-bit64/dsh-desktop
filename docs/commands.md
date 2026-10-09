@@ -383,6 +383,26 @@ npm run version:verify-upstream             # 只核上游可信性（不推 n�
 #     步骤①②（上游 Release / commit）**缺省即真检查**（slug 唯一产地 scripts/upstream-release.mjs）；
 #     离线时可显式关闭，但必须说出来：node scripts/sync-upstream-release.mjs --plan --no-upstream-release
 
+# 26c. Release Plan（第 3 步的人工决策面）：release-manifest.json
+#      它与 MANIFEST.json **不是一回事**：那份是发布**证明**（产物里的事实），这份是发布**计划**。
+#      它只答两件事：这一次发哪几条线；每条线是第几次交付（n）。
+#      它**不**答：合成号（第 4 步从台账派生）、上游精确版本（台账的键）、通道（由 patchTarget 现算）。
+node scripts/release-ledger.mjs --show                    # 台账 + 桥接版 + 计划（两边是否一致一眼可见）
+node scripts/release-ledger.mjs --validate                # 门禁档：恒时判据（结构/目标/在役键唯一/字段白名单/w）
+node scripts/release-ledger.mjs --validate --strict-plan  # 额外跑时点判据（n == 台账现算的下一个）
+npm run version:sync-upstream -- --plan                   # 发布前门：读计划，未批准的线**不派生**
+npm run gate -- release-ledger                            # 上述 --validate 的门禁入口（fast/ci/release 全档）
+#     ⚠️ 判据刻意分两组，**不要**把时点判据塞进每次 PR 都跑的门禁：
+#        · **恒时**（结构 / 目标 / 在役键唯一 / 字段白名单 / w 字符集）——永远为真，进全档门禁；
+#        · **时点**（n 逐字等于台账现算的下一个）——**只在决策时刻成立**。计划是时点快照：
+#          发出去之后台账 next n 前进一格，n 立刻成为历史值。把它放进全档门禁只会得到两种收场：
+#          每个与发布无关的 PR 都要顺手改一个 n（人会开始乱改），或者有人把判据删掉。
+#          故它去**有意义的地方**：发布前门 + --strict-plan。
+#        · 完整理由见 scripts/release-ledger.mjs::diagnoseReleasePlan() 的 boxed 段；
+#          自测里有一对「同一份输入、两种意图、相反结论」的夹具钉住这个分工。
+#     ⚠️ 计划**不是**版本号的产地：它写的是决策（发哪条线、第几次），派生仍由台账现算。
+#        两者不一致时以**台账**为准，改计划（n 不由人填）。
+
 # 27. 变更日志（产物入库 / 供 Release 正文使用）
 npm run changelog:write -- --version 0.2.0     # 写入 CHANGELOG.md
 npm run changelog:notes                        # 打印上个 tag..HEAD 的 Release 正文

@@ -15,8 +15,20 @@
  * | ⑦ | 同步 `package.json`/`Cargo.toml`/`Cargo.lock` 写**合成号** | 复用 `version.mjs` 的 `writeVersion()` + `refreshLock()`（唯一真源机制不变，**填充者**换成合成函数） |
  * | ⑧ | 跑补丁适用性 | 子进程调 `check-patch-applicability.mjs` |
  * | ⑨ | 产出 MANIFEST 元数据基线 | 回填台账的 `upstreamTag` / `upstreamCommit`（MANIFEST v3 形状是 **2g**，不在这里做） |
+ * | **前置** | **第 3 步（出 Release Plan）必须先完成** | `readReleasePlan()` + `checkPlanLineFor()`：`release-manifest.json` 必须批准本次这条线（见下节） |
  *
  * **任一步失败 ⇒ 不写版本、不打 tag、不发布**（§4.6 原文）。
+ *
+ * ## 🔴 第 3→4 步的强制点（2026-10-10 接入）
+ *
+ * `docs/version-policy.md` §3.1 的权威链路是 `Feature Log → Release Plan → Version`，
+ * 即「第 3 步出计划、第 4 步派生」。本条链路上唯一能**强制**它的地方就是这里：
+ * 派生版本号之前先读 `release-manifest.json`，用 `checkPlanLineFor()` 断言
+ * 「这一次要发的这条线**被批准过**、计划里的 `n` 等于台账现算的下一个、`w` 与本次一致」。
+ * 不通过 ⇒ 判红、不派生。
+ *
+ * ⚠️ 缺计划文件同样判红（**不**当成「没有计划，直接派生」）：那样派生出的 `n` 是无人决策过的，
+ * 而它长得和有人决策过的一模一样。
  *
  * ## 🔴 自动化边界（2026-10-08 维护者裁决：`--plan` 默认 + `--apply` 显式）
  *
@@ -55,14 +67,17 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_TARGET, DSH_TARGETS, parseVersionShape, resolveTarget } from './dsh-targets.mjs';
 import {
   LEDGER_RELATIVE,
+  PLAN_RELATIVE,
   allBuilds,
   checkLedger,
   checkLedgerAgainstVersion,
+  checkPlanLineFor,
   composeDesktopVersion,
   deriveReleaseChannel,
   ledgerPath,
   planNextDesktopVersion,
   readLedger,
+  readReleasePlan,
 } from './release-ledger.mjs';
 import {
   UPSTREAM_REPO,
@@ -794,6 +809,37 @@ function main(args) {
   notices.push(...planNotices);
 
   for (const notice of notices) console.warn(`⚠️  ${notice}`);
+
+  // ---- 第 3→4 步的强制点：Release Plan 必须**批准过**这一条线 ------------------
+  // 这是 `release-manifest.json` 在链路上唯一的强制消费点（第 3 步出计划 → 第 4 步派生版本号）。
+  // 少了它，那份文件就是**没人读**的（而它长得像决策面，`docs/version-policy.md` §3.1 把它
+  // 画成唯一权威链路上的一环）——本仓缺陷族「文档承诺了、代码不读」。
+  //
+  // ⚠️ 判据是**时点**的（`n` 必须等于台账现算的下一个）：它在这里成立，因为这里**就是**决策时刻；
+  //    放进每次 PR 都跑的门禁则不成立（发完之后计划里的 n 必然成为历史值，会逼人乱改 n）。
+  //    两组判据的分工见 `release-ledger.mjs::diagnoseReleasePlan()` 的 boxed 段。
+  // ⚠️ `--no-counter` 是纯上游可信性查询（不推导 n、无东西可写）⇒ 不要求计划。
+  if (plan.mode !== 'no-counter') {
+    let releasePlan = null;
+    try {
+      releasePlan = readReleasePlan();
+    } catch (error) {
+      problems.push(
+        `步骤③：${PLAN_RELATIVE} 读不到 —— ${error.message}\n` +
+          `   第 4 步派生版本号之前必须先有第 3 步的决定；缺计划时**不得**直接派生` +
+          `（那种情况下派生出的 n 是「没人决策过」的）。`,
+      );
+    }
+    if (releasePlan !== null) {
+      const planLineProblems = checkPlanLineFor({ plan: releasePlan, ledger, target, w, targets: DSH_TARGETS });
+      problems.push(...planLineProblems.map((p) => `步骤③：${p}`));
+      if (planLineProblems.length === 0) {
+        console.log(
+          `✅ 步骤③④：Release Plan 批准了 ${target} 线（n=${plan.n}${w ? `，w=${w}` : ''}）⇒ 与派生值逐字一致`,
+        );
+      }
+    }
+  }
 
   if (problems.length > 0) {
     for (const problem of problems) console.error(`❌ ${problem}`);

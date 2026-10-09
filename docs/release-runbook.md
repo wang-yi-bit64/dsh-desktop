@@ -33,6 +33,37 @@ containing the `version` field"*）。用满这个能力就把三处重复消掉
 - **先 `--dry-run` 再真改**：`npm run version:bump -- auto --dry-run`。
 - 没有历史 tag 时 `auto` **会报错并要求显式指定**——首次发布不该由一个推导规则猜版本号。
 
+> 🔴 **合成号（[ADR-061](adr/061-synthetic-version-model.md)）之后，本节表格不再是发布路径**：
+> 桌面版本号由**台账**派生（`n = max(同组 n) + 1`），入口是
+> `npm run version:sync-upstream -- --plan|--apply`（见 `docs/version-policy.md` §5）。
+> 本表保留给非发布场景的 `bump`。
+>
+> 📋 **第 3 步「出 Release Plan」也不再是仪式**：`release-manifest.json` 必须在派生版本号**之前**
+> 写好——发布前门现在**会读它**（`scripts/sync-upstream-release.mjs` 的「第 3→4 步的强制点」）。
+> 三条判据：① 计划里有本次这条线（没有 = 没批准）；② 该行的 `n` 逐字等于台账现算的下一个（时点判据）；
+> ③ 该行的 `w` 与本次实际要用的一致（`w` 进版本号）。任一不成立 ⇒ 前门判红、**不派生**。
+> 文件缺失同样判红——**不**当成「没有计划，直接派生」（那样派生出的 `n` 是无人决策过的）。
+> 自查：`node scripts/release-ledger.mjs --show`（看计划与台账两边是否一致）；
+> `node scripts/release-ledger.mjs --validate --strict-plan`（把时点判据显式跑一遍）。
+> 变更累积来源是第 2 步的 Feature Log：`docs/releases/FEATURES.md`。
+>
+> 🌉 **换代期还要多一步：先发桥接版**（[ADR-063](adr/063-bridge-release-for-version-model-cutover.md)）。
+> 合成号跟随**上游**版本线（`0.2.x`），线上历史 tag 属**旧模型**（`0.7.x`）⇒ 换代首个合成号
+> 排序必然更低，`updater` 默认判据（`release > current`）会让它**零投递**。处置顺序
+> **不可颠倒**：
+>
+> 1. `node scripts/release-ledger.mjs --add-bridge <桥接版号>`（先只读核对，再加 `--apply`）
+>    —— 桥接版号须**高于该通道当时最高 tag**；
+> 2. 发布该桥接版：`updater-manifest.mjs --write-config` 会自动把
+>    `plugins.updater.allowDowngrades: true` 写进覆盖配置，**日志里会打印该行警告**；
+> 3. **核实它的 tag 真的发出去了**（本地 `git tag` + `gh api repos/wang-yi-bit64/dsh-desktop/tags`
+>    双侧一致）——台账登记只是**意图**，豁免判据要求该 tag 已发布；在此之前合成号会被正确拦住
+>    （报 `bridge-not-delivered`）；
+> 4. 再发合成号：`npm run version:check` 应打印**豁免依据 note**（而非报红）。
+>
+> 豁免判据与代价（含「装过桥接版的用户此后可回滚」这一条）见 ADR-063 决策 7 与
+> `docs/version-policy.md` §7.4；落地清单见 `docs/dsh-upgrade-checklist.md` §2 Step 8。
+
 ### 8.3 变更日志与 Release 正文
 
 `CHANGELOG.md` 与 Release 正文**来自同一份数据（git 提交历史）与同一套渲染逻辑**，因此不会出现

@@ -102,6 +102,7 @@
 | [060](060-alpha-cross-minor-upgrade-and-shared-payload.md) | alpha 跨 minor 推进至 DSH `0.2.1-alpha.1`：退役判据、注入点迁移、共享载荷对齐 | 已接受 |
 | [061](061-synthetic-version-model.md) | **合成版本号**：上游 `x.y.z-<预发布>` 原样保留 + 本仓 `.<n>` 追加（排序键在**预发布段**，不落 build）；声明 ADR-057 守卫继续有效、接管 ADR-028 决策 4 | 已接受 |
 | [062](062-pullfrog-removal-irreversible.md) | Pullfrog **永久移除**：禁令写死为机器判据（`RETIRED_WORKFLOWS` + 规则 E），关闭 ADR-058 决策 1 的恢复路径 | 已接受 |
+| [063](063-bridge-release-for-version-model-cutover.md) | **换代桥接版**：合成号排序低于旧模型号时，用一次性放宽（`plugins.updater.allowDowngrades`）把已装用户带过版本号换代处；豁免凭据写进台账 `bridges[]` | 已接受 |
 
 ## 新增一条 ADR 的规则
 

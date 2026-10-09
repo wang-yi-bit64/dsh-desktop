@@ -1,0 +1,35 @@
+{
+  "$comment": [
+    "Release Plan —— docs/version-policy.md §3.1「唯一权威链路」的第 3 步（出计划），§5.1 第 3 步。",
+    "它**只**回答两件事：这一次发哪几条线；每条线是第几次交付（n）。",
+    "它**不**回答：合成号本身（第 4 步从台账派生，写进来就是第二个产地）；上游精确版本（唯一产地是台账的键）；",
+    "  发布通道（由 patchTarget 现算，deriveReleaseChannel）；版本文件的写法（第 4/5 步）。",
+    "",
+    "⚠️ 本文件是**时点**快照，不是恒时事实：发出去之后台账的 next n 前进一格，这里的 n 立刻成为历史值。",
+    "   · 恒时判据（结构 / 目标 / 在役键唯一 / 字段白名单 / w 字符集）：node scripts/release-ledger.mjs --validate",
+    "     —— 门禁 fast/ci/release 全档都跑它。",
+    "   · 时点判据（n 逐字等于台账现算的下一个 + w 与本次一致）：发布前门 scripts/sync-upstream-release.mjs",
+    "     （--plan 与 --apply 都跑）与 node scripts/release-ledger.mjs --validate --strict-plan。",
+    "   两组判据为何分开，见 release-ledger.mjs::diagnoseReleasePlan() 的 boxed 段。",
+    "",
+    "⚠️ 桥接版（ADR-063）**不**出现在 lines[] 里：它们是旧模型的高号（0.7.x），由人写进版本文件，",
+    "   只登记在台账的 bridges[] 中，**不**由台账的 n 派生——写进这里等于宣称它们可被派生。",
+    "   本轮（第二代版本号模型首次发版）的不可颠倒顺序：",
+    "     ① 先发两条桥接版 v0.7.3-rc.1（rc 线）、v0.7.4-alpha.1（alpha 线），各自内置 updater 放宽手段",
+    "        allowDowngrades ⇒ 已装旧号的客户端才愿意接受排序更低的合成号；",
+    "     ② 再发本文件批准的两条合成号。",
+    "   顺序颠倒的后果：合成号在排序上低于线上最新的 0.7.2-rc.1 / 0.7.3-alpha.1，默认判据（必须更新）下",
+    "   推送出去也没人收得到；而「已经发出去了」这件事看不出来（发布是成功的）。",
+    "",
+    "本轮变更性质：上游锚点**不动**（next 仍钉 0.2.0-rc.2、alpha 仍钉 0.2.1-alpha.1，两端同批核对过），",
+    "本仓有 feat: 提交 ⇒ releaseType = desktop-feature（§3.2：x.y.z 不变、n+1），两条线各自首次交付 ⇒ n = 1。",
+    "breaking = false：区间内无破坏性改动（详见 docs/releases/FEATURES.md 的分类清单）。"
+  ],
+  "schemaVersion": 1,
+  "releaseType": "desktop-feature",
+  "breaking": false,
+  "lines": {
+    "alpha": { "n": 1, "w": null },
+    "next": { "n": 1, "w": null }
+  }
+}

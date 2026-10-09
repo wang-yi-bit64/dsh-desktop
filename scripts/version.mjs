@@ -68,6 +68,7 @@ import { insertSection, renderSection, repoUrl } from './changelog.mjs';
 import {
   LEDGER_RELATIVE,
   allBuilds,
+  bridgeExemptionFor,
   readLedger,
   resolveReleaseFor,
   splitRepoSequence,
@@ -293,9 +294,12 @@ export function writeChangelogSection(version, root = process.cwd()) {
  *   1. `package.json` 的 version 是合法 semver；
  *   2. `tauri.conf.json` 要么指向 `../package.json`，要么与真源逐字相同；
  *   3. `Cargo.toml` 的 workspace version 与真源相同；
- *   4. 给了 tag 时，tag 必须等于 `v<version>`。
+ *   4. 给了 tag 时，tag 必须等于 `v<version>`；
+ *   5. 版本线单调性：候选版本不得低于已发布最高 `v*` tag——**除非** ADR-063 的桥接版
+ *      豁免成立（该通道存在 ≥ 该通道最高已发布版本的桥接版记录）。
  *
- * 软提示（不阻断）：`Cargo.lock` 未跟上——它是生成物，会在下次构建时自愈。
+ * 软提示（不阻断）：`Cargo.lock` 未跟上（生成物，下次构建自愈）；单调性的**豁免依据**
+ * 本身（必须打印，否则「豁免成立」与「判据没查」在输出上无法区分）。
  *
  * 第 4 条是发布链路的**关键防线**：如果 tag 与版本号不一致，打出来的包会
  * 声称自己是另一个版本，而 updater 的版本比较据此决定推不推更新——错一次就会
@@ -304,6 +308,8 @@ export function writeChangelogSection(version, root = process.cwd()) {
  * @param {object} [options]
  * @param {string|null} [options.tag] - 待校验的 tag（形如 `v0.2.0`）。
  * @param {string} [options.root] - 仓库根路径。
+ * @param {string[]|null} [options.publishedTags] - 已发布 tag；`undefined` 时自行读 git。
+ * @param {object[]} [options.bridges] - 桥接版记录；`undefined` 时从台账读（读不到则豁免不可用并告警）。
  * @returns {{ errors: string[], warnings: string[], version: string|null }} 校验结果。
  */
 /**
@@ -338,27 +344,82 @@ export function readPublishedTags(root = process.cwd()) {
  * 规则：候选版本**不得低于**任何已发布 `v*` tag。允许相等——发布时本版 tag 已在检出里，
  * 用严格大于会把这次发布自己判失败。
  *
- * @param {{ version: string, tags: string[] }} input
+ * @param {{ version: string, tags: string[], bridges?: object[] }} input
+ * @param {object[]} [input.bridges] - 台账 `bridges[]`；给了才可能触发桥接版豁免（ADR-063）。
  * @returns {string[]} problems（空数组 = 通过）
  */
-export function checkVersionMonotonic({ version, tags }) {
+export function checkVersionMonotonic({ version, tags, bridges = [] }) {
+  return diagnoseVersionMonotonic({ version, tags, bridges }).problems;
+}
+
+/**
+ * 单调性判据的**完整诊断**：把「问题」与「说明」分开出口。
+ *
+ * 为什么不能只返回 problems：合成号换代期间，候选版本**必然**低于线上的旧模型号
+ * （`0.2.0-rc.2.1` < `v0.7.3-rc.1`），而这在**桥接版已送达**的前提下是**预期且安全**的。
+ * 若豁免只能通过「不报错」来表达，那么「判据在跑且豁免成立」与「判据根本没在查」在输出上
+ * 完全一样——本仓明确的缺陷族（扫出数为 0 与扫描器坏掉长得一样）。因此豁免必须留下
+ * 一条**可读的依据**：`notes`。
+ *
+ * 出口分工：
+ *   · `problems` 非空 ⇒ 调用方必须判红（§7.1 规则 3：禁止无声降级）；
+ *   · `notes` 非空 ⇒ 调用方必须**打印**（可降为 warning），不得吞掉。
+ *
+ * @param {object} input
+ * @param {string} input.version - 候选版本号。
+ * @param {string[]} input.tags - 已发布 `v*` tag 语料。
+ * @param {object[]} [input.bridges] - 台账 `bridges[]`。
+ * @returns {{ highest: string|null, problems: string[], notes: string[] }} 诊断结果。
+ */
+export function diagnoseVersionMonotonic({ version, tags, bridges = [] }) {
   const problems = [];
-  if (!parseSemver(version)) return problems;
+  const notes = [];
+  if (!parseSemver(version)) return { highest: null, problems, notes };
   let highest = null;
   for (const tag of tags) {
     const candidate = String(tag).replace(/^v/, '');
     if (!parseSemver(candidate)) continue;
     if (highest === null || compareSemver(candidate, highest) > 0) highest = candidate;
   }
-  if (highest === null) return problems;
-  if (compareSemver(version, highest) < 0) {
-    problems.push(
-      `版本号 ${version} 低于已发布的最高 tag v${highest}：发布一个比线上更低的版本，` +
-        `updater 的版本比较会让它永远推不出去（本仓真实形态：先发 v0.7.0-rc.1、后发 0.7.0-alpha.8）。` +
-        `改法：在更高的 patch/minor 上推进（如 v0.7.1-rc.1），不要在同一核心版本里换通道后缀。`,
+  if (highest === null) return { highest: null, problems, notes };
+  if (compareSemver(version, highest) >= 0) return { highest, problems, notes };
+
+  // 低于已发布最高 tag。先问桥接版：这个「低于」是安全的吗？
+  const exempt = bridgeExemptionFor({ version, tags, bridges });
+  if (exempt.granted) {
+    notes.push(
+      `版本号 ${version} 低于已发布最高 tag v${highest}，但**通道 ${exempt.channel} 上最新发出去的号就是桥接版 ` +
+        `v${exempt.bridge.version}**（它已发布，且 ≥ 该通道其余全部 tag：${exempt.atLeast}）⇒ 按 ADR-063，` +
+        `该通道客户端的比较器已被放宽为「必须不同」（\`plugins.updater.allowDowngrades\`），本版可以送达，故不判红。\n` +
+        `    ⚠️ 这是**长期豁免**而非一次性放行：只要该通道最新的号仍是桥接版（合成号更小，短期内必然如此），` +
+        `后续合成号沿用同一条依据；一旦有人在桥接版之上发了更高的号（那一版**没有**放宽比较器），` +
+        `这条豁免会自动失效并重新判红。`,
     );
+    return { highest, problems, notes };
   }
-  return problems;
+
+  const reasonText = {
+    'unresolved-channel':
+      `无法从版本号 ${version} 判定它属于哪条桌面通道（正式版 / 未知后缀），` +
+      `因此不能确认该通道上有过桥接版`,
+    'no-tags-on-channel': `通道 ${exempt.channel} 上没有任何已发布 tag ⇒「该通道的号曾被送达」无凭据`,
+    'no-bridge-on-channel':
+      `通道 ${exempt.channel} 的最高已发布版本是 v${exempt.atLeast}，但台账的 bridges[] 里` +
+      `没有该通道上 ≥ 它的桥接版记录`,
+    'bridge-not-delivered':
+      `通道 ${exempt.channel} 上有 ≥ v${exempt.atLeast} 的桥接版**登记**，但它的 tag 还不在已发布 tag 里` +
+      `⇒ 桥接版**还没送达用户**（台账已改、tag 没打），此刻发合成号没人收得到`,
+  }[exempt.reason];
+
+  problems.push(
+    `版本号 ${version} 低于已发布的最高 tag v${highest}：发布一个比线上更低的版本，` +
+      `updater 的版本比较会让它永远推不出去（本仓真实形态：先发 v0.7.0-rc.1、后发 0.7.0-alpha.8）。\n` +
+      `    ADR-063 桥接版豁免未生效：${reasonText}。\n` +
+      `    两条改法：① 合成号换代场景——先在**该通道**发布一个带 \`allowDowngrades\` 的桥接版` +
+      `（登记进 ${LEDGER_RELATIVE} 的 bridges[]），桥接版本身必须先送达用户，合成号才可能被接受；` +
+      `② 非换代场景——在更高的 patch/minor 上推进（如 v0.7.1-rc.1），不要在同一核心版本里换通道后缀。`,
+  );
+  return { highest, problems, notes };
 }
 export function checkVersions(options = {}) {
   const { tag = null, root = process.cwd() } = options;
@@ -430,7 +491,26 @@ export function checkVersions(options = {}) {
         '权威执行点是 release.yml preflight（fetch-depth: 0）',
     );
   } else if (pkgVersion) {
-    errors.push(...checkVersionMonotonic({ version: pkgVersion, tags: publishedTags }));
+    // 桥接版（ADR-063）：合成号排序低于线上旧模型的号，这不是缺陷而是换代期的**预期状态**，
+    // 前提是该通道已有一个带 allowDowngrades 的桥接版送达过。豁免**只能**由台账 bridges[]
+    // 提供（不许在这里写死白名单），因此先把台账读进来。
+    let bridges = options.bridges;
+    if (bridges === undefined) {
+      try {
+        bridges = readLedger(root).bridges ?? [];
+      } catch (error) {
+        // 读不到台账 ⇒ 豁免不可用。**不静默**：这会把「换代期预期内的低版本」报成红，
+        // 人必须能看出红的原因不是判据而是台账读不到（§7.1 规则 3）。
+        bridges = [];
+        warnings.push(
+          `读不到台账（${error.message}）⇒ 桥接版豁免（ADR-063）不可用；` +
+            `若本次发布的是合成号，下面的单调性报红可能只是台账不可读所致，先修台账再判断。`,
+        );
+      }
+    }
+    const monotonic = diagnoseVersionMonotonic({ version: pkgVersion, tags: publishedTags, bridges });
+    errors.push(...monotonic.problems);
+    warnings.push(...monotonic.notes);
   }
 
   return { errors, warnings, version: pkgVersion };
@@ -623,6 +703,125 @@ export function selfTest() {
   eq('semver：rc.1 < 正式版', compareSemver('0.7.0-rc.1', '0.7.0') < 0, true);
   eq('semver：接受 tag 前导 v', compareSemver('v0.7.1-rc.1', '0.7.0-rc.1') > 0, true);
   throws('semver：非法输入必须抛错而不是按相等处理', () => compareSemver('vNext', '0.7.0'));
+
+  // === ADR-063：桥接版豁免 ==================================================
+  // 语料 A = **桥接版发布前**的真实线上 tag（rc 线最高 v0.7.2-rc.1、alpha 线最高 v0.7.3-alpha.1）。
+  const TAGS_BEFORE_BRIDGE = ['v0.7.0-alpha.8', 'v0.7.0-rc.1', 'v0.7.1-rc.1', 'v0.7.2-rc.1', 'v0.7.3-alpha.1'];
+  // 语料 B = 两条桥接版发布**之后**（rc 线 v0.7.3-rc.1、alpha 线 v0.7.4-alpha.1）。
+  const TAGS_AFTER_BRIDGE = [...TAGS_BEFORE_BRIDGE, 'v0.7.3-rc.1', 'v0.7.4-alpha.1'];
+  const BRIDGE_RC = { version: '0.7.3-rc.1', tag: 'v0.7.3-rc.1', channel: 'rc', target: 'next', upstreamDsh: '0.2.0-rc.2', relaxes: 'allowDowngrades', date: '2026-10-09' };
+  const BRIDGE_ALPHA = { ...BRIDGE_RC, version: '0.7.4-alpha.1', tag: 'v0.7.4-alpha.1', channel: 'alpha', target: 'alpha', upstreamDsh: '0.2.1-alpha.1' };
+
+  // 🔴 可伪证夹具：**这就是本轮的真实阻塞**。合成号排序低于线上的 0.7.x，
+  //    桥接版未登记时判据必须报红——否则「先发 bridge 再发合成号」只是文档里的倡议。
+  eq(
+    '单调性（换代）：合成号在无桥接版时必须报红',
+    diagnoseVersionMonotonic({ version: '0.2.1-alpha.1.1', tags: TAGS_AFTER_BRIDGE, bridges: [] }).problems.length > 0,
+    true,
+  );
+  eq(
+    '单调性（换代）：报红理由必须点名桥接版豁免未生效（不是笼统的「太低」）',
+    diagnoseVersionMonotonic({ version: '0.2.1-alpha.1.1', tags: TAGS_AFTER_BRIDGE, bridges: [] }).problems.some((p) =>
+      p.includes('桥接版豁免未生效'),
+    ),
+    true,
+  );
+  eq(
+    '单调性（换代）：报红必须给出两条改法（发 bridge / 提高版本位）',
+    diagnoseVersionMonotonic({ version: '0.2.1-alpha.1.1', tags: TAGS_AFTER_BRIDGE, bridges: [] }).problems.some(
+      (p) => p.includes('allowDowngrades') && p.includes('v0.7.1-rc.1'),
+    ),
+    true,
+  );
+  // 🔴 可伪证夹具：**发了一半**——台账已登记桥接版、tag 还没打，此时必须仍然报红。
+  //    少了这条，「登记即豁免」会让整条换代链在客户端收不到的状态下静默空转。
+  eq(
+    '单调性（换代）：桥接版只登记未发布 ⇒ 仍必须报红（发了一半）',
+    diagnoseVersionMonotonic({ version: '0.2.1-alpha.1.1', tags: TAGS_BEFORE_BRIDGE, bridges: [BRIDGE_ALPHA] }).problems.length > 0,
+    true,
+  );
+
+  // 桥接版**已发布**后：两条线各自的合成号都必须放行，**且留下可读依据**。
+  const alphaVerdict = diagnoseVersionMonotonic({ version: '0.2.1-alpha.1.1', tags: TAGS_AFTER_BRIDGE, bridges: [BRIDGE_ALPHA] });
+  eq('单调性（换代）：桥接版发布后 alpha 合成号放行', alphaVerdict.problems.length, 0);
+  eq('单调性（换代）：放行必须留 note（禁止无声通过）', alphaVerdict.notes.length > 0, true);
+  eq(
+    '单调性（换代）：note 必须写明「该通道最新发出去的号就是桥接版」（可审计）',
+    alphaVerdict.notes.some((n) => n.includes('0.7.4-alpha.1') && n.includes('该通道')),
+    true,
+  );
+  eq(
+    '单调性（换代）：note 必须说明这是长期豁免（不是一次性放行）',
+    alphaVerdict.notes.some((n) => n.includes('长期豁免')),
+    true,
+  );
+  eq(
+    '单调性（换代）：rc 线同理',
+    diagnoseVersionMonotonic({ version: '0.2.0-rc.2.1', tags: TAGS_AFTER_BRIDGE, bridges: [BRIDGE_RC] }).problems.length,
+    0,
+  );
+  // 🔴 可伪证夹具：**别的通道**的桥接版不得豁免本通道（各通道有自己的更新端点）。
+  eq(
+    '单调性（换代）：只有 alpha 桥接版时 rc 合成号仍必须报红',
+    diagnoseVersionMonotonic({ version: '0.2.0-rc.2.1', tags: TAGS_AFTER_BRIDGE, bridges: [BRIDGE_ALPHA] }).problems.length > 0,
+    true,
+  );
+  // 🔴 可伪证夹具：本通道出现了比桥接版更高的号之后，豁免必须失效（那个更高版本没放宽比较器）。
+  eq(
+    '单调性（换代）：本通道出现高于桥接版的号之后豁免失效',
+    diagnoseVersionMonotonic({ version: '0.2.0-rc.2.1', tags: [...TAGS_AFTER_BRIDGE, 'v0.7.9-rc.1'], bridges: [BRIDGE_RC] }).problems.length > 0,
+    true,
+  );
+  // 非换代场景：豁免**不得**变成绕过守卫的后门（比线上高的号本来就不需要豁免）。
+  eq(
+    '单调性：高于最高 tag 时无问题也无 note（豁免不参与）',
+    JSON.stringify(diagnoseVersionMonotonic({ version: '0.8.0-rc.1', tags: TAGS_AFTER_BRIDGE, bridges: [BRIDGE_RC] })),
+    JSON.stringify({ highest: '0.7.4-alpha.1', problems: [], notes: [] }),
+  );
+  eq(
+    '单调性：与全局最高相等时无问题（发布时自身 tag 已在检出里）',
+    diagnoseVersionMonotonic({ version: '0.7.4-alpha.1', tags: TAGS_AFTER_BRIDGE, bridges: [] }).problems.length,
+    0,
+  );
+  // 🔴 两条桥接版**自己**的发布必须能过这道门（否则「先发 bridge」的第一步就走不动）。
+  eq(
+    '单调性（桥接版自身）：rc 桥接版 0.7.3-rc.1 越过当时的最高 tag 0.7.3-alpha.1',
+    diagnoseVersionMonotonic({ version: '0.7.3-rc.1', tags: TAGS_BEFORE_BRIDGE, bridges: [] }).problems.length,
+    0,
+  );
+  eq(
+    '单调性（桥接版自身）：alpha 桥接版 0.7.4-alpha.1 越过 0.7.3-alpha.1',
+    diagnoseVersionMonotonic({ version: '0.7.4-alpha.1', tags: TAGS_BEFORE_BRIDGE, bridges: [] }).problems.length,
+    0,
+  );
+  // ⚠️ 如实记录一处**刻意的不对称**：`checkVersionMonotonic` 的比较基准是**全局**最高 tag
+  //    （历史守卫，宁可过严），而桥接版豁免的基准是**本通道**最高 tag（否则豁免永不成立）。
+  //    下面这条把这个不对称钉在夹具里——将来谁想「统一成按通道」，必须显式改这条断言。
+  eq(
+    '不对称：本通道最高号（0.7.3-rc.1）低于全局最高（0.7.4-alpha.1）时，全局判据仍会报红',
+    diagnoseVersionMonotonic({ version: '0.7.3-rc.1', tags: TAGS_AFTER_BRIDGE, bridges: [] }).problems.length > 0,
+    true,
+  );
+  eq(
+    '不对称：同一版本在登记并发布本通道桥接版后获豁免（这正是换代期的实际形态）',
+    diagnoseVersionMonotonic({ version: '0.7.3-rc.1', tags: TAGS_AFTER_BRIDGE, bridges: [BRIDGE_RC] }).problems.length,
+    0,
+  );
+  // ⚠️ 反向：豁免**不得**让「未知后缀」蒙混过关（通道不可判定 ⇒ 不豁免 ⇒ 报红）。
+  {
+    const unknown = diagnoseVersionMonotonic({ version: '0.0.1-beta.1', tags: TAGS_AFTER_BRIDGE, bridges: [BRIDGE_RC] });
+    eq('单调性：通道不可判定时豁免不成立', unknown.problems.length > 0, true);
+    eq(
+      '单调性：理由必须写明「无法判定通道」而不是含糊的桥接版缺失',
+      unknown.problems.some((p) => p.includes('无法从版本号')),
+      true,
+    );
+  }
+  eq(
+    '兼容：checkVersionMonotonic 仍只返回 problems（旧调用点行为不变）',
+    Array.isArray(checkVersionMonotonic({ version: '0.7.0-alpha.8', tags: ['v0.7.0-rc.1'] })),
+    true,
+  );
 
   // 合成号解释（show --explain）：上游身份**只认台账键**。
   const ledgerFixture = {

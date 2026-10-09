@@ -35,9 +35,19 @@
     "## ⚠️ 不要回填历史 tag",
     "合成号机制（ADR-061）之前的 v0.7.3-alpha.1 这类版本号里**没有本仓序号**，",
     "而其形状与合成号**同构**（见 release-ledger.mjs 模块文档）⇒ 回填会把两种语义",
-    "混进同一字段且此后无法区分。台账只记往后的发布。builds 为空即真实状态。"
+    "混进同一字段且此后无法区分。台账只记往后的发布。builds 为空即真实状态。",
+    "",
+    "## bridges[] —— 桥接版（ADR-063）",
+    "合成号跟随上游（0.2.x），排序上**低于**历史旧模型的 0.7.x ⇒ 已安装客户端按 updater",
+    "默认判据（release > current）收不到它。处置是先发一个**更高**的桥接版，它内置",
+    "plugins.updater.allowDowngrades = true（比较器放宽为「必须不同」），此后的合成号才送达。",
+    "字段：version / tag / channel（桌面通道）/ target / upstreamDsh（内置的上游精确版本）",
+    "      / relaxes（放宽手段，当前只有 allowDowngrades）/ date / why。",
+    "⚠️ 它**不承担排序**，只回答两件事：① 构建期要不要写 allowDowngrades；",
+    "   ② 单调守卫与更新端点守卫要不要豁免排序要求（同通道且 bridge.version ≥ 该通道最高 tag）。",
+    "登记走 `node scripts/release-ledger.mjs --add-bridge <版本> --apply`，不要手改（同 2b 纪律）。"
   ],
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "releases": {
     "0.2.0-rc.2": {
       "patchTarget": "next",
@@ -51,5 +61,27 @@
       "status": "active",
       "builds": []
     }
-  }
+  },
+  "bridges": [
+    {
+      "version": "0.7.3-rc.1",
+      "tag": "v0.7.3-rc.1",
+      "channel": "rc",
+      "target": "next",
+      "upstreamDsh": "0.2.0-rc.2",
+      "relaxes": "allowDowngrades",
+      "date": "2026-10-09",
+      "why": "合成号（ADR-061）跟随上游 0.2.0-rc.2，排序上低于旧模型的 0.7.x ⇒ 已安装客户端按默认判据（release > current）收不到它。本版内置 allowDowngrades（比较器放宽为「必须不同」）作为换代桥接。"
+    },
+    {
+      "version": "0.7.4-alpha.1",
+      "tag": "v0.7.4-alpha.1",
+      "channel": "alpha",
+      "target": "alpha",
+      "upstreamDsh": "0.2.1-alpha.1",
+      "relaxes": "allowDowngrades",
+      "date": "2026-10-09",
+      "why": "合成号（ADR-061）跟随上游 0.2.1-alpha.1，排序上低于旧模型的 0.7.x ⇒ 已安装客户端按默认判据（release > current）收不到它。本版内置 allowDowngrades（比较器放宽为「必须不同」）作为换代桥接。"
+    }
+  ]
 }
