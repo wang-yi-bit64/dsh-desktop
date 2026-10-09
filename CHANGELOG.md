@@ -7,6 +7,18 @@
 
 <!-- changelog-entries -->
 
+## [0.2.0-rc.2.1] - 2026-10-09
+
+### 🐛 修复
+
+- **release**: 前门时点判据只作用于目标行——next 线 --apply 首跑被 alpha 历史行误判红 ([8fa84f2](https://github.com/wang-yi-bit64/dsh-desktop/commit/8fa84f2c08d504e7a20af72fff759c17907f2598))
+- **release**: 前门步骤⑧补传 --target/--dsh-target——--apply 首次端到端即失败 ([d5a5865](https://github.com/wang-yi-bit64/dsh-desktop/commit/d5a58659c9818c6f1f734ebb19f3f52ad3499611))
+
+### 🧹 其他
+
+- **release**: 0.2.1-alpha.1.1 ([7e452d4](https://github.com/wang-yi-bit64/dsh-desktop/commit/7e452d4fec17dea9f3bda28020ea52ce1a30ea0b))
+- **release**: 0.7.4-alpha.1 ([c2296a0](https://github.com/wang-yi-bit64/dsh-desktop/commit/c2296a0b18262e8db0d42f41dd719adca0c99399))
+
 ## [0.2.1-alpha.1.1] - 2026-10-09
 
 ### ✨ 新功能
