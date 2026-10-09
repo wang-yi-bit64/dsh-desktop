@@ -5,7 +5,7 @@
 | 状态 | 已接受 |
 | 日期 | 2026-09-30 |
 | 唯一产地 | `.github/workflows/` 目录内容——pullfrog.yml 缺席即停用；在役 AI 评审的唯一一份是 `.github/workflows/pr-agent.yml`（其文件头注释） |
-| 修订 | ~~ADR-054 决策 2（pullfrog.yml 保留在 workflows/ 一并接上）~~（本 ADR 修订之：pullfrog.yml 于同日删除，AI 评审只保留 pr-agent.yml） |
+| 修订 | ~~ADR-054 决策 2（pullfrog.yml 保留在 workflows/ 一并接上）~~（本 ADR 修订之：pullfrog.yml 于同日删除，AI 评审只保留 pr-agent.yml）<br>本 ADR **决策 1 的恢复路径**已于 2026-10-09 由 [ADR-062](062-pullfrog-removal-irreversible.md) **关闭**——该文件不得以任何形式复活 |
 | 关联 | ADR-054（AI 评审工作流准入）；ADR-005（准入纪律）；docs/dev-plan-defect-remediation.md S0-3 / S3-4；SECURITY.md「CI 密钥暴露面」表 |
 
 ## 背景
@@ -22,7 +22,7 @@ pullfrog 的实况：厂商模板原样入库，仅 `workflow_dispatch` 手动�
 
 ## 决策
 
-1. **删除 `.github/workflows/pullfrog.yml`**。停用的判据以本 ADR 为唯一产地；恢复 = 从 git 历史（commit `574f61e`）取回文件并重新过 ADR-054 的准入（钉 SHA + 文件头注释），不是「取消禁用」某个开关。
+1. **删除 `.github/workflows/pullfrog.yml`**。停用的判据以本 ADR 为唯一产地；它不是「取消禁用」某个开关。<br>~~恢复 = 从 git 历史（commit `574f61e`）取回文件并重新过 ADR-054 的准入（钉 SHA + 文件头注释）~~ —— **该恢复路径已由 [ADR-062](062-pullfrog-removal-irreversible.md) 关闭**（2026-10-09）：禁令写死在 `scripts/verify-github-config.mjs` 的 `RETIRED_WORKFLOWS`，文件重现即让 `verify:github-config` 报红。**实测背景**：本 ADR 生效后该文件确实被恢复过一次（commit `d286f44`），而当时没有任何检查报红——散文形态的禁令没有执行者。
 2. **AI 评审只保留 pr-agent.yml**。它按 ADR-054 决策 1 / 3 / 4 / 5 已在 `.github/workflows/` 下接线（`pull_request` 三类型 + PR 内 OWNER/MEMBER/COLLABORATOR 评论），**本次零改动即处于启用状态**——「启用」是被验证的事实（actionlint 通过、守卫全绿），不是又一处待接线的宣称。
 3. **不引入任何仓库内「停用开关」**：没有删除文件却保留某种禁用标记的中间态。停用与启用的唯一判据是 `.github/workflows/` 里有没有这个文件。
 4. **secrets 处置分离**：pullfrog 模板声明的 13 个模型 key（`ANTHROPIC_API_KEY` 等）在仓库内从此没有消费方，SECURITY.md 的暴露面表随之删除该行。仓库设置里这些 secret 的删除是 GitHub 侧手工操作——本仓不持有、也不代理任何 GitHub 凭据，agent 不代做；删除它们不影响任何工作流（无引用即无消费）。
@@ -32,7 +32,7 @@ pullfrog 的实况：厂商模板原样入库，仅 `workflow_dispatch` 手动�
 - **保留文件、注释掉 `on:` 或加永假 `if:`**：否决。GitHub 不加载没有 `on:` 的工作流，但文件还在、下一个人还要解释它；「停用」状态只存在于某台机器的一次编辑里，不可检索、不可复现，正是 ADR-005 要消灭的形态。
 - **只依赖 GitHub UI 的 Disable workflow**：否决。服务器端开关不在仓库里（见背景第 2 条）；且 pullfrog 仅有手动触发面，禁用它省不下任何自动运行成本，收益为零而代价是裁决失所。
 - **两份都停用**：否决。pr-agent 提供每次 PR 的自动描述与评审（`auto_describe` / `auto_review` 已开），是 ADR-054 决策 1 接线后真正在用的能力；停用它属于把已兑现的能力退回死配置。
-- **改 pr-agent 的触发面来「补偿」pullfrog 的按需能力**：否决。两者形态不同（PR 自动评审 vs 手动 agent 任务），用 PR 触发器模仿按需 agent 只会得到畸形配置；需要按需 agent 时按决策 1 恢复 pullfrog 或另立 ADR。
+- **改 pr-agent 的触发面来「补偿」pullfrog 的按需能力**：否决。两者形态不同（PR 自动评审 vs 手动 agent 任务），用 PR 触发器模仿按需 agent 只会得到畸形配置；需要按需 agent 时**另立新工作流**（新文件名 + 新 ADR）——本 ADR 决策 1 的「取回旧文件」恢复路径已由 [ADR-062](062-pullfrog-removal-irreversible.md) 关闭。
 
 ## 后果
 

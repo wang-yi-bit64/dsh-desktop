@@ -2,7 +2,7 @@
 /**
  * verify-github-config.mjs — .github/ 下的配置准入守卫（ADR-054）
  *
- * ## 它守什么（四条规则，各自都能静默失效）
+ * ## 它守什么（五条规则，各自都能静默失效）
  *
  * A. **工作流必须住在 .github/workflows/ 下**。GitHub Actions 只从该目录加载文件；
  *    放在别处的工作流是「看得见、从不运行」的死配置——YAML 合法、编辑器有高亮、
@@ -36,6 +36,15 @@
  *      D4. 模式不能含 `!` 取反 / `[ ]` 字符范围——这两条是 gitignore 语法，
  *          在 CODEOWNERS 里**不生效**（GitHub 文档明列）。写了等于没写。
  *
+ * E. **已退役的工作流不得复活**（ADR-062，2026-10-09 新增）。
+ *    `.github/workflows/pullfrog.yml` 按 ADR-058 删除过一次，随后**被恢复过一次**
+ *    （commit `d286f44`）。这就是「把禁令写在散文里」的实测结果：散文没有执行者，
+ *    下一个人（或下一个 agent）读到的只是一段说明，而恢复文件不需要通过任何检查。
+ *    因此本条把禁令**写死成机器可判据**（`RETIRED_WORKFLOWS` 表）：文件重新出现即报红。
+ *    它还额外守一条**空集判据**——**禁令表被清空同样报红**：清空这张表等于删掉禁令，
+ *    而那种删除与「文件复活」一样静默（AGENTS.md §7.3：扫出 0 个不得冒充通过）。
+ *    正当出路是**另立新工作流**（新文件名 + 新 ADR 过准入），不是复活旧文件。
+ *
  * ## 为什么 B 有一张基线表
  * `PRE_EXISTING_FLOATING` 是**预先存在**的浮动 ref，属 docs/dev-plan-defect-remediation.md
  * 的 S3-3，尚未执行。本守卫对**新增**浮动 ref 一律报错（防回归），并在基线非空时打印
@@ -46,6 +55,8 @@
  * 喂进去必须报红。这些夹具用的就是本仓自己踩过的写法，不是构造出来的玩具。
  * D 的夹具同样是**本文件初版真实写错的两处**（`*` 放末尾、`/docs/` 写在
  * `/docs/adr/` 之后），不是假想形态。
+ * E 的夹具同样是真实形态：`pullfrog.yml` 确实**复活过一次**（`d286f44`），
+ * 因此「文件重新出现 ⇒ 报红」这条断言不是假想分支。
  */
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -368,6 +379,77 @@ export function checkFiles(files, allowedFloating = PRE_EXISTING_FLOATING) {
   return { problems, workflowShaped, useRefs, misplaced, scalarKeys }
 }
 
+/**
+ * 退役工作流禁令表（规则 E 的唯一产地，ADR-062）。
+ *
+ * ⚠️ 这张表是**写死的**，不是从别处推导来的：「哪些工作流被永久移除」无法由仓库当前
+ * 状态推出（文件不在，就什么线索都没有），只能显式登记。加条目必须同时：
+ *   · 在对应 ADR 里写明**为什么不可恢复**（不是「暂时停用」）；
+ *   · 确认它在仓库里已无任何消费方（否则删除会让别的门禁/工作流失效）。
+ *
+ * ⚠️ **本表不得清空**：清空 == 删掉禁令。判据见 {@link checkRetiredWorkflows}。
+ *
+ * @type {{ file: string, adr: string, retired: string, irreversible: string, why: string }[]}
+ */
+export const RETIRED_WORKFLOWS = [
+  {
+    file: '.github/workflows/pullfrog.yml',
+    adr: 'ADR-062',
+    retired: '2026-09-30',
+    irreversible: '2026-10-09',
+    why:
+      '厂商模板原样入库、仅 workflow_dispatch 触发，在仓库内零消费方，' +
+      '并在 SECURITY.md 里挂着 13 个 provider key 的暴露面。ADR-058 已裁定停用，' +
+      '但它把「从 git 历史取回文件」写成了正当的恢复路径 ⇒ 该文件被恢复过一次' +
+      '（commit d286f44）。ADR-062 关闭该路径：禁令写死在本表，文件重现即报红。',
+  },
+]
+
+/**
+ * 规则 E：已退役的工作流不得复活（ADR-062）。
+ *
+ * ## 为什么是「文件存在性」而不是「文件内容」
+ *
+ * 判据只问一件事：**这个路径在不在**。不做内容扫描是有意的——本仓已两次踩过
+ * 「『不得出现』类判据被自己的文档命中」的坑（本文件的 E 段注释里就逐字写着
+ * `pullfrog.yml`）。存在性判据没有这个失效模式。
+ *
+ * ## 空集判据（AGENTS.md §7.3）
+ *
+ * `retired` 为空时**不得判通过**：空表意味着「禁令被删掉了」，而删掉禁令与复活文件
+ * 一样静默。这与本文件其它「扫出 0 个必须报红」的断言同形。
+ *
+ * @param {string[]} presentFiles 当前仓库里实际存在的文件（相对仓库根，任意分隔符）。
+ * @param {typeof RETIRED_WORKFLOWS} [retired] 禁令表；默认 {@link RETIRED_WORKFLOWS}。
+ * @returns {{ problems: string[], checked: number, revived: number }}
+ */
+export function checkRetiredWorkflows(presentFiles, retired = RETIRED_WORKFLOWS) {
+  const problems = []
+  if (!Array.isArray(retired) || retired.length === 0) {
+    problems.push(
+      '退役工作流禁令表是空的。这不是「没有退役项」，是**禁令被删掉了**——' +
+        '空表与「文件复活」一样静默（AGENTS.md §7.3：扫出 0 个不得冒充通过）。' +
+        '若确实不再需要任何禁令，请连同 ADR-062 与 ADR-058 的修订行一起显式处置。',
+    )
+    return { problems, checked: 0, revived: 0 }
+  }
+  const present = new Set(presentFiles.map((p) => String(p).split(sep).join('/')))
+  let revived = 0
+  for (const item of retired) {
+    if (!present.has(item.file)) continue
+    revived += 1
+    problems.push(
+      `${item.file} 又出现了——该文件已于 ${item.retired} 被永久移除（${item.adr}，` +
+        `不可恢复声明于 ${item.irreversible}）。原因：${item.why}\n` +
+        '   禁止复活：GitHub 只从 .github/workflows/ 加载工作流，文件存在 == 工作流存在，' +
+        '它会立刻重新出现在可触发列表里，并重新带上那 13 个 provider key 的 secrets 暴露面。\n' +
+        '   正当出路：需要按需 agent 时**另立新工作流**（新文件名 + 新 ADR 过 ADR-054 的准入），' +
+        '不要复活这个文件。若确要推翻本禁令，须先显式改掉 ADR-062 与本表——那是有意的摩擦。',
+    )
+  }
+  return { problems, checked: retired.length, revived }
+}
+
 function main() {
   const files = walk(join(ROOT, '.github')).map((full) => ({
     path: relative(ROOT, full),
@@ -431,17 +513,28 @@ function main() {
     }
   }
 
+  // 规则 E：退役工作流不得复活（ADR-062）。
+  // 判据只看「路径在不在」，不扫内容——见 checkRetiredWorkflows 的注释。
+  const retired = checkRetiredWorkflows(files.map((f) => f.path))
+  console.log(
+    '· 退役工作流禁令：' + retired.checked + ' 项在册 · 复活 ' + retired.revived + ' 项',
+  )
+  problems.push(...retired.problems)
+
   if (problems.length > 0) {
     for (const p of problems) console.error('❌ ' + p)
     return 1
   }
-  console.log('✅ .github 配置准入：工作流都在 workflows/ 下，且没有未钉 SHA 的新增 action')
+  console.log('✅ .github 配置准入：工作流都在 workflows/ 下，没有未钉 SHA 的新增 action，已退役工作流未复活')
   return 0
 }
 
 export function selfTest() {
   let failed = 0
-  const check = (name, cond) => { if (!cond) { console.error('❌ ' + name); failed += 1 } }
+  // 计数器而不是手写的「通过 N 项」：手写的数字会随断言增删悄悄失真，
+  // 而一个失真的数字本身就是错误宣称（本文件此前的 28 就是这么来的）。
+  let passed = 0
+  const check = (name, cond) => { passed += 1; if (!cond) { console.error('❌ ' + name); failed += 1 } }
   const misplacedSample = 'name: PR Agent\non:\n  pull_request:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: qodo-ai/pr-agent@main\n'
   const dependabotSample = 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: "/"\n'
   const pinnedWorkflow = 'on: [push]\njobs:\n  a:\n    steps:\n      - name: checkout\n        uses: actions/checkout@' + 'a'.repeat(40) + '\n'
@@ -616,8 +709,41 @@ export function selfTest() {
       .problems.some((p) => /找不到对应文件或目录/.test(p)),
   )
 
+  // ---------------------------------------------------------------------------
+  // 规则 E：退役工作流不得复活（ADR-062）的可证伪夹具
+  //
+  // 🔴 夹具用的就是真实形态：pullfrog.yml **确实复活过一次**（commit `d286f44`），
+  //    而当时没有任何检查报红——因为禁令只写在散文里。
+  // ---------------------------------------------------------------------------
+  check(
+    'E 好夹具：禁令表非空 + 文件缺席必须通过',
+    checkRetiredWorkflows([join('.github', 'workflows', 'ci.yml'), join('.github', 'CODEOWNERS')]).problems.length === 0,
+  )
+  const eRevived = checkRetiredWorkflows([join('.github', 'workflows', 'pullfrog.yml')])
+  check(
+    'E 可伪证：退役文件重新出现必须报红',
+    eRevived.problems.some((p) => /又出现了/.test(p)),
+  )
+  check('E 报红时必须点名 ADR 与不可恢复日期', eRevived.problems.some((p) => /ADR-062/.test(p) && /2026-10-09/.test(p)))
+  check(
+    'E 报红时必须给出正当出路（另立新工作流），而不是只说「不许」',
+    eRevived.problems.some((p) => /另立新工作流/.test(p)),
+  )
+  check('E 反向：其他工作流在役不得误报', checkRetiredWorkflows([join('.github', 'workflows', 'release.yml')]).problems.length === 0)
+  // 🔴 空集判据：清空禁令表 == 删掉禁令，必须报红而不是「没有退役项 ⇒ 通过」。
+  const eEmpty = checkRetiredWorkflows([], [])
+  check(
+    'E 可伪证：禁令表被清空必须报红（清空即删掉禁令）',
+    eEmpty.problems.some((p) => /禁令表是空的/.test(p)),
+  )
+  // 分隔符归一：Windows 的 `\\` 与 posix 的 `/` 必须判等（本机是 Windows）。
+  check(
+    'E 分隔符归一：反斜杠路径也必须命中',
+    checkRetiredWorkflows(['.github\\workflows\\pullfrog.yml']).problems.length > 0,
+  )
+
   if (failed > 0) { console.error('verify-github-config self-test 失败 ' + failed + ' 项'); return 1 }
-  console.log('✅ verify-github-config 自检通过（28 项）')
+  console.log('✅ verify-github-config 自检通过（' + passed + ' 项）')
   return 0
 }
 
