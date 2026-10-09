@@ -405,6 +405,14 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'cargo-lock-scope',
+    script: 'scripts/verify-cargo-lock-scope.mjs',
+    title: '根 lock 在位 + workspace 成员不得带独立 Cargo.lock（防幽灵 Dependabot 告警）',
+    why: '守 2026-10-09 告警 #7（rustls GHSA-2mjx-qc3c-rqvc，medium）：告警报在 `src-tauri/Cargo.lock` 上，而那个文件是 2026-09-04 初版单 crate 布局的遗留（`2d91067` 之后一次未动）——`src-tauri` 早已是根 workspace 成员，cargo 只用根 `Cargo.lock`，既不读它也不重建它（实测：移走后 cargo 不报错、不补生成）。危害不是「多一个文件」而是**三处声明面互相打架且没有一处会报错**：`dependabot.yml` 的 cargo 段写 `directory: "/"` 且注释明说「指向 workspace 根（Cargo.lock 所在处）」、`CODEOWNERS` 只认 `/Cargo.lock`，而 GitHub 依赖图**两个 lock 都收**（SBOM 实测：孤儿特有的 hyper-rustls/tokio-rustls/rustls-platform-verifier 与根 lock 特有的 hyper-tls/tokio-native-tls/schannel 并存）⇒ 一条构建产物里根本不存在的依赖拿到 medium 告警，并且已经把一次人工分析的结论带偏成「rustls 在本仓自己的 Cargo 依赖链里（Tauri 侧）」——实为 native-tls/schannel。成对判据：根 lock **必须存在**、成员 lock **必须不存在**；只满足一条即为坏，否则「消灭告警」的最省事写法会变成把真 lock 也删掉，等于把整个 rust 扫描面移出仓库。空成员集判红（空集不得冒充通过）；成员条目含通配符时能展开就展开、展不开判红。',
+    real: { tiers: ['fast', 'ci', 'release'], args: [] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'remove-tree',
     script: 'scripts/remove-tree.mjs',
     title: '临时目录清理不得否决主结论',

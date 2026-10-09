@@ -493,8 +493,28 @@ npm run smoke:headless
 | 3 | **上游公开发布官方桌面版**（`apps/desktop` 目前 `private: true`） | `@deepseek-ai/dsh-desktop` 在 npm 上可取；或上游出现 desktop 命名的 Release | `npm view @deepseek-ai/dsh-desktop version`<br>`gh api repos/deepseek-ai/deepseek-harness/contents/apps/desktop/package.json`（看 `private`）<br>`gh api "repos/deepseek-ai/deepseek-harness/releases?per_page=100" --jq '[.[]\|select(.tag_name\|test("desktop"))]\|length'` | **2026-10-09**：❌ 未发布——`@deepseek-ai/dsh-desktop@0.2.1-alpha.1` 且 **`private: true`**；desktop 命名 Release 数 = **0**（`apps/` 下已有 `cli` / `desktop-host` / `desktop` / `web`） | 立刻复核 §0.1 的**约束一**（`desktop` 是保留 profile 名，含大小写变体）与**约束二**（官方桌面版采用更深的宿主协议，不要逼近它）是否被违反 → 违反则改本仓命名 / 协议姿态 → **由维护者发布一版**（`n+1`，`w` 标该批次） |
 | 4 | **上游依赖树里的已知漏洞被上游修掉**（Dependabot：`@modelcontextprotocol/client` ×2 **high**、`http-cache-semantics` **high**——三条都在 `harness-locks/**` 里，由上游传递依赖引入）。**2026-10-09 维护者裁决：跟随上游，不自行 pin** | 这 3 条告警从 open 集合里消失（变 `fixed`），**或**上游锚点推进到含修复版的树上 | `gh api -H "Accept: application/vnd.github+json" "repos/wang-yi-bit64/dsh-desktop/dependabot/alerts?state=open&per_page=20" --jq '.[] \| "\(.number) \| \(.security_advisory.severity) \| \(.dependency.package.name) \| fixed=\(.security_vulnerability.first_patched_version.identifier // "none")"'` | **2026-10-09**：❌ 未到位——`#9`/`#8` `@modelcontextprotocol/client`（`harness-locks/{next,alpha}/package-lock.json`，**fixed=2.2.0**）、`#5` `http-cache-semantics`（`harness-locks/next/…`，**fixed=none** ⇒ 此刻上游也修不了） | 随**上游锚点推进**自然消失（`sync-upstream-release` 会重新生成 `harness-locks/**` 的 lockfile）→ 复跑 `npm run gate -- drift` + `harness-lockfile`（lockfile 与 `inputs.json` 必须成对提交）→ **由维护者发布一版** |
 
-> ⚠️ **同批告警里有一条不属于本节（不在「等上游」范围）**：`rustls`（**medium**，`src-tauri/Cargo.lock`，
-> **fixed=0.23.45**）在**本仓自己的** Cargo 依赖链里（Tauri 侧），与上游 DSH 无关。
-> 按 2026-10-09 维护者裁决**一并搁置**；若要立刻处理，修法是
-> `cargo update -p rustls --precise 0.23.45`（会改 `Cargo.lock`，属发布提交的一部分 ⇒
-> 必须与锚点/补丁同批走 §5 九步，不得单独提交）。**这是独立的一次判断**，别混进第 4 条。
+> ⚠️ **同批告警里有一条不属于本节（不在「等上游」范围）**：`rustls`（**medium**，
+> 清单路径 `src-tauri/Cargo.lock`，**fixed=0.23.45**）。**2026-10-09 复核已订正本条此前的结论**——
+> 原文写作「在**本仓自己的** Cargo 依赖链里（Tauri 侧）」，并给出修法
+> `cargo update -p rustls --precise 0.23.45`。**两句都不成立，实测证据如下**：
+>
+> | 原结论 | 实测 | 命令 |
+> |---|---|---|
+> | rustls 在本仓 Cargo 依赖链里 | ❌ 根 `Cargo.lock` **不含 `rustls`**（只有 `rustls-pki-types`，那是纯类型 crate）。updater 显式 `default-features = false, features = ["native-tls", …]` ⇒ Windows 走 schannel；`cargo tree -i rustls` 在 **4 个目标平台全部** 报 `did not match any packages` | `cargo tree --manifest-path src-tauri/Cargo.toml -i rustls` |
+> | 修法是 `cargo update -p rustls --precise 0.23.45` | ❌ 该命令直接报错 | `cargo update -p rustls --precise 0.23.45` → `package ID specification 'rustls' did not match any packages` |
+>
+> **根因**：这条告警落在**孤儿 lock** 上。`src-tauri` 是根 Cargo workspace 的成员
+> （`cargo metadata` 的 `workspace_root` 即仓库根），**cargo 只用根 `Cargo.lock`**；
+> `src-tauri/Cargo.lock` 提交于 2026-09-04 的初版单 crate 布局（`2d91067`），此后
+> **一次未动**（根 lock 已有 29 次提交），cargo 既不读它、删掉后也不重建它。
+> 而 GitHub 依赖图**两个 lock 都收**（SBOM 实测：孤儿特有的
+> `hyper-rustls`/`tokio-rustls`/`rustls-platform-verifier` 与根 lock 特有的
+> `hyper-tls`/`tokio-native-tls`/`schannel` 并存）⇒ 一条**构建产物里根本不存在的依赖**
+> 拿到了告警，并把上面那次人工分析带偏。
+>
+> **处置（2026-10-09，已完成）**：`git rm src-tauri/Cargo.lock`。收益不止消掉这一条——
+> 它同时消掉了那份 lock 里全部 538 个陈旧包的幽灵告警面。**影响范围：无**——
+> 构建产物零 `rustls` 代码，`cargo tree` 解析结果与删除前逐字一致（根 lock 的
+> sha256 未变）。防复发守卫：`npm run gate -- cargo-lock-scope`（fast/ci/release，
+> 判据是「根 lock 必须在位 **且** 成员目录下不得有独立 lock」这一**成对**条件）。
+> **这是独立的一次判断**，别混进第 4 条。

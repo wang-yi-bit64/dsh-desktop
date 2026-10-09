@@ -32,9 +32,12 @@
 > 📖 **完整命令速查表见 `docs/commands.md`**——原 §2 内容原样迁入。
 >
 > ⚠️ **2026-10-03 起命令面收敛（治理 G1/G2，见 §7.3 与 `docs/dev-plan-defect-remediation.md` §11 的 S4-5）**：
-> 门禁清单的**唯一产地是 `scripts/gate-manifest.mjs`**（33 条，含分档与逐条理由），package.json 只留
+> 门禁清单的**唯一产地是 `scripts/gate-manifest.mjs`**（含分档与逐条理由），package.json 只留
 > 22 条**人用入口**（此前 62 条里 41 条是门禁各自的入口）。跑门禁用 `npm run gate -- <name>`，
 > **旧名 `npm run verify:<name>` 经 `npm run gate -- verify:<name>` 仍然可用**（兼容层；历史文书不改）。
+> 条目数与各档步数**刻意不在此写死**——它们随增删漂，而这一格没有任何守卫（同口径见
+> `docs/commands.md` 头部）。实时值：`npm run gate -- --list`；`npm run gate -- gates` 会打印汇总行。
+> （历史：2026-10-03 落地时 33 条，2026-10-09 已增至 42 条——原句写死的「33 条」就是这么漂掉的。）
 >
 > 高频：`npm run dev`、`npm run build`、`cargo test -p dsh-contracts -p dsh-host -p dsh-host-cli`（无头门禁，INV-6）、`npm run gate -- claims` / `npm run gate -- plan-facts`、`npm run verify:fast`。
 
