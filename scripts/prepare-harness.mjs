@@ -78,6 +78,16 @@ import {
   referencedPackageNames
 } from './harness-lockfile.mjs'
 
+// MANIFEST 的 **v3 字段块**合成器（纯逻辑，带独立自测）。
+// 为什么单独成模块：本脚本**在模块顶层就跑整趟组装**（npm ci → patch-package → 拷
+// `resources/`），而这条路径在本机跑不起来（`koffi` 需要 CMake、原生 Rust 无法写盘）
+// ⇒ 把合成逻辑留在这里，「形状自测」就只能靠一次真实组装触发 = 等于没有守卫。
+// 见 `manifest-v3.mjs` 的模块文档。
+import { RELEASE_TAG_ENV, composeReleaseManifestV3 } from './manifest-v3.mjs'
+
+// 上游**精确**版本 → `patchTarget` + 本仓序号 `n` 的唯一产地（计划 2b/2e）。
+import { readLedger } from './release-ledger.mjs'
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const buildDir = join(projectRoot, 'build')
 const vendorDir = join(projectRoot, 'vendor')
@@ -557,12 +567,89 @@ function stagingInputsMatch() {
 // 此前这里写的是 `patchesApplied: <patches/ 下的文件数>`——那是「存在多少个
 // 补丁文件」，不是「应用成功多少个」，名字与语义不符，会掩盖「补丁全部没打上」
 // 这类事故。现在两者分开记录，且不再使用误导性的 `patchesApplied` 字段。
+//
+// **v3（计划 2g）**：另加 `releaseSchemaVersion: 3` 与六个身份块
+// （`upstreamDsh` / `desktopVersion` / `release` / `desktop` / `runtime` /
+// `changelogPointers`），让这份文件能同时回答「绑的是哪个上游**精确**版本」与
+// 「本次桌面构建相对上一版改了什么」。合成逻辑在 `manifest-v3.mjs`（纯函数 + 自测）。
+const changelogPath = join(projectRoot, 'CHANGELOG.md')
+
+/**
+ * 补丁集摘要：`patches/<target>/*.patch` 的**文件名 + 内容**摘要（与顺序无关）。
+ *
+ * 「打的是哪套补丁」是诊断时的第一手线索（计划 §17 的 `patchSetHash`）。取内容而不
+ * 只取文件名：改一个补丁的行号而文件名不变时，摘要必须跟着变。
+ *
+ * @param {string} directory 目标补丁目录。
+ * @returns {string|null} `sha256:<hex>`；目录里没有 `.patch` 时返回 `null`
+ *   （**如实缺失**，不返回空串或一个「空集摘要」——后者会让「没有补丁」与
+ *   「有补丁但没算」看起来一模一样）。
+ */
+function patchSetHashFor(directory) {
+  const files = readdirSafe(directory).filter((name) => name.endsWith('.patch')).sort()
+  if (files.length === 0) return null
+  const entries = files.map((name) => `${name}:${sha256(readFileSync(join(directory, name)))}`)
+  return `sha256:${sha256(entries.join('\n'))}`
+}
+
+/** 本仓 HEAD（`git rev-parse HEAD`）。取不到返回 `null`——不猜一个 SHA。 */
+function shellCommitOrNull() {
+  try {
+    // ⚠️ `stdio: ['ignore', …]`：Windows 上默认的 `stdin: 'pipe'` 会让 spawn 直接失败
+    //    （`EBUSY`），而 `git rev-parse` 本来也不读 stdin ⇒ 语义等价。
+    return (
+      execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe']
+      }).trim() || null
+    )
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 合成 MANIFEST 的 v3 字段块（计划 §4.6 的 2g 字段清单）。
+ *
+ * 两种返回语义的分工（`manifest-v3.mjs` 的契约）：
+ *   · `problems` 非空 ⇒ **抛错**。矛盾意味着产物会说谎（例如 `release.yml` 传进来的
+ *     tag 与 `package.json` 的版本号不符），此时写出 MANIFEST 比不写更糟；
+ *   · `unresolvedFields` 非空 ⇒ **照常产出**。缺失不是错误，但必须写进产物
+ *     （`AGENTS.md` §7.1 规则 3：禁止无声降级）。
+ *
+ * @param {string} lockfileHash 组装侧已算出的 lockfile 摘要（**裸 hex**）。
+ * @returns {object} 可直接展开进 MANIFEST 的 v3 字段。
+ * @throws {Error} v3 字段之间自相矛盾时。
+ */
+function releaseManifestFields(lockfileHash) {
+  const { fields, problems } = composeReleaseManifestV3({
+    // `package.json` 是桌面版本的唯一真源（ADR-028 决策 1 在合成号模型下继续有效）。
+    compositeVersion: JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8')).version,
+    ledger: readLedger(projectRoot),
+    changelogText: existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : null,
+    shellCommit: shellCommitOrNull(),
+    releaseTag: process.env[RELEASE_TAG_ENV] ?? null,
+    patchSetHash: patchSetHashFor(patchesDir),
+    // v3 的摘要一律带 `sha256:` 前缀（与 `changelogPointers.upstream.digest` 同一约定）；
+    // v1 的 `lockfileHash` 保持裸 hex 不动（既有读取端与指纹比对都在用它）。
+    runtimeLockHash: `sha256:${lockfileHash}`
+  })
+  if (problems.length > 0) {
+    throw new Error(
+      `MANIFEST v3 字段自相矛盾，拒绝写出（否则产物会对不上它自称的那一版）：\n  - ${problems.join('\n  - ')}`
+    )
+  }
+  return fields
+}
+
 function buildManifest(lockfilePath) {
   const patchFiles = readdirSafe(join(staging, 'patches')).length
+  const lockfileHash = sha256(readFileSync(lockfilePath, 'utf8'))
   return {
     fingerprint,
     generatedAt: new Date().toISOString(),
-    lockfileHash: sha256(readFileSync(lockfilePath, 'utf8')),
+    lockfileHash,
     // `target` 是运行时侧判「这份资源属于哪条通道」的唯一依据；
     // versions.dsh 只是它推导出的版本，两者一起记，避免把目标名读成版本名。
     target: dshTarget,
@@ -578,7 +665,9 @@ function buildManifest(lockfilePath) {
     // CX-17 — primary runtime 载荷状态。**必须如实**：装载了就说 present 并给出
     // 摘要，没装载就写 present:false。§7.1 规则 3：用户/反馈页要能据此判断
     // 「这台机器为什么没有 office skills」，而不是看到一个没有任何痕迹的缺失。
-    primaryRuntime: describePrimaryRuntime()
+    primaryRuntime: describePrimaryRuntime(),
+    // v3 身份块（计划 2g）。放在最后，让上面这些 v1 字段在 diff 里保持位置稳定。
+    ...releaseManifestFields(lockfileHash)
   }
 }
 

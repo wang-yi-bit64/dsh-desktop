@@ -222,7 +222,14 @@ jobs:
       # runner 的默认 shell 是 PowerShell，那次写法把值丢掉（参数退化成
       # `--dsh-target=`），只有 Windows 的 Smoke job 红，macOS/Linux 正常——
       # 三个平台给出相反结论，根因却只是 shell 不同。
+      # 发布 tag 注入 MANIFEST v3 的 `release.tag`（计划 2g）：组装期只有发布链路
+      # 知道 tag，而 `release.tag` 是「这份产物属于哪一次发布」的机器可读落点。
+      # 不设它**不会**失败——v3 会把该字段写成 null 并在 `unresolvedFields[]` 里记下
+      # 原因（禁止伪造：猜一个 tag 会让读诊断包的人指错方向）。tag 与版本号不符
+      # 则是**矛盾**，组装会直接失败（那时写出 MANIFEST 比不写更糟）。
       - name: Prepare harness resources
+        env:
+          DSH_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         run: npm run prepare:harness
 
       # 组装树健全性（与 ci.yml 的 bundle job 同一套规则，发布前再拦一次）。
@@ -454,7 +461,11 @@ jobs:
             exit 1
           fi
 
+      # 同上：便携版 job 也组装一次，`release.tag` 同样要注入——两个 job 的
+      # MANIFEST 必须指认同一次发布，否则「同一个 tag 的两份产物」会对不上。
       - name: Prepare harness resources
+        env:
+          DSH_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         run: npm run prepare:harness
 
       - name: Verify assembled harness tree

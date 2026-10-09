@@ -6,7 +6,7 @@
 >
 > | 层 | 在哪 | 说明 |
 > |----|------|------|
-> | **门禁清单** | `scripts/gate-manifest.mjs` | **唯一产地**：33 条门禁的脚本 / 参数 / 分档 / 「为什么有它」。CI 与 release preflight 都从这里派生，不再手抄 |
+> | **门禁清单** | `scripts/gate-manifest.mjs` | **唯一产地**：门禁的脚本 / 参数 / 分档 / 「为什么有它」。CI 与 release preflight 都从这里派生，不再手抄。⚠️ 条目数**不在这里写死**——它随增删漂，而这一格没有任何守卫；实时条数与分档步数请跑 `npm run gate -- --list`（`npm run gate -- gates` 会打印汇总行） |
 > | **编排器** | `npm run gate`（`scripts/gates.mjs`） | 按分档或按名跑门禁 |
 > | **package.json 入口** | 22 条 | 只留给人用的入口（`dev`/`build`/`gate`/`verify:*`/`version:*`/…）。**门禁不再各占一条 script**——此前 62 条里 41 条是门禁入口 |
 >
@@ -232,6 +232,17 @@ npm run gate -- upstream-release
 #      字段 `channel` 已改名 `upstreamDistTag`（仅用于发现）；桌面通道由版本后缀推
 #      （desktopChannelForVersion）。自测成对钉「通道不可挪位」：0.2-rc.3 判红 / 0.2.0-rc.3 判绿
 npm run gate -- targets
+
+# 20h. MANIFEST v3 身份块合成自测（计划 2g，2026-10-09）：upstreamDsh / desktopVersion /
+#      release / desktop / runtime / changelogPointers 六块的形状。
+#      ⚠️ 它必须是**纯逻辑**模块（scripts/manifest-v3.mjs）：写入点 prepare-harness.mjs
+#      在模块顶层就跑整趟组装，本机跑不起来 ⇒ 逻辑留在那里等于「形状自测只能靠一次
+#      真实组装触发」= 没有守卫。
+#      判据三条：① 上游身份**只认台账键**（桌面号与上游号同构，反推会得到假值；序号同理，
+#      无台账背书时 seq 落 null 而不是照抄 splitRepoSequence）；② 无产地字段一律 null +
+#      unresolvedFields[] 逐条记因，不得编造（AGENTS.md §7.1 规则 2/3）；③ tag 与版本号
+#      不符属**矛盾**（判红），字段缺失属**如实**（放行）——两者不得混成一个出口。
+npm run gate -- manifest-v3
 
 # 20c. 提交式 lockfile 纯逻辑自检（inputs 一致性三规则 + 家族钉死推导 +
 #      闭包字段抽取 + 安装位置推导）

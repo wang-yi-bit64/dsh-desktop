@@ -216,6 +216,36 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 
 ---
 
+### 3.4 `MANIFEST.json` v3：谁回答哪件事（计划 2g，2026-10-09）
+
+`MANIFEST.json` 是**发布证明文件**：用户提诊断包时，「Desktop 是哪个版本 / 绑的是哪个上游**精确**版本 /
+哪条通道 / 打了哪套补丁」全从它读。v3 在原有的 v1 字段（`fingerprint` / `target` / `versions` /
+`patches` …）之上追加 `releaseSchemaVersion: 3` 与六个块：
+
+| 块 | 回答的问题 | 产地 |
+|---|---|---|
+| `upstreamDsh{version,tag,commit}` | 绑的是哪个上游**精确**版本 | **台账键**（`version`）；`tag` / `commit` 由 `sync-upstream-release.mjs` 核实后才写 ⇒ 未核实时为 `null` |
+| `desktopVersion{composite,upstreamXyz,channel,seq,w}` | 对外那个版本号由什么组成 | `package.json`（`composite`）+ 版本号自身（其余四段）；**`seq` 需台账背书** |
+| `release{channel,tag}` | 这次发布属于哪条通道 / 哪个 tag | 通道由 `desktopChannelForVersion()`；tag 由 `release.yml` 经 `DSH_RELEASE_TAG` 注入 |
+| `desktop{shellCommit,desktopBuild}` | 指认是哪份壳层代码 | `git rev-parse HEAD`；`desktopBuild` 无产地 ⇒ 恒 `null` |
+| `runtime{patchSetHash,runtimeLockHash}` | 打的是哪套补丁 / 锁 | 组装期现算 |
+| `changelogPointers{sectionKey,upstream,own}` | 本次相对上一版改了什么（两股） | CHANGELOG 段键（= 合成号）+ 台账上一版 tag |
+
+🔴 **两条硬纪律**（`scripts/manifest-v3.mjs` 的模块文档有完整理由与夹具）：
+
+1. **上游身份只认台账键，不得由桌面号反推**——`0.7.3-alpha.1`（旧模型）与真合成号
+   **形状同构**，`splitRepoSequence()` 会把前者拆成 `0.7.3-alpha`（一个不存在的上游版本）。
+   更隐蔽的是**序号**：拆出来的末位纯数字可能是**上游自己的**预发布序号，
+   因此**没有台账背书时 `seq` 必须落 `null`**，而不是照抄一个看起来合理的 `1`。
+2. **无产地字段一律 `null` + 逐条记进 `unresolvedFields[]`，不得编造**（`AGENTS.md` §7.1
+   规则 2/3）。「字段缺失」（如实）与「字段自相矛盾」（例如注入的 tag 与版本号不符）是
+   **两个出口**：前者照常产出，后者直接让组装失败——写出一个会说谎的 MANIFEST 比不写更糟。
+
+⚠️ `desktopBuild` 与 `w` **都只进 MANIFEST，不进 SemVer 的排序位**。理由**不是**「不参与比较」
+（实测在 Rust 侧它**参与**），而是跨生态不一致 + Windows 资源静默丢弃非数字 + 规范不保证。
+
+---
+
 ## 4. 上游同步规则
 
 | 项 | 口径 |
@@ -371,8 +401,17 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
   - **`version-policy`** —— `scripts/verify-version.mjs`：守卫 1（台账）+ 守卫 2（`w` 不参与排序）
     + 守卫 3（通道解析严格）。⚠️ 它的被探测实现是**参数化注入**的，自测里喂「比较 build 的比较器」
     与「缺口 2i 的旧实现」并断言报红——否则判据写坏时同样给绿。
+  - **`manifest-v3`** —— `scripts/manifest-v3.mjs`（2g，2026-10-09）：`MANIFEST.json` 的 v3
+    身份块（`upstreamDsh` / `desktopVersion` / `release` / `desktop` / `runtime` /
+    `changelogPointers`）的形状自测。它是**发布证明文件**的合成侧，故必须是**纯逻辑模块**：
+    写入点 `prepare-harness.mjs` 在模块顶层就跑整趟组装（本机跑不起来），逻辑留在那里
+    等于没有守卫。自测钉住「上游身份只认台账键」「无产地字段 null + 逐条记因」
+    「矛盾判红 / 缺失放行，两个出口不得混淆」。
 - 改 `docs/` 后必须同时跑：`verify-claims` / `verify-plan-facts` / `verify-doc-facts`
   （最后一个含 **ADR 计数**断言——新增 ADR 会改计数）。
+  ⚠️ `verify-plan-facts` 的 C1 自 2h（2026-10-09）起以**台账在役键**为比对基准
+  （此前只读目标表 `dshVersion` ⇒ 「锚点漂了、台账没漂」两侧都不报红），并同时断言
+  「目标表锚点 == 台账在役键」且「该目标的在役键唯一」。
 - 唯一门禁入口：`npm run gate -- --tier=<fast|ci|release|sentinel|full>`；清单产地
   `scripts/gate-manifest.mjs`。
 

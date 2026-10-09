@@ -383,6 +383,36 @@ export function deriveReleaseChannel(patchTarget, targets = DSH_TARGETS) {
 }
 
 /**
+ * 台账里某目标的**在役**上游精确版本键（2h 起作为「本仓钉的是哪个上游版本」的 SSOT）。
+ *
+ * 「上游 `x.y.z` 的唯一产地」是**台账**（`docs/version-policy.md` §4）——目标表那侧的
+ * `dshVersion` 只是**组装锚点**（它答「用哪套补丁目录」）。两者本应由
+ * {@link checkIndexAgainstTargets} 钉在一起，但那一条只断言「目标表的锚点在台账里
+ * **存在**且 `patchTarget` 对得上」，**不排除**台账里同时挂着同一目标的**第二个**在役键
+ * （锚点已前移、旧键忘了置 `dormant`）。那时「文档该写哪个上游版本」就没有唯一定论，
+ * 而每个守卫都可以各自挑一个默默通过——正是「枚举不全 = 假绿」的温床。
+ * ⇒ 本函数把「该目标的在役键」显式化，让「不唯一」成为一个可判定的状态。
+ *
+ * ⚠️ 返回顺序是**字典序**（`sort()` 默认），**不是**版本新旧：`0.2.0-rc.10` 会排在
+ * `0.2.0-rc.3` 前面。调用方只在「恰好一条」时才把它当权威值；多条时应当报错而不是
+ * 拿 `[0]` 当答案。
+ *
+ * @param {Record<string, {patchTarget?: string, status?: string}>} releases - 台账索引。
+ * @param {string} target - 目标名（`next` / `alpha`）。
+ * @returns {string[]} 在役键（字典序）；空数组 = 该目标在台账里没有在役条目
+ *   （**不是**「通过」——缺在役条目意味着「本仓钉的是哪个上游版本」无从回答）。
+ */
+export function inServiceUpstreamKeys(releases, target) {
+  const out = [];
+  for (const [key, entry] of Object.entries(releases ?? {})) {
+    if (entry?.patchTarget !== target) continue;
+    if (entry?.status !== 'active') continue;
+    out.push(key);
+  }
+  return out.sort();
+}
+
+/**
  * **唯一入口**：「上游**精确**版本 → 该用哪套补丁 + 本仓下一个序号」。
  *
  * 这是 2e（2026-10-09）**迁到台账侧**的那部分职责。拆分后的分工：
@@ -726,6 +756,43 @@ export function selfTest() {
   throws('2e：空版本必须抛错', () => resolveReleaseFor(ledger2e, '   '));
   // 上游正式线（无预发布段）在本仓尚无载体（ADR-061 决策 7）⇒ 台账里没有该键，同样抛错。
   throws('2e：上游正式线版本未登记 ⇒ 抛错（决策 7 的开口）', () => resolveReleaseFor(ledger2e, '0.2.2'));
+
+  // === 2h（2026-10-09）：在役键 = 「本仓钉的是哪个上游版本」的 SSOT ==========
+  // 目标表的 `dshVersion` 只答「用哪套补丁目录」；文档要写的上游版本由这里给出。
+  // 期望值**硬编码**（不得由被测函数现算，否则「返回全部键」与「只返回一个」都会过）。
+  eq('2h：在役键唯一时给出那一条', inServiceUpstreamKeys(ledger2e.releases, 'alpha'), ['0.2.1-alpha.1']);
+  eq('2h：next 的在役键', inServiceUpstreamKeys(ledger2e.releases, 'next'), ['0.2.0-rc.2']);
+  eq('2h：没有该目标的键 ⇒ 空数组（不是「通过」）', inServiceUpstreamKeys(ledger2e.releases, 'stable'), []);
+  // 🔴 核心判据：同一目标挂**两个**在役键时必须都返回（调用方据此报「不唯一」），
+  //    若实现只取第一条，「锚点已前移、旧键忘了置 dormant」就会静默挑一个通过。
+  eq(
+    '2h：同一目标两个在役键必须**都**返回（否则「不唯一」无从发现）',
+    inServiceUpstreamKeys(
+      ledgerOf({
+        '0.2.0-rc.2': { patchTarget: 'next', status: 'active' },
+        '0.2.0-rc.3': { patchTarget: 'next', status: 'active' },
+      }).releases,
+      'next',
+    ),
+    ['0.2.0-rc.2', '0.2.0-rc.3'],
+  );
+  eq(
+    '2h：dormant 的键不算在役',
+    inServiceUpstreamKeys(
+      ledgerOf({
+        '0.2.0-rc.2': { patchTarget: 'next', status: 'dormant' },
+        '0.2.0-rc.3': { patchTarget: 'next', status: 'active' },
+      }).releases,
+      'next',
+    ),
+    ['0.2.0-rc.3'],
+  );
+  eq(
+    '2h：patchTarget 是别的目标 ⇒ 不算本目标在役',
+    inServiceUpstreamKeys(ledgerOf({ '0.2.0-rc.2': { patchTarget: 'alpha', status: 'active' } }).releases, 'next'),
+    [],
+  );
+  eq('2h：空台账 ⇒ 空数组（不抛错，调用方按「缺在役条目」处理）', inServiceUpstreamKeys({}, 'next'), []);
 
   eq('索引：覆盖所有在役目标 → 通过', checkIndexAgainstTargets(fullLedger.releases, TARGETS), []);  eq(
     '索引：**漏掉一个在役目标的键**必须报红（这是空转的解法）',

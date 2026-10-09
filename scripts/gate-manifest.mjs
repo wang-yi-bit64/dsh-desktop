@@ -129,6 +129,14 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'manifest-v3',
+    script: 'scripts/manifest-v3.mjs',
+    title: 'MANIFEST v3 身份块合成（形状自测，不需组装树）',
+    why: 'MANIFEST.json 是**发布证明文件**：用户提交诊断包时，「Desktop 是哪个版本 / 绑的是哪个上游精确版本 / 哪条通道 / 打了哪套补丁」全从它读。2g 让这份文件承载「上游精确版本 + 本仓序号 + 两股变更记录指针」，而上游段与本仓段**不是同一个字符串**——一处算错，诊断包就把人引向错误的方向。⚠️ 它必须能**脱离组装树**自测：写入点 prepare-harness.mjs 在模块顶层就跑整趟组装（本机跑不起来），逻辑留在那里等于「形状自测只能靠一次真实组装触发」= 没有守卫，故抽成 scripts/manifest-v3.mjs 这个纯模块。自测同时钉住三条纪律：① 上游身份**只认台账键**（`0.7.3-alpha.1` 与真合成号**同构**，反推会得到假的 `0.7.3-alpha`；序号同理——拆出来的末位纯数字可能是**上游自己的**预发布序号，故无台账背书时 seq 必须落 null 而不是照抄）；② 无产地的字段（desktopBuild / 未核实的 upstreamTag·upstreamCommit / 无 env 的 release.tag / 未落地的 D7 上游股）一律 null + 逐条记因，**不得编造**；③ tag 与版本号不符属**矛盾**（判红），而字段缺失属**如实**（放行）——两者不得混成一个出口。',
+    real: null,
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'sync-upstream',
     script: 'scripts/sync-upstream-release.mjs',
     title: '2c 前门的纯逻辑判据（锁 exact / 台账记录构造 / 发布前核算）',

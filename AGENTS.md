@@ -203,8 +203,15 @@
 
 | 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1` | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须**严格大于**最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057 后果段） |
+| `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1` | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
+
+> 🔴 **桌面版本号 = 合成号**（[ADR-061](docs/adr/061-synthetic-version-model.md)），**不是上游版本号的副本**：
+> `<上游精确版本>.<n>[+<w>]`——前三段与上游自己那段预发布标识原样照抄，`<n>` 是本仓序号。
+> 上表最后一列给的是**形态**而不是值：写一个具体号，锚点一动它就漂，而那一格**没有任何守卫**
+> 盯着（C1 只读第 3 格「固定的 DSH」）。ADR-057 的跨通道单调要求继续有效，其旧数值示例
+> （`0.7.3-alpha.1 > 0.7.2-rc.1`）的表达形式已作废。字段归属与「本仓钉的是哪个上游版本」的
+> SSOT 见 [`docs/version-policy.md`](docs/version-policy.md) §3.3 / §4。
 
 > ✅ **next 线于 2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`**（ADR-057 同批
 > 恢复 alpha 在役并推进到 `0.1.7-alpha.2`）：预检 clean 2 / conflict 12，经
@@ -225,4 +232,4 @@
 > 2026-10-07 alpha 线推进到 `0.2.1-alpha.1` 后该补丁在 alpha 线也退役，**两线各 10 个**。
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
-> 📖 通道解耦（`upstreamDistTag` vs `publishChannel`；旧名 `channel` 已于 2026-10-09 按计划 2e 改名）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6；字段归属（谁拥有哪个字段）见 `docs/version-policy.md` §3.3。
+> 📖 通道解耦（`upstreamDistTag` vs `publishChannel`；旧名 `channel` 已于 2026-10-09 按计划 2e 改名）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6；字段归属（谁拥有哪个字段）见 `docs/version-policy.md` §3.3，`MANIFEST.json` v3 六块各回答什么问题见同文件 §3.4（计划 2g）。

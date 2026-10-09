@@ -304,8 +304,13 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 
 | 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2`（2026-09-30 推进） | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `0.7.2-rc.1` |
-| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1`（2026-10-07 跨 minor 推进） | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `0.7.3-alpha.x` 起（须严格大于最高 rc tag，见 ADR-057） |
+| `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2`（2026-09-30 推进） | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
+| `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](../docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.1`（2026-10-07 跨 minor 推进） | `patches/alpha/`（10 个）、`packages/alpha/`（已清空） | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
+
+> 🔴 **最后一列给的是「形态」而不是值**：桌面版本号是**合成号**（[ADR-061](../docs/adr/061-synthetic-version-model.md)），
+> 不是上游版本号的副本——`<n>` 是本仓序号（台账 `builds[]` 同组 max+1），具体值以 `package.json` 为准。
+> 写一个具体号进那一格，锚点一动它就漂，而没有任何守卫盯着那一格（C1 只读第 3 格）。
+> 字段归属见 [`docs/version-policy.md`](version-policy.md) §3.3；「本仓钉的是哪个上游版本」的 SSOT 是同文件 §4。
 
 > ✅ **双线锚点已各自对齐上游 dist-tag**（2026-09-30，ADR-057）：`npm run gate -- drift` 不再告警。
 > next 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`（预检 clean 2 / conflict 12，
@@ -344,11 +349,13 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
   （那会让漂移哨兵静默退回 `latest`，把一条自己管着的线永久误报成落后或持平）。
 - **桌面版本号的预发布后缀是 `publishChannel`**，`release.yml` 的 preflight 用
   `node scripts/dsh-targets.mjs --channel-of "$VERSION"` 从 tag 反推该组装哪个运行时，
-  因此**不需要在 tag 之外再声明一次通道**。未知后缀（如 `0.7.0-beta.1`）**直接失败**，
+  因此**不需要在 tag 之外再声明一次通道**。未知后缀（如 `v0.2.0-beta.1`）**直接失败**，
   不回退默认目标——静默回退会产出「版本号说 beta、运行时却是 next 线」的包，
   而这类错配只有用户装上才会发现（updater 的版本比较会跟着一起错）。
-  ⚠️ 后缀是 `publishChannel` 而**不是**目标键：`v0.7.0-rc.1` 组装的是 **`next`** 目标。
-  `v0.7.0-next.1` 这类**旧后缀已不再是合法输入**（会报错），改名后不要再用。
+  ⚠️ 后缀是 `publishChannel` 而**不是**目标键：`v0.2.0-rc.2.5` 组装的是 **`next`** 目标。
+  ⚠️ `-next.1` 这类**旧后缀已不再是合法输入**（会报错），2026-10-09 改名后不要再用。
+  🔴 **示例一律写成形状**（`<x.y.z>-rc.<n>`）而不是具体号：标签里的上游段随锚点走，
+  写死的例子必然漂，而这一节没有任何守卫对照它。
 - **两条线的补丁做的是同一件事，只是行号随上游版本变化**。因此 `patch-layers.mjs` 的
   分级表按**包名**索引：新增一条上游线**不需要**动它；只有引入新包才要补登记。
 - **移植补丁必须重算行号**：`patch-package` 按 `@@ -N` 的行号定位，偏移取 0、-1、+1…

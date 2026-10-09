@@ -2,7 +2,7 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**本仓实际钉住的版本**（客观事实），二者**历史上**可以不一致。2026-09-30 `next` 线与 2026-10-07 `alpha` 线各自推进后，`next` 锚 `0.2.0-rc.2`、`alpha` 锚 `0.2.1-alpha.1`，两条线已各自对齐上游对应 dist-tag（2026-10-08 实测一致，`npm run gate -- drift` 不告警）。升级前先跑 `node scripts/dsh-targets.mjs` 读**实际值**，不要按通道名推断版本。
+> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-09-30 `next` 线与 2026-10-07 `alpha` 线各自推进后，`next` 锚 `0.2.0-rc.2`、`alpha` 锚 `0.2.1-alpha.1`，两条线已各自对齐上游对应 dist-tag（2026-10-08 实测一致，`npm run gate -- drift` 不告警）。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
 > **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.0-rc.2`、alpha 线 `0.2.1-alpha.1`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
@@ -14,7 +14,7 @@
 
 | # | 锚点 | 位置 | 说明 |
 |---|------|------|------|
-| 1 | `DSH_TARGETS[<target>].dshVersion` | `scripts/dsh-targets.mjs`（目标总表） | 该目标钉住的 Harness 版本，**唯一产地**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取。决定 `dependencies` 里所有 `@deepseek-ai/*` 的取值（每个目标一条） |
+| 1 | `DSH_TARGETS[<target>].dshVersion` | `scripts/dsh-targets.mjs`（目标总表） | 该目标的**组装锚点**（上游精确版本）；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取。决定 `dependencies` 里所有 `@deepseek-ai/*` 的取值（每个目标一条）。⚠️ **「本仓钉的是哪个上游版本」的 SSOT 是台账在役键**（`harness-locks/dsh-releases.json`，见 `docs/version-policy.md` §4）——同一事实两处产地，改锚点时必须与本字段同批，`plan-facts` 的 C1 会断言两者一致 |
 | 2 | `NODE_VERSION` | `scripts/prepare-harness.mjs` | 内置 Node 运行时版本；与 DSH 无关，除非上游提升 Node 要求 |
 | 3 | `PNPM_VERSION` | `scripts/prepare-harness.mjs` | 仅用于组装期工具链，通常不动 |
 | 4 | `patches/<target>/*.patch` **文件名** | `patches/<target>/` | 形如 `@deepseek-ai+dsh-client-ui-chat+<版本>.patch`，版本段必须跟**该目标**的 `dshVersion` 一致（仅 DSH 家族包跟随；`cordis-plugin-loader` 这类独立版本号的包不跟）。两个目标各持一套，`npm run gate -- patches` 逐目标校验 |
@@ -118,7 +118,7 @@ boot / config-dump / 插件管理。
 
 ### Step 1 — 改版本锚点
 
-- [ ] `scripts/dsh-targets.mjs`：更新 `DSH_TARGETS[<target>].dshVersion`——**唯一产地**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取（补丁目录 / vendored 目录 / staging 目录也一并由它推导）。只改你正在升的那条线
+- [ ] `scripts/dsh-targets.mjs`：更新 `DSH_TARGETS[<target>].dshVersion`——**组装锚点**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取（补丁目录 / vendored 目录 / staging 目录也一并由它推导）。只改你正在升的那条线。⚠️ 同批还要更新 `harness-locks/dsh-releases.json` 的在役键（那是「本仓钉的是哪个上游版本」的 SSOT，两者不一致会被 `npm run gate -- plan-facts` 判红）
 - [ ] **`overrides` 已无手工维护段**：它由该目标的 `patches/<target>/*.patch` 文件名与 `packages/<target>/*.tgz` 自动推导（`prepare-harness.mjs`），所以没有「要改的 overrides 段」。要检查的是**钉住是否仍然必要**——上游若已修复相关问题，按 Step 5 退役对应补丁，override 会随文件名一起消失
 - [ ] `packages/<target>/*.tgz` 与 `vendor/*` 中声明依赖 DSH 版本的地方
 - [ ] **重新生成提交式 lockfile（2026-09-23 起，必做）**：版本锚点、补丁集、vendored 包任何一个变了，`harness-locks/<target>/` 的 lockfile 就与输入失配，CI 的组装会**硬失败**（`lockInputsMatch` 四条规则，其中第 4 条校验快照自证的 `target` + `dshVersion`）。重新生成：

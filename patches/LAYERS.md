@@ -16,8 +16,8 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（10 条） | `packages/next/`（**已清空**，2026-09-24） | `0.7.2-rc.1`（0.7.1 之后的下一个 rc；实际版本以 package.json 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.1`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进，含上游重构；预检 clean 4 / conflict 7，经行号重算 + 语义重做 3 个 + 退役 1 个后 10 个补丁全部 clean） | `patches/alpha/`（10 条） | `packages/alpha/`（已清空） | `0.7.3-alpha.x` 起（必须**严格**大于最高 rc tag；`0.7.2-alpha.x` < `0.7.2-rc.1`，见 ADR-057） |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（10 条） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.1`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进，含上游重构；预检 clean 4 / conflict 7，经行号重算 + 语义重做 3 个 + 退役 1 个后 10 个补丁全部 clean） | `patches/alpha/`（10 条） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。

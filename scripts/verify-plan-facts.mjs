@@ -25,7 +25,7 @@
  *
  * | 编号 | 检查 | 级别 |
  * |------|------|------|
- * | C1 | 各文档里「钉住的 DSH 版本」（表格 3 文件 × 2 目标 + 12 处散文/注释写法）必须等于 `DSH_TARGETS[<target>].dshVersion`；**声明点缺失也判红**（不然删掉整张表就能让检查静默变绿） | 错误 |
+ * | C1 | 各文档里「钉住的 DSH 版本」（表格 3 文件 × 2 目标 + 12 处散文/注释写法）必须等于**台账**里该目标的在役上游**精确**版本（`inServiceUpstreamKeys()`；2h 起 SSOT 从目标表换到台账，见 `docs/version-policy.md` §4）；**声明点缺失也判红**（不然删掉整张表就能让检查静默变绿）；**台账未提供也判红**（回退目标表会让「两处各说各话」重新变成静默通过）。C1 另断言「目标表锚点 == 台账在役键，且该目标的在役键唯一」 | 错误 |
  * | C2 | `harness-locks/<target>/inputs.json` 的 `dshVersion` 必须等于同一值 | 错误 |
  * | C3 | 计划文档的批次状态词必须与脚本内的**状态账本**一致（§5 小节标题 与 §10.1 表行**两处**都要含该状态词），且账本必须覆盖 §10.1 的全部批次；开头的「状态」段必须点名所有非「待办」的状态词 | 错误 |
  *
@@ -54,6 +54,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { DSH_TARGETS, listTargetNames } from './dsh-targets.mjs'
+
+// 「本仓钉的是哪个上游**精确**版本」的 SSOT：**台账**（`docs/version-policy.md` §4：
+// `x.y.z` 的唯一产地是 `dsh-releases.json` 的 `upstreamDsh.version`）。目标表那侧的
+// `dshVersion` 只是**组装锚点**（答「用哪套补丁目录」）——2h 起本守卫按台账判定。
+import { inServiceUpstreamKeys, readLedger } from './release-ledger.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -240,18 +245,74 @@ export function proseSites(text, res) {
 }
 
 /**
- * C1：所有声明点都必须等于该目标的 `dshVersion`。
+ * C1：所有声明点都必须等于**台账里该目标的在役上游精确版本**。
+ *
+ * ## 2h（2026-10-09）：权威来源从目标表换成台账
+ *
+ * 「上游 `x.y.z` 的唯一产地」是**台账**（`docs/version-policy.md` §4）；目标表那侧的
+ * `dshVersion` 只是**组装锚点**（答「用哪套补丁目录」）。此前 C1 只读目标表 ⇒
+ * 「锚点漂了、台账没漂」（或反之）时，文档对哪一侧都能算「一致」，而**没有一处**会报红。
+ *
+ * 换成台账后另有两条断言，否则「改指 SSOT」只是换了个变量名：
+ *   ① **该目标的在役键必须唯一**——`checkIndexAgainstTargets()` 只断言「目标表的锚点在
+ *      台账里**存在**且 `patchTarget` 对得上」，**不排除**同一目标挂着第二个在役键
+ *      （锚点已前移、旧键忘了置 `dormant`）。那时「文档该写哪个版本」就没有唯一定论，
+ *      任何守卫都能挑一个默默通过。
+ *   ② **目标表锚点 == 台账在役键**——同一事实两处产地，不一致本身就是缺陷。
+ *
+ * ⚠️ **`releases` 缺失时判红，不回退目标表**：回退会让上面两条断言重新变成静默通过，
+ * 那正是「改了判据却没人发现它没生效」的形态（本仓缺陷族：守卫只覆盖 N 段里的 N-1 段）。
  *
  * **声明点缺失同样判红**——这是刻意的：否则「把整张 Pinned DSH 表删掉」会让检查
  * 在 0 个声明点上「全部通过」，比写错还危险（写错至少值还在）。
  *
  * @param {Record<string, string>} docs 文件路径 → 内容
- * @param {Record<string, {dshVersion: string}>} targets 目标 → 条目
+ * @param {Record<string, {dshVersion: string}>} targets 目标 → 条目（只用于第 ② 条交叉断言）
+ * @param {Record<string, {patchTarget?: string, status?: string}>} releases 台账索引
+ *   （`harness-locks/dsh-releases.json` 的 `releases`）
  * @returns {string[]} 问题列表
  */
-export function checkVersionDeclarations(docs, targets) {
+export function checkVersionDeclarations(docs, targets, releases) {
   const problems = []
   const targetNames = Object.keys(targets)
+
+  // 先算「每个目标的期望值」——文档比对与交叉断言都用它，避免两处各算一遍。
+  const expectedByTarget = {}
+  if (releases === undefined || releases === null) {
+    problems.push(
+      'C1：未提供台账（harness-locks/dsh-releases.json 的 releases）⇒ 无法回答「本仓钉的是哪个上游精确版本」。' +
+        '台账是该事实的唯一产地（docs/version-policy.md §4）；此处**刻意不回退**目标表的 dshVersion——' +
+        '回退会让「目标表与台账不一致」这件事重新变成静默通过。'
+    )
+  } else {
+    for (const name of targetNames) {
+      const anchor = targets[name].dshVersion
+      const keys = inServiceUpstreamKeys(releases, name)
+      if (keys.length === 0) {
+        problems.push(
+          `C1：台账里没有目标 \`${name}\` 的**在役**键（patchTarget=${JSON.stringify(name)} 且 status=active）。` +
+            `该目标当前锚点是 ${anchor} ⇒ 「本仓钉的是哪个上游版本」无从回答（缺在役条目不是「通过」）。`
+        )
+        expectedByTarget[name] = anchor
+        continue
+      }
+      if (keys.length > 1) {
+        problems.push(
+          `C1：目标 \`${name}\` 在台账里有 ${keys.length} 个在役键（${keys.join('、')}）⇒ 文档该写哪个没有唯一定论。` +
+            `若锚点已前移，旧键必须显式置 status: dormant（决策 7 之外的场合都适用这套口径）。`
+        )
+      }
+      if (keys.length === 1 && keys[0] !== anchor) {
+        problems.push(
+          `C1：目标 \`${name}\` 的锚点（scripts/dsh-targets.mjs）是 ${anchor}，而台账里在役键是 ${keys[0]}。` +
+            `同一事实两处产地不一致 ⇒ 文档无论写哪个都会与另一侧打架。台帐是发布身份的产地，` +
+            `目标表是组装锚点，改锚点时两者必须同批。`
+        )
+      }
+      // 文档按**台账**那一侧比对（台账是「本仓钉的是哪个上游版本」的 SSOT）。
+      expectedByTarget[name] = keys[0]
+    }
+  }
 
   for (const file of PIN_TABLE_FILES) {
     const text = docs[file]
@@ -261,14 +322,17 @@ export function checkVersionDeclarations(docs, targets) {
     }
     for (const target of targetNames) {
       const sites = pinTableSites(text, target)
-      const expected = targets[target].dshVersion
+      const expected = expectedByTarget[target]
+      // 期望值缺失（台账未提供）时**只**报那条根因，不再为每个声明点各报一条
+      // 「钉的是 X，而台账里是 undefined」——后者会把根因淹没在噪声里。
+      if (expected === undefined) continue
       if (sites.length === 0) {
         problems.push(`${file}：找不到 \`${target}\` 的 Pinned 版本行（第 1 格是 \`${target}\`、第 3 格是版本号）——这一处声明被删了或改了形状`)
         continue
       }
       for (const site of sites) {
         if (site.version !== expected) {
-          problems.push(`${file}:${site.line}：\`${target}\` 钉的是 ${site.version}，而 dsh-targets.mjs 里是 ${expected}`)
+          problems.push(`${file}:${site.line}：\`${target}\` 钉的是 ${site.version}，而台账里在役的上游精确版本是 ${expected}`)
         }
       }
     }
@@ -281,7 +345,7 @@ export function checkVersionDeclarations(docs, targets) {
       continue
     }
     const values = proseSites(text, entry.res)
-    const expected = targets[entry.target]?.dshVersion
+    const expected = expectedByTarget[entry.target]
     if (expected === undefined) continue
     if (values.length === 0) {
       problems.push(`${entry.file}：找不到 ${entry.target} 的${entry.label}——这一处声明被删了或改了措辞`)
@@ -289,7 +353,7 @@ export function checkVersionDeclarations(docs, targets) {
     }
     for (const value of values) {
       if (value !== expected) {
-        problems.push(`${entry.file}：${entry.label} 写的是 ${value}，而 dsh-targets.mjs 里 ${entry.target} 是 ${expected}`)
+        problems.push(`${entry.file}：${entry.label} 写的是 ${value}，而台账里 ${entry.target} 在役的上游精确版本是 ${expected}`)
       }
     }
   }
@@ -404,6 +468,13 @@ function selfTest() {
   // 期望值**硬编码**：它必须是一条独立事实，不能由被测函数现算。
   const TARGETS = { next: { dshVersion: '0.1.5-rc.3' }, alpha: { dshVersion: '0.1.6-alpha.2' } }
 
+  // C1 的 SSOT 夹具（2h）：台账里两个目标各一条**在役**键，且与 TARGETS 的锚点一致。
+  // ⚠️ 同样硬编码：若由被测函数现算，「在役键挑错目标」这类缺陷在夹具里就不会现形。
+  const LEDGER = {
+    '0.1.5-rc.3': { patchTarget: 'next', status: 'active' },
+    '0.1.6-alpha.2': { patchTarget: 'alpha', status: 'active' }
+  }
+
   // --- 夹具 1：表格抽取器只认「第 1 格是目标键 + 第 3 格是版本号」 ---
   // 表格与散文**分开建常量**：散文声明点是后加的（见 PROSE_DECLARATIONS 末尾），
   // 分成两个夹具才能分别证明「表格抽取器」与「散文抽取器」各自真的在比对——
@@ -460,11 +531,11 @@ function selfTest() {
     'docs/dsh-upgrade-checklist.md': checklistOk,
     'scripts/prepare-harness.mjs': harnessCommentOk
   }
-  eq('夹具2：全部声明点一致 → 无问题', checkVersionDeclarations(docsOk, TARGETS), [])
+  eq('夹具2：全部声明点一致 → 无问题', checkVersionDeclarations(docsOk, TARGETS, LEDGER), [])
 
   // --- 夹具 3：**真实事故形态**——锚点改了、文档没同步（旧值 0.1.5-rc.2） ---
   const staleReadme = readmeOk.replace('`0.1.5-rc.3`', '`0.1.5-rc.2`')
-  const stale = checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS)
+  const stale = checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS, LEDGER)
   eq('夹具3：旧锚点未同步 → 判红', stale.length, 1)
   eq('夹具3：报错点名文件与行号', stale[0].includes('README.md:5'), true)
   eq(
@@ -476,27 +547,27 @@ function selfTest() {
   eq(
     '夹具3：只改一位版本 → 结论翻转（证明判据真的在比对）',
     [
-      checkVersionDeclarations({ ...docsOk, 'README.md': readmeOk }, TARGETS).length,
-      checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS).length
+      checkVersionDeclarations({ ...docsOk, 'README.md': readmeOk }, TARGETS, LEDGER).length,
+      checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS, LEDGER).length
     ],
     [0, 1]
   )
 
   // --- 夹具 3b：**表格仍对、只有散文过期**（2026-10-07 的真实形态，补守卫前这里是 0） ---
   const staleProse = readmeOk.replace('`next` pins `0.1.5-rc.3`', '`next` pins `0.1.5-rc.2`')
-  const proseStale = checkVersionDeclarations({ ...docsOk, 'README.md': staleProse }, TARGETS)
+  const proseStale = checkVersionDeclarations({ ...docsOk, 'README.md': staleProse }, TARGETS, LEDGER)
   eq('夹具3b：表格对、散文过期 → 判红 1 条', proseStale.length, 1)
   eq('夹具3b：报错点名散文声明而不是表格', proseStale[0].includes('English 散文'), true)
   // 反证：只改表格那处时，散文声明**不得**跟着报红（否则说明两处抽的是同一个位置）
   eq(
     '夹具3b：两处声明互相独立（改表格只报表格那处）',
-    checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS)[0].includes('README.md:5'),
+    checkVersionDeclarations({ ...docsOk, 'README.md': staleReadme }, TARGETS, LEDGER)[0].includes('README.md:5'),
     true
   )
 
   // --- 夹具 3c：中文 README 的散文声明同样在生效（新增点不是只测了英文） ---
   const staleZh = readmeZhOk.replace('alpha `0.1.6-alpha.2`', 'alpha `0.1.6-alpha.1`')
-  const zhStale = checkVersionDeclarations({ ...docsOk, 'README.zh-CN.md': staleZh }, TARGETS)
+  const zhStale = checkVersionDeclarations({ ...docsOk, 'README.zh-CN.md': staleZh }, TARGETS, LEDGER)
   eq('夹具3c：中文散文过期 → 判红 1 条', zhStale.length, 1)
   eq('夹具3c：报错点名中文散文声明', zhStale[0].includes('中文散文'), true)
 
@@ -504,14 +575,14 @@ function selfTest() {
   // ⚠️ 本夹具**刻意保留散文**：它要证明的是「表格抽取器发现声明行消失」。
   //    若把散文一并删掉，会同时命中散文判据，那就分不清红在哪一侧了（那是夹具 4b 的事）。
   const noTable = ['# README', '', readmeProseEn].join('\n')
-  const deleted = checkVersionDeclarations({ ...docsOk, 'README.md': noTable }, TARGETS)
+  const deleted = checkVersionDeclarations({ ...docsOk, 'README.md': noTable }, TARGETS, LEDGER)
   eq('夹具4：表格声明行整体消失 → 判红 2 条（每目标一条）', deleted.length, 2)
   eq('夹具4：报错说清是「找不到声明行」', deleted.every((p) => p.includes('找不到')), true)
 
   // --- 夹具 4b：**散文声明行被删掉**（表格仍在）→ 同样必须判红 ---
   // 这是新声明点的「锚点消失」用例：少了它，把 README 那段 ⚠️ 说明整段删掉就能让新判据
   // 静默变绿（0 个声明点 = 全通过），比写错还危险。
-  const proseDeleted = checkVersionDeclarations({ ...docsOk, 'README.md': readmeTableEn }, TARGETS)
+  const proseDeleted = checkVersionDeclarations({ ...docsOk, 'README.md': readmeTableEn }, TARGETS, LEDGER)
   eq('夹具4b：散文声明整体消失 → 判红 2 条', proseDeleted.length, 2)
   eq(
     '夹具4b：报错措辞是「找不到 … 散文」（与表格缺失可区分）',
@@ -537,7 +608,8 @@ function selfTest() {
   const staleAnchor = checklistOk.replace('`alpha` 锚 `0.1.6-alpha.2`', '`alpha` 锚 `0.1.6-alpha.1`')
   const anchorProblems = checkVersionDeclarations(
     { ...docsOk, 'docs/dsh-upgrade-checklist.md': staleAnchor },
-    TARGETS
+    TARGETS,
+    LEDGER
   )
   eq('夹具5b：`alpha` 锚 写法过期 → 判红 1 条', anchorProblems.length, 1)
   eq('夹具5b：报错点名「`alpha` 锚」这种写法', anchorProblems[0].includes('`alpha` 锚'), true)
@@ -553,7 +625,8 @@ function selfTest() {
   const staleComment = harnessCommentOk.replace('alpha → DSH 0.1.6-alpha.2', 'alpha → DSH 0.1.6-alpha.1')
   const commentProblems = checkVersionDeclarations(
     { ...docsOk, 'scripts/prepare-harness.mjs': staleComment },
-    TARGETS
+    TARGETS,
+    LEDGER
   )
   eq('夹具5c：源码注释里的版本过期 → 判红 1 条', commentProblems.length, 1)
   eq('夹具5c：报错点名 prepare-harness.mjs', commentProblems[0].includes('prepare-harness.mjs'), true)
@@ -567,6 +640,49 @@ function selfTest() {
       /alpha\s+→ DSH ([0-9][0-9A-Za-z.-]*)/g
     ]),
     ['0.1.5-rc.3', '0.1.6-alpha.2']
+  )
+
+  // --- 夹具 8：C1 的 SSOT 是**台账**（2h，2026-10-09） ----------------------
+  // 这一组是「改指 SSOT」的证伪夹具。判据：把第三实参=台账换成目标表口径，结论必须翻转；
+  // 任何人把实现改回 `targets[t].dshVersion`，夹具 8d 必红。
+  //
+  // 8a：未提供台账 ⇒ 判红（**不得**回退目标表）
+  const noLedger = checkVersionDeclarations(docsOk, TARGETS)
+  eq('夹具8a：未提供台账 → 判红 1 条', noLedger.length, 1)
+  eq('夹具8a：报错点名「未提供台账」且说明为何不回退', noLedger[0].includes('未提供台账'), true)
+
+  // 8b：该目标在台账里没有**在役**键 ⇒ 判红（缺在役条目不是「通过」）
+  const allDormant = { ...LEDGER, '0.1.5-rc.3': { patchTarget: 'next', status: 'dormant' } }
+  const bProblems = checkVersionDeclarations(docsOk, TARGETS, allDormant)
+  eq('夹具8b：没有在役键 → 判红 1 条', bProblems.length, 1)
+  eq('夹具8b：报错点名「在役」', bProblems[0].includes('在役'), true)
+
+  // 8c：同一目标两个在役键 ⇒ 判红（否则「锚点前移、旧键忘了置 dormant」会静默挑一个通过）
+  const twoActive = { ...LEDGER, '0.1.5-rc.4': { patchTarget: 'next', status: 'active' } }
+  const cProblems = checkVersionDeclarations(docsOk, TARGETS, twoActive)
+  eq('夹具8c：两个在役键 → 判红 1 条', cProblems.length, 1)
+  eq(
+    '夹具8c：报错把两个键都列出来（人才能判断该把哪个置 dormant）',
+    cProblems[0].includes('0.1.5-rc.3') && cProblems[0].includes('0.1.5-rc.4'),
+    true
+  )
+
+  // 8d：**核心配对**——文档全部与台账对齐，但目标表锚点没跟进。
+  //     期望：只剩「两处产地不一致」一条 ⇒ 证明文档比的是**台账**那一侧，而不是目标表。
+  //     （配对项：同一份文档对**旧台账**必须判红，否则这条夹具只是恒绿地通过了。）
+  const shiftAnchor = (text) => text.replaceAll('0.1.5-rc.3', '0.1.5-rc.4')
+  const docsOnLedger = Object.fromEntries(
+    Object.entries(docsOk).map(([file, text]) => [file, shiftAnchor(text)])
+  )
+  const ledgerMoved = { ...LEDGER, '0.1.5-rc.4': { patchTarget: 'next', status: 'active' } }
+  delete ledgerMoved['0.1.5-rc.3']
+  const movedProblems = checkVersionDeclarations(docsOnLedger, TARGETS, ledgerMoved)
+  eq('夹具8d：文档随台账前移、目标表锚点未跟进 → 判红 1 条', movedProblems.length, 1)
+  eq('夹具8d：且那一条是「两处产地不一致」，不是「文档值不对」', movedProblems[0].includes('两处产地不一致'), true)
+  eq(
+    '夹具8d 配对：同一份文档对**旧台账**必须判红（反证：判据真的在比对台账值）',
+    checkVersionDeclarations(docsOnLedger, TARGETS, LEDGER).length > 0,
+    true
   )
 
   // --- 夹具 6：inputs.json 自证字段 ---
@@ -677,7 +793,7 @@ function main() {
     readdirSync(join(projectRoot, 'docs', 'adr')).filter((f) => /^\d{3}-/.test(f))
   )
   const problems = [
-    ...checkVersionDeclarations(docs, targets),
+    ...checkVersionDeclarations(docs, targets, readLedger(projectRoot).releases),
     ...checkLockInputs(docs, targets),
     ...checkDecisionLedger({ plan: docs[PLAN_DOC] ?? '', adrFileNames })
   ]
@@ -686,12 +802,13 @@ function main() {
     console.error(`❌ 计划文档/事实漂移 ${problems.length} 处：`)
     for (const problem of problems) console.error(`  · ${problem}`)
     console.error('')
-    console.error('  修法：把文档里的版本号与状态词改成与 `scripts/dsh-targets.mjs` / 账本一致，')
-    console.error('  而不是反过来改判据——判据读的是**动态解析**出来的值，它不会漂。')
+    console.error('  修法：把文档里的版本号与状态词改成与 `harness-locks/dsh-releases.json` 的**在役键**')
+    console.error('  （以及 `scripts/dsh-targets.mjs` 的锚点，两者必须同批）一致，而不是反过来改判据——')
+    console.error('  判据读的是**动态解析**出来的值，它不会漂。')
     process.exit(1)
   }
 
-  console.log(`✅ 计划事实一致：${new Set(paths).size} 个文件 · ${listTargetNames().length} 个目标的版本声明与锚点一致，决策账本自洽`)
+  console.log(`✅ 计划事实一致：${new Set(paths).size} 个文件 · ${listTargetNames().length} 个目标的版本声明与**台账在役键**一致（且目标表锚点与之一致），决策账本自洽`)
   process.exit(0)
 }
 
