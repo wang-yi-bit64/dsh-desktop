@@ -55,6 +55,17 @@
 export const TIERS = ['fast', 'ci', 'release', 'sentinel']
 
 /**
+ * 总表条目的**合法字段**（唯一产地，与上面的字段表一一对应）。
+ *
+ * 用途：`verify-gates.mjs` 的 M6 判「未知字段」。可选字段多是布尔开关、读法是
+ * `gate.foo === true`，所以拼错一个字母**不会报错**、只会静默失效——而 `echoOutput`
+ * 的语义恰恰是「消除静默」。新字段要进这里，必须同时补上文件头的字段表。
+ */
+export const ALLOWED_GATE_FIELDS = [
+  'name', 'script', 'title', 'why', 'real', 'selfTest', 'platforms', 'manual', 'needsAssembly', 'echoOutput'
+]
+
+/**
  * 门禁总表。字段：
  *   · name       —— 门禁名（同时是旧名 verify:<name> / verify:<name>:self-test 的键）
  *   · script     —— 仓库内相对路径（**必须存在**，由 verify-gates 断言）
@@ -67,6 +78,12 @@ export const TIERS = ['fast', 'ci', 'release', 'sentinel']
  *                   不得静默（§7.1 规则 3）
  *   · manual     —— 可选，配合空 tiers 说明「为什么刻意不自动跑」
  *   · needsAssembly —— 可选，需要组装好的运行时资源树（本地/发布链路才有）
+ *   · echoOutput —— 可选，**成功时也回显该脚本的 stdout**。默认只在失败时回显末尾 6 行，
+ *                   于是「已核对」与「跳过未核对」在日志里长得一模一样——而哨兵类门禁
+ *                   （drift / update-channel / dependabot-setting）的**语义本身就包含
+ *                   「这次到底核对了没有」**，它们的 skip 必须可见（2026-10-09 实测：
+ *                   新哨兵在 CI 里全绿，却从日志看不出它读没读到远端设置）。
+ *                   可选字段拼错会**静默失效**，故由 verify-gates 的 M6 白名单封住。
  */
 export const GATES = [
   // ------------------------------------------------------------------
@@ -289,6 +306,9 @@ export const GATES = [
     title: '上游版本漂移哨兵（**联网**）',
     why: '落后上游是「该规划升级了」，不是「这次发布有问题」。因此真检查**刻意不进** fast/ci：挂在每次提交上会长期制造红灯噪声（ADR-030 / S1-3）。真检查跑在 drift.yml 的定时任务里。基准已于 2026-10-09（计划 2f）由 npm dist-tag 换成**上游 GitHub Release**：dist-tag 滞后可见（同一天内前进过一版），且上游出现过「tag 已动、依赖树未齐」的波次。⚠️ 换基准带来一个**新形状** `patch-line-behind`（上游在新补丁线上重新起预发布：patch 前进 + 阶段回退）——旧实现会把它误报成「上游已进入**更晚**的预发布阶段」（与事实相反），本哨兵沿用阻断但把归因说准，是否继续阻断**待重算**（计划 §17 → P0-2）。',
     real: { tiers: ['sentinel'], args: [] },
+    // 哨兵的语义包含「这次到底核对了没有」：取不到上游 Release 会 SKIP（exit 0）并打印
+    // 「未核对」。默认的「仅失败回显」会让 SKIP 与真核对在日志里同形。
+    echoOutput: true,
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
@@ -297,6 +317,8 @@ export const GATES = [
     title: '更新通道端点核验（**联网**，发布后）',
     why: '断言「端点 version ≥ 该通道最新 tag」——更新链路断掉时用户永远收不到更新，而这个事实只有真发布后才可观测。真检查进 sentinel 档（drift.yml 每周 + 发布后手动）。',
     real: { tiers: ['sentinel'], args: ['--verify'] },
+    // 同 drift：全通道核对会打印每条通道的端点判定；休眠目标显式跳过也必须可见。
+    echoOutput: true,
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
@@ -312,6 +334,9 @@ export const GATES = [
       '⚠️ 它**只能**是联网判据：开关住在仓库设置里，打开/关闭都不改变任何产物，本地静态扫描看不见它。' +
       '取不到 / 字段不可见 ⇒ skip 并**明写「未核对」**（绝不判绿）；slug 404 ⇒ 判红（配置缺陷，同 drift）。',
     real: { tiers: ['sentinel'], args: [] },
+    // 🔴 本条**必开** echoOutput：它的三个出口里 skip 是「未核对」，与「已核对且关闭」
+    //    都是 exit 0。不回声就必须靠猜——那就是本仓反复踩的假绿。
+    echoOutput: true,
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
 

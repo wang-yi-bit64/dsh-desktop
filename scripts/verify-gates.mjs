@@ -11,6 +11,7 @@
  * | M3 | scripts/ 下**每个支持 --self-test 的脚本**都必须在总表里登记，或在豁免表里带理由（且扫出数必须 > 0） | 错误 |
  * | M4 | 旧名兼容：每个门禁都能被 verify:<name> / <name>:self-test 解析到 | 错误 |
  * | M5 | 门禁名不得重复 | 错误 |
+ * | M6 | 门禁条目的字段必须来自白名单（可选字段拼错会静默失效） | 错误 |
  *
  * ## 为什么需要它（真实事故形态）
  *
@@ -40,6 +41,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  ALLOWED_GATE_FIELDS,
   EXEMPT_SELF_TEST_SCRIPTS,
   GATES,
   SELF_TEST_CLI_PATTERN,
@@ -168,6 +170,35 @@ export function checkUniqueNames(gates) {
   return problems
 }
 
+/**
+ * M6：门禁条目的字段必须来自白名单（2026-10-09 新增，治 D13 的衍生缺口）。
+ *
+ * 为什么需要：总表里的可选字段（`echoOutput` / `manual` / `platforms` / `needsAssembly`）
+ * 都是**布尔或存在性开关**，读的是 `gate.foo === true` 这类判定。于是拼错一个字母
+ * （`echoOutpt`）不会报任何错——那一条**静默失效**，而它的语义（「成功也要回显」）
+ * 恰恰是用来消除「静默」的。这属于本仓反复出现的「配置看着在、实际不生效」一类。
+ *
+ * ⚠️ 只判**未知字段名**，不判字段取值：取值语义由各自的消费者负责。
+ * 新字段要进白名单，必须同时更新 gate-manifest 的文件头字段表——那是有意的摩擦。
+ *
+ * @param {{name: string}[]} gates
+ * @param {string[]} [allowed] 允许的字段名；默认 {@link ALLOWED_GATE_FIELDS}
+ * @returns {string[]}
+ */
+export function checkUnknownFields(gates, allowed = ALLOWED_GATE_FIELDS) {
+  const problems = []
+  for (const gate of gates) {
+    for (const key of Object.keys(gate)) {
+      if (allowed.includes(key)) continue
+      problems.push(
+        '门禁 ' + gate.name + ' 有未知字段 `' + key + '`——可选字段多为布尔开关，拼错即**静默失效**' +
+          '（读的是 `=== true`）。允许的字段：' + allowed.join(' / ') + '。',
+      )
+    }
+  }
+  return problems
+}
+
 // ---------------------------------------------------------------------------
 // 自测（纯内存夹具；不读仓库文件）
 // ---------------------------------------------------------------------------
@@ -238,6 +269,17 @@ function selfTest() {
   ok('M5：不重名 → 无问题', checkUniqueNames([gate('a'), gate('b')]).length === 0)
   ok('M5：真实总表无重名', checkUniqueNames(GATES).length === 0)
 
+  // --- 夹具 6b：M6 字段白名单（2026-10-09） ---
+  // 🔴 形态就是真实的：可选字段读的是 `=== true`，拼错一个字母**不报错**、静默失效——
+  //    而 echoOutput 的存在意义正是「消除静默」，它自己被拼错就成了同一类缺陷。
+  ok('M6：白名单内的字段 → 无问题', checkUnknownFields([gate('a'), gate('b', { echoOutput: true })], ['name', 'script', 'real', 'selfTest', 'echoOutput']).length === 0)
+  const typo = checkUnknownFields([gate('a', { echoOutpt: true })], ['name', 'script', 'real', 'selfTest', 'echoOutput'])
+  ok('M6：拼错的可选字段必须判红（echoOutpt）', typo.length === 1 && typo[0].includes('echoOutpt'))
+  ok('M6：报错必须点名允许的字段集', typo.some((p) => p.includes('echoOutput')))
+  ok('M6：空字段集不判红（只判未知，不判取值）', checkUnknownFields([gate('a', { manual: '' })], ['name', 'script', 'real', 'selfTest', 'manual']).length === 0)
+  // 真实总表自证（与 M1/M4 的真实自洽块同形）。
+  ok('真实总表：M6 无未知字段', checkUnknownFields(GATES).length === 0)
+
   // --- 夹具 7：真实总表的自洽性（读的是本文件导出，不是另抄一份） ---
   ok('真实总表：M1 文件存在', checkScriptsExist(GATES, () => true).length === 0)
   ok('真实总表：M4 旧名可解析', checkLegacyAliases(GATES, normalizeGateName).length === 0)
@@ -271,7 +313,8 @@ function main() {
     ...checkTierCoverage(GATES, TIERS, (tier) => resolveTier(tier).length),
     ...checkSelfTestRegistration(scanned, GATES, EXEMPT_SELF_TEST_SCRIPTS),
     ...checkLegacyAliases(GATES, normalizeGateName),
-    ...checkUniqueNames(GATES)
+    ...checkUniqueNames(GATES),
+    ...checkUnknownFields(GATES)
   ]
 
   if (problems.length > 0) {

@@ -156,6 +156,17 @@ function runStep(step) {
     const tail = text.trim().split(/\r?\n/).slice(-6).join('\n  ')
     if (tail.length > 0) console.error('  ' + tail)
     if (result.error) console.error('  ' + String(result.error.message ?? result.error))
+  } else if (step.gate.echoOutput === true) {
+    // 哨兵类门禁：**成功也回显**。它们的 exit 0 有两种含义——「已核对」与「取不到 ⇒ 未核对」，
+    // 只看 ✅ 分不出来（2026-10-09 实测：新加的 dependabot-setting 在 CI 里全绿，而日志里
+    // 没有任何一行能说明它到底读没读到远端设置——它可能一直在 skip，而 skip 是静默的）。
+    // 上限 40 行，超出即**明写**截断（§7.1 规则 3：允许降级，但不得无声降级）。
+    const lines = (result.stdout ?? '').trim().split(/\r?\n/).filter((l) => l.length > 0)
+    const shown = lines.slice(0, 40)
+    for (const line of shown) console.log('  ' + line)
+    if (lines.length > shown.length) {
+      console.log('  …（另有 ' + (lines.length - shown.length) + ' 行未回显）')
+    }
   }
   return ok
 }

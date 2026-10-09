@@ -276,6 +276,8 @@ npm run gate -- github-config --self-test
 #      它一打开，每条落在 harness-locks/ 快照目录的告警都会派生一个必然失败的 job。
 #      三个出口：disabled ⇒ 绿；enabled ⇒ 红；取不到/字段不可见 ⇒ skip 且日志明写「未核对」
 #      （绝不判绿）；slug 404 ⇒ 红（配置缺陷）。真检查在 drift.yml 的独立 job 里每周跑。
+#      ⚠️ 本条在总表里带 `echoOutput: true`：编排器默认**只在失败时**回显脚本输出，于是
+#         「已核对」与「skip 未核对」都是 ✅，日志里分不出来——那正是本仓最怕的假绿。
 npm run gate -- dependabot-setting --self-test
 npm run gate -- dependabot-setting
 
