@@ -416,7 +416,12 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
         'Cargo.lock：cargo update --workspace --offline 刷新（生成物，失败为软提示）',
       ],
       delegates: [
-        `步骤⑤ 更新 lock：node scripts/prepare-harness.mjs --target ${target} --update-lockfile`,
+        // 🔴 必须是 `--dsh-target=`（**带等号**，且是 `resolveDshTargetArg` 认的那个名）：
+        //    `prepare-harness.mjs` 的 `--target=` 是**打包平台/架构**守卫（`win32/x64`），
+        //    写成 `--target <名字>`（空格形式）两边都匹配不上——守卫不触发、更不会报错，
+        //    而目标会**静默回落 `DEFAULT_TARGET`（next）**。照抄这行 = 以为在做 alpha、
+        //    实际更新了 next 的 lockfile，且没有任何输出能看出来（2026-10-10 实地撞到）。
+        `步骤⑤ 更新 lock：node scripts/prepare-harness.mjs --dsh-target=${target} --update-lockfile`,
         `步骤⑧ 补丁适用性：node ${PATCH_APPLICABILITY_SCRIPT} --target=${upstreamDsh} --dsh-target=${target}`,
       ],
     },
@@ -621,6 +626,13 @@ export function selfTest() {
   eq('核算：同锚点第二个合成号可发布', [ok.problems.length, ok.plan.desktopVersion], [0, '0.2.1-alpha.1.2']);
   eq('核算：写出台账写入项', ok.plan.writes.some((x) => x.includes(LEDGER_RELATIVE)), true);
   eq('核算：写出手动委托项（⑤⑧）', ok.plan.delegates.some((x) => x.includes('prepare-harness')), true);
+  // 🔴 只断言「提到 prepare-harness」是**对称失效**：夹具与被测犯同一个错（都以为参数名随便写）。
+  //    委托串是给人**照抄**的可执行命令，因此成对钉住正确形态与错误形态：
+  //      · `--dsh-target=<目标>`（`resolveDshTargetArg` 认的名字，缺它 ⇒ 静默回落 next）；
+  //      · 不得出现裸 `--target <名字>`（那是打包平台守卫的形式，且**匹配不上任何东西**）。
+  const delegated = ok.plan.delegates.find((x) => x.includes('prepare-harness'));
+  eq('核算：委托串用 --dsh-target=（目标参数的正确名字）', delegated.includes('--dsh-target=alpha'), true);
+  eq('核算：委托串不得用裸 --target <名字>（会静默回落 next）', /--target\s/.test(delegated), false);
   const missing = planSync({ target: 'alpha', upstreamDsh: '0.2.2-alpha.1', ledger: base });
   eq('核算：锚点未动的上游前进必须判红（不静默新建键）', missing.plan, null);
   const noCounter = planSync({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1', ledger: base, noCounter: true });
