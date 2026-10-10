@@ -274,7 +274,17 @@ export function insertSection(existing, section, version, force = false) {
  * @returns {string} 规范化后的文本。
  */
 function normalize(text) {
-  return `${text
+  // 🔴 入口先把换行归一成 LF —— 下面两条规则都是按 LF 写的，而工作树在
+  // `core.autocrlf=true`（本仓**无** `.gitattributes`）时是 CRLF。实测（2026-10-10）：
+  // 仓库 blob 585 个 `\n` / 0 个 `\r\n`，而工作区磁盘文件是 584 个 `\r\n` + 46 个裸 `\n`
+  // 的**混合**形态。不归一会有两处**静默**错误（探针：LF 输入无多余空行、CRLF 输入每个标题多一行）：
+  //   · `/\n{3,}/g` —— `\r` 把 `\n` 的连续段打断 ⇒ **从不折叠**，历次生成攒下的多余空行留在原地；
+  //   · `/([^\n])\n(## \[)/` —— `\r` 被当成「非换行字符」⇒ 匹配 `\r\n## [` 并替换成 `\r\n\n## [`
+  //     ⇒ **给每一个版本标题多插一个空行**，逐次发布单调膨胀。
+  // 两者叠加还产出混合换行的文件（编辑器与 GitHub 都照常渲染，所以一直没被发现）。
+  // 产出统一为 LF：仓库里的 blob 本就是 LF，CRLF 由检出负责 ⇒ 归一后 `git diff` 只显示真正的改动。
+  const lf = text.replace(/\r\n?/g, '\n');
+  return `${lf
     .replace(/\n{3,}/g, '\n\n')
     .replace(/([^\n])\n(## \[)/g, '$1\n\n$2')
     .trimEnd()}\n`;
@@ -411,6 +421,33 @@ export function selfTest() {
   check(first === rewritten, '插入：首次写入与覆盖重写的结果必须逐字节相同（否则每次发布都会产生纯空白 diff）');
   check(!/\n\n\n/.test(first), '插入：产出不得含连续空行');
   check(first.endsWith('\n') && !first.endsWith('\n\n'), '插入：文件应以单个换行结尾');
+
+  // 9b) 🔴 换行形态无关性（2026-10-10 实测缺陷的回归钉）。
+  //
+  // 上面几条不变量断言本身是对的，但**夹具全是 LF 字符串**，于是对本机真实输入形态
+  // （`core.autocrlf=true` ⇒ 工作树 CRLF）完全不设防，属「夹具与被测犯同一个错」的经典形态：
+  // 断言写得对、输入没覆盖。两处盲区是具体的——
+  //   · `!/\n\n\n/` 在 CRLF 输入下**仍为真**：多出来的空白是 `\n\r\n` 而不是 `\n\n\n`；
+  //   · `!/[^\n]\n## \[/` 在 CRLF 输入下会命中（`\r` 就是那个 `[^\n]`），但夹具没喂过 CRLF。
+  // 这里成对喂 LF 与 CRLF，最强的一条是**两者产出逐字节相同**——它同时钉住
+  // 「不得插空行」「不得紧贴标题」「产出无 `\r`」，且换实现方式也不会误报。
+  {
+    const lfSection = '## [0.2.0] - 2026-02-02\n\n### ✨ 新功能\n\n- new\n';
+    const lfBody = `${FILE_HEADER}## [0.1.0] - 2026-01-01\n\n- old\n`;
+    const fromLf = insertSection(lfBody, lfSection, '0.2.0');
+    const fromCrlf = insertSection(lfBody.replace(/\n/g, '\r\n'), lfSection.replace(/\n/g, '\r\n'), '0.2.0');
+    check(fromCrlf === fromLf, '插入：CRLF 输入与 LF 输入的产出必须逐字节相同（换行形态无关）');
+    check(!fromCrlf.includes('\r'), '插入：产出不得含 CR（统一 LF —— 仓库 blob 本就是 LF）');
+    check(!/[^\n]\n## \[/.test(fromCrlf), '插入：CRLF 输入下不得出现紧贴标题');
+    check(!/\n\n\n/.test(fromCrlf), '插入：CRLF 输入下不得出现连续空行');
+
+    // 反向钉 (A) 那条折叠规则：**已经攒下多余空行**的 CRLF 文件必须被折回「恰好一个空行」。
+    // 只断言「不新增」的话，`normalize` 里删掉折叠仍然可能白过（输入本来只有一个空行）。
+    const scarredCrlf = `${FILE_HEADER}## [0.2.0] - 2026-02-03\r\n\r\n- b2\r\n\r\n\r\n\r\n## [0.1.0] - 2026-01-01\r\n\r\n- a\r\n`;
+    const healedCrlf = insertSection(scarredCrlf, '## [0.2.0] - 2026-02-04\r\n\r\n- b3\r\n', '0.2.0', true);
+    check(!/\n\n\n/.test(healedCrlf), '插入：CRLF 输入下历史遗留的多余空行必须被折叠回一个');
+    check(!healedCrlf.includes('\r'), '插入：CRLF 覆盖路径的产出同样不得含 CR');
+  }
 
   // 10) 基线 ref 的推导（纯逻辑）。
   check(baselineRefFor('v0.1.0') === 'v0.1.0^', '基线：给定 --to 时必须从其父提交开始找上一个 tag');
