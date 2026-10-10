@@ -16,8 +16,8 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（10 条） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.1`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进，含上游重构；预检 clean 4 / conflict 7，经行号重算 + 语义重做 3 个 + 退役 1 个后 10 个补丁全部 clean） | `patches/alpha/`（10 条） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.1`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进，含上游重构；预检 clean 4 / conflict 7，经行号重算 + 语义重做 3 个 + 退役 1 个后 10 个补丁全部 clean） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -78,13 +78,15 @@
 如 `patches/next/@deepseek-ai+dsh+0.2.0-rc.2.patch` 与
 `patches/alpha/@deepseek-ai+dsh+0.2.1-alpha.1.patch`。
 
-### functional（3 个）
+### functional（条数不写死：`node scripts/patch-layers.mjs --list --dsh-target=<t>` 是权威）
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
 | `@deepseek-ai/dsh` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` 三个桌面插件包声明为 dsh 依赖（第四个 `dsh-desktop-preset-transfer` 已于 2026-09-30 整链退役）。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
 | `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
+| `@deepseek-ai/dsh-typert-loader` | 上游把**启动路径**上「任一 contributor 注册失败」升级成 `AggregateError` 并从 `apply()` 抛出，而 typert-loader 本身是 profile 的一个 loader entry ⇒ 一个插件的 typert 声明有问题就让**整棵插件树**加载失败（`dsh: plugin tree failed to load`）。同一份代码在**动态路径**（后挂载的 entry）上只 `logger.error` 不抛——启动路径缺的正是这个降级。补丁把启动路径的失败也降级为带 entry 名的 logged error（保留 `AggregateError` 作结构化载荷） | 官方把 contributor 注册失败降级为非致命（或按 entry 隔离、不再整树原子） |
+| `@deepseek-ai/dsh-client-file-upload` | `registerAgentResolver` 在「已注册」时抛错，而 Cordis `Fiber._reload()` 是**先重跑 apply、后处置上一轮 effects** ⇒ 任何对该 entry 的重放（插件管理器 live-apply、热挂载 bundle 重列核心行）都会命中守卫抛错，让 session-controller 整个 fiber 回滚；回滚连带摘掉它注册的 `typert.lookups.configure("agent"/"session")` ⇒ 冷会话切模式报 `lookup provider "agent" did not resolve`。补丁把守卫改为**接管 + warn**（旧 disposer 的 `=== resolve` 比较保证不误伤新注册者） | 官方把该注册改为幂等（或 reload 前先处置旧注册） |
 
 ### ui-behavior（next 7 个 / alpha 7 个；**已退役项**在表内以删除线标明，半退役项在判据列内注明）
 
@@ -343,6 +345,44 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
 （UI 消费方已同轮退役，无第二个消费方；文件系统预设根模型在上游已不存在，
 照旧 API「移植」= 在已消失的语义上造假）。三处联动移除 + vendor 源码删除。
 
+### 桌面启动缺陷修复（B2，2026-10-10）：两线同批新增 2 个补丁
+
+> 背景：用户报告 `0.2.0-rc.2.1` / `0.2.1-alpha.1.1` 上「启动报错进不去」「装完切不到其他模式」
+> 「首次启动插件加载不了」。逐条取证后落到两处运行时契约缺陷，两线形态相同，故同批新增。
+
+**新增补丁（按包名，两线各带自己的版本段）：**
+
+- `@deepseek-ai/dsh-typert-loader`——把启动路径的 contributor 注册失败从 **fatal** 降级为
+  **带 entry 名的 logged error**。上游在动态路径（`ctx.on("internal/plugin")` 的 microtask 分支）
+  已经只 `logger.error` 不抛，启动路径却 `throw new AggregateError`；而 typert-loader 是 profile 的
+  一个 loader entry ⇒ **一个插件的 typert 声明有问题，整棵插件树加载失败**。
+- `@deepseek-ai/dsh-client-file-upload`——`registerAgentResolver` 从「已注册即抛」改为
+  **接管 + warn**。Cordis `Fiber._reload()` 会**先重跑 apply、后处置上一轮 effects**，
+  所以「已注册」在重放时序里是**正常**的，抛错会让 session-controller 整个 fiber 回滚，
+  连带摘掉它注册的 `typert.lookups.configure("agent"/"session")`。
+
+**两处与批次计划书不一致，在此记录（偏差必须可查）：**
+
+| # | 计划书写的是 | 实际做的是 | 原因 |
+|---|---|---|---|
+| 1 | 改 `dsh-api-session-controller`（让**调用方**幂等） | 改 `dsh-client-file-upload`（让**服务**可重入） | 幂等性属**服务契约**。`registerAgentResolver` 全树只有一个调用点（`session-controller:2851`），但非幂等的根因在服务侧——「reload 先重跑后处置」是**运行时契约**，任何消费者都会踩，改调用方只能修一处；且调用方拿不到「别人的」disposer，先 dispose 会把另一个仍活着的 owner 打坏。服务侧改法（接管 + warn）由旧 disposer 的 `=== resolve` 比较保证不乱清 |
+| 2 | ③（可选）`dsh-agent` resolver 兜底 | **不做** | 兜底要「冷会话也能解析出 Agent」＝接持久化层，本机**无法验证**（组装被 `koffi` 拦、无真实网关）。按「无法验证不得声称可用」放弃；真正缺的 lookup 已由补丁 2「不再丢失」覆盖 |
+
+**验证（全部成对红→绿，本地可复跑）：**
+
+| 判据 | 证据 |
+|---|---|
+| 补丁能否干净落盘 | 用**真实 `patch-package`**（不是本仓自写的匹配器）在仓库外临时 app 根上打：两线各 2 包全部 `✔`、退出码 0；LF 形态落盘**逐字节等于预期且零 CR** |
+| 本机 CRLF 工作树的副作用 | 同补丁转 CRLF 后仍 applied 成功，差异**恰好**是新增行尾部 8 / 4 个 `\r`。显式断言而非忽略：`core.autocrlf=true` 只作用于**工作树**，blob 是 LF，所以 CI 无此差；本地组装产物与 CI 会有字节差，必须被看见 |
+| typert 降级行为 | 桩 ctx 真跑 `apply()`：红=纯净模块抛 `AggregateError` 且指名坏 entry；绿=resolve、恰 1 次 `logger.error`、**好 entry 照常注册**（是「跳过坏的」而不是「整树放弃」） |
+| file-upload 幂等行为 | 红=第二次注册抛 `already registered`；绿=接管 + 恰 1 条 warn；且**旧 disposer 在新注册之后才运行**（正是 `_reload()` 的顺序）不会清掉新 resolver |
+| lockfile 是否需重生成 | 用本仓 `lockInputsMatch` 复算：两线 `ok=true`。原因：这两个包在快照 `overrides` 里**本就存在且同值**（`--update` 会把整个 `@deepseek-ai/dsh-*` 家族钉进快照），新增补丁只是把它们从「家族钉死」挪进「基础 override」，值不变 ⇒ 规则 2 仍满足。负控（值改错 / 注入快照外包名）均 `ok=false`，证明判据在工作 |
+| 静态门禁 | `patches`、`harness-lockfile`、`harness-entry`、`harness-inject` 全绿 |
+
+**未覆盖（诚实声明）**：组装态「12/12 applied」与「能启动」**本机验不了**（`prepare:harness --force`
+被 `koffi` 拦，见 `docs/incidents/local-toolchain-limits.md`），须由 CI 的 build / portable job 在
+`prepare:harness` 之后按名点名确认。
+
 ---
 
 ## 4. 维护规则
@@ -359,5 +399,6 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
       看哪些干净、哪些冲突（它现在也会报「内容匹配但行号漂移超窗」）；
    2. 冲突的按语义重做（见上文 alpha 线的做法），**改完必须重算行号**：
       `node scripts/recount-patches.mjs --dsh-target=<目标> --pristine=<未打补丁的包根>`；
-   3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认**本目标**全部 `applied`（当前 next 10 / alpha 10）
+   3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认**本目标**全部 `applied`（条数以
+     `node scripts/patch-layers.mjs --list --dsh-target=<目标>` 为准，不在此写死）
       ——**这一步不可省略**：预检与真实组装在行号口径上不同，只有它能证明补丁真的落盘。

@@ -1,0 +1,15 @@
+diff --git a/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js b/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js
+@@ -187,7 +187,10 @@ let FileUploads = (() => {
+ 		* @returns disposer removing this resolver.
+ 		*/
+ 		registerAgentResolver(resolve) {
+-			if (this.agentResolver !== void 0) throw new Error("file-upload: Agent resolver is already registered");
++			// 重放不得失败：Cordis `Fiber._reload()` 会**先重跑 apply、后处置上一轮 effects**，
++			// 因此「已注册」在这里是正常时序而非冲突。接管旧的，并让旧 disposer 自然失效
++			// （它的 `=== resolve` 守卫已保证不会清掉新注册的那个）。
++			if (this.agentResolver !== void 0 && this.agentResolver !== resolve) this.ctx.logger.warn("file-upload: replacing the previously registered Agent resolver — an owner was re-applied or a second owner registered");
+ 			this.agentResolver = resolve;
+ 			return () => {
+ 				if (this.agentResolver === resolve) this.agentResolver = void 0;

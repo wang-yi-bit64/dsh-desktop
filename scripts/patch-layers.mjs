@@ -76,6 +76,16 @@ export const PATCH_LAYERS = {
     why: 'ClientModuleRegistry 解析 `${expectedPackageName}/package.json` 以定位插件模块。渲染侧插件装载的最后一段依赖，缺失则桌面 UI 插件挂不上。',
     retireWhen: '官方 registry 自带 createRequire 解析时。'
   },
+  '@deepseek-ai/dsh-typert-loader': {
+    layer: 'functional',
+    why: '上游把**启动路径**上「任一 contributor 注册失败」升级成 AggregateError 并在 `apply()` 尾部抛出，而 typert-loader 是 profile 里的一个 loader entry ⇒ 一个插件的 typert 声明有问题就让**整棵插件树**加载失败（`dsh: plugin tree failed to load`，实测三次启动中断，见 0.2.x 启动缺陷诊断 §3.1）。同一份代码在**动态路径**（后挂载的 entry）上却只 `logger.error` 不抛——启动路径缺的正是这个降级。补丁把启动路径的失败也降级为带 entry 名的 logged error（并保留 AggregateError 作为结构化载荷），使不兼容插件不再阻断启动。缺失该补丁 ⇒ 回到「一个坏插件 = 全树起不来」。',
+    retireWhen: '官方把 contributor 注册失败降级为非致命（或按 entry 隔离、不再整树原子）时。'
+  },
+  '@deepseek-ai/dsh-client-file-upload': {
+    layer: 'functional',
+    why: '`registerAgentResolver` 在「已注册」时抛错，而 Cordis `Fiber._reload()` 是**先重跑 apply、后处置上一轮 effects** ⇒ 任何对该 entry 的重放（插件管理器 live-apply 热重放、热挂载 bundle 重列核心行）都会命中守卫，抛错让 session-controller 整个 fiber 回滚；回滚连带摘掉它注册的 `typert.lookups.configure("agent"/"session")` 与 `contexts.configureHost("agent")`，`LookupStore.get` 回落到声明解析器 ⇒ 冷会话切模式报 `lookup provider "agent" did not resolve the requested identity`（即「装完切不到其他模式」）。补丁把守卫改为**接管 + warn**（旧 disposer 的 `=== resolve` 比较保证它不会清掉新注册者）。缺失该补丁 ⇒ 首次启用的插件市场重放核心行即回滚。',
+    retireWhen: '官方把该注册改为幂等（或 reload 前先处置旧注册）时。'
+  },
 
   // ---- ui-behavior：视觉 / 文案 / 产品增强，缺失可用 -------------------------
   // `dsh-client-ui-layout` 已于 2026-09-30 在 next 线退役（上游 0.2.0 的

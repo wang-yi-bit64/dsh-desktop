@@ -1,0 +1,33 @@
+diff --git a/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js b/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js
+@@ -313,10 +313,10 @@ async function apply(ctx, config) {
+ 			try {
+ 				const task = processOne(entryName);
+ 				if (task !== void 0) tasks.push(task.catch((error) => {
+-					onError(toError(error));
++					onError(toError(error), entryName);
+ 				}));
+ 			} catch (error) {
+-				onError(toError(error));
++				onError(toError(error), entryName);
+ 			}
+ 		}
+ 		return tasks;
+@@ -338,10 +338,13 @@ async function apply(ctx, config) {
+ 	for (const packageName of configured) dirty.add(packageName);
+ 	for (const entry of ctx.loader.entries()) dirty.add(entry.options.name);
+ 	const failures = [];
+-	await Promise.all(flush((err) => {
+-		failures.push(err);
++	await Promise.all(flush((err, entryName) => {
++		failures.push({
++			entryName,
++			error: err
++		});
+ 	}));
+-	if (failures.length > 0) throw new AggregateError(failures, `typert-loader: ${String(failures.length)} typert contributor(s) failed to register:\n${failures.map((e) => `  - ${e.message}`).join("\n")}`);
++	if (failures.length > 0) ctx.logger.error(new AggregateError(failures.map((failure) => failure.error), `typert-loader: ${String(failures.length)} typert contributor(s) failed to register — skipping them; the rest of the tree keeps loading:\n${failures.map((failure) => `  - ${failure.entryName}: ${failure.error.message}`).join("\n")}`));
+ }
+ /** Normalize an arbitrary import or manifest failure to an Error. */
+ function toError(error) {

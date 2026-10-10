@@ -111,7 +111,7 @@ export const DSH_TARGETS = {
     status: 'active',
     dshVersion: '0.2.0-rc.2',
     summary:
-      '上游 rc 线（当前 0.2.0-rc.2，2026-09-30 从 0.1.5-rc.3 跨两个 minor 推进；补丁按 retireWhen 退役 4 个、语义重做 3 个，10 个落盘——见 patches/LAYERS.md「next 线（0.2.0-rc.2）的移植裁定」）'
+      '上游 rc 线（当前 0.2.0-rc.2，2026-09-30 从 0.1.5-rc.3 跨两个 minor 推进；补丁按 retireWhen 退役 4 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
   },
   alpha: {
     upstreamDistTag: 'alpha',
@@ -119,7 +119,7 @@ export const DSH_TARGETS = {
     status: 'active',
     dshVersion: '0.2.1-alpha.1',
     summary:
-      '上游 alpha 线（2026-10-07 从 0.1.7-alpha.2 跨 minor 推进到 0.2.1-alpha.1：补丁按 retireWhen 退役 1 个、语义重做 4 个，10 个落盘——见 patches/LAYERS.md「alpha 线（0.2.1-alpha.1）的移植裁定」）'
+      '上游 alpha 线（2026-10-07 从 0.1.7-alpha.2 跨 minor 推进到 0.2.1-alpha.1：补丁按 retireWhen 退役 1 个、语义重做 4 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
   }
 }
 
