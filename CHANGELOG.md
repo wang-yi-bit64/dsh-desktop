@@ -7,6 +7,29 @@
 
 <!-- changelog-entries -->
 
+## [0.2.0-rc.2.2] - 2026-10-10
+
+### 🐛 修复
+
+- **changelog**: normalize() 在 CRLF 工作树上恒多插空行 —— 入口归一换行（自测补形态无关夹具） ([ba879bc](https://github.com/wang-yi-bit64/dsh-desktop/commit/ba879bcdb19e0d2b14ce4bebcacb834b940295d1))
+- **release**: 前门步骤⑤ 委托串参数名写错 —— 照抄会静默更新另一条线的 lockfile ([7b2b087](https://github.com/wang-yi-bit64/dsh-desktop/commit/7b2b0873ba46d8fc101cb61ae1e5ec14c561c70e))
+- **patches**: 热挂载入口 URL 的死路 —— loader 在解析前修 specifier（双线） ([a89ec45](https://github.com/wang-yi-bit64/dsh-desktop/commit/a89ec45432032d039d716ceec6f61f6acc29618a))
+- **patches**: 启动不再被单个插件拖垮 —— typert 启动路径失败降级 + Agent resolver 注册幂等（双线） ([398f6ee](https://github.com/wang-yi-bit64/dsh-desktop/commit/398f6eeaee4806c09d838374c90c9630569ef70a))
+- **vendor**: vendored 包 peer 声明锚定 0.2.x —— 治上游 peer 门禁的静默禁用，并加三面守卫 ([9a72f40](https://github.com/wang-yi-bit64/dsh-desktop/commit/9a72f40772f06eada339cd3ae73c2a3038673493))
+
+### ⚡ 性能
+
+- **entry**: 启动耗时先有度量再谈优化 —— 阶段埋点 + V8 字节码编译缓存 ([4a357b3](https://github.com/wang-yi-bit64/dsh-desktop/commit/4a357b36ea3da322838865d831d8ee51bb962e39))
+
+### 📝 文档
+
+- **release**: 本轮第 2/3 步产物 —— Feature Log 基线按通道前移 + Release Plan 批准双线 n=2 ([2d835e6](https://github.com/wang-yi-bit64/dsh-desktop/commit/2d835e6976c4e73868b84d34bcf7e8f4a4ff6629))
+
+### 🧹 其他
+
+- **release**: 0.2.1-alpha.1.2 ([9db00fa](https://github.com/wang-yi-bit64/dsh-desktop/commit/9db00faab2a34e689916567308f75e8bc644f0b6))
+- Merge remote-tracking branch 'origin/main' into main ([5b74be8](https://github.com/wang-yi-bit64/dsh-desktop/commit/5b74be8013bc08e25c914cc73997ed156afe6618))
+
 ## [0.2.1-alpha.1.2] - 2026-10-10
 
 ### 🐛 修复
