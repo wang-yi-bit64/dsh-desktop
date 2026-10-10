@@ -90,7 +90,7 @@
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
 - `docs/dev-plan-defect-remediation.md`：**缺陷治理专项**（批次 S0~S7，2026-09-30 起）——D1~D12 缺陷清单、可证伪判据、C1~C8 裁决与执行台账；动 S 批次任何条目前先读它。
 - `docs/version-policy.md`：**版本号策略唯一口径**——命名规则、按变更类型的递增条件、**递增权限**（谁有权决定版本号）、发布流程与守卫；**动版本模型或 `release.yml` 前先读它**。
-- `docs/adr/`：架构决策记录库（48 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
+- `docs/adr/`：架构决策记录库（49 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
 - `crates/dsh-contracts/src/constants.rs`（契约常量）、`errors.rs`（错误码 + `AppError`）、`ipc.rs`（`IpcEnvelope<T>` + 形状测试）、`rpc.rs`（JSON-RPC 唯一契约源，⚠️ 无运行时消费者）。
@@ -216,6 +216,14 @@
 > 盯着（C1 只读第 3 格「固定的 DSH」）。ADR-057 的跨通道单调要求继续有效，其旧数值示例
 > （`0.7.3-alpha.1 > 0.7.2-rc.1`）的表达形式已作废。字段归属与「本仓钉的是哪个上游版本」的
 > SSOT 见 [`docs/version-policy.md`](docs/version-policy.md) §3.3 / §4。
+
+> 🌉 **换代期必须先发「桥接版」**（[ADR-063](docs/adr/063-bridge-release-for-version-model-cutover.md)）：
+> 合成号跟随**上游**版本线（`0.2.x`），线上历史 tag 属**旧模型**（`0.7.x`）⇒ 换代首个合成号
+> 排序必然更低，`updater` 默认判据（`release > current`）会让它**零投递**。处置是先在**同一条
+> 通道**上发一个版本号更高、内置 `plugins.updater.allowDowngrades` 的桥接版（登记进台账
+> `bridges[]`），桥接版**真的送达**之后合成号才收得到。豁免判据三条（同通道 / ≥ 该通道最高
+> tag / **该 tag 已发布**）见 `docs/version-policy.md` §7.4；放宽只对装过桥接版的人生效——
+> 那笔代价如实登记在 ADR-063 决策 7，不要把它当成常规手段。
 
 > ✅ **next 线于 2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进到 `0.2.0-rc.2`**（ADR-057 同批
 > 恢复 alpha 在役并推进到 `0.1.7-alpha.2`）：预检 clean 2 / conflict 12，经

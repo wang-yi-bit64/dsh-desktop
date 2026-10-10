@@ -429,6 +429,27 @@ grep -n '"dependencies"\|"optionalDependencies"' -A 10 <该包>/package.json
 - [ ] 若升级导致能力状态变化（例如某个 `⚠️ 未接线` 项被接线、或某个补丁退役使某能力消失），**必须**同步 `AGENTS.md` §7 的对照表与 `README.md` / `README.zh-CN.md` 的功能列表
 - [ ] 在 `docs/` 记录本次升级的冲突处理结论（哪个补丁退役、为什么）
 
+### Step 8 — 换代桥接版（**仅版本号模型换代时**，[ADR-063](adr/063-bridge-release-for-version-model-cutover.md)）
+
+> 只在「新版号模型的号**必然低于**线上已有号」时适用（本仓 2026-10-09 的首次适用：合成号
+> `0.2.x` 低于旧模型 `0.7.x`）。**不适用就不要做这一步**——放宽比较器是有代价的（决策 7）。
+
+按序执行，**顺序不可颠倒**（桥接版没送达 ⇒ 合成号零投递）：
+
+- [ ] 1. 选定该通道的桥接版号：**高于该通道当时最高 tag**（rc 线 `v0.7.3-rc.1` > `v0.7.2-rc.1`；
+      alpha 线 `v0.7.4-alpha.1` > `v0.7.3-alpha.1`）
+- [ ] 2. 登记：`node scripts/release-ledger.mjs --add-bridge <版本>`（先只读核对，再加 `--apply`）；
+      登记后 `node scripts/release-ledger.mjs --validate` 必须自洽
+- [ ] 3. 发布桥接版（走 §2 的既有链路；`updater-manifest.mjs --write-config` 会自动把
+      `plugins.updater.allowDowngrades: true` 写进覆盖配置，**日志里会打印该行警告**）
+- [ ] 4. **核实桥接版 tag 真的发出去了**（本地 `git tag` + `gh api repos/.../tags` 双侧一致）——
+      台账登记只是**意图**，豁免判据要求该 tag 已发布，此刻之前合成号会被正确拦住
+- [ ] 5. 再发合成号；`version.mjs check` 应打印**豁免依据 note**（而不是报红），
+      `updater-manifest.mjs --verify --tag <tag>` 亦同
+
+⚠️ 常见失败形态（判据都会报红，不会静默）：**只登记未发布**（`reason=bridge-not-delivered`）；
+**跨通道借用别线的桥接版**（各通道有自己的端点）；**桥接版号低于本通道最高 tag**（它当年没送达）。
+
 ---
 
 ## 3. 升级后：允许合并的判据

@@ -15,8 +15,25 @@
  * | ⑦ | 同步 `package.json`/`Cargo.toml`/`Cargo.lock` 写**合成号** | 复用 `version.mjs` 的 `writeVersion()` + `refreshLock()`（唯一真源机制不变，**填充者**换成合成函数） |
  * | ⑧ | 跑补丁适用性 | 子进程调 `check-patch-applicability.mjs` |
  * | ⑨ | 产出 MANIFEST 元数据基线 | 回填台账的 `upstreamTag` / `upstreamCommit`（MANIFEST v3 形状是 **2g**，不在这里做） |
+ * | **前置** | **第 3 步（出 Release Plan）必须先完成** | `readReleasePlan()` + `checkPlanLineFor()`：`release-manifest.json` 必须批准本次这条线（见下节） |
  *
  * **任一步失败 ⇒ 不写版本、不打 tag、不发布**（§4.6 原文）。
+ *
+ * ## 🔴 第 3→4 步的强制点（2026-10-10 接入）
+ *
+ * `docs/version-policy.md` §3.1 的权威链路是 `Feature Log → Release Plan → Version`，
+ * 即「第 3 步出计划、第 4 步派生」。本条链路上唯一能**强制**它的地方就是这里：
+ * 派生版本号之前先读 `release-manifest.json`，用 `checkPlanLineFor()` 断言
+ * 「这一次要发的这条线**被批准过**、计划里的 `n` 等于台账现算的下一个、`w` 与本次一致」。
+ * 不通过 ⇒ 判红、不派生。
+ *
+ * ⚠️ 时点判据**只作用于本次目标行**（`checkPlanLineFor` 内部传 `sequenceTarget`）：
+ * 先后发两条线时（如先 alpha 后 next），发 next 时计划里 alpha 行的 `n` 必然已是历史值——
+ * 若全计划跑时点判据，就等于逼人乱改非目标行的 `n`（ADR-061「n 不由人填」被绕开）。
+ * 2026-10-10 next 线 `--apply` 首跑实锤：alpha 历史行判红，阻断 next 派生。
+ *
+ * ⚠️ 缺计划文件同样判红（**不**当成「没有计划，直接派生」）：那样派生出的 `n` 是无人决策过的，
+ * 而它长得和有人决策过的一模一样。
  *
  * ## 🔴 自动化边界（2026-10-08 维护者裁决：`--plan` 默认 + `--apply` 显式）
  *
@@ -55,14 +72,17 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_TARGET, DSH_TARGETS, parseVersionShape, resolveTarget } from './dsh-targets.mjs';
 import {
   LEDGER_RELATIVE,
+  PLAN_RELATIVE,
   allBuilds,
   checkLedger,
   checkLedgerAgainstVersion,
+  checkPlanLineFor,
   composeDesktopVersion,
   deriveReleaseChannel,
   ledgerPath,
   planNextDesktopVersion,
   readLedger,
+  readReleasePlan,
 } from './release-ledger.mjs';
 import {
   UPSTREAM_REPO,
@@ -397,7 +417,7 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
       ],
       delegates: [
         `步骤⑤ 更新 lock：node scripts/prepare-harness.mjs --target ${target} --update-lockfile`,
-        `步骤⑧ 补丁适用性：node ${PATCH_APPLICABILITY_SCRIPT}`,
+        `步骤⑧ 补丁适用性：node ${PATCH_APPLICABILITY_SCRIPT} --target=${upstreamDsh} --dsh-target=${target}`,
       ],
     },
   };
@@ -438,13 +458,47 @@ export function snapshotFiles(files) {
 }
 
 /**
+ * 步骤⑧的**参数合成**（纯函数，可证伪）。
+ *
+ * 🔴 为什么单独抽出来：`--apply` 首次端到端运行（2026-10-10）即暴露——此前这里
+ *    **不带任何参数**地 spawn 补丁脚本，子进程打印用法后以非零退出，步骤⑧**恒失败**
+ *    并触发整趟回滚。它是「写了但从未真正执行过的步骤」的又一例：`--plan` 不跑步骤⑧，
+ *    自测也不覆盖 spawn 参数，于是缺陷存活到首次真跑。
+ *
+ * 语义（子进程 CLI 的约定，`check-patch-applicability.mjs` 头部）：
+ *   · `--target=<版本>` 是**待检的上游版本**（升级候选）⇒ 传上游精确版本 `upstreamDsh`；
+ *   · `--dsh-target=<name>` 选**哪一套补丁** ⇒ 传目标键 `target`。
+ *
+ * @param {object} input
+ * @param {string} input.target - 目标键（`next` / `alpha`）。
+ * @param {string} input.upstreamDsh - 上游精确版本（如 `0.2.1-alpha.1`）。
+ * @returns {string[]|null} 子进程参数；缺输入时返回 `null`（调用方据此直接判失败）。
+ */
+export function patchApplicabilityArgs({ target, upstreamDsh }) {
+  if (!target || !upstreamDsh) return null;
+  return [`--target=${upstreamDsh}`, `--dsh-target=${target}`];
+}
+
+/**
  * 步骤⑧：补丁适用性（子进程，**不** import——它有自己的 CLI 语义与自测）。
  *
- * @param {string} root - 仓库根。
+ * @param {object} input
+ * @param {string} [input.root] - 仓库根。
+ * @param {string} input.target - 目标键（选哪套补丁）。
+ * @param {string} input.upstreamDsh - 待检的上游精确版本。
  * @returns {{ ok: boolean, detail: string }}
  */
-export function runPatchApplicability(root = process.cwd()) {
-  const result = spawnSync(process.execPath, [resolve(root, PATCH_APPLICABILITY_SCRIPT)], {
+export function runPatchApplicability({ root = process.cwd(), target, upstreamDsh } = {}) {
+  const args = patchApplicabilityArgs({ target, upstreamDsh });
+  if (args === null) {
+    return {
+      ok: false,
+      detail:
+        '缺 target 或 upstreamDsh ⇒ 无法构造补丁适用性检查的参数' +
+        '（--dsh-target 选补丁集、--target 是待检上游版本）。这是调用方缺陷，不是补丁问题。',
+    };
+  }
+  const result = spawnSync(process.execPath, [resolve(root, PATCH_APPLICABILITY_SCRIPT), ...args], {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -683,6 +737,24 @@ export function selfTest() {
   cyclic.self = cyclic;
   eq('describeError：循环引用对象仍可读（不抛、不退化成 [object Object]）', describeError(cyclic), '{"code":"EPERM","self":"[循环引用]"}');
 
+  // --- 步骤⑧的参数合成（2026-10-10 真实缺陷的回归夹具）-----------------------
+  // 真实形态：`--apply` 首次端到端跑即在此失败——spawn 不带参数，子进程打印用法后退出。
+  // 期望值**硬编码**（不得由被测函数现算），并把「缺输入必须判失败」钉住：
+  // 若有人把判据弱化成「缺了也返回参数」，下面两条会红。
+  eq(
+    '步骤⑧：参数形状逐字正确（--target=上游精确版本 --dsh-target=目标键）',
+    patchApplicabilityArgs({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1' }),
+    ['--target=0.2.1-alpha.1', '--dsh-target=alpha'],
+  );
+  eq(
+    '步骤⑧：next 线同样带两个参数',
+    patchApplicabilityArgs({ target: 'next', upstreamDsh: '0.2.0-rc.2' }),
+    ['--target=0.2.0-rc.2', '--dsh-target=next'],
+  );
+  eq('步骤⑧：缺 target ⇒ null（调用方判失败，不得空跑）', patchApplicabilityArgs({ upstreamDsh: '0.2.1-alpha.1' }), null);
+  eq('步骤⑧：缺 upstreamDsh ⇒ null', patchApplicabilityArgs({ target: 'alpha' }), null);
+  eq('步骤⑧：两者皆缺 ⇒ null', patchApplicabilityArgs({}), null);
+
   if (failures.length > 0) {
     throw new Error(`sync-upstream-release 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
   }
@@ -795,6 +867,37 @@ function main(args) {
 
   for (const notice of notices) console.warn(`⚠️  ${notice}`);
 
+  // ---- 第 3→4 步的强制点：Release Plan 必须**批准过**这一条线 ------------------
+  // 这是 `release-manifest.json` 在链路上唯一的强制消费点（第 3 步出计划 → 第 4 步派生版本号）。
+  // 少了它，那份文件就是**没人读**的（而它长得像决策面，`docs/version-policy.md` §3.1 把它
+  // 画成唯一权威链路上的一环）——本仓缺陷族「文档承诺了、代码不读」。
+  //
+  // ⚠️ 判据是**时点**的（`n` 必须等于台账现算的下一个）：它在这里成立，因为这里**就是**决策时刻；
+  //    放进每次 PR 都跑的门禁则不成立（发完之后计划里的 n 必然成为历史值，会逼人乱改 n）。
+  //    两组判据的分工见 `release-ledger.mjs::diagnoseReleasePlan()` 的 boxed 段。
+  // ⚠️ `--no-counter` 是纯上游可信性查询（不推导 n、无东西可写）⇒ 不要求计划。
+  if (plan.mode !== 'no-counter') {
+    let releasePlan = null;
+    try {
+      releasePlan = readReleasePlan();
+    } catch (error) {
+      problems.push(
+        `步骤③：${PLAN_RELATIVE} 读不到 —— ${error.message}\n` +
+          `   第 4 步派生版本号之前必须先有第 3 步的决定；缺计划时**不得**直接派生` +
+          `（那种情况下派生出的 n 是「没人决策过」的）。`,
+      );
+    }
+    if (releasePlan !== null) {
+      const planLineProblems = checkPlanLineFor({ plan: releasePlan, ledger, target, w, targets: DSH_TARGETS });
+      problems.push(...planLineProblems.map((p) => `步骤③：${p}`));
+      if (planLineProblems.length === 0) {
+        console.log(
+          `✅ 步骤③④：Release Plan 批准了 ${target} 线（n=${plan.n}${w ? `，w=${w}` : ''}）⇒ 与派生值逐字一致`,
+        );
+      }
+    }
+  }
+
   if (problems.length > 0) {
     for (const problem of problems) console.error(`❌ ${problem}`);
     console.error(`\n核算失败（${problems.length} 项）——不写版本、不打 tag、不发布（§4.6）。`);
@@ -828,7 +931,12 @@ function main(args) {
     return 1;
   }
   const versionFiles = [join(process.cwd(), 'package.json'), join(process.cwd(), 'Cargo.toml')];
-  const snapshot = snapshotFiles([ledgerPath(), ...versionFiles]);
+  // ⚠️ Cargo.lock 必须进快照：步骤⑤的 refreshLock 会改写它（含 workspace 成员版本号），
+  //    而后续任一步失败回滚时，若它不在快照里，就会残留「版本文件已回滚、lock 里还是
+  //    新版本号」的半套状态（2026-10-10 首次 --apply 实测泄漏过一次：步骤⑧失败后
+  //    Cargo.lock 里残留 0.2.1-alpha.1.1，而 package.json 已回滚成 0.7.4-alpha.1）。
+  const lockFile = join(process.cwd(), 'Cargo.lock');
+  const snapshot = snapshotFiles([ledgerPath(), ...versionFiles, lockFile]);
   console.log(`📸 快照：${snapshot.dir}`);
 
   const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
@@ -854,7 +962,7 @@ function main(args) {
   const lock = refreshLock();
   console.log(`${lock.ok ? '✅' : '⚠️ '} Cargo.lock：${lock.detail}`);
 
-  const patches = runPatchApplicability();
+  const patches = runPatchApplicability({ target, upstreamDsh });
   if (!patches.ok) {
     snapshot.restore();
     const cleaned = snapshot.cleanup();

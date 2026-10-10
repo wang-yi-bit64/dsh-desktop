@@ -269,8 +269,8 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 | # | 步骤 | 命令 / 判据 |
 |---|---|---|
 | 1 | 上游同步 | `sync-upstream-release.mjs` → 更新 `harness-locks/dsh-releases.json` 与 `dshVersion` 锚点 |
-| 2 | 功能检测 | 从「上个 tag..HEAD」分类提交 → `docs/releases/FEATURES.md` |
-| 3 | 出 Release Plan | `release-manifest.json`：`releaseType` + `breaking` + `n` + `w` |
+| 2 | 功能检测 | 从「上个 tag..HEAD」分类提交 → `docs/releases/FEATURES.md`。⚠️ 双通道并存时基线**按通道取**（alpha 上次 tag 与 rc 上次 tag 不同），文件首部有基线表；生成器 `feature-log.mjs` **尚未落地**，当前人工按 `conventional-commits.mjs` 同一判据复核 |
+| 3 | 出 Release Plan | `release-manifest.json`：`releaseType` + `breaking` + `n` + `w`。🔴 **强制点已接线**（2026-10-10）：第 4 步前门前会读它，未批准的线 / `n` `w` 与派生值不符 / 文件缺失 ⇒ 判红不派生；判据分恒时（门禁）与时点（前门）两组，见 `scripts/release-ledger.mjs::diagnoseReleasePlan()` |
 | 4 | **派生**版本号 | `npm run version:next`（**不手填**）→ 写 `package.json` |
 | 5 | 原子发布提交 | `package.json` + `Cargo.toml` + `Cargo.lock` + `CHANGELOG.md` **同一个提交** |
 | 6 | 门禁 | `npm run gate -- --tier=release`；命中敏感路径再跑条件式人工 smoke |
@@ -371,7 +371,7 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 |---|---|
 | **让 `+N` 承担排序**（把排序键放进 build 段） | SemVer **规范**明确规定 build metadata 不参与优先级；本栈今天能排是**实现意外**（虽已文档化）。一旦 `semver` 升到 2.x 去对齐规范，排序会**静默失效**。用 §1.2-3 的不变量把排序留在**预发布段**，则**不依赖任何第三方行为** |
 | 自定义 `version_comparator` 作为**必需项** | §6.2 已证伪。且它**解不了**真正的问题（本仓 JS），反而增加一条「已安装二进制内置逻辑」的维护面 |
-| `allow_downgrades` 作为放宽手段 | 它把「must be newer」变成「**must be different**」= 放开**任意**回滚，与 `version_comparator` **互斥**。仅用于 bridge 版（内置放宽比较器的那一版） |
+| `allow_downgrades` 作为放宽手段 | 它把「must be newer」变成「**must be different**」= 放开**任意**回滚，与 `version_comparator` **互斥**。因此**不得**作为常规手段——只在 **bridge 版**（内置放宽比较器的那一版）上用**一次**，用于把已装用户带过版本号换代处。**已于 2026-10-09 落为 [ADR-063](../docs/adr/063-bridge-release-for-version-model-cutover.md)**：登记在台账 `bridges[]`、豁免判据见 §7.4、注入点 `updater-manifest.mjs::composeUpdaterConfig` |
 
 ---
 
@@ -397,7 +397,11 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
   以及本次新增的两条（**已于 2026-10-08 注册进 `scripts/gate-manifest.mjs`**）：
   - **`release-ledger`** —— `scripts/release-ledger.mjs`：台账自洽（守卫 1：二元组不重复 + `n` 序列无空洞）
     与「`desktopVersion` 逐字等于由 `(upstreamDsh, n, w)` 合成出来的串」。空台账时**打印「空集判据」**，
-    不静默通过。
+    不静默通过。2026-10-10 起**同时**校验 Release Plan（`release-manifest.json`）的**恒时**判据
+    （结构 / 目标 / 在役键唯一 / 字段白名单 / `w` 字符集），文件缺失判红；
+    **时点**判据（`n` 逐字等于台账现算的下一个）不进门禁——它只在决策时刻成立，
+    去处是发布前门（`sync-upstream-release.mjs` 的「第 3→4 步强制点」）与 `--validate --strict-plan`。
+    两组为何分开见 `diagnoseReleasePlan()` 的 boxed 段；`--show` 会连计划一起打印。
   - **`version-policy`** —— `scripts/verify-version.mjs`：守卫 1（台账）+ 守卫 2（`w` 不参与排序）
     + 守卫 3（通道解析严格）。⚠️ 它的被探测实现是**参数化注入**的，自测里喂「比较 build 的比较器」
     与「缺口 2i 的旧实现」并断言报红——否则判据写坏时同样给绿。
@@ -415,7 +419,41 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 - 唯一门禁入口：`npm run gate -- --tier=<fast|ci|release|sentinel|full>`；清单产地
   `scripts/gate-manifest.mjs`。
 
-### 7.4 发布前门禁（按序）
+### 7.4 换代桥接版豁免（ADR-063；对 §7.1 守卫的**有凭据**降级）
+
+⚠️ 本节不是「放松守卫」，而是「给一处**必然发生**的排序倒挂规定唯一出路」。背景：合成号跟随
+**上游**版本线（`0.2.x`），线上历史 tag 属**旧模型**（`0.7.x`）⇒ 换代首个合成号排序必然更低，
+`updater` 默认判据（`release > current`）会让它**零投递**。处置是**先发桥接版**（版本号更高、
+内置 `plugins.updater.allowDowngrades`），再发合成号。
+
+**豁免判据三条，缺一即不豁免**（唯一产地 `release-ledger.mjs::findPermittingBridge`）：
+
+| # | 判据 | 反例（必须不豁免） |
+|---|---|---|
+| 1 | **同通道** | 只有 alpha 线的桥接版时，rc 线合成号仍判红（各通道有自己的端点） |
+| 2 | `bridge.version ≥` **该通道**已发布的最高版本 | 桥接版比本通道最高 tag 低 ⇒ 它当年没送达 ⇒ 不得当凭据 |
+| 3 | 该桥接版的 tag **已在 tag 语料里** | 「台账已登记、tag 没打」（发了一半）⇒ 必须判红；**不给 `tags` 语料一律不豁免** |
+
+**豁免只降级两条守卫的「后果」，判据本身不变**，且降级必须**留痕**：
+
+- `version.mjs::diagnoseVersionMonotonic`：`problems` 为空，`notes` 写明命中的桥接版与基准
+  （禁止无声通过——否则「豁免成立」与「判据没查」在输出上完全一样）；
+- `updater-manifest.mjs::diagnoseChannelManifest`：同上；**结论行按实际结局分项写**，
+  不得在豁免生效时仍宣称「端点 version ≥ 该通道最新已发布 tag」（那是假的）。
+
+**豁免是长期的，不逐次补登记**：合成号永远低于旧模型号 ⇒ 只要该通道最新的号仍是桥接版，
+后续合成号沿用同一依据；一旦有人在桥接版之上发了**更高的号**（那一版没放宽比较器），豁免
+**自动失效**并重新判红。不变式：豁免成立时 `bridge.version === 该通道最高已发布 tag`。
+
+**一处刻意的不对称（勿「统一」）**：本节判据的基准是**本通道**最高 tag；而 §7.1 那条**基础**
+单调判据（`checkVersionMonotonic`）的基准仍是**全局**最高 tag（历史守卫，宁可过严——它是为
+2026-09-25「先 `v0.7.0-rc.1`、后 `0.7.0-alpha.8`」的形态建立的）。两处的差异在各自自测里
+都有夹具钉住（`version.mjs` 自测「不对称：…」两条）。
+
+**代价（如实登记，见 ADR-063 决策 7）**：放宽内置在桥接版里 ⇒ 装过它的用户此后可回滚到
+任意更旧版本；**从未装过桥接版的用户照旧收不到合成号**，必须经历一次桥接版。
+
+### 7.5 发布前门禁（按序）
 
 1. `gh workflow run ci.yml --ref main`
 2. **两条通道各一次** `smoke.yml -f scope=full -f dsh_target=next|alpha`，须落在**将要打 tag 的那个提交**上
@@ -470,5 +508,7 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 权限：  commits → Feature Log → Release Plan → **机器派生** Version（人不填）
 流程：  同步 → 检测 → 计划 → 派生 → 原子提交 → 门禁 → 两步推送 → Draft/Verify/Publish → 回读
 守卫：  n 不重复 / w 不排序 / 通道解析不静默回落
+换代：  排序必然倒挂（合成号 0.2.x < 旧模型 0.7.x）⇒ **先发桥接版**（内置 allowDowngrades）
+        再发合成号；豁免三条判据见 §7.4（同通道 / ≥ 本通道最高 tag / **该 tag 已发布**）
 开口：  正式线（上游无预发布）的序号载体 —— ADR-061 决策 7
 ```
