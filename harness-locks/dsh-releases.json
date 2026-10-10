@@ -78,6 +78,15 @@
           "date": "2026-10-09",
           "upstreamTag": "dsh-v0.2.1-alpha.1",
           "upstreamCommit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc"
+        },
+        {
+          "channel": "alpha",
+          "n": 2,
+          "desktopVersion": "0.2.1-alpha.1.2",
+          "tag": "v0.2.1-alpha.1.2",
+          "date": "2026-10-10",
+          "upstreamTag": "dsh-v0.2.1-alpha.1",
+          "upstreamCommit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc"
         }
       ]
     }
