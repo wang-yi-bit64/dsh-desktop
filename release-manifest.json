@@ -14,22 +14,23 @@
     "",
     "⚠️ 桥接版（ADR-063）**不**出现在 lines[] 里：它们是旧模型的高号（0.7.x），由人写进版本文件，",
     "   只登记在台账的 bridges[] 中，**不**由台账的 n 派生——写进这里等于宣称它们可被派生。",
-    "   本轮（第二代版本号模型首次发版）的不可颠倒顺序：",
-    "     ① 先发两条桥接版 v0.7.3-rc.1（rc 线）、v0.7.4-alpha.1（alpha 线），各自内置 updater 放宽手段",
-    "        allowDowngrades ⇒ 已装旧号的客户端才愿意接受排序更低的合成号；",
-    "     ② 再发本文件批准的两条合成号。",
-    "   顺序颠倒的后果：合成号在排序上低于线上最新的 0.7.2-rc.1 / 0.7.3-alpha.1，默认判据（必须更新）下",
-    "   推送出去也没人收得到；而「已经发出去了」这件事看不出来（发布是成功的）。",
+    "   本轮（第二代版本号模型的第二次发版）的前置**已完成**：两条桥接版（rc 线 v0.7.3-rc.1、",
+    "   alpha 线 v0.7.4-alpha.1）已于 2026-10-09 各自发出（Release 存在、13 资产），",
+    "   按 §7.4 三条豁免判据全部成立（同通道 / bridge.version ≥ 该通道最高已发布 tag / 该 tag 已发布）。",
+    "   ⇒ 本轮两条合成号可以直接发，**不需要**再补一轮桥接版。",
     "",
     "本轮变更性质：上游锚点**不动**（next 仍钉 0.2.0-rc.2、alpha 仍钉 0.2.1-alpha.1，两端同批核对过），",
-    "本仓有 feat: 提交 ⇒ releaseType = desktop-feature（§3.2：x.y.z 不变、n+1），两条线各自首次交付 ⇒ n = 1。",
-    "breaking = false：区间内无破坏性改动（详见 docs/releases/FEATURES.md 的分类清单）。"
+    "本仓只有 fix: / perf: 提交（4 条，即启动五缺陷的 B1–B4 修复批次），**无 feat:**、**无破坏性**",
+    "⇒ releaseType = desktop-fix（§3.2：x.y.z 不变、n+1）。",
+    "两条线各自第 2 次交付 ⇒ n = 2（台账 builds[] 里该 (上游精确版本, 通道) 组已各有一条 n = 1，",
+    "见 harness-locks/dsh-releases.json；n 不由人填，此处只是本轮**决策**的批准值，第 4 步会再逐字核对）。",
+    "breaking = false：判据见 docs/releases/FEATURES.md §2（四条可证伪判据，全部零命中）。"
   ],
   "schemaVersion": 1,
-  "releaseType": "desktop-feature",
+  "releaseType": "desktop-fix",
   "breaking": false,
   "lines": {
-    "alpha": { "n": 1, "w": null },
-    "next": { "n": 1, "w": null }
+    "alpha": { "n": 2, "w": null },
+    "next": { "n": 2, "w": null }
   }
 }
