@@ -295,7 +295,7 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 | 无空文件 | 无 0 字节；`.sha256` 约 100 B 属正常 |
 | 滚动端点 | `version == 新版` **且** `url 里的 tag == 新 tag`（⚠️「间隔取回不回退」是**错的判据**——上传错的那份会让三次取回全是旧内容且稳定，**反而通过**） |
 | ⚠️ URL 可达 | `latest.json` 里的 `url` 必须回读 **HTTP 200**。**理由**：合成本仓段含 `+`，而安装包**文件名本身**就含它（NSIS 命名为 `{productName}_{version}_{arch}-setup.exe`）⇒ 若下游按**表单编码**处理 `+` 会变空格 ⇒ 404 |
-| Release 属性 | `prerelease` / `draft` 与目标通道一致（⚠️ `v0.7.2-rc.1` 曾出现 `prerelease=false` 的**带外人工改**，GitHub **无编辑历史** ⇒ 只能靠回读断言发现） |
+| Release 属性 | `prerelease` / `draft` 与目标通道一致。**判据**＝`node scripts/verify-release-assets.mjs --check-release <tag>`：一次 `gh api` 调用同时取回属性与 13 项清单（分两次调用会拿到两个时刻的对象），期望值由 **tag 的版本号**推出（带预发布段 ⇔ `prerelease=true`；`draft` 恒须 `false`），**不看工作流怎么写**。⚠️ `v0.7.2-rc.1` 曾出现 `prerelease=false` 的**带外人工改**，GitHub **无编辑历史** ⇒ 只能靠回读断言发现 |
 
 ---
 

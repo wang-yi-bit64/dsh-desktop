@@ -256,10 +256,21 @@ jobs:
           DSH_VERSION: ${{ needs.preflight.outputs.dsh_version }}
         run: |
           set -euo pipefail
-          # ⚠️ --match 'v*' 不能省（ADR-053）：更新通道的滚动 tag（updater-rc / updater-alpha）
-          # 也是 tag。不限定前缀时，git describe 会在下个发布周期把上一次的滚动 tag 当成
-          # 「上一个发布」，于是变更区间算错、Release 正文少一段——而它不会报任何错。
-          PREV="$(git describe --tags --match 'v*' --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          # 🔴 「上一个发布」必须**按通道**取，不能再用 `git describe --tags --match 'v*'`：
+          #    那条守卫是照 ADR-053 的滚动 tag（updater-rc / updater-alpha）写的，**没有
+          #    通道过滤**。双通道下 `git describe` 按**图距离**取全局最近，会取到**另一条线**
+          #    的 tag；更糟的是答案**随仓库里存在哪些 tag 而变**——同一条已发布的 tag，
+          #    今天取和明天取可以不同。
+          #    2026-10-10 实测（发布 v0.2.1-alpha.1.2）：正文写成
+          #    `完整变更：v0.2.0-rc.2.1 → v0.2.1-alpha.1.2`，而 alpha 线自己的基线是
+          #    `v0.2.1-alpha.1.1`（`v0.2.0-rc.2.1` 属于 rc 线）。**不报任何错。**
+          #    现在委托给 `changelog.mjs --print-baseline`：通道判据与 CHANGELOG 段落生成
+          #    **同一个产地**（`dsh-targets.mjs` 的 `publishChannel`），且推不出通道时
+          #    它**非零退出**——不许把「推不出」伪装成「首次发布」。
+          # ⚠️ 这里**刻意不写 `|| true`**：旧写法吞掉了所有失败，包括「通道推导错」。
+          #    该通道确实还没有上一个 tag 时，脚本以 0 退出且**无输出**，下面的
+          #    `[ -n "$PREV" ]` 自然走「首次发布」分支——正常路径不依赖兜底。
+          PREV="$(node scripts/changelog.mjs --print-baseline --to "${TAG}")"
           {
             echo 'body<<RELEASE_NOTES_EOF'
             # 运行时基线横幅：双通道下，「这一版内置哪个 DSH」是用户选版本时最先看的

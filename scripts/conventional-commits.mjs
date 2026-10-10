@@ -38,6 +38,11 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+// 🔴 通道名与「tag 属于哪条通道」的判据**只从 dsh-targets.mjs 取**（SSOT）。
+//    不自造第二套后缀表——那正是本仓反复踩的坑：同一事实两处实现，改一处另一处静默漂移。
+//    `dsh-targets.mjs` 只 import `node:` 内置模块，无循环依赖。
+import { DSH_TARGETS, STABLE_CHANNEL, desktopChannelForVersion } from './dsh-targets.mjs';
+
 /**
  * 章节定义：顺序即渲染顺序，`title` 直接进 Markdown 标题。
  *
@@ -304,8 +309,14 @@ function comparePrereleaseParts(a, b) {
   return 0;
 }
 export function latestTag(options = {}) {
-  const { cwd = process.cwd(), pattern = 'v*', rev } = options;
-  const args = ['describe', '--tags', '--abbrev=0', `--match=${pattern}`];
+  const { cwd = process.cwd(), pattern = 'v*', rev, excludes = [] } = options;
+  // `pattern` 允许是数组：通道感知取基线会把**该通道的全部候选 tag 名**逐个传进来
+  // （`--match` 可重复，语义是并集）。用 tag 名当 glob 是安全的——本仓 tag 形如
+  // `v<semver>`，不含 glob 元字符。
+  const patterns = Array.isArray(pattern) ? pattern : [pattern];
+  const args = ['describe', '--tags', '--abbrev=0'];
+  for (const p of patterns) args.push(`--match=${p}`);
+  for (const e of excludes) args.push(`--exclude=${e}`);
   if (rev) args.push(rev);
   try {
     const stdout = execFileSync('git', args, {
@@ -321,6 +332,123 @@ export function latestTag(options = {}) {
     // `rev` 非法（如根提交的 `^`）同样走这里，语义退化为「从头读」，也是安全的。
     return null;
   }
+}
+
+/**
+ * 本仓认可的**全部**通道名：`stable` + 各目标的 `publishChannel`。
+ *
+ * 唯一产地是 `dsh-targets.mjs`；此处只做集合化，不新增名字。
+ * 含休眠目标（如 `beta`）——休眠是「不许发布」，不是「不存在这个通道」。
+ *
+ * @returns {string[]} 去重后的通道名
+ */
+export function knownChannelNames() {
+  return [STABLE_CHANNEL, ...new Set(Object.values(DSH_TARGETS).map((t) => t.publishChannel))];
+}
+
+/**
+ * 取某个 tag 归属的桌面通道（纯函数，不碰 git）。
+ *
+ * 形状非法的 tag（非 `v<semver>`）返回 `null`——**排除**，不是抛错：
+ * 历史里可能存在与本仓命名无关的 tag，为它中断整个取基线过程是错的。
+ *
+ * @param {string} tag 形如 `v0.2.1-alpha.1.2`
+ * @returns {string|null}
+ */
+export function channelOfTag(tag) {
+  const version = String(tag).replace(/^v/, '');
+  try {
+    return desktopChannelForVersion(version);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从候选 tag 里筛出属于 `channel` 的那些（纯函数，供自测直接喂夹具）。
+ *
+ * @param {string[]} tags
+ * @param {string} channel
+ * @returns {string[]}
+ */
+export function filterTagsForChannel(tags, channel) {
+  return tags.filter((tag) => channelOfTag(tag) === channel);
+}
+
+/**
+ * 列出「从 `rev` 可达」的全部 `v*` tag。
+ *
+ * 🔴 必须限制在**可达**集合内：基线只能是被发布提交的祖先。只在 tag 总表里找工作，
+ *    会把「尚未进入本分支的 tag」也算进来（例如另一条线刚推的 tag）。
+ *
+ * @param {{cwd?: string, rev?: string}} [options]
+ * @returns {string[]}
+ */
+export function reachableVersionTags(options = {}) {
+  const { cwd = process.cwd(), rev = 'HEAD' } = options;
+  try {
+    const stdout = execFileSync('git', ['tag', '--merged', rev, '--list', 'v*'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    // rev 不可解析（如根提交的 `^`）或无 tag —— 与 `latestTag` 同一处置：空集。
+    return [];
+  }
+}
+
+/**
+ * **通道感知**的取基线：返回 `channel` 这条线自己的上一个 `v*` tag。
+ *
+ * ## 为什么必须存在（本仓真实缺陷）
+ *
+ * 修 `release.yml` 的正文段落时它是这样写的：
+ *
+ * ```bash
+ * PREV="$(git describe --tags --match 'v*' --abbrev=0 "${TAG}^")"
+ * ```
+ *
+ * `--match 'v*'` 这条守卫是照 **ADR-053 的滚动 tag**（`updater-rc` / `updater-alpha`）
+ * 写的，**没有通道过滤**。双通道下 `git describe` 按**图距离**取全局最近，于是可能
+ * 取到**另一条线**的 tag。2026-10-10 实测：发布 `v0.2.1-alpha.1.2` 时正文写的是
+ * `完整变更：v0.2.0-rc.2.1 → v0.2.1-alpha.1.2`——`v0.2.0-rc.2.1` 属于 **rc 线**，
+ * 而 alpha 线自己的基线是 `v0.2.1-alpha.1.1`。用户看到的变更区间因此是错的，
+ * 且**不报任何错**。
+ *
+ * 同一类缺陷在 `changelog.mjs` 里早已修过（见其 `--from` 省略时的注释），
+ * 但修一处未 grep 同类点 ⇒ 残留落在 **YAML** 里，JS linter 与 `scripts/**`
+ * 的守卫都看不见它。本函数是那个「同类点」的唯一出口。
+ *
+ * ## 实现要点
+ *
+ * 先把可达 tag 按通道筛出来，再把**候选 tag 名本身**当 `--match` 交给
+ * `git describe`，从而复用 git 原生的「最近优先 / 附注优先 / 同级取新」语义——
+ * 不自己实现距离比较（自造第二套比较器 = 本仓明令禁止的形态）。
+ *
+ * @param {{channel: string, rev?: string, cwd?: string}} options
+ * @returns {string|null} 该通道的上一个 tag；该通道尚无 tag 时为 `null`
+ * @throws {Error} `channel` 不在 {@link knownChannelNames} 内（**不静默返回空**：
+ *   「判不了」与「没有」必须分开，否则一个拼错的通道名会伪装成「首次发布」）
+ */
+export function latestTagForChannel(options = {}) {
+  const { channel, cwd = process.cwd(), rev } = options;
+  const known = knownChannelNames();
+  if (!known.includes(channel)) {
+    throw new Error(
+      `未知通道 ${JSON.stringify(channel)}；可用：${known.join(' / ')}`,
+    );
+  }
+  const candidates = filterTagsForChannel(
+    reachableVersionTags({ cwd, rev: rev ?? 'HEAD' }),
+    channel,
+  );
+  if (candidates.length === 0) return null;
+  return latestTag({ cwd, pattern: candidates, rev });
 }
 
 /**
@@ -416,10 +544,97 @@ export function selfTest() {
     }
   }
 
+  // --- 通道感知取基线：**纯逻辑部分**（不碰 git，喂夹具） ----------------------
+  //
+  // 🔴 这里只钉「分类逻辑」。真实 tag 集合上的行为（可达性、图距离、附注优先）
+  //    属于 git 侧，夹具替代不了——那部分由发布链路真跑覆盖，并在
+  //    `verify-release-workflow.mjs` 侧钉住 release.yml 不许再用通道盲的命令。
+  const CHANNEL_TAGS = [
+    // rc 线
+    'v0.2.0-rc.2.2',
+    'v0.2.0-rc.2.1',
+    'v0.7.3-rc.1',
+    // alpha 线
+    'v0.2.1-alpha.1.2',
+    'v0.2.1-alpha.1.1',
+    'v0.7.4-alpha.1',
+    // 正式线（无预发布段）
+    'v0.1.0',
+    'v0.4.0',
+    // 后缀命中不了任何 publishChannel（`next` 是**上游 dist-tag 名**，不是桌面通道名）
+    'v0.5.0-next.1',
+    // 与本仓命名无关 / 形状非法
+    'release-2024',
+    'v0.2-rc.1',
+  ];
+  const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+  const rcTags = filterTagsForChannel(CHANNEL_TAGS, 'rc');
+  const alphaTags = filterTagsForChannel(CHANNEL_TAGS, 'alpha');
+  const stableTags = filterTagsForChannel(CHANNEL_TAGS, 'stable');
+
+  const channelCases = [
+    {
+      label: 'rc 线只筛出自己的 tag',
+      got: rcTags,
+      want: ['v0.2.0-rc.2.2', 'v0.2.0-rc.2.1', 'v0.7.3-rc.1'],
+    },
+    {
+      label: 'alpha 线只筛出自己的 tag',
+      got: alphaTags,
+      want: ['v0.2.1-alpha.1.2', 'v0.2.1-alpha.1.1', 'v0.7.4-alpha.1'],
+    },
+    {
+      label: '🔴 跨通道隔离：两条线的结果不得有交集（缺陷本体）',
+      got: rcTags.filter((t) => alphaTags.includes(t)),
+      want: [],
+    },
+    { label: 'stable 线取无预发布段的 tag', got: stableTags, want: ['v0.1.0', 'v0.4.0'] },
+    {
+      label: '后缀非通道名的 tag 不属于任何通道',
+      got: CHANNEL_TAGS.filter((t) => channelOfTag(t) !== null).includes('v0.5.0-next.1'),
+      want: false,
+    },
+    {
+      label: '形状非法/非本仓命名的 tag 被排除而非抛错',
+      got: ['v0.2-rc.1', 'release-2024'].every((t) => channelOfTag(t) === null),
+      want: true,
+    },
+    {
+      label: '通道名与目标表同源（stable + 各 publishChannel）',
+      got: knownChannelNames().sort(),
+      want: ['alpha', 'rc', 'stable'],
+    },
+    {
+      label: '🔴 未知通道抛错（不静默返回空，否则拼错的通道名会伪装成「首次发布」）',
+      got: (() => {
+        try {
+          latestTagForChannel({ channel: 'beta' });
+          return 'no-throw';
+        } catch {
+          return 'throw';
+        }
+      })(),
+      want: 'throw',
+    },
+  ];
+  for (const testCase of channelCases) {
+    const ok = Array.isArray(testCase.want)
+      ? Array.isArray(testCase.got) && sameSet(testCase.got, testCase.want)
+      : testCase.got === testCase.want;
+    if (!ok) {
+      failures.push(
+        `通道取基线：${testCase.label} —— 期望 ${JSON.stringify(testCase.want)}，实际 ${JSON.stringify(testCase.got)}`,
+      );
+    }
+  }
+
   if (failures.length > 0) {
     throw new Error(`conventional-commits 自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`);
   }
-  return { passed: SELF_TEST_FIXTURES.length + 3 + bumpCases.length, failed: 0 };
+  return {
+    passed: SELF_TEST_FIXTURES.length + 3 + bumpCases.length + channelCases.length,
+    failed: 0,
+  };
 }
 
 // 直接执行时支持 --self-test；作为库 import 时不触发任何副作用。
