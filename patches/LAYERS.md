@@ -83,7 +83,7 @@
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
 | `@deepseek-ai/dsh` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` 三个桌面插件包声明为 dsh 依赖（第四个 `dsh-desktop-preset-transfer` 已于 2026-09-30 整链退役）。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
-| `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败** | 官方 loader 支持从 `baseUrl` 解析裸包名 |
+| `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败**。<br>**2026-10-10（B4）同一补丁加了另一半**：入口 specifier 被交成**绝对 `file://` URL 而该文件并不存在**（典型形态：硬写的 `<pkgDir>/index.js`，而包的真实入口在 `main`/`exports` 里）时，那条 URL 是一条**死路**——`require.resolve` 不收 URL，URL 也从不走包解析 ⇒ 热挂载无声失败、回落重启（用户感知为「点了插件没反应」）。补丁在**任何下游解析之前**把失效的 `file://` URL 修成其 owning package 的裸名（按 `/node_modules/` 取**最内层**，覆盖作用域包与 pnpm 虚拟 store），并留 warn 让这次替换**可见**（AGENTS §7.1 禁无声降级）。<br>🔴 落点必须在 `composeError` 异步体的**顶部**：`this.ctx.loader.internal` 存在时第一路直接 `return`，写在 `else` 分支里的救援在真机上**永不可达**（本仓实测判据 C1） | 官方 loader 支持从 `baseUrl` 解析裸包名，**且**上游解析器不再把绝对入口 URL 交给 loader |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 | `@deepseek-ai/dsh-typert-loader` | 上游把**启动路径**上「任一 contributor 注册失败」升级成 `AggregateError` 并从 `apply()` 抛出，而 typert-loader 本身是 profile 的一个 loader entry ⇒ 一个插件的 typert 声明有问题就让**整棵插件树**加载失败（`dsh: plugin tree failed to load`）。同一份代码在**动态路径**（后挂载的 entry）上只 `logger.error` 不抛——启动路径缺的正是这个降级。补丁把启动路径的失败也降级为带 entry 名的 logged error（保留 `AggregateError` 作结构化载荷） | 官方把 contributor 注册失败降级为非致命（或按 entry 隔离、不再整树原子） |
 | `@deepseek-ai/dsh-client-file-upload` | `registerAgentResolver` 在「已注册」时抛错，而 Cordis `Fiber._reload()` 是**先重跑 apply、后处置上一轮 effects** ⇒ 任何对该 entry 的重放（插件管理器 live-apply、热挂载 bundle 重列核心行）都会命中守卫抛错，让 session-controller 整个 fiber 回滚；回滚连带摘掉它注册的 `typert.lookups.configure("agent"/"session")` ⇒ 冷会话切模式报 `lookup provider "agent" did not resolve`。补丁把守卫改为**接管 + warn**（旧 disposer 的 `=== resolve` 比较保证不误伤新注册者） | 官方把该注册改为幂等（或 reload 前先处置旧注册） |
@@ -382,6 +382,55 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
 **未覆盖（诚实声明）**：组装态「12/12 applied」与「能启动」**本机验不了**（`prepare:harness --force`
 被 `koffi` 拦，见 `docs/incidents/local-toolchain-limits.md`），须由 CI 的 build / portable job 在
 `prepare:harness` 之后按名点名确认。
+
+---
+
+### market 热挂载入口 URL（B4，2026-10-10）：**扩展既有补丁，不新增文件**
+
+> 背景：同一个用户报告里第 5 条是「装完首启点插件加载不了」。市场日志
+> （`profiles/web/.dsh-market/log.ndjson`）原文给的失败是
+> `failed to import loader entry mkt-furongjun1999-dsh-memory (file:///…/node_modules/@furongjun1999/dsh-memory/index.js): Cannot find module '…\@furongjun1999\dsh-memory\index.js' imported from …\.dsh-market\`。
+
+**根因（实测，逐条可查）：**
+
+1. **入口 specifier 是一条死路**：热挂载把裸包名解析成了**绝对 `file://` 入口 URL**，而该 URL 指向
+   **不存在的文件**——`<pkgDir>/index.js`。该包的真实入口由 manifest 声明
+   （`type: module`、`main: lib/index.js`、`exports["."].import: ./lib/index.js`），**没有** `index.js`。
+2. **`~` 是日志产物，不是 specifier 的一部分**（报告原假设在此被**证伪**）：`…/dshmarket/lib/log.js`
+   的 `sanitize()` 会把 `homedir()` 折叠成 `~`（隐私处理）。原始 message 里是
+   `C:\Users\Administrator\AppData\…`，写成 `~\AppData\…` 只是落盘时的替换。按"畸形 specifier"去找
+   构造点会找错方向。
+3. **为什么 loader 救不了它**：`EntryTree.import()` 的兜底只处理**裸包名**（`require.resolve(name)`）。
+   绝对 `file://` URL 既不是相对 specifier、`require.resolve` 也不接受 URL ⇒ 兜底整段失效。
+4. **产者不在本仓可控面内**：`resolveProfileEntry()`（把裸名转成绝对入口 URL 的那个函数，失败时
+   回退硬写 `join(packageDir,'index.js')`）只存在于 **`dshmarket@1.52.0`** 里；本仓 vendored
+   `vendor/dshmarket` 是 **1.40.0**（`hot.js` 只写裸名，**不含**该函数），且 `origin/main` 同为
+   1.40.0、`resolveProfileEntry` 在全仓**零命中**。即：缺陷的**产者**不在 `vendor/**` 里。
+
+**方案级偏差（必须记）：施工面从 `vendor/dshmarket/**` 迁到 loader 补丁。**
+
+| # | 计划书写的是 | 实际做的是 | 原因 |
+|---|---|---|---|
+| 1 | 改 `vendor/dshmarket/**` 的 hot-mount 路径构造 | 扩展 `@deepseek-ai/cordis-plugin-loader` 既有补丁 | 本仓 vendored 的 1.40.0 **根本没有那个构造点**（它写裸名）——照计划改会去修一个不存在的函数。把补丁加在 loader 这一侧，收益是**与市场版本无关**：任何版本的市场交来失效的绝对入口 URL，热挂载都不会再无声失败 |
+| 2 | （报告未写）救援落在 import 的 `else` 分支 | 落在 `composeError` 异步体**顶部**（先修 specifier，再走原有三条路） | **行为夹具当场判红**：`this.ctx.loader.internal` 存在时第一路直接 `return`，`else` 分支在真机上**永不可达**——按原写法这条救援在发生缺陷的配置里等于没写（判据 C1） |
+
+**验证（`.workbuddy/tmp/verify-b4-loader.mjs`，`node --expose-internals`，19/19 PASS）：**
+
+| 判据 | 证据 |
+|---|---|
+| 缺陷本体（成对红→绿） | 同一夹具、同一 URL：未打补丁 ⇒ `ERR_MODULE_NOT_FOUND`；打补丁 ⇒ 解析成功且 token 命中（ESM-only 包，`exports` 只给 `import` 条件、**故意不放 index.js**） |
+| 降级可见 | 替换触发时留下 warn，且 warn 里出现反解出的裸名（AGENTS §7.1 禁无声降级） |
+| 负控 1：不得凭空造模块 | 包**本身**不存在时，修后仍必须失败 |
+| 负控 2：不得误触发 | 裸名缺失仍按原样失败，且**零 warn**（证明救援没被走进） |
+| 不回归 | 裸包名 / **存在**的绝对 `file://` URL / 缺失的相对 specifier —— 两种变体行为一致 |
+| 反解正确性 | 作用域包 `@scope/pkg` 取两段；pnpm 虚拟 store `.pnpm/<n>@<v>/node_modules/<n>/…` 取**最内层**（夹具按 pnpm 真实形态补了顶层链接，否则测的是"没装"而不是"取错") |
+| 已知边界（留档） | 宿主**无** `internal` 时，第二路（CJS `require.resolve`）救不了 ESM-only 包 ⇒ 仍失败。该配置不是缺陷发生的那种（真机 `internal` 必然可用，否则错误里的 base 不会是被 baseUrl 锚定的 `.dsh-market/`）；同一宿主下 CJS 包可成功，证明第二路本身有效 |
+| 补丁能否干净落盘 | `git apply --check` 与 GNU `patch --dry-run` 均通过；真实 `patch -p1` 落盘结果与生成器产物**逐字节相同**；`node --check` 语法通过；LF 落盘零 CR（本机 `core.autocrlf=true` 只作用于工作树） |
+| 对**真实发布包**的适用性 | `check-patch-applicability` 双线各 12/12 clean（`--target=0.2.0-rc.2` / `--target=0.2.1-alpha.1 --dsh-target=alpha`） |
+
+**未覆盖（诚实声明）**：①组装态（`prepare:harness` 之后）与真机热挂载**本机验不了**——`koffi` 拦
+`--force`、L1 让 `smoke:headless` 必红、捆绑 Node 24.9 在本机跑不了脚本（三条都先于 B4 存在）；
+②夹具跑在托管 Node 22.22.2 上，**未**在捆绑的 24.9 上复跑（同上，本机跑不了）。
 
 ---
 

@@ -68,8 +68,8 @@ export const PATCH_LAYERS = {
   },
   '@deepseek-ai/cordis-plugin-loader': {
     layer: 'functional',
-    why: '插件 loader 的裸 specifier import 失败时回退到 createRequire 解析（基于 ctx.baseUrl）。桌面插件包位于 node_modules 而非相对路径，缺失则插件 import 失败。',
-    retireWhen: '官方 loader 支持从 baseUrl 解析裸包名时。'
+    why: '插件 loader 的裸 specifier import 失败时回退到 createRequire 解析（基于 ctx.baseUrl）。桌面插件包位于 node_modules 而非相对路径，缺失则插件 import 失败。**2026-10-10（B4）同一补丁还修掉「入口被交成绝对 `file://` URL、且该文件并不存在」**：那是一条死路——`require.resolve` 不收 URL，URL 也从不走包解析，于是热挂载无声失败并回落重启（用户看到的是「点了插件没反应」）。补丁在解析前把失效的 `file://` URL 修成其 owning package 的裸名（按 `/node_modules/` 取**最内层**，覆盖作用域包与 pnpm 虚拟 store 形态），并留一条 warn 使这次替换可见。',
+    retireWhen: '官方 loader 支持从 baseUrl 解析裸包名，**且**上游解析器不再把绝对入口 URL 交给 loader 时。'
   },
   '@deepseek-ai/dsh-client-modules': {
     layer: 'functional',

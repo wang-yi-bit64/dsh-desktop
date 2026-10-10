@@ -1,7 +1,40 @@
 diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 --- a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 +++ b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
-@@ -276,10 +276,25 @@ var EntryTree = class EntryTree {
+@@ -271,15 +271,58 @@ var EntryTree = class EntryTree {
+ 		if (name.startsWith("cordis:")) return this.ctx.loader.builtins[name.slice(7)];
+ 		return composeError(async (info) => {
+ 			info.offset += 3;
++			// A resolver upstream of the loader may hand over an absolute entry URL
++			// (e.g. a market hot-mount row) that no longer exists — the classic
++			// shape is a hard-coded `<pkgDir>/index.js` for a package whose real
++			// entry is declared by `main`/`exports`. An absolute URL is not a
++			// specifier any of the paths below can rescue: `require.resolve`
++			// cannot take it, and it does not go through package resolution at all.
++			// Its owning package name is the faithful equivalent — repair the
++			// specifier up front so every path below sees something it can honour.
++			if (typeof name === "string" && name.startsWith("file:") && this.ctx.baseUrl) {
++				const marker = "/node_modules/";
++				const at = name.lastIndexOf(marker);
++				if (at >= 0) {
++					const rest = name.slice(at + marker.length).split("/");
++					const bare = rest[0].startsWith("@") ? rest[1] === undefined ? "" : rest[0] + "/" + rest[1] : rest[0];
++					if (bare !== "") {
++						let exists = true;
++						try {
++							const { existsSync } = await import("node:fs");
++							const { fileURLToPath } = await import("node:url");
++							exists = existsSync(fileURLToPath(name));
++						} catch {}
++						if (!exists) {
++							this.ctx.logger?.warn?.(`loader: ${name} does not exist; resolving the owning package ${bare} instead`);
++							name = bare;
++						}
++					}
++				}
++			}
+ 			if (this.ctx.loader.internal) return await this.ctx.loader.internal.import(name, this.ctx.baseUrl, {});
+ 			else if (name.startsWith(".")) return await import(__rewriteRelativeImportExtension(
  				/* @vite-ignore */
  				new URL(name, this.ctx.baseUrl).href
  			));
