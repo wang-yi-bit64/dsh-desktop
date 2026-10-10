@@ -284,10 +284,10 @@ export const GATES = [
   {
     name: 'harness-tree',
     script: 'scripts/verify-harness-tree.mjs',
-    title: '组装树完整性（package.json 入口目标必须存在）',
-    why: '缺入口时 package.json 与文件都在、看起来完全正常，只有 Harness 启动才抛 Cannot find module——「装得上、起不来」。真检查需要组装树，因此只在发布链路跑。',
+    title: '组装树健全性（逃逸符号链接 / 桌面插件裸导入 / vendored 包 peer 声明）',
+    why: '三条都只在运行时才炸、且都**静默**：①逃逸链接复制进安装包后成死链接，且插件裸导入按目标真实路径解析；②dsh-desktop-* 插件的裸导入解析不到；③vendored 包的 dsh-* peer 区间被上游 0.2.0 起的 peer 门禁判为不相容——profile bundle 被 `skipping profile bundle`、插件行被 `disabling profile plugin row`，退出码仍是 0，用户看到的是「已安装却用不了」（2026-10-10 真实事故：三个 vendored 包都还写着 ^0.1.2-alpha.4，而运行时是 0.2.0-rc.2）。规则 3 还要求源 / 装配树 / 提交式 lockfile 三面声明一致。因为比较器取自**被测树自己的 semver**（不自造第三套比较器），真检查需要组装树。',
     real: { tiers: [], args: ['src-tauri/resources/harness/node_modules'], needsAssembly: true },
-    manual: '需组装树：由 release.yml 的 build job 与 portable job 在 prepare:harness 之后按名点名',
+    manual: '需组装树：由 release.yml 的 build job 与 portable job 在 prepare:harness 之后按名点名（规则 3 的比较器需要树内的 semver，因此不能进 fast/ci 档；规则 1/2 同样需要树）',
     selfTest: { tiers: ['ci', 'release'], args: ['--self-test'] }
   },
   {
