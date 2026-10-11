@@ -89,8 +89,10 @@
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点 D1~D11 与裁决记录；「插件禁用语义」证据链在此。
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
 - `docs/dev-plan-defect-remediation.md`：**缺陷治理专项**（批次 S0~S7，2026-09-30 起）——D1~D12 缺陷清单、可证伪判据、C1~C8 裁决与执行台账；动 S 批次任何条目前先读它。
+- `docs/dev-plan-supervisor-shell-wiring.md`：**Supervisor 接入桌面壳（L1→L2 接线）的设计与阻塞项**——集成点、`SupervisorState`↔`HarnessPhase` 映射表、启动/停止/安全模式生命周期、异常与边界清单（E1~E11），以及**接线前必须先在 `dsh-host` 补齐的三个 API 缺口**（`HarnessEnv` 传递 / 安全模式 profile / `extra_envs` 死字段）。**动 `HarnessSupervisor` 或 `Supervisor` 前先读它。**
+- `docs/recover-demo.md`：`recover` 子命令的一页式无 GUI 复现步骤（启动 → 注入崩溃 → 退避递增 → 断路器开路）——**改 Supervisor / 退避 / 断路器后必跑**，它同时是 §7.2「Supervisor 自愈与退避」的证据链之一。
 - `docs/version-policy.md`：**版本号策略唯一口径**——命名规则、按变更类型的递增条件、**递增权限**（谁有权决定版本号）、发布流程与守卫；**动版本模型或 `release.yml` 前先读它**。
-- `docs/adr/`：架构决策记录库（49 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
+- `docs/adr/`：架构决策记录库（50 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
 - `crates/dsh-contracts/src/constants.rs`（契约常量）、`errors.rs`（错误码 + `AppError`）、`ipc.rs`（`IpcEnvelope<T>` + 形状测试）、`rpc.rs`（JSON-RPC 唯一契约源，⚠️ 无运行时消费者）。
@@ -119,7 +121,7 @@
 | 内置 Node + Harness 生命周期管理 | ✅ 已接线 | `crates/dsh-host/src/launch.rs` | `src-tauri/src/lib.rs` setup |
 | 孤儿进程防护（INV-3） | ✅ 已接线 | `crates/dsh-host/src/process.rs`（Win32 JobObject / POSIX） | `launch.rs` 派生路径 |
 | URL / Token 捕获与就绪探测 | ✅ 已接线 | `readiness.rs`、`token.rs` | `state.rs::on_ready` |
-| Supervisor 自愈与退避 | ✅ 已接线 | `crates/dsh-host/src/supervisor.rs` | `state.rs` 生命周期回调 |
+| Supervisor 自愈与退避 | ✅ 已接线（**CLI + 桌面壳两条路径都已接入**；2026-10-11 同日先订正为「未接线」、再补齐消费者） | `crates/dsh-host/src/supervisor.rs`（退避/断路器 + 纯函数 `next_backoff` / `decide_restart` / `is_stable_uptime` / `resolve_launch_env`） | **两条**：① `dsh-host-cli recover`（第一个消费者，`commands/recover.rs`）；② **桌面壳 `src-tauri/src/state.rs` 的 `HarnessSupervisor`**——2026-10-11 改为 L2 适配器（[ADR-064](docs/adr/064-shell-adopts-l2-supervisor.md)），公开方法面零改动、`commands.rs`/`menu.rs`/`quit_guard.rs` 不受影响。**证据链**：单元不变式 11 项（`supervisor::tests`）+ 性质测试 9 项（`tests/supervisor_properties.rs`）+ 集成面（`tests/supervisor_backoff.rs` 退避递增与进 `Failed`、`tests/supervisor_stop_orphans.rs` 启动中 stop 无孤儿、`tests/supervisor_env_profile.rs` env/profile 真达子进程）+ 黑盒（`crates/dsh-host-cli/tests/recover_cmd.rs`）+ 一页式复现步骤 `docs/recover-demo.md` + 壳层映射单测（`classify_state`）。⚠️ **接线带来的产品行为变化**：崩溃改为退避重启至多 3 次（`SUPERVISOR_MAX_RESTARTS`），最坏 **3.5 s** 后才进错误页；⚠️ **GUI 路径的本机自动化覆盖仍缺**（GNU 工具链下 `dsh-desktop` 测试二进制无法加载，见 `docs/incidents/local-toolchain-limits.md`），壳层断言由 CI（MSVC）执行 |
 | Safe Mode 隔离 Profile | ✅ 已接线（2026-09-10 补完启动链路） | `crates/dsh-host/src/safe_mode.rs`（profile 落盘）+ `args.rs::profile_patch` / `launch.rs::with_safe_mode`（**启动时选中**：`--profile desktop-safe-mode` + `build/dsh-desktop-safe.patch.yml`） | 错误页 `/safe_mode_action` → `commands.rs`、菜单 `harness-safe-mode` → `menu.rs` |
 | ↳ Safe Mode 的界面反馈（横幅） | 🕓 **计划中**（刻意后置） | 上游靠 preload 往 Harness 页注入安全模式横幅（`mountSafeModeBanner`，含「卸载插件 / 退出安全模式」两个按钮）；本仓界面**看不出**当前处于安全模式 | 无（**待软件功能稳定后再开发**，非阻塞项） |
 | 崩溃归因诊断（**结论**，非压缩包） | ✅ 已接线 | `crates/dsh-host/src/diagnostics.rs` | `dsh-host-cli doctor`、错误页 |
