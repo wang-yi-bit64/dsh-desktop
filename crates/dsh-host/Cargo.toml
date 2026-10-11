@@ -29,3 +29,5 @@ libc.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# S6-3：Supervisor 状态机不变式的性质测试（见 tests/supervisor_properties.rs）。
+proptest.workspace = true

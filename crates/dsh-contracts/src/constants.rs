@@ -400,6 +400,26 @@ pub const SUPERVISOR_STABLE_UPTIME: Duration = Duration::from_secs(30);
 /// 契约 C10 — 状态广播通道容量。
 pub const SUPERVISOR_CHANNEL_CAPACITY: usize = 64;
 
+/// 契约 C10 — 连续崩溃后自动重启的**次数上限**（断路器开路阈值）。
+///
+/// ## 取值理由（2026-10-11 裁决）
+///
+/// 这个数字直接决定「Harness 崩溃后，用户多久才看到错误页」：
+/// 最坏耗时 = 前 `SUPERVISOR_MAX_RESTARTS` 次退避之和
+/// = `0.5 + 1 + 2` = **3.5 s**（退避序列见 [`SUPERVISOR_BACKOFF_INITIAL`]）。
+///
+/// 取 3 是**区间中值**上的权衡：
+///
+/// | 取值 | 最坏见到错误页 | 取舍 |
+/// |---|---|---|
+/// | 2 | 1.5 s | 错误页来得快，但只够扛 2 次偶发崩溃（端口竞争、瞬时 IO） |
+/// | **3** | **3.5 s** | **本值**：3 次重试足以渡过瞬时故障，同时把「必然崩溃」的等待压在 4 s 内 |
+/// | 5 | 15.5 s | 最耐用，但配置类错误要干等 15 s 才见图文归因 |
+///
+/// 注意：崩溃若发生在**稳定运行**（[`SUPERVISOR_STABLE_UPTIME`]）之后，
+/// 计数会被重置，因此本上限约束的是「连续」崩溃，而不是进程一生的总重启数。
+pub const SUPERVISOR_MAX_RESTARTS: usize = 3;
+
 /// INV-3 — 陈旧进程清扫用的 pidfile 名。
 pub const PID_FILE: &str = "harness.pid";
 
