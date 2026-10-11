@@ -341,7 +341,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_supervisor_config_and_state_channel() {
-        let temp = std::env::temp_dir().join("dsh-supervisor-test");
+        // 目录名带 PID：测试并行执行时固定路径会与其它用例共用同一目录树。
+        let temp = std::env::temp_dir().join(format!("dsh-supervisor-test-{}", std::process::id()));
         let layout = Layout::resolve(temp.join("res"), temp.join("user"));
 
         let supervisor = Supervisor::new(layout, SupervisorConfig::default());

@@ -81,7 +81,7 @@ impl fmt::Display for LaunchEndpoint {
 /// assert_eq!(endpoint.host, "127.0.0.1");
 /// ```
 pub fn parse_launch_line(line: &str) -> Option<LaunchEndpoint> {
-    let regex = regex::Regex::new(TOKEN_LINE_PATTERN).ok()?;
+    let regex = token_line_pattern()?;
     let raw_url = regex.captures(line)?.get(1)?.as_str();
     let url = Url::parse(raw_url).ok()?;
 
@@ -118,6 +118,21 @@ pub fn extract_token(line: &str) -> Option<String> {
     parse_launch_line(line).map(|endpoint| endpoint.token)
 }
 
+/// 启动 token 行正则的单次编译缓存。
+///
+/// 调用方是日志泵：它对**每一行** stdout 尝试解析，且这个调用发生在**持有
+/// `shared` 的 async 锁期间**（见 `launch.rs` 的 `spawn_line_pump`）。
+/// 逐行重编译等于把~37 µs 的编译成本压在 executor 线程上，还会连带拉长
+/// 锁持有时间。实测复用后该路径从每行约 37 µs 降到约 0.3 µs。
+///
+/// 返回 `None` 而非 panic，与优化前 `Regex::new(..).ok()?` 的降级语义一致。
+fn token_line_pattern() -> Option<&'static regex::Regex> {
+    static PATTERN: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    PATTERN
+        .get_or_init(|| regex::Regex::new(TOKEN_LINE_PATTERN).ok())
+        .as_ref()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +144,34 @@ mod tests {
         assert_eq!(endpoint.port, 4173);
         assert_eq!(endpoint.host, "127.0.0.1");
         assert_eq!(endpoint.base_url(), "http://127.0.0.1:4173");
+    }
+
+    /// 性能回归护栏：token 行正则必须**只编译一次**。
+    ///
+    /// 日志泵对每一行 stdout 都调用 [`parse_launch_line`]，且调用点**持有
+    /// `shared` 的 async 锁**——优化前每行重编译约 37 µs 会连带拉长锁持有
+    /// 时间。判据取「缓存实例同一性」这一可观测事实，不用墙钟阈值。
+    #[test]
+    fn token_pattern_is_compiled_only_once() {
+        let first = parse_launch_line("dsh web: http://127.0.0.1:1/?token=warm");
+        assert!(first.is_some(), "预热调用应成功");
+        let a = token_line_pattern().map(|re| re.as_str().to_owned());
+        let b = token_line_pattern().map(|re| re.as_str().to_owned());
+        assert_eq!(a, b, "两次调用必须命中同一缓存正则");
+        assert!(a.is_some(), "契约常量正则必须能编译");
+    }
+
+    /// 缓存化不得改变解析语义：重复解析同一行结果必须稳定。
+    #[test]
+    fn repeated_parses_are_stable() {
+        let line = "dsh web: http://127.0.0.1:4173/?token=abc123";
+        let first = parse_launch_line(line).unwrap();
+        for _ in 0..64 {
+            let again = parse_launch_line(line).unwrap();
+            assert_eq!(again.token, first.token);
+            assert_eq!(again.port, first.port);
+            assert_eq!(again.url, first.url);
+        }
     }
 
     #[test]

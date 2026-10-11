@@ -158,6 +158,18 @@ pub const LOG_FILE_MAX_BYTES: u64 = 5 * 1024 * 1024;
 /// C7 — 落盘日志保留份数。
 pub const LOG_FILE_MAX_BACKUPS: usize = 3;
 
+/// 日志落盘队列容量（有界通道的槽位数）。
+///
+/// 落盘已从 async 任务移交给专用阻塞线程（见 `launch.rs` 的 `LogWriteTx`）。
+/// 该队列**必须有界**：子进程若以远高于落盘速度的速率刷日志，无界队列会
+/// 把堆积行全部留在内存里——而日志按契约本就是「排障手段，不是关键路径」。
+/// 满了就让泵在 async 层背压减速（内存有界），绝不丢行：丢行会毁掉
+/// 失败归因的证据链。
+///
+/// 1024 行按 [`LOG_LINE_MAX_BYTES`] 的上限约 8 MiB 文本量，远高于启动期与
+/// 稳态运行的实际峰值，同时把「泵被拖住」的窗口限制在可接受范围内。
+pub const LOG_WRITE_QUEUE: usize = 1024;
+
 /// 日志前缀：宿主自身写入的诊断行。
 pub const LOG_PREFIX_DESKTOP: &str = "[desktop]";
 
