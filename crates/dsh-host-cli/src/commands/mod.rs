@@ -5,6 +5,7 @@
 
 pub mod doctor;
 pub mod inspect;
+pub mod recover;
 pub mod start;
 
 use crate::cli::{Commands, LogLevelArg};
@@ -22,6 +23,7 @@ pub async fn dispatch(command: Commands, log_level: LogLevelArg, json: bool) -> 
         Commands::Tail(args) => inspect::tail(args),
         Commands::Probe(args) => inspect::probe(args).await,
         Commands::Doctor(args) => doctor::run(args),
+        Commands::Recover(args) => recover::run(args, json).await,
     }
 }
 
