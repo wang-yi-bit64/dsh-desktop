@@ -216,16 +216,21 @@ harness 崩溃
 | **3（已采纳）** | **3.5 s** | 3 次重试足以渡过端口竞争/瞬时 IO，又把「必然崩溃」的等待压在 4 s 内 |
 | 5（原默认） | 15.5 s | 最耐用，但配置类错误要干等 15 s 才见图文归因 |
 
-### 5.3 停止序列与 `abort()` 语义 ⚠️ 边界
+### 5.3 停止序列与 `abort()` 语义
 
-`Supervisor::stop()`（`supervisor.rs:343-357`）做三件事：置 `is_stopping` → `take()` 并 `terminate()` 活跃实例 → `handle.abort()`。
+`Supervisor::stop()` 做三件事：置 `is_stopping` → `take()` 并 `terminate()` 活跃实例 → `handle.abort()`。
 
 | 边界 | 风险 | 处置 |
 |---|---|---|
 | 在**退避 sleep 中** stop | `abort()` 直接杀掉协程，sleep 被打断 —— 行为正确 | 可接受 |
-| 在**启动中**（spawn 到 ready 之间）stop | `abort()` 可能在 `Launcher` 内部中途丢弃 `RunningHarness`。孤儿防护由 Job Object / PDEATHSIG 兜底，但**这一步没有测试覆盖** | **需补**：接入时必须加一条「启动中 stop 不残留孤儿」的集成测试（可复用 `scripts/fault-inject.mjs` 的场景 A） |
-| 用户主动 stop 后相位 | 现状是 `Stopped`；壳的 `stop()` 还会区分 `Idle` | 桥接任务须区分「用户停止」与「崩溃终止」——用 `is_stopping` 或 stop 前后置标志判定 |
+| 在**启动中**（spawn 到 ready 之间）stop | ⚠️ **这里曾有真实缺陷**（2026-10-13 由 CI 三平台矩阵抓到）：`active_instance` 只在 `Ready` **之后**才被填充，故该窗口内 `stop()` 拿到 `None`、**什么都不终止**，只剩 `abort()` 丢掉进行中的 launch future。**Windows 靠 Job Object 兜住，Linux / macOS 没有等价兜底 ⇒ 子进程成孤儿** | ✅ **已修**：`Supervisor` 增 `inflight_pid: Arc<AtomicU32>`——`LaunchEvent::Spawned` 写入、本次尝试一了结即清零（**不留过期 pid**，避免误杀被回收后重用的 pid），`stop()` 用 `swap(0)` 取出后 `terminate_process_tree`。守卫：`crates/dsh-host/tests/supervisor_stop_orphans.rs` |
+| 用户主动 stop 后相位 | 现状是 `Stopped`；壳的 `stop()` 还会区分 `Idle` | 桥接任务须区分「用户停止」与「崩溃终止」——用 `is_stopping` 或 stop 前后置标志判定 ✅ 已按此实现 |
 | `stop()` 之后再 `start()` | `supervision_task` 已被 `take()`，`is_stopping` 会被重置 | 可重入，✅ |
+
+> **这条边界的教训**：它原本只是文档里一句「由 Job Object 兜底」的推理。
+> 补上跨平台测试后，CI 立刻证明那个推理**只对 Windows 成立**。
+> ⇒ 「单平台绿」不能当作跨平台不变式成立的证据——尤其是孤儿防护这种
+> 三平台各有一套机制的领域（ADR-010）。
 
 ### 5.4 退出守卫（`quit_guard`）不受影响
 
@@ -273,7 +278,7 @@ harness 崩溃
 |---|---|---|---|
 | E1 | 崩溃 → 退避中用户点「重试」 | `restart()` 先 `stop()`（打断退避）再 `start()`；不得出现两个实例 | §5.3 |
 | E2 | 退避中用户关闭窗口 / 退出 | `is_stopping` 置位 → 协程退出；`quit_guard` 用 `launch_endpoint()` 判断 | 现有链路 |
-| E3 | 启动中（spawn→ready 之间）`stop()` | 不得残留孤儿进程 | **需补测试**（§5.3） |
+| E3 | 启动中（spawn→ready 之间）`stop()` | 不得残留孤儿进程 | ✅ **已修**（2026-10-13）——补测试后 CI 三平台矩阵**真的抓到了缺陷**：Windows 绿、ubuntu/macos 红。根因是 `stop()` 只终止 `active_instance`，而它要到 `Ready` 之后才被填充 ⇒ 该窗口内什么都没杀，Windows 靠 Job Object 兜住、POSIX 无兜底。修法：新增在途 pid 跟踪并在 `stop()` 里终止（见 §5.3） |
 | E4 | `max_restarts` 用尽 | 进 `Failed` + 错误页；`plugin_fault` / `retryable` 由 `diagnostics` 归因填充 | 现有 `FailureCause` |
 | E5 | 安全模式启动 | 必须真的带 `--profile desktop-safe-mode` | **§4.2 阻塞** |
 | E6 | `DSH_HOME` 等 C2 契约环境 | 必须到达子进程，可写状态落 `app_data_dir` | **§4.1 阻塞** |
@@ -296,7 +301,7 @@ harness 崩溃
 | **P1** | `SupervisorConfig` 补 `env` / `profile`，`extra_envs` 从**死字段**变为真生效 | `crates/dsh-host/src/supervisor.rs` 的 `resolve_launch_env` | 单测 4 项（四种情形）+ `tests/supervisor_env_profile.rs` 2 项（**子进程真的收到** `DSH_MOCK_FAIL`；`argv` 里真的有 `--profile`） |
 | **P2** | 修 `stable_uptime == 0` ⇒ 退避与断路器同时失效 | 抽纯函数 `is_stable_uptime` 并显式排除零值 | 回归锁 `zero_stable_uptime_never_counts_as_stable`；**可证伪**：回退后只有它变红 |
 | **P3** | `HarnessSupervisor` 改为 L2 适配器 + 状态桥 | `src-tauri/src/state.rs`（公开方法面零改动） | 编译通过 + `classify_state` 映射单测 5 项；**执行者是 CI**（本机 GNU 工具链无法加载该测试二进制，见 `docs/incidents/local-toolchain-limits.md`） |
-| **P4** | 「启动中 stop 不残留孤儿」集成测试 | `crates/dsh-host/tests/supervisor_stop_orphans.rs` | 通过（1.72 s）；**可证伪**：跳过 `abort()` 后真的产生孤儿（pid 存活），测试精确报出 |
+| **P4** | 「启动中 stop 不残留孤儿」集成测试 | `crates/dsh-host/tests/supervisor_stop_orphans.rs` | ✅ 通过（三平台）——**且这条测试真的抓到了缺陷**：初版在 Windows 绿、ubuntu/macos 红，暴露 `stop()` 在启动窗口漏杀子进程（详见 §5.3）。修完三平台全绿。**可证伪**：跳过 `abort()` 后真的产生孤儿（pid 存活），测试精确报出 |
 | **P5** | ADR 登记 | [ADR-064](adr/064-shell-adopts-l2-supervisor.md)（+ `docs/adr/README.md` 索引） | — |
 
 ### 裁决记录（P3 的两个待定项）
