@@ -573,7 +573,6 @@ impl HarnessSupervisor {
                     return;
                 };
                 inner.logs.push(line);
-                return;
             }
             LaunchEvent::Preparing => self.transition(
                 HarnessPhase::Preparing,
@@ -589,7 +588,6 @@ impl HarnessSupervisor {
                 };
                 inner.message = "Launch token acquired.".to_string();
                 inner.push_desktop("launch token acquired".to_string());
-                return;
             }
             LaunchEvent::ReadyChecking { port } => self.transition(
                 HarnessPhase::ReadyChecking,
