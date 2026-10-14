@@ -9,7 +9,7 @@
 //! - **指数退避（Exponential Backoff）**：避免高频崩溃造成 CPU/IO 风暴。
 //! - **稳定窗口重置**：子进程存活超过 `SUPERVISOR_STABLE_UPTIME` 后重置退避。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,7 @@ use crate::env::{capture_shell_environment, harness_env_with_overrides, HarnessE
 use crate::launch::{LaunchEvent, LaunchOutcome, Launcher, LauncherConfig, RunningHarness};
 use crate::logs::LogRing;
 use crate::paths::Layout;
+use crate::process::terminate_process_tree;
 use crate::token::LaunchEndpoint;
 
 /// 计算下一次崩溃后的退避间隔（契约 C10：指数退避 + 上限钳制）。
@@ -236,6 +237,18 @@ pub struct Supervisor {
     is_stopping: Arc<AtomicBool>,
     active_instance: Arc<AsyncMutex<Option<ActiveInstance>>>,
     supervision_task: AsyncMutex<Option<JoinHandle<()>>>,
+    /// **在途**子进程 pid（0 = 无）。
+    ///
+    /// 填 [`active_instance`] 只在 `LaunchOutcome::Ready` **之后**发生，因此
+    /// 「已 spawn、未就绪」那段窗口里 `stop()` 拿到的是 `None`、无从终止。
+    /// 2026-10-13 由 `tests/supervisor_stop_orphans.rs` 的**跨平台**运行实测到后果：
+    /// Windows 靠 Job Object 兜住了，**Linux / macOS 上子进程成了孤儿**。
+    ///
+    /// 所以这里单独记一个「本次启动尝试已经派生的 pid」，供 `stop()` 兜底终止。
+    /// 生命周期：`LaunchEvent::Spawned` 写入 → 本次启动尝试一了结（`Ready` 或 `Failed`）
+    /// 立刻清零。**刻意不长期保留**——pid 会被操作系统回收，拿一个过期 pid 去
+    /// 终止可能误杀无关进程。
+    inflight_pid: Arc<AtomicU32>,
 }
 
 impl Supervisor {
@@ -249,6 +262,7 @@ impl Supervisor {
             is_stopping: Arc::new(AtomicBool::new(false)),
             active_instance: Arc::new(AsyncMutex::new(None)),
             supervision_task: AsyncMutex::new(None),
+            inflight_pid: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -305,6 +319,7 @@ impl Supervisor {
         let state_tx = self.state_tx.clone();
         let is_stopping = Arc::clone(&self.is_stopping);
         let active_instance = Arc::clone(&self.active_instance);
+        let inflight_pid = Arc::clone(&self.inflight_pid);
 
         let handle = tokio::spawn(async move {
             let mut restart_count = 0usize;
@@ -328,9 +343,19 @@ impl Supervisor {
 
                 let outcome = launcher
                     .launch(launch_env.as_ref(), |evt| {
+                        // 记下在途 pid：`active_instance` 要到 `Ready` 之后才填，
+                        // 而 `stop()` 可能在那之前就被调用（见 `inflight_pid` 文档）。
+                        if let LaunchEvent::Spawned { pid, .. } = &evt {
+                            inflight_pid.store(*pid, Ordering::SeqCst);
+                        }
                         let _ = state_tx.send(SupervisorState::LaunchProgress(evt));
                     })
                     .await;
+
+                // 本次启动尝试已了结：接下来要么 `Ready` 分支接手实例，要么
+                // `Failed` 由启动器负责收尾。立刻清掉在途 pid——**不要留着过期 pid**，
+                // 它可能被操作系统回收后指向无关进程。
+                inflight_pid.store(0, Ordering::SeqCst);
 
                 if is_stopping.load(Ordering::SeqCst) {
                     break;
@@ -468,7 +493,23 @@ impl Supervisor {
         self.is_stopping.store(true, Ordering::SeqCst);
         let _ = self.state_tx.send(SupervisorState::Stopping);
 
-        // 终止当前活跃子进程
+        // ① 在途子进程（已 spawn、尚未就绪）。
+        //
+        // 这条分支在 2026-10-13 之前**缺失**：`active_instance` 只在
+        // `LaunchOutcome::Ready` 之后才被填充，因此「启动中」窗口里 `stop()`
+        // 什么都不终止，只剩 `abort()` 丢掉进行中的 launch future。Windows 上
+        // Job Object 会随之回收子进程，但 **Linux / macOS 没有等价兜底**，
+        // 子进程直接成为孤儿——这一点由 `tests/supervisor_stop_orphans.rs`
+        // 在三平台 CI 矩阵上暴露（Windows 绿、ubuntu/macos 红）。
+        //
+        // 用 `swap(0)` 而非 `load`：与协程里的清零竞争时，pid 只会被一方取得，
+        // 不会出现「两边都以为对方在处理」。
+        let pid = self.inflight_pid.swap(0, Ordering::SeqCst);
+        if pid != 0 {
+            terminate_process_tree(pid);
+        }
+
+        // ② 已就绪的活跃子进程
         {
             let mut guard = self.active_instance.lock().await;
             if let Some(inst) = guard.take() {

@@ -268,6 +268,10 @@ proptest! {
         // 逐次 `from_secs_f64` 会累积纳秒级舍入；容差取 1µs 与相对 1e-6 的较大者，
         // 足以容纳舍入，又远小于公式写错时的量级偏离。
         let tol = Duration::from_secs_f64(1e-6f64).max(expected.mul_f64(1e-6));
+        // 用 `abs_diff` 而不是手写 `if a > b { a - b } else { b - a }`：
+        // 后者会被 clippy 判为 `manual_abs_diff`，而 CI 是 `-D warnings`——
+        // 本机 GNU 工具链下 clippy 会 ICE，`cargo check` 又不跑 clippy lint，
+        // 所以这个错误是本机测不出来、只能在 CI 暴露的那一类（2026-10-13 实测）。
         let diff = cur.abs_diff(expected);
         prop_assert!(
             diff <= tol,

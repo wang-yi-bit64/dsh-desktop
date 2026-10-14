@@ -16,10 +16,23 @@ rustc 1.97.1 / clippy 0.1.97），停在 `codegen_and_build_linker`。
   一轮闭环，没有消耗三平台 CI 跑一轮十几分钟的反馈时间。
   ⚠️ **仍不要把 clippy 当成「本地有没有都无所谓」**：触发该 ICE 的是一类「某个 crate 恰好触到
   clippy 代码生成路径」的环境问题，将来任何新 crate 都可能复现。因此：
-  1. 本地首选 `cargo clippy --workspace --all-targets -- -D warnings`（与 CI 逐字一致）；
-     若某天又 ICE，退回 `cargo check --workspace --all-targets`（能报出全部真实 warning，包括
-     CI `-D warnings` 会拦下的 `unused_imports`）；
-  2. clippy 的最终权威执行者仍是 CI（MSVC 工具链，三个平台都跑）——本地通过不等于三平台都通过。
+  1. 本地首选 `cargo clippy --workspace --all-targets -- -D warnings`（与 CI 逐字一致）。
+  2. **若又 ICE，先试关掉增量编译**：
+     `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`
+     —— 2026-10-13 实测：默认（带增量）ICE，**关掉增量后干净跑完**（约 12s）。
+     这是本条目前最省事、也最接近 CI 的本地复现路径，**先试它再考虑换工具链**。
+  3. ⛔ **不要退回 `cargo check` 顶替 clippy**。`cargo check` **完全不跑 clippy 的 lint**，
+     它只能替代「编译错误与 rustc warning」——**不能**替代 CI 那条
+     `cargo clippy … -- -D warnings`。（本行原写作「退回 `cargo check`……能报出全部真实
+     warning，包括 CI `-D warnings` 会拦下的」，该表述漏掉了 clippy 专属 lint 这一整类，
+     已于 2026-10-13 按其引发的真实事故订正。）
+     **事故（2026-10-13）**：clippy ICE 后改用 `cargo check`（通过），并在交付说明里写了
+     「clippy 0 代码警告」——**实际是「clippy 根本没跑起来」**。结果该批提交的 PR 在三平台 CI
+     **全部**卡在 `cargo clippy`，暴露 3 类共 4 处 lint（`manual_abs_diff`、
+     `unused_assignments`、`needless_return` ×2），返工两轮。
+     ⇒ **本机 clippy 不可用时，不得声称 clippy 通过**：要么用上面第 2 条的
+     `CARGO_INCREMENTAL=0`，要么切 MSVC 工具链，要么明确写「clippy 未验证，待 CI」。
+  4. clippy 的最终权威执行者仍是 CI（MSVC 工具链，三个平台都跑）——本地通过不等于三平台都通过。
 
 #### ⚠️ 已知环境限制：GNU 工具链下 `dsh-desktop` 的测试二进制无法加载
 

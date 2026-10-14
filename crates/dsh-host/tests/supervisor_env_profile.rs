@@ -210,15 +210,16 @@ async fn profile_reaches_child_argv() {
     let out = poll_until(&mut rx, SCENARIO_BUDGET, |o| o.saw_running || o.saw_failed).await;
     supervisor.stop().await;
 
-    // 落盘可能有毫秒级延迟：轮询读盘。
+    // 落盘可能有毫秒级延迟：先读一次，再在「还没读到且未超时」时轮询重读。
+    //
+    // 这里刻意不用「`let mut content = String::new()` + loop 里赋值」的写法：
+    // 初值从未被读取，clippy 的 `unused_assignments` 会报
+    // `value assigned to content is never read`，而 CI 是 `-D warnings`。
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut content;
-    loop {
-        content = std::fs::read_to_string(&log_path).unwrap_or_default();
-        if content.contains("argv=") || Instant::now() >= deadline {
-            break;
-        }
+    let mut content = std::fs::read_to_string(&log_path).unwrap_or_default();
+    while !content.contains("argv=") && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
+        content = std::fs::read_to_string(&log_path).unwrap_or_default();
     }
 
     let argv_line = content
