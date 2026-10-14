@@ -32,7 +32,7 @@
 
 ## 1. 上游版本变化类型
 
-分六族。**「可观测判据」一列是设计的重点**——看不见的变化等于没发生。
+分五族。**「可观测判据」一列是设计的重点**——看不见的变化等于没发生。
 
 ### 族 A — 版本号本身变化
 
@@ -170,7 +170,7 @@ npm dist-tag(线指针) ──判定层──▶   各目标「线上游现值�
 |---|---|---|---|---|
 | **判定** | 我这条线走到哪了？ | 该目标 `upstreamDistTag` 的**线指针** | `verify-upstream-drift.mjs::resolveLineVersion()` | `gate -- drift`（sentinel 档） |
 | **组装** | 我钉的是哪个**精确**版本？ | `dsh-targets.dshVersion` + 台账键 | `resolveTarget()` / `resolveReleaseFor()` | `targets` / `release-ledger` / `plan-facts` |
-| **发布** | 这一版对外属哪条通道？ | **版本后缀**（`publishChannel`） | `targetForVersion()` / `--channel-of` | `release-workflow` |
+| **发布** | 这一版对外属哪条通道？ | **版本后缀**（`publishChannel`） | `desktopChannelForVersion()` / `--channel-of` | `release-workflow` |
 
 **为什么不能合并**：Release 清单里没有任何字段能标记「这条 Release 属于哪条线」，
 所以拿「全局最新」当判定，`next` 会被 **alpha 线**的版本判成落后并报红（2026-10-10 实证）。

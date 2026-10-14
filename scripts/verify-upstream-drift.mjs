@@ -626,63 +626,62 @@ async function main() {
   console.log('')
 
   // ---------------- 判定层 ----------------
+  let blocked = 0
   const tags = await fetchDistTags({ registry, timeoutMs })
   if (tags.status !== 'ok') {
     console.log(`[verify:drift] SKIP —— npm dist-tags 取不到（${tags.reason}）`)
     for (const t of targets) console.log(`  ${t.name.padEnd(6)} pinned DSH ${t.current}  ← 线 npm ${t.upstreamDistTag}`)
     console.log('  ⚠️ SKIP 不等于「已核对」：判定基准取不到 ⇒ 漂移未知。')
-    return
-  }
-
-  const rendered = ['latest', 'next', 'alpha']
-    .filter((name) => typeof tags.tags[name] === 'string')
-    .map((name) => `${name}=${tags.tags[name]}`)
-    .join('  ')
-  console.log(`  npm dist-tags：${rendered}`)
-  console.log('')
-
-  let blocked = 0
-  let needsRework = 0
-  // examined：实际被对照的**在役**目标数。休眠目标（ADR-056）显式跳过、不计入；
-  // 全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役），必须报错而不是空转通过。
-  let examined = 0
-  for (const target of targets) {
-    if (target.status === 'dormant') {
-      console.log(`  [${target.name}] 🗄️ 已裁定休眠（ADR-056；复役见 ADR-057）——不对照上游漂移`)
-      continue
-    }
-    examined += 1
-    const prefix = `  [${target.name} → npm ${target.upstreamDistTag}]`
-    const line = resolveLineVersion(tags.tags, target)
-    if (line.status !== 'ok') {
-      // 「线不存在」与「取不到」分开：线名是本仓写死的常量 ⇒ 它不存在意味着**我们**错了。
-      blocked += 1
-      console.error(`${prefix} ❌ ${line.reason}——目标表指了一条不存在的线。`)
-      console.error('     修法：核对 scripts/dsh-targets.mjs 的 upstreamDistTag（必须是上游真实存在的 dist-tag 名）。')
-      continue
-    }
-    const drift = judgeDrift(target.current, line.version)
-    if (drift.level === 'patch-behind') {
-      console.log(`${prefix} ⚠️  ${drift.message}`)
-    } else if (drift.ok) {
-      console.log(`${prefix} ✅ ${drift.message}`)
-    } else {
-      blocked += 1
-      if (drift.level === 'patch-line-behind') needsRework += 1
-      console.error(`${prefix} ❌ ${drift.message}`)
-    }
-  }
-
-  if (examined === 0) {
-    console.error('  ❌ 没有在役目标可核对——全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役）。')
-    exit(1)
-  }
-
-  if (needsRework > 0) {
+  } else {
+    const rendered = ['latest', 'next', 'alpha']
+      .filter((name) => typeof tags.tags[name] === 'string')
+      .map((name) => `${name}=${tags.tags[name]}`)
+      .join('  ')
+    console.log(`  npm dist-tags：${rendered}`)
     console.log('')
-    console.log('  ℹ️ 出现 patch-line-behind：与**自己那条线**比时出现「补丁线前进 + 阶段回退」。')
-    console.log('     判定已按线，所以这不是跨线假象——该 dist-tag 大概率被上游**重指**到了另一条线，')
-    console.log('     目标表的 dshVersion 与补丁基线可能已过期，需人工确认后再动手（docs/dsh-upgrade-checklist.md）。')
+
+    let needsRework = 0
+    // examined：实际被对照的**在役**目标数。休眠目标（ADR-056）显式跳过、不计入；
+    // 全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役），必须报错而不是空转通过。
+    let examined = 0
+    for (const target of targets) {
+      if (target.status === 'dormant') {
+        console.log(`  [${target.name}] 🗄️ 已裁定休眠（ADR-056；复役见 ADR-057）——不对照上游漂移`)
+        continue
+      }
+      examined += 1
+      const prefix = `  [${target.name} → npm ${target.upstreamDistTag}]`
+      const line = resolveLineVersion(tags.tags, target)
+      if (line.status !== 'ok') {
+        // 「线不存在」与「取不到」分开：线名是本仓写死的常量 ⇒ 它不存在意味着**我们**错了。
+        blocked += 1
+        console.error(`${prefix} ❌ ${line.reason}——目标表指了一条不存在的线。`)
+        console.error('     修法：核对 scripts/dsh-targets.mjs 的 upstreamDistTag（必须是上游真实存在的 dist-tag 名）。')
+        continue
+      }
+      const drift = judgeDrift(target.current, line.version)
+      if (drift.level === 'patch-behind') {
+        console.log(`${prefix} ⚠️  ${drift.message}`)
+      } else if (drift.ok) {
+        console.log(`${prefix} ✅ ${drift.message}`)
+      } else {
+        blocked += 1
+        if (drift.level === 'patch-line-behind') needsRework += 1
+        console.error(`${prefix} ❌ ${drift.message}`)
+      }
+    }
+
+    if (examined === 0) {
+      console.error('  ❌ 没有在役目标可核对——全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役）。')
+      exit(1)
+    }
+
+    if (needsRework > 0) {
+      console.log('')
+      console.log('  ℹ️ 出现 patch-line-behind：与**自己那条线**比时出现「补丁线前进 + 阶段回退」。')
+      console.log('     判定已按线，所以这不是跨线假象——该 dist-tag 大概率被上游**重指**到了另一条线，')
+      console.log('     目标表的 dshVersion 与补丁基线可能已过期，需人工确认后再动手（docs/dsh-upgrade-checklist.md）。')
+    }
   }
 
   // ---------------- 信息层（不参与判定，但取不到必须显式说明） ----------------
@@ -696,14 +695,14 @@ async function main() {
     const stableNote = noteStableLineRelease(releaseResult.releases)
     if (stableNote !== null) console.log(`\n  ⚠️ ${stableNote}`)
   } else {
-    const fatal = releaseResult.status === 'error'
+    const fatal = releaseResult.status === 'error' && releaseResult.code === 'not-found'
     console.log(`  [信息层·不参与判定] ${fatal ? 'FAIL' : 'SKIP'} —— ${releaseResult.reason}`)
     console.log('  [信息层] ⚠️ 未核对：本次没拿到上游 Release 清单 ⇒ 「上游最近宣布了哪一版」与')
     console.log('           「stable 线的叫号」这两项**未核对**（不影响上面的判定结论）。')
     if (fatal) {
       console.error('')
       console.error('  上游 slug 是本仓写死的常量（scripts/upstream-release.mjs 的 UPSTREAM_REPO）')
-      console.error('  ⇒ 404 / 响应异常是**配置缺陷**，不是「外部状态没准备好」，故判红。')
+      console.error('  ⇒ 404 是**配置缺陷**，不是「外部状态没准备好」，故判红。')
       exit(1)
     }
   }
