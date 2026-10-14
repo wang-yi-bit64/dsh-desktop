@@ -25,6 +25,26 @@
  * L1 可静态跑、进 CI；L2 要联网、只在发布后或本地手动跑（`--check-release <tag>`）。
  * 只做 L2 的话，缺陷要等下次真发布才暴露；只做 L1 的话，管不住「工作流对但跑错了」。
  *
+ * ## L2 同时核对 **Release 的自身属性**（F15，2026-10-10）
+ *
+ * 资产齐 ≠ 发布正确。`docs/version-policy.md` §5.3 的发布后回读同时要求
+ * 「`prerelease` 与目标通道一致、`draft: false`」，但**那两条此前没有任何判据**：
+ * `prerelease` 在本仓全部代码里只出现过两次，一次在注释里、一次是滚动 tag 的
+ * `gh release create --prerelease`。后果是 rc 线的 3 个 Release（`v0.7.2-rc.1`、
+ * `v0.2.0-rc.2.1`、`v0.2.0-rc.2.2`）实际是 `prerelease=false`——它们因此进了
+ * `releases/latest`，stable 用户看到的「最新版」是 rc 构建。**全部门禁绿灯。**
+ *
+ * 因此 L2 现在成对地断言（tag 的版本号决定应当是什么，不看工作流怎么写的）：
+ *
+ * | 断言 | 判据 | 错了的后果 |
+ * |---|---|---|
+ * | `prerelease` | 版本号**带**预发布段 ⇔ `true` | 预发布进 latest ⇒ stable 用户收到 rc；正式版被标预发布 ⇒ 从 latest 里消失 |
+ * | `draft` | 必须 `false` | 草稿对用户不可见，而资产与滚动端点都已是新版（外表完全正常） |
+ *
+ * ⚠️ 覆盖面边界（诚实说明）：**不**断言「正式版应当等于 `releases/latest`」——
+ * 那需要额外一次 API 调用去解 ref，且 `make_latest` 的语义会随 GitHub 侧变化
+ * （本仓无 stable 发布，这条路径至今零执行，写判据等于凭空规定行为）。
+ *
  * ## 为什么名字要逐项枚举，而不是只数个数
  *
  * 「== 13 个」这条判据可以被 13 个**错误**的资产满足（比如少了便携版却多了
@@ -37,7 +57,7 @@
  * node scripts/verify-release-assets.mjs                  # L1：静态校验 release.yml 形状
  * node scripts/verify-release-assets.mjs --self-test      # 自测（含可伪证夹具）
  * node scripts/verify-release-assets.mjs --check-release v0.7.0-alpha.7
- *                                                         # L2：核对真实 Release（需 gh + 联网）
+ *                                                         # L2：核对真实 Release（资产 + 属性，需 gh + 联网）
  * node scripts/verify-release-assets.mjs --print-expected # 打印期望清单（供人工比对）
  * ```
  *
@@ -49,6 +69,12 @@ import { readFileSync } from 'node:fs'
 import { argv, env, exit } from 'node:process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// 「这个 tag 应不应当是预发布」的判据**不在本文件里自造**：形状正则的唯一产地是
+// `dsh-targets.mjs` 的 `parseVersionShape`（`channelOfPrerelease` 也委托它）。
+// 用 `parseVersionShape` 而不是抛错的 `channelOfPrerelease`：这里消费的是**tag 字符串**
+// 这类来路不明的语料，脏输入应当变成一条可读的 problems，而不是让整趟核对崩栈。
+import { parseVersionShape } from './dsh-targets.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const RELEASE_YML = join(projectRoot, '.github', 'workflows', 'release.yml')
@@ -165,12 +191,13 @@ export function jobBlock(text, name) {
 /**
  * L1 静态判据：`release.yml` 的形状**能不能**产出 13 个资产。
  *
- * 判据四条（缺一不可）：
+ * 判据五条（缺一不可）：
  *   P1 `build` job 用 tauri-action 且带 `prerelease` 从版本号派生（tauri-action
  *      负责 9 安装包 + `latest.json`）；
  *   P2 `portable` job 产出 `dist/portable/*` 并 `upload-artifact`（3 件）；
  *   P3 **存在**把 `dist/portable/*` 上传到 Release 的动作（F13 的直防）；
- *   P4 该动作用的是 `--clobber`（重复发布时可覆盖，否则重跑会因重名失败）。
+ *   P4 该动作用的是 `--clobber`（重复发布时可覆盖，否则重跑会因重名失败）；
+ *   P5 `releaseDraft: false`（草稿发布对用户不可见，而资产与滚动端点都已是新版）。
  *
  * ⚠️ P3 是**唯一**能直接拦住 F13 的判据。它在 F13 修复前会红——实测过。
  *
@@ -197,6 +224,17 @@ export function checkAssetShape(text) {
       )
     } else {
       findings.push('build：tauri-action + prerelease 派生 ✅')
+    }
+    // P1b：Release 不得是草稿（2026-10-10 新增，与 L2 的属性断言成对）。
+    //      `releaseDraft: true` 时 tauri-action 建的是 draft：资产照样上传、滚动端点
+    //      照样更新，**外表完全正常**，只是用户看不见——属「静默改变可见性」那一族。
+    if (!/releaseDraft:\s*false\b/.test(build)) {
+      problems.push(
+        '`build` 的 tauri-action 没有 `releaseDraft: false`——草稿发布对用户不可见，' +
+          '而资产与滚动端点都已是新版（外表完全正常，只有用户看不到）'
+      )
+    } else {
+      findings.push('build：releaseDraft: false（发布即刻可见）✅')
     }
   }
 
@@ -259,21 +297,98 @@ export function checkAssetShape(text) {
 }
 
 /**
- * L2 清单判据：核对一个**真实 Release** 的资产是否恰好是期望的 13 个。
+ * L2 属性判据：Release 的 `prerelease` / `draft` 是否与该 tag 的版本号一致（F15）。
+ *
+ * ## 为什么判据的输入是 **tag 的版本号**而不是工作流的写法
+ *
+ * 工作流怎么写属于 L1（`checkAssetShape` 的 P1/P5）。L2 要回答的是**结果对不对**：
+ * 那个 Release 对象**实际**被标成了什么。因此期望值必须从**客观事实**（tag 的版本号）
+ * 推出，而不是从「配置里写了什么」推出——否则配置写错时判据会跟着一起错
+ * （本仓的「自测与被测共享同一个错误假设」正是这一族）。
+ *
+ * 判据只有两条，且都**双向**（两个方向都是真实故障，不是一个方向）：
+ *
+ * | 断言 | 期望 | 反向故障 |
+ * |---|---|---|
+ * | `prerelease` | 版本号带预发布段 ⇔ `true` | 预发布标成正式 ⇒ 进 `releases/latest`（stable 用户收到 rc）；正式标成预发布 ⇒ 从 latest 消失 |
+ * | `draft` | `false` | 草稿 ⇒ 用户看不见，而资产与滚动端点已是新版 |
+ *
+ * ⚠️ 「判不了」必须**判红**，不得当作通过：tag 形状非法时（`v0.2-rc.1`）无从知道
+ * 期望值，而「无从知道」与「一致」是两件事——本仓在 `latestTagForChannel` 上已
+ * 立过同一条纪律（未知通道抛错，不静默返回空）。
+ *
+ * @param {string} tag Release tag（如 `v0.2.0-rc.2.2`）
+ * @param {{prerelease?: unknown, draft?: unknown}} properties `gh api` 返回的同名字段
+ * @returns {{ok: boolean, problems: string[], expectedPrerelease: boolean|null}}
+ *   判定与问题清单；`expectedPrerelease` 为 `null` 表示判不了（tag 形状非法）
+ */
+export function judgeReleaseProperties(tag, properties) {
+  const problems = []
+  const prerelease = properties?.prerelease
+  const draft = properties?.draft
+
+  const parsed = parseVersionShape(tag)
+  let expectedPrerelease = null
+  if (!parsed.ok) {
+    problems.push(
+      `无法从 tag ${JSON.stringify(tag)} 推出应有的 prerelease 属性——` +
+        'tag 应为 `<major>.<minor>.<patch>[-<预发布>][+<build>]`（可带前导 v）。' +
+        '「判不了」不等于「一致」，因此这里判红'
+    )
+  } else {
+    expectedPrerelease = parsed.prerelease !== null
+    if (prerelease !== expectedPrerelease) {
+      problems.push(
+        `Release ${tag} 的 prerelease=${JSON.stringify(prerelease)}，应为 ${expectedPrerelease}——` +
+          `tag 的版本号${expectedPrerelease ? '**带**' : '**不带**'}预发布段。` +
+          (expectedPrerelease
+            ? '预发布被标成正式版会进 releases/latest，stable 用户会收到 rc/alpha 更新'
+            : '正式版被标成预发布会从 releases/latest 里消失')
+      )
+    }
+  }
+
+  // `draft` 严格判 `false`：缺字段（undefined）也判红——读不到 ≠ 不是草稿。
+  if (draft !== false) {
+    problems.push(
+      `Release ${tag} 的 draft=${JSON.stringify(draft)}，必须是 false——` +
+        '草稿对用户不可见，等于这次发布没有发生；而资产与滚动端点都已更新到新版，' +
+        '外表完全正常，只有用户看不到'
+    )
+  }
+
+  return { ok: problems.length === 0, problems, expectedPrerelease }
+}
+
+/**
+ * Check a real Release's expected assets and its prerelease/draft properties.
+ * Extra assets are reported but allowed, except for retired `dsh-host-cli` assets.
+ * Repository lookup errors, failed API commands, invalid JSON, and missing
+ * asset arrays return `ok: false` with problems. Errors thrown by an injected
+ * runner during the Release API call propagate.
  *
  * 需要 `gh` 与联网。适配 `gh api repos/<owner>/<repo>/releases/tags/<tag>` 的
- * `assets[].name`。
+ * `assets[].name`，并用**同一次调用**取回 `prerelease` / `draft`（见下）。
+ *
+ * 🔴 2026-10-10（F15）：`--jq` 从 `.assets[].name` 改成
+ * `{prerelease, draft, assets: [.assets[].name]}`，一次调用同时取回属性与清单。
+ * 不分成两次调用的理由：两次调用之间 Release 可以被改（TOCTOU），得到的
+ * 「属性」与「清单」可能来自不同时刻的**两个不同对象**——判据要回答的是
+ * 「**这一个** Release 对不对」。
  *
  * @param {string} tag Release tag
  * @param {{slug?: string, runner?: (cmd: string, args: string[]) => {status: number, stdout: string, stderr: string}}} [options]
  *   `slug` 直接指定 `owner/repo`（跳过 git 推导）；`runner` 为 `gh`/`git` 调用器（自测注入用）
- * @returns {{ok: boolean, problems: string[], assets: string[], missing: string[], unexpected: string[]}}
+ * @returns {{ok: boolean, problems: string[], assets: string[], missing: string[], unexpected: string[],
+ *   prerelease: unknown, draft: unknown}}
  */
 export function checkReleaseAssets(tag, options = {}) {
   // ⚠️ 必须与 `repoSlug` 共用同一份默认实现（见 `spawnRunner` 的注释）：
   //    这里曾经内联了**第二份**同样的实现，于是只修 `repoSlug` 那份时
   //    真实路径毫无变化——「修了同类点里的一个」正是本仓反复踩的形态。
   const runner = options.runner ?? spawnRunner
+
+  const empty = { assets: [], missing: [], unexpected: [], prerelease: undefined, draft: undefined }
 
   // owner/repo 推导失败（本机 `spawnSync git` 可能因 EBUSY 返回空）不应崩栈，
   // 而要降级成一条可读的 problems，让调用者看到真正的原因。
@@ -284,9 +399,7 @@ export function checkReleaseAssets(tag, options = {}) {
     return {
       ok: false,
       problems: [`${err.message}（若本机 spawnSync git 受限，可显式传 options.slug）`],
-      assets: [],
-      missing: [],
-      unexpected: []
+      ...empty
     }
   }
 
@@ -294,23 +407,56 @@ export function checkReleaseAssets(tag, options = {}) {
     'api',
     `repos/${slug}/releases/tags/${tag}`,
     '--jq',
-    '.assets[].name'
+    '{prerelease, draft, assets: [.assets[].name]}'
   ])
   if (result.status !== 0) {
     return {
       ok: false,
       problems: [`读取 Release ${tag} 的资产失败：${result.stderr.trim() || '(无输出)'}`],
-      assets: [],
-      missing: [],
-      unexpected: []
+      ...empty
     }
   }
 
-  const assets = result.stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  return judgeAssets(assets, tag)
+  let payload
+  try {
+    payload = JSON.parse(result.stdout)
+  } catch (err) {
+    return {
+      ok: false,
+      problems: [
+        `无法解析 \`gh api\` 的输出为 JSON（${err.message}）；` +
+          `首 200 字符：${JSON.stringify(result.stdout.slice(0, 200))}`
+      ],
+      ...empty
+    }
+  }
+
+  // assets 字段不存在 ≠ 一个资产都没有：前者说明 API 形状与判据假设不符，
+  // 后者是真实的「资产掉光」。混成一个出口会让「形状变了」伪装成「资产缺失 13 个」。
+  if (!Array.isArray(payload?.assets)) {
+    return {
+      ok: false,
+      problems: [
+        `\`gh api\` 的输出里没有 assets 数组（实际键：${JSON.stringify(Object.keys(payload ?? {}))}）——` +
+          'API 形状与判据假设不符，判据需要跟着改，而不是当作「没有资产」'
+      ],
+      ...empty,
+      prerelease: payload?.prerelease,
+      draft: payload?.draft
+    }
+  }
+
+  const assets = payload.assets.map((name) => String(name).trim()).filter(Boolean)
+  const judged = judgeAssets(assets, tag)
+  const props = judgeReleaseProperties(tag, { prerelease: payload.prerelease, draft: payload.draft })
+
+  return {
+    ...judged,
+    ok: judged.ok && props.ok,
+    problems: [...judged.problems, ...props.problems],
+    prerelease: payload.prerelease,
+    draft: payload.draft
+  }
 }
 
 /**
@@ -559,14 +705,82 @@ export function selfTest() {
     `git 推导失败必须优雅降级为 problems 而非崩栈（实得 ${JSON.stringify(degraded.problems)}）`
   )
   // 显式传 slug 时，git 完全不被触碰。
-  const slugged = checkReleaseAssets('v0.0.0', {
-    slug: 'owner/repo',
-    runner: (cmd, args) =>
-      cmd === 'gh'
-        ? { status: 0, stdout: `${good.join('\n')}\n`, stderr: '' }
-        : { status: 1, stdout: '', stderr: 'git must not be called' }
-  })
+  //
+  // 🔴 夹具**按 jq 表达式回数据**，不是无条件回 JSON：若把 `--jq` 改回
+  //    `.assets[].name`，本夹具会回纯名单 ⇒ `JSON.parse` 失败 ⇒ 判红。
+  //    无条件回 JSON 的夹具会让「jq 改回旧形状」畅通无阻——那是本仓反复踩的
+  //    「夹具与被测不共形 → 对称失效」。
+  const ghCalls = []
+  const runnerFor = (props) => (cmd, args) => {
+    ghCalls.push([cmd, args])
+    if (cmd !== 'gh') return { status: 1, stdout: '', stderr: 'git must not be called' }
+    const jq = args[args.indexOf('--jq') + 1] ?? ''
+    if (/prerelease/.test(jq) && /draft/.test(jq) && /assets/.test(jq)) {
+      return { status: 0, stdout: JSON.stringify({ ...props, assets: good }), stderr: '' }
+    }
+    return { status: 0, stdout: `${good.join('\n')}\n`, stderr: '' }
+  }
+  const slugged = checkReleaseAssets('v0.0.0', { slug: 'owner/repo', runner: runnerFor({ prerelease: false, draft: false }) })
   check(slugged.ok, `显式 slug 路径必须跳过 git 推导并正常判定 → ${slugged.problems.join('；')}`)
+  // 真实调用必须用**一次调用取回属性 + 清单**的 jq（两次调用之间存在 TOCTOU）。
+  check(
+    ghCalls.some(([cmd, args]) => cmd === 'gh' && /prerelease/.test(String(args.at(-1))) && /assets/.test(String(args.at(-1)))),
+    'L2 必须用一次 gh api 调用同时取回 prerelease / draft / assets（分两次调用会得到两个时刻的对象）'
+  )
+
+  // 7) 🔴 F15（2026-10-10）：Release 的 `prerelease` / `draft` 必须与 tag 的版本号一致。
+  //    缺陷本体：rc 线的 3 个 Release（v0.7.2-rc.1 / v0.2.0-rc.2.1 / v0.2.0-rc.2.2）
+  //    实际是 `prerelease=false` —— 它们因此进了 `releases/latest`。
+  const rcTag = 'v0.2.0-rc.2.2'
+  check(
+    judgeReleaseProperties(rcTag, { prerelease: true, draft: false }).ok,
+    '正向：预发布 tag + prerelease=true + draft=false 必须通过'
+  )
+  check(
+    judgeReleaseProperties('v0.7.2', { prerelease: false, draft: false }).ok,
+    '正向：正式版 tag + prerelease=false 必须通过（判据不得硬编码「必须为 true」）'
+  )
+  check(
+    judgeReleaseProperties('v0.7.2+hotfix', { prerelease: false, draft: false }).ok &&
+      judgeReleaseProperties('v0.2.1-alpha.1.2', { prerelease: true, draft: false }).ok,
+    '正向：build 段（`+hotfix`）不参与预发布判定，合成号（`alpha.1.2`）判为预发布'
+  )
+  check(
+    !judgeReleaseProperties(rcTag, { prerelease: false, draft: false }).ok,
+    '可伪证性：预发布被标成 prerelease=false 必须判红（F15 本体：它因此进了 releases/latest）'
+  )
+  check(
+    !judgeReleaseProperties('v0.7.2', { prerelease: true, draft: false }).ok,
+    '可伪证性：正式版被标成 prerelease=true 必须判红（会从 releases/latest 里消失）'
+  )
+  check(
+    !judgeReleaseProperties(rcTag, { prerelease: true, draft: true }).ok,
+    '可伪证性：draft=true 必须判红（草稿对用户不可见，而资产与滚动端点已是新版）'
+  )
+  check(
+    !judgeReleaseProperties(rcTag, {}).ok,
+    '可伪证性：属性字段全缺（API 形状变了）必须判红——读不到不等于没问题（fail-closed）'
+  )
+  check(
+    !judgeReleaseProperties('v0.2-rc.1', { prerelease: true, draft: false }).ok &&
+      !judgeReleaseProperties('release-2024', { prerelease: true, draft: false }).ok,
+    '可伪证性：tag 形状非法（推不出期望值）必须判红——「判不了」不等于「一致」'
+  )
+  // 端到端（注入 runner，不联网）：同一个 13 项清单，属性错也必须判红——
+  // 这条钉住「L2 的两半真的被合成一个出口」，而不是各判各的、只看后者。
+  const cleanRelease = checkReleaseAssets('v0.7.0-alpha.7', {
+    slug: 'owner/repo',
+    runner: runnerFor({ prerelease: true, draft: false })
+  })
+  check(cleanRelease.ok, `L2 端到端：资产齐全 + 属性正确必须通过 → ${cleanRelease.problems.join('；')}`)
+  const flippedRelease = checkReleaseAssets('v0.7.0-alpha.7', {
+    slug: 'owner/repo',
+    runner: runnerFor({ prerelease: false, draft: false })
+  })
+  check(
+    !flippedRelease.ok && flippedRelease.problems.some((p) => /prerelease=false/.test(p)),
+    'L2 端到端：资产齐全但 prerelease 错必须判红（资产齐 ≠ 发布正确）'
+  )
 
   if (failures.length > 0) {
     throw new Error(`资产清单自测失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
@@ -586,6 +800,15 @@ function printExpected() {
   }
 }
 
+/**
+ * Run the asset CLI: check workflow configuration by default, a real Release
+ * with `--check-release`, or asset names only with `--assets-from`.
+ * Also supports printing expected names and running self-tests.
+ *
+ * Prints results and exits with code 1 on a failed check or 2 when a required
+ * tag/file argument is absent. File I/O, self-test, and uncaught runner errors
+ * propagate.
+ */
 function run() {
   const args = argv.slice(2)
   if (args.includes('--print-expected')) {
@@ -610,18 +833,29 @@ function run() {
     const slug = repoIdx === -1 ? undefined : args[repoIdx + 1]
     const result = checkReleaseAssets(tag, { slug })
     if (result.ok) {
+      const parsed = parseVersionShape(tag)
+      const hasPrerelease = parsed.ok && parsed.prerelease !== null
       console.log(`✅ Release ${tag} 的资产清单完整（${EXPECTED_ASSET_COUNT} 项）`)
+      console.log(
+        `✅ Release ${tag} 的属性正确：prerelease=${result.prerelease}、draft=${result.draft}` +
+          `（tag 的版本号${hasPrerelease ? '带' : '不带'}预发布段）`
+      )
       if (result.unexpected.length > 0) {
         console.log(`   （另有 ${result.unexpected.length} 个未在期望清单内的资产：${result.unexpected.join(', ')}）`)
       }
       return
     }
-    console.error(`❌ Release ${tag} 的资产清单不完整：`)
+    console.error(`❌ Release ${tag} 的核对未通过：`)
+    console.error(`   prerelease=${result.prerelease}、draft=${result.draft}、资产 ${result.assets.length} 个`)
     for (const p of result.problems) console.error(`  - ${p}`)
     exit(1)
   }
 
   // 离线核对：从文件读资产名（每行一个），走纯逻辑判定。
+  //
+  // ⚠️ 这条路径**只**覆盖清单（名字 / 数量）那一半，**不**覆盖 Release 的
+  //    `prerelease` / `draft` 属性——属性只存在于真实 API 响应里，文件里没有它。
+  //    要核对属性必须走 `--check-release`（联网）。
   //
   // 存在的理由：本机 `spawnSync` 外部进程会 EBUSY，`gh api` 走不通
   // （与 verify:target / verify:cli-package 同源）。这条路径让受限宿主

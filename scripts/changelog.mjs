@@ -43,8 +43,10 @@ import path from 'node:path';
 import {
   BREAKING_TITLE,
   baselineRefFor,
+  channelOfTag,
   classify,
   latestTag,
+  latestTagForChannel,
   parseCommit,
   readCommits,
 } from './conventional-commits.mjs';
@@ -65,23 +67,93 @@ ${ENTRIES_ANCHOR}
 `;
 
 /**
+ * 推导「这次发布属于哪条通道」。
+ *
+ * 优先级：显式 `--channel` > `--version` > `--to` 的 tag 名。
+ * 从 tag 名推导时剥掉前导 `v`；非 `v*` 形态（分支名、`HEAD`）推不出来。
+ *
+ * An explicit channel is returned without validation. An unrecognized version
+ * returns `null` without trying `to` next.
+ *
+ * @param {{channel?: string|null, version?: string|null, to?: string|null}} input
+ * @returns {string|null} 通道名；推不出来时为 `null`（**不等于**「没有 tag」）
+ */
+function resolveChannel(input = {}) {
+  const { channel = null, version = null, to = null } = input;
+  if (channel) return channel;
+  if (version) return channelOfTag(`v${String(version).replace(/^v/, '')}`);
+  if (to && /^v/.test(to)) return channelOfTag(to);
+  return null;
+}
+
+/**
+ * 解析本次的起始基线（`--from` 的实际取值）。
+ *
+ * ## 为什么不能只用 `latestTag()`
+ *
+ * 修 `release.yml` 的正文段落时它写的是 `git describe --tags --match 'v*'`——
+ * **通道盲**：双通道下按图距离取全局最近，会取到另一条线的 tag，而且**随仓库里
+ * 新 tag 的出现而改变答案**（同一条已发布的 tag，今天取和明天取可以不同）。
+ * 2026-10-10 实测：发布 alpha 时正文写成 `v0.2.0-rc.2.1 → v0.2.1-alpha.1.2`，
+ * 正确基线应为 `v0.2.1-alpha.1.1`。
+ *
+ * ## 两种模式的边界（诚实说明）
+ *
+ * · 推得出通道（`--version` 或 `--to` 是 `v*` tag）⇒ **通道感知**，取该线自己的上一个 tag。
+ * If no channel can be inferred, use the nearest global tag. Call `warn` only
+ * when that fallback finds a tag and a callback was provided.
+ * A nonempty `from` is returned unchanged, bypassing channel and Git checks.
+ * Git lookup failures return `null`, just as an absent matching tag does.
+ *
+ * @param {{from?: string|null, to?: string|null, version?: string|null,
+ *          channel?: string|null, warn?: (msg: string) => void}} input
+ * @returns {string|null} 起始基线 ref；`null` 表示从头读
+ * @throws {Error} An explicit channel is unknown, unless `from` bypasses lookup.
+ *   Errors thrown by `warn` also propagate.
+ */
+function resolveBaseline(input = {}) {
+  const { from = null, to = null, version = null, channel = null, warn } = input;
+  if (from) return from;
+
+  const resolved = resolveChannel({ channel, version, to });
+  const rev = baselineRefFor(to);
+
+  if (resolved) {
+    return latestTagForChannel({ channel: resolved, rev: rev ?? undefined });
+  }
+
+  const fallback = latestTag(rev ? { rev } : {});
+  if (fallback && typeof warn === 'function') {
+    warn(
+      `推不出通道（--to=${to ?? 'HEAD'} 不是 v* tag），已退回**全局最近**基线 ${fallback}。` +
+        '该口径在双通道下可能取到另一条线的 tag；正式发布请用 --version/--channel 或显式 --from。',
+    );
+  }
+  return fallback;
+}
+
+/**
  * 解析参数。
  *
  * @param {string[]} argv - `process.argv.slice(2)`。
  * @returns {{
- *   notes: boolean, write: boolean, selfTest: boolean,
- *   from: string|null, to: string, version: string|null,
+ *   notes: boolean, write: boolean, selfTest: boolean, printBaseline: boolean,
+ *   from: string|null, to: string, version: string|null, channel: string|null,
  *   date: string|null, force: boolean, json: boolean,
  * }} 归一化后的选项。
+ * @throws {Error} An argument is not recognized. Option values are consumed
+ *   without validation; a missing value can be `undefined`.
  */
 function parseArgs(argv) {
   const options = {
     notes: false,
     write: false,
     selfTest: false,
+    printBaseline: false,
     from: null,
     to: 'HEAD',
     version: null,
+    channel: null,
     date: null,
     force: false,
     json: false,
@@ -94,9 +166,11 @@ function parseArgs(argv) {
     else if (arg === '--self-test') options.selfTest = true;
     else if (arg === '--force') options.force = true;
     else if (arg === '--json') options.json = true;
+    else if (arg === '--print-baseline') options.printBaseline = true;
     else if (arg === '--from') options.from = next();
     else if (arg === '--to') options.to = next();
     else if (arg === '--version') options.version = next();
+    else if (arg === '--channel') options.channel = next();
     else if (arg === '--date') options.date = next();
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`未知参数：${arg}（--help 查看用法）`);
@@ -108,9 +182,11 @@ const USAGE = `changelog.mjs — 从提交历史生成变更日志
 
   --notes, --release-notes   打印 Release 正文到 stdout
   --write                    写入/追加 CHANGELOG.md
-  --from <ref>               起始 ref（不含）；省略则取最近的 v* tag，无 tag 则从头
+  --from <ref>               起始 ref（不含）；省略则取**本通道**上一个 v* tag，无 tag 则从头
   --to <ref>                 结束 ref，默认 HEAD
-  --version <x.y.z>          --write 时的段落标题（写入必须提供）
+  --version <x.y.z>          --write 时的段落标题（写入必须提供）；也用于推导通道
+  --channel <name>           显式指定通道（stable / rc / alpha）；省略则从 --version/--to 推导
+  --print-baseline           只打印 --from 会取到的值（发布链路据此取基线），成功时无输出表示首次发布
   --date <YYYY-MM-DD>        段落日期，默认今天
   --force                    同版本段落已存在时允许覆盖（默认报错）
   --self-test                渲染逻辑自测（不读 git）
@@ -538,7 +614,15 @@ if (isDirectRun) {
 /**
  * CLI 主入口。
  *
+ * Prints release notes, range metadata, or the channel baseline; `--write`
+ * updates CHANGELOG.md in the current directory. Baseline mode requires a
+ * resolvable channel and prints nothing when no matching tag is found or the
+ * Git lookup fails.
+ *
  * @param {string[]} argv - 命令行参数。
+ * @throws {Error} Arguments or channels are invalid, baseline mode cannot infer
+ *   a channel, notes contain no commits, or writing lacks a version or fails
+ *   changelog insertion checks. Git history and file I/O errors also propagate.
  * @returns {Promise<void>}
  */
 async function main(argv) {
@@ -555,15 +639,43 @@ async function main(argv) {
     return;
   }
 
-  // `--from` 省略时的默认基线：**相对 `--to` 的**上一个 v* tag。
+  // `--print-baseline`：只解析基线并打印，供发布链路取 `PREV`。
   //
-  // 这里**不能**写成 `latestTag()`（= 从 HEAD 去找）。发布链路调用的是
-  // `--notes --to v0.1.0`，而 `v0.1.0` 这个 tag 在生成说明时必然已经存在（它就是
-  // 刚 push 上来的那个），从 HEAD 找会把它自己找回来，`--from` 与 `--to` 指向
-  // 同一处，区间为空，Release 正文变成「区间内没有提交」——而且不报错。
-  // 详见 `baselineRefFor()`。
-  const baselineRev = baselineRefFor(options.to);
-  const from = options.from ?? latestTag(baselineRev ? { rev: baselineRev } : {});
+  // 🔴 它**必须**推得出通道，否则非零退出。理由是本仓的判据纪律：
+  //    「判不了」与「没有」必须分成两个出口——若把「推不出通道」当成「首次发布」
+  //    静默放行，一个拼错的 tag/通道名会伪装成「首个版本」，正文变成空区间而不报错。
+  if (options.printBaseline) {
+    const channel = resolveChannel(options);
+    if (!channel) {
+      throw new Error(
+        `--print-baseline 推不出通道：--to=${options.to}` +
+          `${options.version ? ` --version=${options.version}` : ''}。\n` +
+          '请让 --to 指向一个 v* tag（或显式给 --version / --channel）。\n' +
+          '「推不出通道」不等于「首次发布」——两者不得混成一个出口。',
+      );
+    }
+    const baseline = latestTagForChannel({
+      channel,
+      rev: baselineRefFor(options.to) ?? undefined,
+    });
+    if (baseline) console.log(baseline);
+    return;
+  }
+
+  // `--from` 省略时的默认基线：**相对 `--to` 的**、且属于**同一通道**的上一个 v* tag。
+  //
+  // 两个坑都在这里：
+  //   ① 不能写成「从 HEAD 去找」——`--to v0.1.0` 时 `v0.1.0` 必然已存在（它就是刚
+  //      push 上来的那个），从 HEAD 找会把它自己找回来，区间变空且不报错。详见 `baselineRefFor()`。
+  //   ② 不能写成**通道盲**的 `git describe --match 'v*'`——双通道下会取到另一条线
+  //      的 tag，且答案随仓库里存在哪些 tag 而变。详见 `resolveBaseline()`。
+  const from = resolveBaseline({
+    from: options.from,
+    to: options.to,
+    version: options.version,
+    channel: options.channel,
+    warn: (msg) => console.warn(`⚠️  ${msg}`),
+  });
   const commits = readCommits({ from, to: options.to });
   const base = repoUrl();
 

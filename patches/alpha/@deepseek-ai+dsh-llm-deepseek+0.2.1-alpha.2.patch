@@ -10,7 +10,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js b/node_modu
  		this.name = "DeepSeekFilesError";
  		this.detail = detail;
  	}
-@@ -1747,7 +1747,8 @@ function providerError(raw, status, headers) {
+@@ -1750,7 +1750,8 @@ function providerError(raw, status, headers) {
  	const type = typeof error.type === "string" ? error.type : "";
  	const detail = `${type} ${typeof error.code === "string" ? error.code : ""} ${message}`;
  	let code;

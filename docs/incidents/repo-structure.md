@@ -42,7 +42,7 @@
     > `publishChannel` 是**桌面 tag 的预发布后缀**（本仓命名，可改）。
     > 当前 `next` 目标：`upstreamDistTag: 'next'` 而 `publishChannel: 'rc'`——上游 `next` dist-tag 当下
     > 就指向一个 `rc` 阶段版本，所以桌面发 `v0.7.0-rc.1` 却要组装 `next` 目标的补丁集，这是**正常**的。
-    > 解析入口：`targetForVersion` / `--channel-of` 查 `publishChannel`；`desktopChannelForVersion` 从**版本后缀**推桌面通道（`stable` / `rc` / `alpha`）。漂移哨兵只在**自测**里断言 `upstreamDistTag` 的形态，主流程已不再按目标查 dist-tag（参考段查的是全局 npm dist-tags，见 2f）。
+    > 解析入口：`targetForVersion` / `--channel-of` 查 `publishChannel`；`desktopChannelForVersion` 从**版本后缀**推桌面通道（`stable` / `rc` / `alpha`）。漂移哨兵**判定层直接依赖** `upstreamDistTag`——每个目标查**自己那条线**的 npm dist-tag（线名在响应里不存在即判红），自测同时断言它的形态（2026-10-10 裁决恢复「按线判定」；2f 曾一度改成比「全局最新 Release」并把该字段摘成无读者，理由与实测见 `scripts/verify-upstream-drift.mjs` 文件头）。
     > **若把两者强行同名**，想改桌面后缀时就会连带去查一个上游不存在的 dist-tag，让哨兵静默退回 `latest` 并永久误报。
   - `recount-patches.mjs`：把补丁 hunk 行号重算到目标版本的真实位置（移植补丁的必需步骤）。拒绝任何未知参数——位置参数曾被静默忽略，会让「重算 alpha」实际跑在默认目标上。
     > ⚠️ **同一份补丁只用下面两条路径中的一条**：两者都能把行号算对，但**产出的补丁不完全相同**（重生成会顺带规范化上下文与计数行）。混用会让同一补丁在两次操作间来回变动，且看不出版本差异是「上游变了」还是「工具换了一条」。

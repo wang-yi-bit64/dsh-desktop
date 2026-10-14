@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.1`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进，含上游重构；预检 clean 4 / conflict 7，经行号重算 + 语义重做 3 个 + 退役 1 个后 10 个补丁全部 clean） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.2`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -280,6 +280,35 @@ override，把它反向钉到补丁所针对的 `1.0.3`；这与两线既有做�
 **体积（清单 Step 6，如实记录）**：本轮**无本地组装基线**（`src-tauri/resources/` 与
 `harness-deps/` 均不存在），无法给出增量对比；按计划取代理基线并显式标注
 「基线缺失，增量不可比」——不重蹈 2026-09-30 那次「跳过体积对比」的流程教训。
+
+### alpha 线（0.2.1-alpha.2）的移植裁定（2026-10-14）
+
+上游 `alpha` dist-tag 从 `0.2.1-alpha.1` 前进到 `0.2.1-alpha.2`。
+**预检基线**：clean 10 / conflict 2（12 个补丁）。
+
+**行号重算**：用 [`relocate-patch-hunks.mjs`](../scripts/relocate-patch-hunks.mjs)
+自动重算行号。首轮 11/12 补丁 clean；`dsh-client-ui-trajectory` 的第二个 hunk 因上游在
+`requestErrorMessage` 中插入 `details.lastAttemptError` 键而定位失败，需人工重写。
+
+**人工修复 3 个补丁（上游微调导致上下文或行号偏移）**：
+
+- **`@deepseek-ai/dsh`**：`package.json` 的 `files` 数组与依赖顺序在上游 0.2.1-alpha.2
+  中保持不变，但 recount 产出的行号偏移 1 行（`dsh-desktop-*` 三个依赖的插入点从
+  `license` 后第 1 行变为第 2 行）。**只校正行号，不动语义**。
+- **`@deepseek-ai/dsh-client-ui-deliverables`**：上游把 `producedFileMentions`
+  的第二参数从 `label` 扩成 `label, operations = []`（`operations` 为新增可选参数），
+  补丁的 `localPathReference` 回退逻辑与 `paths === null` guard 移除仍成立，但三个 hunk
+  的行号全部偏移（`producedFileMentions` +7、`presentedForClosing` 后插入点 +0 但
+  `chatFileMentions` 行号漂移）。**只校正行号与上下文，不动语义**。
+- **`@deepseek-ai/dsh-client-ui-trajectory`**：上游在错误文案对象里新增
+  `details.lastAttemptError` 键，导致 `requestErrorMessage` 函数的行号下移；
+  补丁的 `QUOTA` / `FORBIDDEN` 分支逻辑仍成立，只校正行号。
+
+**退役与语义重做**：本轮 **0 个退役、0 个语义重做**。12 个补丁的意图在 0.2.1-alpha.2
+上全部仍然成立，仅需行号与上下文校正。
+
+**验证（仅预检）**：在 `harness-deps/alpha-pristine-0.2.1-alpha.2/` 纯净树上逐补丁用
+`patch -p1 --dry-run` 验证，12/12 通过，但其中 3 个需要 fuzz 1~2；尚未通过 fuzz 0 或真实 `patch-package` 验证，不能据此认定组装成功。
 
 ### next 线（0.2.0-rc.2）与 alpha 线（0.1.7-alpha.2）的移植裁定（2026-09-30）
 

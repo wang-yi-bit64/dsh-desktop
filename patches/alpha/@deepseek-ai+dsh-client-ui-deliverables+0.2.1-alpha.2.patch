@@ -1,20 +1,10 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
-@@ -1271,7 +1271,7 @@ window.__ModuleLoader__.load({
- 		*/
- 		function producedFileMentions(paths, openFile, label) {
- 			return { resolve(value) {
--				const path = paths.includes(value) ? value : onlyPathWithBasename(paths, value);
-+				const path = paths.includes(value) ? value : onlyPathWithBasename(paths, value) ?? localPathReference(value);
- 				if (path === void 0) return void 0;
- 				return {
- 					open: () => {
-@@ -1282,6 +1282,21 @@ window.__ModuleLoader__.load({
- 				};
- 			} };
+@@ -1270,6 +1270,21 @@ window.__ModuleLoader__.load({
+ 			return [...files.values()];
  		}
-+		/**
+ 		/**
 +		* Resolve Codex-style local path references that were not produced by a tool
 +		* in the current turn. Keep bare identifiers inert: without a slash, an
 +		* absolute-path prefix, or a conventional filename suffix, inline code is
@@ -29,14 +19,28 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
 +			if (/^[^\\/]+\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(path)) return path;
 +			return void 0;
 +		}
- 		/** The single supplied path whose basename is exactly `value`, else undefined. */
- 		function onlyPathWithBasename(paths, value) {
- 			const matches = paths.filter((path) => basename(path) === value);
-@@ -2320,7 +2335,6 @@ window.__ModuleLoader__.load({
++		/**
+ 		* Resolves inline-code references against one turn's produced or delivered
+ 		paths and explicit mutation arguments. A reference resolves only when every
+ 		exact or basename match identifies one target. Ambiguous and unknown tokens stay inert.
+@@ -1284,7 +1299,11 @@ window.__ModuleLoader__.load({
+ 			return { resolve(value) {
+ 				const matches = new Set(paths.filter((path) => path === value || basename(path) === value));
+ 				for (const operation of operations) if (operation.argumentPath === value) matches.add(operation.path);
+-				const path = matches.size === 1 ? matches.values().next().value : void 0;
++				let path = matches.size === 1 ? matches.values().next().value : void 0;
++				if (path === void 0) {
++					const local = localPathReference(value);
++					if (local !== void 0 && matches.size === 0) path = local;
++				}
+ 				if (path === void 0) return void 0;
+ 				return {
+ 					open: () => {
+@@ -2328,7 +2347,6 @@ window.__ModuleLoader__.load({
  			ctx.provide("chatFileMentions", { forClosing(owner) {
  				const paths = selectProducedFiles(owner);
  				const presented = presentedForClosing(owner);
 -				if (paths === null && presented.length === 0) return void 0;
- 				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }));
+ 				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }), owner.turn.data.get("deliverables")?.produced.filter((operation) => operation.seq <= owner.seq));
  			} });
  		}

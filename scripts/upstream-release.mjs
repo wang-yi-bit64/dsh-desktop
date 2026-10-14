@@ -13,7 +13,12 @@
  *
  * 实测（2026-10-09）：两者可以不一致——上游 Release 已到 `dsh-v0.2.1-alpha.1`，
  * 而 npm `next` 还停在 `0.2.0-rc.2`。更早的实测还出现过「tag 已动、依赖树未齐」的波次。
- * ⇒ 「上游走到哪了」这件事，**Release 比 dist-tag 更早可见**，这才是漂移哨兵该看的基准。
+ * ⇒ 「上游走到哪了」这件事，**Release 比 dist-tag 更早可见**。
+ *
+ * 🔴 **但它是漂移哨兵的「信息层」，不是判定基准**（2026-10-10 裁决）：判定按**各目标自己那条线**
+ * 的 npm dist-tag 做——因为 Release 清单里没有字段能标记「这条 Release 属于哪条线」，
+ * 拿「全局最新」当基准会让 `next` 被 alpha 线的版本判成落后（可复现形态与两个被证伪的
+ * 备选判据见 [`verify-upstream-drift.mjs`](./verify-upstream-drift.mjs) 文件头）。
  *
  * ## 🔴 四条实测事实（每一条都能让天真实现静默出错）
  *
@@ -45,7 +50,7 @@
  * | `ok` | 取到可用 Release | 正常比较 |
  * | `empty` | 仓库可达，但一条可用的都没有（全 draft / 全是别的 tag 形态） | SKIP **并报出被排除的条数与原因**（否则与「真没有漂移」长得一样） |
  * | `skip` | 取不到（`gh` 缺失 / 网络不可达 / 限流） | SKIP 并说明「未核对」 |
- * | `error` | 响应**不该长这样**（404 说明 slug 错了、JSON 不可解析） | **判红**——这是配置缺陷，不是外部状态 |
+ * | `error` | 响应异常（`code` 区分 `not-found` / `invalid-json` / `invalid-response`） | 信息层仅对 404 **判红**；其余异常 SKIP 并说明「未核对」 |
  *
  * `error` 与 `skip` 必须分开：slug 是本仓写死的常量，它 404 意味着**我们**错了；
  * 把它当 SKIP 会让一个配置错误永远隐身（本仓纪律：不可判定与配置错误不是一回事）。
@@ -236,7 +241,7 @@ export function spawnRunner(cmd, args) {
  * @returns {{status:'ok', releases: object[], ignored: object[]}
  *   | {status:'empty', releases: object[], ignored: object[], reason: string}
  *   | {status:'skip', reason: string}
- *   | {status:'error', reason: string}}
+ *   | {status:'error', code:'not-found'|'invalid-json'|'invalid-response', reason: string}}
  */
 export function fetchUpstreamReleases({ repo = UPSTREAM_REPO, perPage = RELEASES_PER_PAGE, runner = spawnRunner } = {}) {
   const run = runner ?? spawnRunner;
@@ -251,9 +256,10 @@ export function fetchUpstreamReleases({ repo = UPSTREAM_REPO, perPage = RELEASES
       return { status: 'skip', reason: `未找到 gh 命令（无法查询上游 Release）：${firstLine}` };
     }
     // 404 ⇒ slug 错了 / 仓库被改名或转私有。这是我们自己的配置缺陷，**不是**外部状态。
-    if (/HTTP 404|Not Found/i.test(stderr + stdout)) {
+    if (/HTTP 404\b/i.test(stderr + stdout)) {
       return {
         status: 'error',
+        code: 'not-found',
         reason:
           `上游仓库 ${repo} 返回 404：slug 是本仓写死的常量（upstream-release.mjs 的 UPSTREAM_REPO）` +
           `⇒ 要么写错了、要么仓库改名/转私有。这是配置缺陷而不是「取不到」，故判红。原始信息：${firstLine}`,
@@ -266,10 +272,10 @@ export function fetchUpstreamReleases({ repo = UPSTREAM_REPO, perPage = RELEASES
   try {
     parsed = JSON.parse(stdout);
   } catch (error) {
-    return { status: 'error', reason: `gh api 响应不是合法 JSON：${error.message}（前 120 字：${stdout.slice(0, 120)}）` };
+    return { status: 'error', code: 'invalid-json', reason: `gh api 响应不是合法 JSON：${error.message}（前 120 字：${stdout.slice(0, 120)}）` };
   }
   if (!Array.isArray(parsed)) {
-    return { status: 'error', reason: `gh api 响应不是数组（收到 ${typeof parsed}）——端点路径写错了？` };
+    return { status: 'error', code: 'invalid-response', reason: `gh api 响应不是数组（收到 ${typeof parsed}）——端点路径写错了？` };
   }
 
   const { releases, ignored } = normalizeReleases(parsed);
@@ -477,20 +483,26 @@ export function selfTest() {
 
   const notFound = () => ({ status: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)', error: null });
   eq('取数：404 → error（配置缺陷判红，**不是** skip）', fetchUpstreamReleases({ runner: notFound }).status, 'error');
+  eq('取数：404 必须有独立错误类型', fetchUpstreamReleases({ runner: notFound }).code, 'not-found');
+  eq(
+    '取数：Not Found 文案没有 HTTP 404 → skip',
+    fetchUpstreamReleases({ runner: () => ({ status: 1, stdout: '', stderr: 'proxy: host not found', error: null }) }).status,
+    'skip',
+  );
   const noGh = () => ({ status: 1, stdout: '', stderr: '', error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) });
   eq('取数：gh 未安装 → skip（外部状态）', fetchUpstreamReleases({ runner: noGh }).status, 'skip');
   const offline = () => ({ status: 1, stdout: '', stderr: 'dial tcp: connect: network is unreachable', error: null });
   eq('取数：网络不可达 → skip', fetchUpstreamReleases({ runner: offline }).status, 'skip');
   eq('取数：skip 必须带理由（§7.1 规则 3）', fetchUpstreamReleases({ runner: offline }).reason.length > 0, true);
   eq(
-    '取数：响应不可解析 → error',
-    fetchUpstreamReleases({ runner: () => ({ status: 0, stdout: '<html>', stderr: '', error: null }) }).status,
-    'error',
+    '取数：响应不可解析 → invalid-json（与 404 分开）',
+    fetchUpstreamReleases({ runner: () => ({ status: 0, stdout: '<html>', stderr: '', error: null }) }).code,
+    'invalid-json',
   );
   eq(
-    '取数：响应不是数组 → error（端点路径写错时就是这个形态）',
-    fetchUpstreamReleases({ runner: () => ({ status: 0, stdout: '{"message":"x"}', stderr: '', error: null }) }).status,
-    'error',
+    '取数：响应不是数组 → invalid-response（与 404 分开）',
+    fetchUpstreamReleases({ runner: () => ({ status: 0, stdout: '{"message":"x"}', stderr: '', error: null }) }).code,
+    'invalid-response',
   );
 
   // ---- 按 tag 取单条 Release（前门步骤①的准入判据）----

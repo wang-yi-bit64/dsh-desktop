@@ -21,9 +21,20 @@
  *      `）` 当作变量名终止符，于是把变量解析成 `TAG）`，报
  *      `TAG）: unbound variable`（Linux/Windows 的 bash 正确终止，所以只有 macOS 红）。
  *
- * 这两条都“只在真跑发布时炸”，本地 `npm run verify:*` 全都绿——正是本仓守卫体系
- * 要覆盖的那一类。本脚本用纯文本判据把它们钉死，并带**可伪证性检查**：把上述两份
- * 缺陷配置当作夹具，断言必须变红。
+ *   3. **通道盲的取基线**（2026-10-10，`v0.2.1-alpha.1.2` 真实发布，F14）。发布正文的
+ *      「完整变更」区间由 `git describe --tags --match 'v*' --abbrev=0 "${TAG}^"` 求出，
+ *      而那个 `--match` 是照 ADR-053 的滚动 tag（`updater-rc` / `updater-alpha`）写的、
+ *      **没有通道过滤**：双通道下 `git describe` 按**图距离**取全局最近，会取到**另一条线**
+ *      的 tag。实际发出的正文写着 `v0.2.0-rc.2.1 → v0.2.1-alpha.1.2`，而 alpha 线自己的
+ *      基线是 `v0.2.1-alpha.1.1`（`v0.2.0-rc.2.1` 属于 rc 线）——**不报任何错**。
+ *      更糟的是答案**随仓库里存在哪些 tag 而变**：rc 线发布时这个盲取法「碰巧对」，
+ *      只因为当时 alpha 的 tag 还不存在；alpha 发布后同一条 rc tag 再取就错了。
+ *      修法不是改那一行，而是把「上一个发布」收敛成**与变更日志同源**的脚本入口
+ *      （`changelog.mjs --print-baseline`），本脚本负责钉住 YAML 侧不许退回盲取。
+ *
+ * 这三条都“只在真跑发布时炸”，本地 `npm run verify:*` 全都绿——正是本仓守卫体系
+ * 要覆盖的那一类。本脚本用纯文本判据把它们钉死，并带**可伪证性检查**：把上述缺陷
+ * 配置当作夹具，断言必须变红。
  *
  * 用法：
  * ```bash
@@ -636,6 +647,117 @@ export function checkDualChannelShape(text) {
 }
 
 /**
+ * 把以 `\` 续行的多行命令折成一条**逻辑行**。
+ *
+ * 判据按逻辑行而不是物理行匹配，是为了让「同一件事换个排版就躲过守卫」不成立：
+ * 把一条命令拆成两行（bash 反斜杠续行）与写成一行在语义上完全等价，判据必须
+ * 给出同一个结论。本仓已有过「按物理行匹配 → 换个写法就漏」的先例
+ * （见 {@link shellContinuationProblems} 对续行的处理）。
+ *
+ * @param {string} code 已剥注释的文本
+ * @returns {string[]} Trimmed lines joined with spaces across continuations.
+ *   Continuation backslashes are retained; an unfinished final group is included.
+ *   This groups text for matching rather than parsing shell syntax.
+ */
+function logicalLines(code) {
+  const out = []
+  let buffer = null
+  for (const line of code.split('\n')) {
+    buffer = buffer === null ? line.trim() : `${buffer} ${line.trim()}`
+    if (!/\\[ \t]*$/.test(line)) {
+      out.push(buffer)
+      buffer = null
+    }
+  }
+  if (buffer !== null) out.push(buffer)
+  return out
+}
+
+/**
+ * 「上一个发布」的基线必须**按通道**取（F14，2026-10-10 实测缺陷）。
+ *
+ * ## 缺陷本体
+ *
+ * `release.yml` 的正文步骤曾这样求 `PREV`：
+ *
+ * ```bash
+ * PREV="$(git describe --tags --match 'v*' --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+ * ```
+ *
+ * `--match 'v*'` 这条限定是照 **ADR-053 的滚动 tag**（`updater-rc` / `updater-alpha`）写的，
+ * 它防的是「把滚动 tag 当成上一个发布」，**不是**「取到另一条通道的发布」。双通道下
+ * `git describe` 按**图距离**取全局最近 ⇒ 取到 rc 线或 alpha 线的另一个 tag。
+ * 2026-10-10 实测：发布 `v0.2.1-alpha.1.2` 时正文写成
+ * `完整变更：v0.2.0-rc.2.1 → v0.2.1-alpha.1.2`（`v0.2.0-rc.2.1` 属于 **rc 线**），
+ * 而 alpha 线自己的基线是 `v0.2.1-alpha.1.1`。**不报任何错。**
+ *
+ * 这一类缺陷在本仓**已经修过一次**（`changelog.mjs` 的 `--from` 省略路径），但修一处
+ * 未 grep 同类点 ⇒ 残留落在 **YAML** 里——JS linter 与 `scripts/**` 的守卫都看不见它。
+ * 这正是「拆职责后必须全仓 grep 同类点」那条纪律的又一例。
+ *
+ * ## 判据为什么是**成对**的
+ *
+ * 只判「不得出现通道盲命令」不够：把那两行整个删掉同样会让守卫变绿，而删掉之后
+ * `PREV` 变成空 ⇒ 每次发布都声称「首次发布」，正文区间同样错。因此必须**同时**：
+ *
+ * | 方向 | 断言 | 缺失的后果 |
+ * |---|---|---|
+ * | 禁 | 可执行位置不得有 `git describe` | 取到另一条通道的 tag，正文区间错且无声 |
+ * | 必须 | 必须有 `changelog.mjs --print-baseline` 的委托 | 删掉取基线 ⇒ 每次都成「首次发布」 |
+ *
+ * ## 覆盖面的诚实说明
+ *
+ * 判据钉的是 `git describe` 这一**形态**（本仓实际出现过的形态），不试图枚举所有
+ * 「找上一个 tag」的等价写法（`git tag --sort` / `for-each-ref` 之类）。这是有意的
+ * 取舍：判据要窄而准，把没出现过的形态也写成判据只会制造噪音；真正的收口在于
+ * **委托脚本入口**（第 2 条断言）——只要基线来自 `changelog.mjs`，里面用的是哪条
+ * git 命令就与 YAML 无关了。
+ *
+ * ⚠️ 所有「不得出现」的判据都在 {@link stripYamlComments} 之后的文本上跑：本次修复
+ * 的说明里**逐字引用了**那条坏命令来交代删掉了什么（同 {@link checkCliArtifactShape}
+ * 踩过的坑），不剥注释的话守卫会被自己的文档命中而恒红。
+ *
+ * @param {string} text release.yml 全文（应已把 CRLF 规范成 LF）
+ * @returns {{ok: boolean, problems: string[]}} 判定与问题清单
+ */
+export function checkChannelAwareBaseline(text) {
+  const problems = []
+  const lines = logicalLines(stripYamlComments(text))
+
+  // 1) 禁止：可执行位置不得有通道盲的取基线动作。
+  for (const line of lines) {
+    if (/\bgit\b[^\n]*\bdescribe\b/.test(line)) {
+      problems.push(
+        `release.yml 的可执行位置仍有通道盲的 \`git describe\` 取基线：\`${line}\`\n` +
+          '        `--match \'v*\'` 只防滚动 tag（ADR-053），**不防另一条通道**；' +
+          '双通道下 `git describe` 按图距离取全局最近，会取到 rc 线 / alpha 线的另一个 tag，' +
+          '且答案随仓库里存在哪些 tag 而变（2026-10-10 实测：alpha 的正文写成 rc→alpha 区间）。' +
+          '改为 `node scripts/changelog.mjs --print-baseline --to "$TAG"`——' +
+          '通道判据与变更日志同源（`dsh-targets.mjs` 的 `publishChannel`），推不出时会非零退出'
+      )
+    }
+  }
+
+  // 2) 必须：基线只能来自脚本入口（否则「删掉那两行」也能让第 1 条通过）。
+  const delegations = lines.filter((line) => /changelog\.mjs/.test(line) && /--print-baseline\b/.test(line))
+  if (delegations.length === 0) {
+    problems.push(
+      'release.yml 里没有 `node scripts/changelog.mjs --print-baseline` 的委托——' +
+        '「上一个发布」的取法必须是这个入口（与变更日志同源）。' +
+        '整个删掉取基线会让每次发布都走「首次发布」分支，正文区间同样是错的'
+    )
+  } else if (!delegations.some((line) => /--to\b/.test(line))) {
+    // 基线是**相对某个 tag** 定义的；靠默认值等于把语义藏在实现里（且一旦将来
+    // 默认值改成 HEAD，取回的正是 tag 自己，区间变空而不会报错）。
+    problems.push(
+      '`changelog.mjs --print-baseline` 没有显式给 `--to`——基线是相对某个 tag 定义的，' +
+        '`--to` 省略时语义由脚本默认值决定，等于把「哪个区间」藏进实现细节'
+    )
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
  * 扫出「把 `${{ … }}` 插进 run 字符串来传构建目标」的写法。
  *
  * 这份判据独立成函数是为了能对 smoke.yml 复用：两份工作流各有自己的组装步骤，
@@ -1129,12 +1251,78 @@ export function selfTest() {
     )
   }
 
+  // 11) 🔴 F14（2026-10-10 实测）：正文的「上一个发布」必须**按通道**取。
+  //     缺陷本体：`git describe --tags --match 'v*'` 只防滚动 tag（ADR-053），
+  //     不防另一条通道；alpha 的正文因此写成 `v0.2.0-rc.2.1 → v0.2.1-alpha.1.2`。
+  const baselineShape = checkChannelAwareBaseline(text)
+  check(baselineShape.ok, `release.yml：取基线的形状不合法 → ${baselineShape.problems.join('；')}`)
+  {
+    // 夹具基于**真实 text**，只把取基线那一行换掉：从零合成会让无关判据跟着红，
+    // 把待验判据的结论淹没（本仓在 checkCliArtifactShape 的夹具上踩过）。
+    const REAL_BASELINE_LINE = 'PREV="$(node scripts/changelog.mjs --print-baseline --to "${TAG}")"'
+    const probe = (body) => checkChannelAwareBaseline(text.replace(REAL_BASELINE_LINE, body))
+    check(
+      text.includes(REAL_BASELINE_LINE),
+      '夹具前提：必须能在真实工作流里找到取基线那一行（找不到说明它改了形状，下面的负向断言会白过）'
+    )
+    // 负向 ①：缺陷本体（历史真实写法，含吞掉失败的 `|| true`）。
+    check(
+      !probe('          PREV="$(git describe --tags --match \'v*\' --abbrev=0 "${TAG}^" 2>/dev/null || true)"').ok,
+      '可伪证性：退回通道盲的 `git describe --tags --match \'v*\'` 必须判红（F14 缺陷本体）'
+    )
+    // 负向 ②：去掉 `|| true`（失败会暴露）也仍然是错的区间，同样判红——
+    //          否则「只删掉兜底」会被误当成修好了。
+    check(
+      !probe('          PREV="$(git describe --tags --match \'v*\' --abbrev=0 "${TAG}^")"').ok,
+      '可伪证性：不带 `|| true` 的通道盲写法同样判红（它只是会报错，区间仍然是错的）'
+    )
+    // 负向 ③：整段删掉取基线。只判「旧写法不得出现」的话，删掉它就绿了，
+    //          而 `PREV` 为空 ⇒ 每次发布都声称「首次发布」。
+    check(
+      !probe('          echo no baseline here').ok,
+      '可伪证性：删掉取基线必须判红（否则每次都走「首次发布」，区间同样错）'
+    )
+    // 负向 ④：委托了脚本但没给 `--to`。
+    check(
+      !probe('          PREV="$(node scripts/changelog.mjs --print-baseline)"').ok,
+      '可伪证性：委托但省略 `--to` 必须判红（区间语义不得由脚本默认值决定）'
+    )
+    // 正向：换一种**排版**（反斜杠续行）不得被判红——判据按逻辑行匹配。
+    check(
+      probe(
+        '          PREV="$(node scripts/changelog.mjs \\\n            --print-baseline --to "${TAG}")"'
+      ).ok,
+      '可伪证性：同一件事拆成续行两行不得判红（否则守卫会因排版而误报）'
+    )
+  }
+  // 注释安全：本次修复的说明**逐字引用**了那条坏命令（`git describe --tags --match 'v*'`），
+  // 不剥注释的话这个守卫一落地就恒红——本仓已两次踩到同一形状。
+  check(
+    checkChannelAwareBaseline(
+      `${text}\n          # 说明：以前这里写的是 git describe --tags --match 'v*'\n`
+    ).ok,
+    '可伪证性：注释里引用坏命令必须放行（否则修复说明会让守卫恒红）'
+  )
+  check(
+    !checkChannelAwareBaseline(
+      'jobs:\n  demo:\n    steps:\n      - name: 夹具\n        run: |\n          git describe --tags --match \'v*\'\n'
+    ).ok,
+    '可伪证性：可执行位置的同一串必须判红（与上一条互补，证明剥注释没把判据一起剥掉）'
+  )
+
   if (failures.length > 0) {
     throw new Error(`发布工作流守卫失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
   }
   return { passed }
 }
 
+/**
+ * Check local release workflow arguments, shell portability, artifact routing,
+ * checkout steps, channel baseline delegation, and retention of the CLI crate.
+ *
+ * Prints results and exits with code 1 if any check fails. Errors reading the
+ * workflow, Cargo manifest, or supporting scripts propagate.
+ */
 function run() {
   const text = readWorkflow()
   const { tauriScript, args } = extractTauriActionInputs(text)
@@ -1192,13 +1380,24 @@ function run() {
     console.log('✅ 所有执行仓库脚本的 job 都先 checkout（代码取自 tag）')
   }
 
+  // 6) 「上一个发布」的基线必须按通道取（F14，2026-10-10 实测：alpha 的正文写成 rc→alpha 区间）。
+  const baselineShape = checkChannelAwareBaseline(text)
+  if (!baselineShape.ok) {
+    for (const p of baselineShape.problems) console.error(`  ✗ 取基线（上一个发布）：${p}`)
+  } else {
+    console.log(
+      '✅ 「上一个发布」按通道取（委托 changelog.mjs --print-baseline，YAML 里无通道盲 git describe）'
+    )
+  }
+
   if (
     !ok ||
     hits.length > 0 ||
     shellProblems.length > 0 ||
     !cliShape.ok ||
     !crate.ok ||
-    noCheckout.length > 0
+    noCheckout.length > 0 ||
+    !baselineShape.ok
   ) {
     process.exit(1)
   }

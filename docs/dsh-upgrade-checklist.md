@@ -2,8 +2,8 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-09-30 `next` 线与 2026-10-07 `alpha` 线各自推进后，`next` 锚 `0.2.0-rc.2`、`alpha` 锚 `0.2.1-alpha.1`，两条线已各自对齐上游对应 dist-tag（2026-10-08 实测一致，`npm run gate -- drift` 不告警）。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
-> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.0-rc.2`、alpha 线 `0.2.1-alpha.1`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
+> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-09-30 `next` 线与 2026-10-14 `alpha` 线各自推进后，`next` 锚 `0.2.0-rc.2`、`alpha` 锚 `0.2.1-alpha.2`。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
+> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.0-rc.2`、alpha 线 `0.2.1-alpha.2`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
 ---
@@ -76,16 +76,19 @@ boot / config-dump / 插件管理。
 
 ### 约束三：上游版本漂移要主动监测，不要等升级时才发现
 
-- [ ] 跑 `npm run gate -- drift`：把**两条通道各自**钉住的版本与**上游最新 GitHub Release** 比一次。
-      🔄 **基准已于 2026-10-09 由 npm dist-tag 换成上游 Release**（计划 2f；理由与实测见
-      `scripts/verify-upstream-drift.mjs` 文件头：dist-tag 滞后可见，且上游出现过「tag 已动、
-      依赖树未齐」的波次）。判定分档：
-      - **阻断**：落后 ≥1 个 minor / 上游进入更晚的预发布阶段（如 alpha → rc）/
-        上游在**新补丁线**上重新起预发布（patch 前进 **且** 阶段回退 ⇒ `patch-line-behind`）；
+- [ ] 跑 `npm run gate -- drift`：把**两条通道各自**钉住的版本与**它自己那条线的上游 npm
+      dist-tag** 比一次。🔄 **判定基准 2026-10-10 裁决恢复为「按线」**（取代 2f 的「全局最新
+      上游 Release」——那次换基准把「按线比较」静默丢掉了，`next` 会拿 alpha 线的版本判自己
+      落后并报红；理由、两个被证伪的备选判据与实测见 `scripts/verify-upstream-drift.mjs` 文件头）。
+      判定分档：
+      - **阻断**：落后 ≥1 个 minor / 该线上游进入更晚的预发布阶段（如 alpha → rc）/
+        该线 dist-tag 被**重指**到新补丁线 + 更早阶段（patch 前进 **且** 阶段回退 ⇒ `patch-line-behind`）；
       - **仅提示**：同一 major.minor 且同一阶段，只落后补丁位或阶段内序号；
-      - npm dist-tag 仍会打印，但**只作参考、不参与判定**（两者的差值＝「上游已宣布、npm 还没跟上」）；
-      - 取不到上游 Release ⇒ 打印 SKIP（**不等于「已核对」**）；
-        ⚠️ 例外：仓库 slug 404 属**配置缺陷**（slug 是本仓写死的常量），那种情形**判红**。
+      - 上游 GitHub Release 清单仍会打印（差值＝「上游已宣布、npm 还没跟上」），但**只作信息层、不参与判定**
+        ——npm 上还没有的版本我们本来就组装不出来，拿它阻断不是可执行信号；
+      - 线名在上游 dist-tags 响应里**不存在** ⇒ **判红**（`upstreamDistTag` 是本仓写死的常量，
+        配错是我们的问题）；判定基准（npm dist-tags）取不到 ⇒ 打印 SKIP（**不等于「已核对」**）；
+        ⚠️ 信息层例外：仓库 slug 404 属**配置缺陷**（slug 是本仓写死的常量），那种情形**判红**。
 
 ---
 
