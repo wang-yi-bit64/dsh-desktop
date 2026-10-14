@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.2`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.2`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -68,7 +68,7 @@
 
 ---
 
-## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核）
+## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核；2026-10-14 新增 `dsh-typert-registry` 加固）
 
 分类原则：**只有当缺失会导致「补丁体系失效」或「桌面插件挂不上 / 起不来」时才归 `functional`**；
 其余一律 `ui-behavior`（可降级）。产品功能增强（如会话永久删除）虽然影响功能，
@@ -88,10 +88,11 @@
 | `@deepseek-ai/dsh-typert-loader` | 上游把**启动路径**上「任一 contributor 注册失败」升级成 `AggregateError` 并从 `apply()` 抛出，而 typert-loader 本身是 profile 的一个 loader entry ⇒ 一个插件的 typert 声明有问题就让**整棵插件树**加载失败（`dsh: plugin tree failed to load`）。同一份代码在**动态路径**（后挂载的 entry）上只 `logger.error` 不抛——启动路径缺的正是这个降级。补丁把启动路径的失败也降级为带 entry 名的 logged error（保留 `AggregateError` 作结构化载荷） | 官方把 contributor 注册失败降级为非致命（或按 entry 隔离、不再整树原子） |
 | `@deepseek-ai/dsh-client-file-upload` | `registerAgentResolver` 在「已注册」时抛错，而 Cordis `Fiber._reload()` 是**先重跑 apply、后处置上一轮 effects** ⇒ 任何对该 entry 的重放（插件管理器 live-apply、热挂载 bundle 重列核心行）都会命中守卫抛错，让 session-controller 整个 fiber 回滚；回滚连带摘掉它注册的 `typert.lookups.configure("agent"/"session")` ⇒ 冷会话切模式报 `lookup provider "agent" did not resolve`。补丁把守卫改为**接管 + warn**（旧 disposer 的 `=== resolve` 比较保证不误伤新注册者） | 官方把该注册改为幂等（或 reload 前先处置旧注册） |
 
-### ui-behavior（next 7 个 / alpha 7 个；**已退役项**在表内以删除线标明，半退役项在判据列内注明）
+### ui-behavior（条数不写死：`node scripts/patch-layers.mjs --list --dsh-target=<t>` 是权威；**已退役项**在表内以删除线标明，半退役项在判据列内注明）
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
+| `dsh-typert-registry` | lookup 族三处注册器（`LookupStore.configure` / `.register` / `ContextStore.configureHost`，host `lib/index.js` 与 client bundle `lib/client.js` 两镜像共 6 处）在「键已在册」时**同步抛错**，抛点在 `ctx.effect(...)` **之前**（apply 期）⇒ 同一 owner 的 apply 被重跑、而上一轮 effect 尚未处置时，抛错会让 owner fiber 回滚。上游三处注释写「duplicate configuration is rejected, so this effect remains the key's unique owner」并配 `v8 ignore`——**该前提是错的**，注释与 `v8 ignore` 一并订正为「该分支**可达**」。补丁照 B2 先例改为**接管 + warn**（AGENTS §7.1：降级必须可见）；旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。<br>⚠️ **为何不归 `functional`**：本机真机 Cordis 夹具**未构造出可达路径**（详见本节末「typert lookup 守卫」），「缺失即起不来」不成立，按 §4 规则 3 归此层。缺失时仅少一层纵深防御 | 官方把 lookup 族注册改为幂等（或 reload 前先处置旧 effect、不再假定「重复配置不可能」） |
 | ~~`dsh-client-ui-layout`~~ | 🗄️ **已全线退役**：alpha 线 2026-09-16、next 线 2026-09-30（上游 0.2.0 的 `computeColumns(…, collapsedWidth)` + `data-platform` 推导覆盖本补丁全部意图，两线判据均已满足）。补丁文件两线均已删除 | 官方区分平台宽度 ← **已满足（两线）** |
 | `dsh-client-ui-sidebar` | 注入壳层锚点属性（`data-dsh-sidebar-root` / `-wide` / `-settings`），供 Harness 页注入脚本挂载手机状态指示器。**自定义 padding 已于 2026-09-16 移除**（上游原生适配 macOS，叠加会成双份留白） | 官方侧栏暴露等效锚点（本仓注入脚本可挂到官方标记上）时 |
 | ~~`dsh-client-ui-workspace`~~ | 🗄️ **两线退役（2026-09-30）**：上游原生 `completionUnread` → `SessionStatusDots`/`StateDot` 未读完成态 + 完整会话行样式。补丁文件两线均已删除 | 官方列表补齐未读与行样式 ← **已满足（两线）** |
@@ -411,6 +412,72 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
 **未覆盖（诚实声明）**：组装态「12/12 applied」与「能启动」**本机验不了**（`prepare:harness --force`
 被 `koffi` 拦，见 `docs/incidents/local-toolchain-limits.md`），须由 CI 的 build / portable job 在
 `prepare:harness` 之后按名点名确认。
+
+---
+
+### typert lookup 守卫（T2，2026-10-14）：两线同批新增 1 个补丁
+
+> 背景：与 B2 同源。B2 修的是 `dsh-client-file-upload::registerAgentResolver` 在**重放**时抛错；
+> 复查同一条重放链时发现上游 `dsh-typert-registry` 的 lookup 族注册器有**同一形状**的守卫，
+> 且上游把那个错误前提**写死成了注释断言**并配 `v8 ignore` 标为不可达——注释说
+> 「duplicate configuration is rejected, so this effect remains the key's unique owner」，
+> 但 `Fiber._reload()` 是**先重跑 apply、后处置旧 effects**，所以「键已在册」在重放时序里
+> 恰恰是**正常**的。两线形态完全相同，故同批新增。
+
+**新增补丁（按包名，两线各带自己的版本段）：**
+
+- `@deepseek-ai/dsh-typert-registry`——lookup 族三处注册器由「已在册即抛错」改为**接管 + warn**，
+  并把配套的错误注释与 `v8 ignore` 一并订正。抛点在 `ctx.effect(...)` **之前**（apply 期），
+  故抛错会让 owner fiber 回滚。
+
+**12 处改动 = 2 文件 × 2 线 × 3 方法（throw）+ 3 注释订正：**
+
+| # | 位置（纯净底版行号，两镜像逐字节相同） | 方法 | 原行为 → 补丁后 |
+|---|---|---|---|
+| 1 | `lib/index.js:189`（throw @191） | `LookupStore.configure` | `throw new Error(…resolver is already configured)` → `ctx.logger?.warn(…taking over during replay)` |
+| 2 | `lib/index.js:214`（throw @220） | `LookupStore.register` | `throw …is already registered` → 同上接管 + warn |
+| 3 | `lib/index.js:286`（throw @288） | `ContextStore.configureHost` | `throw …resolver is already configured`（host-context）→ 同上 |
+| 4-6 | `lib/index.js` 三处 disposer 注释 | `resolvers/providers/hostResolvers.get(key) !== entry` 之上 | `/* v8 ignore next -- duplicate … unique owner. */` → `/* 该分支**可达**：… */`（**去掉** `v8 ignore`） |
+| 7-9 | `lib/client.js:981 / 1006 / 1078`（throw @983 / 1012 / 1080） | 同 1-3 | 同上（client bundle，缩进多一层） |
+| 10-12 | `lib/client.js` 三处 disposer 注释 | 同 4-6 | 同上 |
+
+补丁统计：**12 hunk / +30 / −12 行 / LF**，两线一致。
+
+**范围界定（为什么只动这 3 个方法）：**
+
+同文件另有 **6 处** `is already registered`（纯净 `lib/index.js` 的 `:75` / `:76` DescriptorStore 端点与 id、
+`:143` Remote package、`:322` provider table、`:482` package face、`:497` schema）——这些是**真冲突检测器**，
+接管会吞掉真错，**一律不动**。`LookupStore.register` 里那条「lookup wire 声明不得中途改变」
+（`:229` `changed its wire declaration during this registry lifetime`）同样**保留**：它检测的是真冲突，
+而接管只覆盖「同一 key 再注册」这一种情形。
+
+**为何归 `ui-behavior` 而不是 `functional`（举证责任逻辑）：**
+
+§4 规则 3 把 `functional` 的准入写成**「缺失即起不来」**——这是一个需要**举证**的强主张。
+本机真机 Cordis 夹具**未能构造出该路径的可达形态**：同插件双挂载会先撞上 Cordis 自身的同名
+服务守卫（`service "sessionController" has been registered at <…>`），而首次 apply 一旦抛错则
+`resolvers` 归空、无残留键（抛点在 `resolvers.set` **之前**）。
+⇒ 「未构造出」≠「不存在」，但**举证未成立**，按规则 3 宁可归 `ui-behavior`（缺失仅少一层纵深防御）。
+真正可达的那条（apply 后段、无 Cordis 保护的 `registerAgentResolver`）由同批的
+`@deepseek-ai/dsh-client-file-upload` 负责。
+
+**验证（全部成对红→绿，本地可复跑）：**
+
+| 判据 | 证据 |
+|---|---|
+| 补丁能否干净落盘 | 生成器 `.workbuddy/tmp/gen-t2-patches.mjs` 自检：用**真实 GNU `patch -p1`** 打在纯净副本上，产物与生成器输出**逐字节相同**（两线） |
+| 改动命中数 | 12/12 处各命中 **恰好 1 次**（`expect: 1` 硬断言，未命中即失败） |
+| 行为红→绿 | `.workbuddy/tmp/verify-t2-behaviour.mjs`：**通过 64 项 / 失败 0 项** = 2 线 × 2 镜像（host `lib/index.js` 走真 `import()`；client bundle 走桩 `__ModuleLoader__`）× 3 用例 + 负控。红=抛 `already configured`；绿=不抛 + 恰 1 条 warn + 可正常 resolve。**负控保留**：`provider('dsh.agent.CHANGED')` 仍须抛 `changed its wire declaration during this registry lifetime`（证明接管没有把真冲突检测器一起放倒） |
+| 分级表覆盖 | `node scripts/patch-layers.mjs --self-test` 两线全绿，各 **13** 个补丁**全部**有分级（新补丁若漏登记则该项即红） |
+| lockfile 是否需重生成 | `lockInputsMatch` **三态实测**（`.workbuddy/tmp/verify-lockfile-inputs.mjs`，10/10）：改前 `ok`、**改后 `ok`**、两项缺陷注入均 `ok=false`。原因同 B2 一行：该包在快照 `overrides` 里**本就存在且同值**（`next=0.2.0-rc.2` / `alpha=0.2.1-alpha.2`，`--update` 把整个 `@deepseek-ai/dsh-*` 家族钉进快照），新增补丁只是把它从「家族钉死」挪进「基础 override」。另核对提交式 `package-lock.json`：该包**实际解析版本 = 补丁目标版本**（逐线一致）⇒ `npm ci` 装出的树里 patch-package 打得上 |
+| 静态门禁 | `npm run gate -- patches` 全绿 |
+
+**已知副作用（记录，非缺陷）**：`stagingInputsMatch()` 用 `JSON.stringify(overrides)` 比对，**键序敏感**；
+新增补丁使该签名改变 ⇒ 本机快速路径失效、走完整重组。补丁集本来就变了，重组是**正确**行为。
+
+**未覆盖（诚实声明）**：组装态「13/13 applied」与「能启动」**本机验不了**
+（`prepare:harness --force` 被 `koffi` 拦，见 `docs/incidents/local-toolchain-limits.md`），
+须由 CI 的 build / portable job 在 `prepare:harness` 之后按名点名确认。
 
 ---
 

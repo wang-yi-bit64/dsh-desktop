@@ -1,0 +1,132 @@
+diff --git a/node_modules/@deepseek-ai/dsh-typert-registry/lib/client.js b/node_modules/@deepseek-ai/dsh-typert-registry/lib/client.js
+--- a/node_modules/@deepseek-ai/dsh-typert-registry/lib/client.js
++++ b/node_modules/@deepseek-ai/dsh-typert-registry/lib/client.js
+@@ -980,7 +980,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
+ 			}
+ 			configure(ctx, key, resolver) {
+ 				validateSegment("lookup key", key);
+-				if (this.resolvers.has(key)) throw new Error(`typert: lookup "${key}" resolver is already configured`);
++				// 重放不得致命：上游假定「重复配置不可能发生」，该假定已证伪 —— 键在册时
++				// 可能是上一轮**尚未处置**的 effect，而不是冲突。接管 + warn（AGENTS §7.1：
++				// 降级必须可见）；旧 effect 的 disposer 带 entry 身份比较，不会误删新 entry。
++				if (this.resolvers.has(key)) ctx.logger?.warn(`typert: lookup "${key}" resolver is already configured; taking over during replay`);
+ 				const entry = {
+ 					provider: { resolve: async (id) => resolver(id) },
+ 					owner: {}
+@@ -993,7 +996,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
+ 						key
+ 					});
+ 					yield () => {
+-						/* v8 ignore next -- duplicate configuration is rejected, so this effect remains the key's unique owner. */
++						/* 该分支**可达**：重放时前后两轮 owner 会并存，正靠这条比较保住新 entry
++						   （原注释假定重复配置不可能，该假定已证伪）。 */
+ 						if (resolvers.get(key) !== entry) return;
+ 						resolvers.delete(key);
+ 						changes.emit({
+@@ -1009,7 +1013,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
+ 				validateWireName("lookup wire field", provider.wire);
+ 				validateNonempty("lookup Host type symbol", provider.hostTypeSymbol);
+ 				validateNonempty("lookup wire type symbol", provider.wireTypeSymbol);
+-				if (this.providers.has(key)) throw new Error(`typert: lookup "${key}" is already registered`);
++				// 同 configure：重放时接管而非抛错。下文那条「wire 声明不得中途改变」的校验
++				// **保留**——它检测的是真冲突，接管只覆盖「同一 key 再注册」这一种情形。
++				if (this.providers.has(key)) ctx.logger?.warn(`typert: lookup "${key}" is already registered; taking over during replay`);
+ 				const definition = {
+ 					key,
+ 					parameter: provider.parameter,
+@@ -1032,7 +1038,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
+ 						key
+ 					});
+ 					yield () => {
+-						/* v8 ignore next -- duplicate registration is rejected, so this effect remains the key's unique owner. */
++						/* 该分支**可达**：重放时前后两轮 owner 会并存，正靠这条比较保住新 entry
++						   （原注释假定重复注册不可能，该假定已证伪）。 */
+ 						if (providers.get(key) !== entry) return;
+ 						providers.delete(key);
+ 						changes.emit({
+@@ -1077,7 +1084,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
+ 			}
+ 			configureHost(ctx, key, resolver) {
+ 				validateSegment("Context key", key);
+-				if (this.hostResolvers.has(key)) throw new Error(`typert: host-context "${key}" resolver is already configured`);
++				// 同 configure：host-context 解析器在重放时接管而非抛错。
++				if (this.hostResolvers.has(key)) ctx.logger?.warn(`typert: host-context "${key}" resolver is already configured; taking over during replay`);
+ 				const entry = {
+ 					provider: { resolve: async (id) => resolver(id) },
+ 					owner: {}
+@@ -1090,7 +1098,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
+ 						key
+ 					});
+ 					yield () => {
+-						/* v8 ignore next -- duplicate configuration is rejected, so this effect remains the key's unique owner. */
++						/* 该分支**可达**：重放时前后两轮 owner 会并存，正靠这条比较保住新 entry
++						   （原注释假定重复配置不可能，该假定已证伪）。 */
+ 						if (hostResolvers.get(key) !== entry) return;
+ 						hostResolvers.delete(key);
+ 						changes.emit({
+diff --git a/node_modules/@deepseek-ai/dsh-typert-registry/lib/index.js b/node_modules/@deepseek-ai/dsh-typert-registry/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-typert-registry/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-typert-registry/lib/index.js
+@@ -188,7 +188,10 @@ var LookupStore = class {
+ 	}
+ 	configure(ctx, key, resolver) {
+ 		validateSegment("lookup key", key);
+-		if (this.resolvers.has(key)) throw new Error(`typert: lookup "${key}" resolver is already configured`);
++		// 重放不得致命：上游假定「重复配置不可能发生」，该假定已证伪 —— 键在册时
++		// 可能是上一轮**尚未处置**的 effect，而不是冲突。接管 + warn（AGENTS §7.1：
++		// 降级必须可见）；旧 effect 的 disposer 带 entry 身份比较，不会误删新 entry。
++		if (this.resolvers.has(key)) ctx.logger?.warn(`typert: lookup "${key}" resolver is already configured; taking over during replay`);
+ 		const entry = {
+ 			provider: { resolve: async (id) => resolver(id) },
+ 			owner: {}
+@@ -201,7 +204,8 @@ var LookupStore = class {
+ 				key
+ 			});
+ 			yield () => {
+-				/* v8 ignore next -- duplicate configuration is rejected, so this effect remains the key's unique owner. */
++				/* 该分支**可达**：重放时前后两轮 owner 会并存，正靠这条比较保住新 entry
++				   （原注释假定重复配置不可能，该假定已证伪）。 */
+ 				if (resolvers.get(key) !== entry) return;
+ 				resolvers.delete(key);
+ 				changes.emit({
+@@ -217,7 +221,9 @@ var LookupStore = class {
+ 		validateWireName("lookup wire field", provider.wire);
+ 		validateNonempty("lookup Host type symbol", provider.hostTypeSymbol);
+ 		validateNonempty("lookup wire type symbol", provider.wireTypeSymbol);
+-		if (this.providers.has(key)) throw new Error(`typert: lookup "${key}" is already registered`);
++		// 同 configure：重放时接管而非抛错。下文那条「wire 声明不得中途改变」的校验
++		// **保留**——它检测的是真冲突，接管只覆盖「同一 key 再注册」这一种情形。
++		if (this.providers.has(key)) ctx.logger?.warn(`typert: lookup "${key}" is already registered; taking over during replay`);
+ 		const definition = {
+ 			key,
+ 			parameter: provider.parameter,
+@@ -240,7 +246,8 @@ var LookupStore = class {
+ 				key
+ 			});
+ 			yield () => {
+-				/* v8 ignore next -- duplicate registration is rejected, so this effect remains the key's unique owner. */
++				/* 该分支**可达**：重放时前后两轮 owner 会并存，正靠这条比较保住新 entry
++				   （原注释假定重复注册不可能，该假定已证伪）。 */
+ 				if (providers.get(key) !== entry) return;
+ 				providers.delete(key);
+ 				changes.emit({
+@@ -285,7 +292,8 @@ var ContextStore = class {
+ 	}
+ 	configureHost(ctx, key, resolver) {
+ 		validateSegment("Context key", key);
+-		if (this.hostResolvers.has(key)) throw new Error(`typert: host-context "${key}" resolver is already configured`);
++		// 同 configure：host-context 解析器在重放时接管而非抛错。
++		if (this.hostResolvers.has(key)) ctx.logger?.warn(`typert: host-context "${key}" resolver is already configured; taking over during replay`);
+ 		const entry = {
+ 			provider: { resolve: async (id) => resolver(id) },
+ 			owner: {}
+@@ -298,7 +306,8 @@ var ContextStore = class {
+ 				key
+ 			});
+ 			yield () => {
+-				/* v8 ignore next -- duplicate configuration is rejected, so this effect remains the key's unique owner. */
++				/* 该分支**可达**：重放时前后两轮 owner 会并存，正靠这条比较保住新 entry
++				   （原注释假定重复配置不可能，该假定已证伪）。 */
+ 				if (hostResolvers.get(key) !== entry) return;
+ 				hostResolvers.delete(key);
+ 				changes.emit({
