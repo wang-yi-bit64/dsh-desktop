@@ -118,7 +118,7 @@ alpha.6 的准备期正是这样跑掉了三轮：推 `9e112e2`（CI 三平台�
 |--------|------|------|--------|
 | CI | `.github/workflows/ci.yml` | 任意 `pull_request` / 手动 / **每日定时一次** | 三平台 `test`（静态门禁 + clippy + 单测）。**不组装资源、不打包、不跑烟雾** |
 | Smoke | `.github/workflows/smoke.yml` | **仅手动**（`workflow_dispatch`，四个输入：`scope` / `os` / `fault_injection` / `dsh_target`） | 按 `scope` 分级：`l1`（mock 资源树 L1 会话烟雾 + 可选故障注入）/ `assembled`（组装真实资源树 + 真实树 L1）/ `full`（+ 打安装包 + L2 GUI 烟雾 + 体积采集）。`dsh_target` 选组装哪条上游通道（`next` / `alpha`）。**不发布任何东西** |
-| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`npm run gate -- drift` 把各在役目标的锚点与**上游最新 GitHub Release** 比一次（基准 2026-10-09 由 npm dist-tag 换成 Release——dist-tag 滞后可见，且上游出现过「tag 已动、依赖树未齐」的波次；npm dist-tag 仍打印但**只作参考、不参与判定**）。阻断：落后 ≥1 个 minor / 上游进入更晚的预发布阶段 / `patch-line-behind`（上游在新补丁线上重新起预发布）；仅提示：同阶段内落后补丁位或序号。**休眠目标显式跳过**（机制见 ADR-056；在役通道：`next` / `alpha`；休眠通道：无——alpha 已由 ADR-057 复役）。取不到上游 Release ⇒ SKIP（≠「已核对」）；仓库 slug 404 ⇒ **判红**（配置缺陷）。另有独立 job 跑 `verify:update-channel`（全通道更新端点健康，同样跳过休眠目标）。**不构建任何东西**——只回答「该规划升级了吗」 |
+| Drift | `.github/workflows/drift.yml` | **每日定时一次** / 手动 | 上游 DSH 版本漂移哨兵：`npm run gate -- drift` 把各在役目标的锚点与**它自己那条线**的上游 npm dist-tag 比一次（判定基准 2026-10-10 裁决**恢复为「按线」**，取代 2f 的「全局最新 Release」——那次换基准让 `next` 拿 alpha 线的版本判自己落后；上游 GitHub Release 清单仍打印但**只作信息层、不参与判定**）。阻断：落后 ≥1 个 minor / 该线上游进入更晚的预发布阶段 / `patch-line-behind`（该线 dist-tag 被**重指**到新补丁线 + 更早阶段）；仅提示：同阶段内落后补丁位或序号。**线名在响应里不存在 ⇒ 判红**（`upstreamDistTag` 是本仓写死的常量）。**休眠目标显式跳过**（机制见 ADR-056；在役通道：`next` / `alpha`；休眠通道：无——alpha 已由 ADR-057 复役）。取不到判定基准（npm dist-tags）⇒ SKIP（≠「已核对」）；信息层 slug 404 ⇒ **判红**（配置缺陷）。另有独立 job 跑 `verify:update-channel`（全通道更新端点健康，同样跳过休眠目标）。**不构建任何东西**——只回答「该规划升级了吗」 |
 | Release | `.github/workflows/release.yml` | **推 `v*` tag** / 手动（指定 tag） | `preflight`（版本↔tag 一致性 + **从 tag 的预发布通道名推导 `dsh_target`** + 秒级静态门禁）→ 三平台并行出包（`build`）并**创建/更新 GitHub Release**、上传安装包与 `.sig`、生成 updater 的 `latest.json`；Windows 的 `portable` job 出便携 zip → `publish-assets` 把便携版三件挂到 Release（**F13 修复，2026-09-24 新增**：此前它们只停在 Actions artifacts 里，Release 上永远只有 10 项而非期望的 13）。🗄️ 原 `cli` / `cli-publish` 两个 job 已于 2026-09-24 退役（见 §8.4 末条） |
 
 - **每日定时是「日常零自动化」的补偿，不是把它加回来**（2026-09-12 起）：`ci.yml` 增设
@@ -377,7 +377,8 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
   造成为何必须分开：上游 `next` dist-tag 现在**指向一个 `rc` 阶段版本**——dist-tag 是
   「哪条发布线」，预发布标识是「这条线走到哪一步了」，两者独立。本仓想把桌面后缀改成语义
   更准的 `rc`（因为发的确实是 rc 阶段的包），但**不能**因此去查一个上游根本不存在的 `rc` tag
-  （那会让漂移哨兵静默退回 `latest`，把一条自己管着的线永久误报成落后或持平）。
+  （那会让漂移哨兵去查一个上游根本不存在的 dist-tag；2026-10-10 起判定层**已取消任何兜底**，
+  线名不存在即**判红**——「静默退回 `latest`」这条退化路径不再存在，见 `verify-upstream-drift.mjs`）。
 - **桌面版本号的预发布后缀是 `publishChannel`**，`release.yml` 的 preflight 用
   `node scripts/dsh-targets.mjs --channel-of "$VERSION"` 从 tag 反推该组装哪个运行时，
   因此**不需要在 tag 之外再声明一次通道**。未知后缀（如 `v0.2.0-beta.1`）**直接失败**，

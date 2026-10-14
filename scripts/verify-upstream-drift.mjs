@@ -13,23 +13,46 @@
  * 本脚本把它变成**主动预警**：每次跑（或由 `schedule` 定时跑）就与上游比一次，
  * 落后到阈值就非零退出。
  *
- * ## 🔄 基准 = 上游 **GitHub Release**（计划 2f，2026-10-09 换掉 npm dist-tag）
+ * ## 🔴 判定基准 = **每个目标自己那条线**的上游 npm dist-tag（2026-10-10 裁决恢复）
  *
- * | 基准 | 它回答的问题 | 什么时候动 |
- * |---|---|---|
- * | npm dist-tag（旧基准） | 上游**包分发**指向哪一版 | 走到「发 npm」那一步才动 |
- * | **GitHub Release（现基准）** | 上游**宣布发了哪一版** | tag 一打就动 |
+ * | 层 | 来源 | 它回答的问题 | 参与判定 |
+ * |---|---|---|---|
+ * | **判定层** | 该目标 `upstreamDistTag` 指向的 npm dist-tag | 「**我这条线**走到哪了」 | ✅ |
+ * | 信息层 | 上游 GitHub Release 清单 | 「上游最近宣布了哪一版」（含「tag 已动、npm 未跟上」） | ❌ 只打印 |
  *
- * 换基准的理由是**实测**的两条：① 同一天内 dist-tag 就前进过一版（滞后可见）；
- * ② 上游出现过「tag 已动、依赖树未齐」的波次（Release 先到，npm 后到）。
- * 想看「上游走到哪了」，Release 更早可见。
+ * ### 为什么判定层回到 dist-tag（取代 2f 的「全局最新 Release」）
  *
- * npm dist-tag **保留为参考段**（打印出来但不参与判定）——它的差值正是「上游还没发 npm」
- * 的可观察证据。取不到时只影响这一段，不影响结论。
+ * 2f 把判定基准换成**全局最新 Release**（`pickNewestRelease` 从全部 Release 里取 semver 最大）
+ * 之后，「按线比较」这层语义**被静默丢掉**了：每个目标都被拿去和**别的线**的最新版比。
+ * 可复现的真实形态（2026-10-10 实测）：
  *
- * ⚠️ 上游全部 Release 都是 `prerelease: true` ⇒ **`/releases/latest` 恒 404**，
- * 基准必须「列清单 + 按 semver 取最大」。该陷阱与 tag 形态（`dsh-v<x.y.z>`）的
- * 唯一产地都在 [`upstream-release.mjs`](./upstream-release.mjs)（文件头有实测记录）。
+ * ```
+ * 本仓 next 钉 0.2.0-rc.2（上游 npm next dist-tag 也是 0.2.0-rc.2 —— 一动没动）
+ * 上游 alpha 已到 0.2.1-alpha.2
+ * ⇒ judgeDrift('0.2.0-rc.2', '0.2.1-alpha.2') = patch-line-behind ⇒ 对 next 报红
+ * ```
+ *
+ * **归因错比不报更坏**：它会把排查引向「next 该升级了」，而 next 线其实完全没落后。
+ * 在双通道下这种跨线误报还会**长期常驻红灯**（alpha 线几乎总在 rc 线前面），
+ * 正是 ADR-030 明确要避免的形态。
+ *
+ * ### 为什么**不**在 Release 基准上做「按线」判定（两个候选判据都被真实数据证伪）
+ *
+ * Release 清单里**没有任何字段**标记「这条 Release 属于哪条线」（tag 只有版本，`target_commitish`
+ * 实测多是分支名 `master`）。试过的两个判据：
+ *
+ * | 候选判据 | 真实数据反例 |
+ * |---|---|
+ * | 「dist-tag 值 ≤ R 的最大者」 | `R = 0.2.1-alpha.1` 而 alpha 指针已到 `0.2.1-alpha.2`（> R）⇒ 被判给 `next` 线。**错** |
+ * | 「同 `(major,minor)` + 同阶段」 | alpha 线真实轨迹 `0.1.7-alpha.2 → 0.2.1-alpha.1`（跨 minor 与 patch）⇒ 把自家线最关键的那类推进判成「不属于本线」。**错** |
+ *
+ * 只剩「同阶段」这条启发式，而它把「阶段」当「线」——`docs/version-policy.md` §3.3 与
+ * `dsh-targets.mjs` 都明文写着「dist-tag 是**哪条发布线**，预发布阶段是**这条线走到哪一步**，
+ * 两者独立」⇒ 明知不成立的假设，且上游一旦让 `next` 指向 `beta` 就静默走错。
+ *
+ * ⇒ **判定必须回到「线」自己那条指针**。Release 保留为**信息层**：它的「比 dist-tag 更早可见」
+ * 依然照打印（这正是 2f 想要的那半个价值），只是不再拿来定级——因为 npm 上还没有的版本，
+ * 我们**本来就组装不出来**（补丁打的是 npm 包），拿它阻断不是可执行信号。
  *
  * ## 判定
  *
@@ -41,27 +64,32 @@
  * | `patch-behind` | 同 major.minor **且**同阶段，只落后补丁位/阶段内序号 | 仅提示（exit 0） |
  * | `ok` | 持平或领先 | 通过 |
  *
- * ⚠️ `patch-line-behind` 是换基准后**新出现**的形状（旧基准是 dist-tag，一条线内不会
- * 出现「patch 前进 + 阶段回退」）。它**沿用阻断**——与旧口径对该形状的**结果一致**，
- * 只是把归因说准了：旧实现把它报成「上游已进入更晚的预发布阶段」，而事实相反
- * （上游是回退到更早的阶段、同时前进了补丁线）。是否该继续阻断**待重算**（计划 §17 → P0-2）。
+ * ⚠️ `patch-line-behind` 的口径（2026-10-10 更新）：判定已按线，所以这个形状**不再是跨线假象**，
+ * 而是「该目标那条 dist-tag 被**重指**到新补丁线 + 更早阶段」。它是真实且需要人工确认的事件
+ * （目标表 `dshVersion` / 补丁基线可能已过期）⇒ **沿用阻断**。此时输出会额外打印归因指向。
  *
  * ## 取不到上游时：SKIP，而不是「通过」
  *
- * 拿不到 Release 清单（`gh` 缺失 / 离线 / 限流）时打印 `SKIP` 并 **exit 0**。
- * 但它**明确不等于「已核对」**：输出里会说清楚这一点，避免「没连上」被读成「没有漂移」。
- * ⚠️ 唯一的例外是 **404**：slug 是本仓写死的常量，404 说明**我们**错了（配置缺陷），
- * 那种情形判红而不是 SKIP。
+ * 判定基准（npm dist-tags）取不到（离线 / registry 故障 / 响应不可用）时打印 `SKIP` 并
+ * **exit 0**，但**明确不等于「已核对」**：输出里会说清这一点。
+ *
+ * 线名在响应里**不存在**（registry 答了，但该目标指的那条线没有）⇒ 与「取不到」分开，
+ * **判红**：`upstreamDistTag` 是本仓写死的常量，它不存在意味着**我们**错了（配置缺陷）。同
+ * `dependabot-scope` 的裁定口径：**名字解不出 ⇒ 红；取不到 ⇒ skip**。
+ *
+ * 信息层（Release 清单）取不到只降级该段并**显式**打印「未核对」（§7.1 规则 3：禁止无声降级）；
+ * 唯一的例外是 404 —— slug 是本仓写死的常量，404 说明**我们**错了 ⇒ 判红。
  *
  * ## 用法
  *
  * ```bash
- * node scripts/verify-upstream-drift.mjs              # 真查上游 Release
+ * node scripts/verify-upstream-drift.mjs              # 真查上游（npm dist-tag 判定 + Release 信息层）
  * node scripts/verify-upstream-drift.mjs --self-test  # 纯逻辑 + 无网络分支自检
  * DSH_UPSTREAM_REPO=owner/name node scripts/verify-upstream-drift.mjs
+ * DSH_REGISTRY=https://registry.npmmirror.com node scripts/verify-upstream-drift.mjs
  * ```
  *
- * 退出码：`0` 通过 / 仅提示 / SKIP · `1` 落后到阈值（或上游查询是配置缺陷）。
+ * 退出码：`0` 通过 / 仅提示 / SKIP · `1` 落后到阈值（或上游线名不存在 / slug 404）。
  */
 
 import { argv, env, exit } from 'node:process'
@@ -138,6 +166,8 @@ export function compareVersions(a, b) {
  * 登记在 `docs/dsh-upgrade-checklist.md` §6 第 1 条——**散文登记需要一个自动叫号的人**，
  * 否则它会变成一段没人重读的文本（本仓纪律：没有执行者的规矩等于没有规矩）。
  *
+ * ⚠️ 它读的是**信息层**（Release 清单）⇒ 信息层取不到时这一路**未核对**，必须显式说明。
+ *
  * @param {object[]} releases - {@link fetchUpstreamReleases} 的 `releases`。
  * @returns {string|null}
  */
@@ -169,6 +199,9 @@ function stageLabel(parsed) {
  * 而数组顺序来自 GitHub 的返回顺序，不是任何判据。
  * 自测里有一条反证夹具把该退化形态钉住（见 selfTest）。
  *
+ * ⚠️ 用途已收窄（2026-10-10）：它现在**只**服务于**信息层**（打印「上游最近宣布了哪一版」）
+ * 与 `noteStableLineRelease` 的输入，**不再参与判定**。判定走 {@link resolveLineVersion}。
+ *
  * @param {string} a 版本字符串
  * @param {string} b 版本字符串
  * @returns {-1|0|1}
@@ -181,16 +214,48 @@ export function compareVersionStrings(a, b) {
 }
 
 /**
+ * 取出**某个目标自己那条线**的当前版本 —— 判定的唯一入口。
+ *
+ * 🔴 为什么**不**给 `latest` 之类兜底：兜底会把「这条线不存在」静默变成「拿另一条线的版本比」，
+ * 于是哨兵要么永久误报、要么永久漏报，而日志上看起来一切正常（`docs/version-policy.md` §3.3
+ * 记录的正是这个形态：`tags['rc'] ?? latest` 让哨兵静默退回 `latest`）。判不了就说判不了。
+ *
+ * @param {object} tags - `fetchDistTags` 的 `tags`（dist-tag 名 → 版本串）。
+ * @param {{upstreamDistTag?: string}} target - 目标定义（至少要带 `upstreamDistTag`）。
+ * @returns {{status:'ok', distTag:string, version:string}
+ *   | {status:'missing', distTag:string, reason:string}}
+ */
+export function resolveLineVersion(tags, target) {
+  const distTag = String(target?.upstreamDistTag ?? '').trim()
+  if (distTag === '') {
+    return { status: 'missing', distTag: '', reason: '目标没有 upstreamDistTag（线名缺失，无从查起）' }
+  }
+  const version = tags && typeof tags === 'object' ? tags[distTag] : undefined
+  if (typeof version !== 'string' || version.trim() === '') {
+    return {
+      status: 'missing',
+      distTag,
+      reason: `上游 dist-tags 里没有 ${JSON.stringify(distTag)}（该线不存在）`
+    }
+  }
+  return { status: 'ok', distTag, version: version.trim() }
+}
+
+/**
  * 判定漂移。纯函数，便于自检。
+ *
+ * 比较的两端都是**同一条线**上的版本（调用方负责：`current` 是该目标钉的 `dshVersion`，
+ * `latestRaw` 来自 {@link resolveLineVersion}）。把别的线的版本喂进来会得到一条
+ * 归因错误的红灯——那正是本脚本 2026-10-10 修掉的东西。
  *
  * ## 为什么文案要逐位说出「哪一位不同」
  *
  * 旧实现只用 `level` 决定文案，于是 `0.2.0-rc.2` vs `0.2.1-alpha.1` 会被报成
  * 「上游已进入**更晚**的预发布阶段」——而事实是上游**回到**了更早的阶段、同时前进了
- * 补丁线（换基准后才成为高频形状）。**归因错**比不报更坏：它会把排查引到错误的方向。
+ * 补丁线。**归因错**比不报更坏：它会把排查引到错误的方向。
  *
  * @param {string} currentRaw 仓库钉住的版本
- * @param {string} latestRaw 上游最新 Release 的版本
+ * @param {string} latestRaw 该目标那条线的上游当前版本
  * @returns {{ok:boolean, level:string, message:string}}
  */
 export function judgeDrift(currentRaw, latestRaw) {
@@ -222,13 +287,13 @@ export function judgeDrift(currentRaw, latestRaw) {
   const stageBack = latest.stage < current.stage
 
   if (patchAhead && stageBack) {
-    // 上游在同 major.minor 上开了一条**新补丁线**，并回到更早的预发布阶段。
+    // 同一条线上出现「补丁线前进 + 阶段回退」：该 dist-tag 大概率被**重指**过。
     // 结果沿用阻断（与旧口径一致），但归因必须说准。
     return {
       ok: false,
       level: 'patch-line-behind',
       message:
-        `上游已前进到更新的补丁线并回到更早的预发布阶段（${currentRaw} < ${latestRaw}）——` +
+        `该目标的线上游已前进到更新的补丁线并回到更早的预发布阶段（${currentRaw} < ${latestRaw}）——` +
         `patch ${current.patch} → ${latest.patch}，阶段 ${stageLabel(current)} → ${stageLabel(latest)}`
     }
   }
@@ -276,10 +341,14 @@ export function distTagsUrl(registry) {
 }
 
 /**
- * 拉取 npm dist-tags —— **仅作参考段**（不参与判定）。
+ * 拉取 npm dist-tags —— **判定基准**（2026-10-10 起）。
  *
- * 任何取不到的情形都返回 `status: 'skip'`，**不抛异常**：它已经不是基准了，
- * 不该让一个参考段把整次检查弄红。
+ * 任何取不到的情形都返回 `status: 'skip'`，**不抛异常**：由调用方打印 SKIP 并说明「未核对」。
+ *
+ * ⚠️ 形态判据**刻意不绑死某个 tag 名**（旧实现要求必须有 `latest`）：判定要的只是「那条线的
+ * 名字在不在」，而这件事由 {@link resolveLineVersion} 逐目标判——在这里先要求 `latest` 存在，
+ * 会在上游调整 dist-tag 时给出一条**假 SKIP**（把「我们依赖了一个没人要的字段」伪装成
+ * 「外部状态没准备好」）。这里只判「像个 dist-tag 响应」。
  *
  * @returns {Promise<{status:'ok',tags:object}|{status:'skip',reason:string}>}
  */
@@ -297,8 +366,11 @@ export async function fetchDistTags({
     })
     if (!res.ok) return { status: 'skip', reason: `registry 返回 HTTP ${res.status}` }
     const tags = await res.json()
-    if (!tags || typeof tags !== 'object' || typeof tags.latest !== 'string') {
-      return { status: 'skip', reason: 'registry 响应缺少 dist-tags.latest' }
+    if (!tags || typeof tags !== 'object' || Array.isArray(tags)) {
+      return { status: 'skip', reason: 'registry 响应不是 dist-tag 对象' }
+    }
+    if (!Object.values(tags).some((value) => typeof value === 'string')) {
+      return { status: 'skip', reason: 'registry 响应里没有任何字符串 dist-tag 值' }
     }
     return { status: 'ok', tags }
   } catch (error) {
@@ -309,7 +381,7 @@ export async function fetchDistTags({
 }
 
 /**
- * 自检：覆盖四个判定等级 + 解析边界 + 目标表完整性 + 无网络分支。
+ * 自检：覆盖四个判定等级 + 解析边界 + **按线判定接线**（含跨线反证）+ 目标表完整性 + 无网络分支。
  * 「无网络」分支用一个必然拒绝连接的地址真跑一次 fetchDistTags。
  */
 async function selfTest() {
@@ -332,8 +404,8 @@ async function selfTest() {
   check('新 rc 线 → level', judgeDrift('0.1.5-alpha.2', '0.1.5-rc.1').level, 'stage-behind')
   check('新 rc 线 → ok=false', judgeDrift('0.1.5-alpha.2', '0.1.5-rc.1').ok, false)
 
-  // 🔴 换基准后成为高频形状：patch 前进 **且** 阶段回退（rc → alpha）。
-  //    旧的归因是「上游已进入更晚的预发布阶段」——与事实相反。这里钉住**准确的**归因。
+  // 🔴 同一条线上出现「patch 前进 + 阶段回退」（dist-tag 被重指）：
+  //    旧归因是「上游已进入更晚的预发布阶段」——与事实相反。这里钉住**准确的**归因。
   check('patch 前进 + 阶段回退 → level', judgeDrift('0.2.0-rc.2', '0.2.1-alpha.1').level, 'patch-line-behind')
   check('patch 前进 + 阶段回退 → ok=false（沿用阻断）', judgeDrift('0.2.0-rc.2', '0.2.1-alpha.1').ok, false)
   check(
@@ -364,7 +436,6 @@ async function selfTest() {
   check('阶段内序号落后 → level', judgeDrift('0.1.5-rc.1', '0.1.5-rc.2').level, 'patch-behind')
   check('阶段内序号落后 → ok=true', judgeDrift('0.1.5-rc.1', '0.1.5-rc.2').ok, true)
   // 🔴 阈值不变的证据：同 major.minor **且同阶段**只落后 patch 位 ⇒ 仍是「仅提示」。
-  //    换基准不该顺手把它升成阻断——那会是一次没人裁决过的口径变更。
   check('同阶段只落后 patch → level', judgeDrift('0.2.0-rc.2', '0.2.1-rc.2').level, 'patch-behind')
   check('同阶段只落后 patch → ok=true（仅提示）', judgeDrift('0.2.0-rc.2', '0.2.1-rc.2').ok, true)
   check('同阶段只落后 patch → 文案点出 patch 位', judgeDrift('0.2.0-rc.1', '0.2.1-rc.1').message.includes('patch 0 → 1'), true)
@@ -378,19 +449,51 @@ async function selfTest() {
   check('readDshVersion(缺失)', readDshVersion('const OTHER = 1'), null)
   check('distTagsUrl', distTagsUrl('https://registry.npmjs.org/'), `https://registry.npmjs.org/-/package/@deepseek-ai%2Fdsh/dist-tags`)
 
-  // ---- 基准接线：只有接对了才绿 ----
-  // 用一个**真实形态**的上游 Release 清单（2026-10-09 实测截取）验证
-  // 「列清单 + 按 semver 取最大 → 判定」。数组顺序刻意打乱：端点返回顺序不是判据。
+  // ---- 🔴 判定层接线：**按线**（2026-10-10 恢复；钉住真实回归）----
+  // 用 2026-10-10 的真实 dist-tags 快照：next 与 alpha 指向**不同**的线。
+  const realTags = { latest: '0.2.0-rc.2', next: '0.2.0-rc.2', alpha: '0.2.1-alpha.2' }
+  check('按线：next 取到的是自己那条线', resolveLineVersion(realTags, { upstreamDistTag: 'next' }).version, '0.2.0-rc.2')
+  check('按线：alpha 取到 alpha 那条线', resolveLineVersion(realTags, { upstreamDistTag: 'alpha' }).version, '0.2.1-alpha.2')
+  check(
+    '按线：线上游与自己持平 ⇒ 通过（本仓 next 的真实状态）',
+    judgeDrift('0.2.0-rc.2', resolveLineVersion(realTags, { upstreamDistTag: 'next' }).version).level,
+    'ok'
+  )
+  check(
+    '按线：alpha 只落后阶段内序号 ⇒ 仅提示（本仓真实状态）',
+    judgeDrift('0.2.1-alpha.1', resolveLineVersion(realTags, { upstreamDistTag: 'alpha' }).version).level,
+    'patch-behind'
+  )
+  // 🔴 可伪证性：钉住「**别的线**的最新版不得参与判定」——这正是被修掉的回归。
+  //    两侧结果**必须不同**，否则本条判据是空转。
   const upstreamLike = [
     { tag: 'dsh-v0.2.0-rc.2', version: '0.2.0-rc.2', prerelease: true },
     { tag: 'dsh-v0.1.7-rc.2', version: '0.1.7-rc.2', prerelease: true },
     { tag: 'dsh-v0.2.1-alpha.1', version: '0.2.1-alpha.1', prerelease: true },
     { tag: 'dsh-v0.1.6-alpha.2', version: '0.1.6-alpha.2', prerelease: true }
   ]
+  const globalNewest = pickNewestRelease(upstreamLike, compareVersionStrings).version
+  check('反证：跨线最新是 alpha 线的版本（数组中不是首条）', globalNewest, '0.2.1-alpha.1')
+  check(
+    '反证：跨线判 vs 按线判 结果必须不同（按线判据非空转）',
+    [
+      judgeDrift('0.2.0-rc.2', globalNewest).level,
+      judgeDrift('0.2.0-rc.2', resolveLineVersion(realTags, { upstreamDistTag: 'next' }).version).level
+    ],
+    ['patch-line-behind', 'ok']
+  )
+  // 线不存在 / 线名缺失 ⇒ missing，**不许**静默退回 latest
+  check('按线：线上游名不存在 ⇒ missing（不许退回 latest）', resolveLineVersion(realTags, { upstreamDistTag: 'rc' }).status, 'missing')
+  check('按线：空线名 ⇒ missing', resolveLineVersion(realTags, { upstreamDistTag: '' }).status, 'missing')
+  check('按线：target 缺失 ⇒ missing（不抛异常）', resolveLineVersion(realTags, undefined).status, 'missing')
+  check('按线：tags 非对象 ⇒ missing（不抛异常）', resolveLineVersion(null, { upstreamDistTag: 'next' }).status, 'missing')
+  check('按线：missing 必须带理由（§7.1 规则 3）', resolveLineVersion(realTags, { upstreamDistTag: 'rc' }).reason.includes('rc'), true)
+
+  // ---- 信息层接线：Release → 「最近宣布了哪一版」+ 叫号器 ----
+  // 数组顺序刻意打乱：端点返回顺序不是判据。
   const newest = pickNewestRelease(upstreamLike, compareVersionStrings)
-  check('基准接线：取到的是 semver 最大那条（不是数组首条）', newest.version, '0.2.1-alpha.1')
-  check('基准接线：顺序颠倒结果不变', pickNewestRelease([...upstreamLike].reverse(), compareVersionStrings).version, '0.2.1-alpha.1')
-  check('基准接线：判定用的就是它', judgeDrift('0.2.0-rc.2', newest.version).level, 'patch-line-behind')
+  check('信息层：取到的是 semver 最大那条（不是数组首条）', newest.version, '0.2.1-alpha.1')
+  check('信息层：顺序颠倒结果不变', pickNewestRelease([...upstreamLike].reverse(), compareVersionStrings).version, '0.2.1-alpha.1')
   // 反证：若有人把比较器换成「永远返回 0」，就会取到首条 —— 断言它**必须**不等于真最新。
   check('反证：退化比较器会取错（证明这条判据非空转）', pickNewestRelease(upstreamLike, () => 0).version !== '0.2.1-alpha.1', true)
   // 🔴 这条反证记录的是**实际抓到过的接线错**：不解析就直接比较 ⇒ 逐位皆「相等」⇒
@@ -422,7 +525,8 @@ async function selfTest() {
   // 双通道：每个目标都要能被解析、且 upstreamDistTag 是一个真实存在的 npm dist-tag 名。
   // 注意**不能**要求版本后缀等于 upstreamDistTag：上游的 `next` 现在就指向一个 `rc` 版本
   // （dist-tag 是「哪条发布线」，预发布阶段是「这条线走到哪一步了」，两者独立）。
-  // 真正要守的是这个字段别写成不存在的 tag——那样有人照它去查就会查一个不存在的名字。
+  // 真正要守的是这个字段别写成不存在的 tag——那样有人照它去查就会查一个不存在的名字
+  // （判定层现在**直接**依赖它 ⇒ 判红，见 main()）。
   //
   // 🔴 2026-09-24 解耦后这条更硬：目标的 `upstreamDistTag`（上游 tag）与 `publishChannel`
   //    （桌面 tag 后缀）**本来就不该相等**——`next` 目标的桌面后缀是 `rc` 而
@@ -443,6 +547,8 @@ async function selfTest() {
     // publishChannel 才是桌面后缀，它必须非空且能反查回同一个目标。
     check(`目标 ${name} 的 publishChannel 非空且可反查`, targetForVersion(`9.9.9-${t.publishChannel}.1`), name)
     check(`目标 ${name} 自身不落后于自己`, judgeDrift(t.dshVersion, t.dshVersion).ok, true)
+    // 🔴 判定层依赖它 ⇒ 必须能在真实 dist-tags 快照里解出来（形态对 ≠ 名字存在）。
+    check(`目标 ${name} 的线在真实 dist-tags 快照里可解`, resolveLineVersion(realTags, t).status, 'ok')
   }
   // 目标状态：休眠/复役都是**有记录的裁定**（ADR-056 → ADR-057），本行把裁定钉在自测里——
   // 若有人改 status 却没走 ADR，这里会红。默认目标必须在役，否则本哨兵对
@@ -460,18 +566,23 @@ async function selfTest() {
   // 上游 slug 的唯一产地必须非空且是 owner/name（否则 `gh api` 会去查一个畸形路径）
   check('上游 slug 形态', /^[^/\s]+\/[^/\s]+$/.test(UPSTREAM_REPO), true)
 
-  // 无网络 → 参考段必须落到 skip（既不判失败，也不冒充「已核对」）
+  // 无网络 → 判定基准必须落到 skip（既不判失败，也不冒充「已核对」）
   const offline = await fetchDistTags({ registry: 'http://127.0.0.1:9', timeoutMs: 1500 })
-  check('参考段：无网络 → skip', offline.status, 'skip')
+  check('判定基准：无网络 → skip', offline.status, 'skip')
+  check('判定基准：skip 必须带理由', offline.reason.length > 0, true)
 
   if (failed > 0) {
     console.error(`verify-upstream-drift self-test: ${failed} 项失败`)
     exit(1)
   }
-  console.log('verify-upstream-drift self-test: 全部通过（含无网络 → SKIP 分支）')
+  console.log('verify-upstream-drift self-test: 全部通过（含按线判定 + 跨线反证 + 无网络 → SKIP 分支）')
 }
 
-/** 主流程：各**在役**目标对照「上游最新 Release」检查一次；休眠目标（ADR-056）显式跳过。 */
+/**
+ * 主流程：
+ *   ① 判定层 —— 各**在役**目标对照**自己那条线**的 npm dist-tag（休眠目标显式跳过）；
+ *   ② 信息层 —— 上游 Release 清单（打印 + stable 线叫号），**不参与判定**。
+ */
 async function main() {
   if (argv.includes('--self-test')) {
     await selfTest()
@@ -479,42 +590,35 @@ async function main() {
   }
 
   const repo = env.DSH_UPSTREAM_REPO || UPSTREAM_REPO
+  const registry = env.DSH_REGISTRY || DEFAULT_REGISTRY
+  const timeoutMs = Number(env.DSH_DRIFT_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS
+
   const targets = listTargetNames().map((name) => ({
     name,
     status: resolveTarget(name).status,
-    current: resolveTarget(name).dshVersion
-    // ⚠️ 这里**刻意不再**带目标表的 `upstreamDistTag`（旧名 `channel`；2026-10-09，2e）。
-    //    基准换成「上游 Release」后，参考段查的是**全局** npm dist-tags
-    //    （见下方 `fetchDistTags`），与「每个目标各自跟哪条 dist-tag」无关
-    //    ⇒ 那个属性自 2f 起就**没有任何读者**（旧基准的残留）。留着它会让下次
-    //    读代码的人以为「哨兵按目标逐个查上游 dist-tag」——事实并非如此。
-    //    目标表字段本身仍在自测里被断言（它是上游客观事实，需要形态守卫）。
+    current: resolveTarget(name).dshVersion,
+    upstreamDistTag: resolveTarget(name).upstreamDistTag
   }))
 
-  const result = fetchUpstreamReleases({ repo })
+  console.log('[verify:drift] 上游 DSH 版本漂移检查')
+  console.log(`  判定基准：**各目标自己那条线**的上游 npm dist-tag（${registry}）`)
+  console.log('  信息层（不参与判定）：上游 GitHub Release —— 只作「上游最近宣布了哪一版」的提前预警')
+  console.log('')
 
-  if (result.status !== 'ok') {
-    const fatal = result.status === 'error'
-    console.log(`[verify:drift] ${fatal ? 'FAIL' : 'SKIP'} —— ${result.reason}`)
-    for (const t of targets) console.log(`  ${t.name.padEnd(6)} pinned DSH ${t.current}`)
-    if (fatal) {
-      console.error('')
-      console.error('  上游 slug 是本仓写死的常量（scripts/upstream-release.mjs 的 UPSTREAM_REPO）')
-      console.error('  ⇒ 404 / 响应异常是**配置缺陷**，不是「外部状态没准备好」，故判红。')
-      exit(1)
-    }
-    console.log('  ⚠️ SKIP 不等于「已核对」：只是这次没拿到上游 Release，漂移未知。')
+  // ---------------- 判定层 ----------------
+  const tags = await fetchDistTags({ registry, timeoutMs })
+  if (tags.status !== 'ok') {
+    console.log(`[verify:drift] SKIP —— npm dist-tags 取不到（${tags.reason}）`)
+    for (const t of targets) console.log(`  ${t.name.padEnd(6)} pinned DSH ${t.current}  ← 线 npm ${t.upstreamDistTag}`)
+    console.log('  ⚠️ SKIP 不等于「已核对」：判定基准取不到 ⇒ 漂移未知。')
     return
   }
 
-  const newest = pickNewestRelease(result.releases, compareVersionStrings)
-  console.log('[verify:drift] 上游 DSH 版本漂移检查')
-  console.log(`  基准：上游 GitHub Release（${repo}）—— 计划 2f；npm dist-tag 仅作参考`)
-  console.log(`  最新 Release：${newest.tag}（${newest.prerelease ? 'prerelease' : 'release'}，${newest.publishedAt ?? '发布时刻未知'}）`)
-  console.log(`  参与比较 ${result.releases.length} 条；排除 ${result.ignored.length} 条${result.ignored.length > 0 ? `（例：${result.ignored[0].tag} — ${result.ignored[0].why}）` : ''}`)
-  // 「等上游」登记的自动叫号：上游发了正式版 ⇒ 本仓在 stable 线上是**硬阻塞**的。
-  const stableNote = noteStableLineRelease(result.releases)
-  if (stableNote !== null) console.log(`\n  ⚠️ ${stableNote}`)
+  const rendered = ['latest', 'next', 'alpha']
+    .filter((name) => typeof tags.tags[name] === 'string')
+    .map((name) => `${name}=${tags.tags[name]}`)
+    .join('  ')
+  console.log(`  npm dist-tags：${rendered}`)
   console.log('')
 
   let blocked = 0
@@ -528,8 +632,16 @@ async function main() {
       continue
     }
     examined += 1
-    const drift = judgeDrift(target.current, newest.version)
-    const prefix = `  [${target.name}]`
+    const prefix = `  [${target.name} → npm ${target.upstreamDistTag}]`
+    const line = resolveLineVersion(tags.tags, target)
+    if (line.status !== 'ok') {
+      // 「线不存在」与「取不到」分开：线名是本仓写死的常量 ⇒ 它不存在意味着**我们**错了。
+      blocked += 1
+      console.error(`${prefix} ❌ ${line.reason}——目标表指了一条不存在的线。`)
+      console.error('     修法：核对 scripts/dsh-targets.mjs 的 upstreamDistTag（必须是上游真实存在的 dist-tag 名）。')
+      continue
+    }
+    const drift = judgeDrift(target.current, line.version)
     if (drift.level === 'patch-behind') {
       console.log(`${prefix} ⚠️  ${drift.message}`)
     } else if (drift.ok) {
@@ -541,21 +653,6 @@ async function main() {
     }
   }
 
-  // 参考段：npm dist-tag。**不参与判定**，取不到也不影响结论（但必须说出来）。
-  const registry = env.DSH_REGISTRY || DEFAULT_REGISTRY
-  const timeoutMs = Number(env.DSH_DRIFT_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS
-  const tags = await fetchDistTags({ registry, timeoutMs })
-  if (tags.status === 'ok') {
-    const rendered = ['latest', 'next', 'alpha']
-      .filter((name) => typeof tags.tags[name] === 'string')
-      .map((name) => `${name}=${tags.tags[name]}`)
-      .join('  ')
-    console.log(`\n  参考（不参与判定）：npm dist-tags ${rendered}`)
-    console.log(`  两个基准的差值就是「上游已宣布但 npm 还没跟上」的那一段——这正是换基准的理由。`)
-  } else {
-    console.log(`\n  参考（不参与判定）：npm dist-tags 取不到（${tags.reason}）——不影响上面的结论。`)
-  }
-
   if (examined === 0) {
     console.error('  ❌ 没有在役目标可核对——全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役）。')
     exit(1)
@@ -563,9 +660,32 @@ async function main() {
 
   if (needsRework > 0) {
     console.log('')
-    console.log('  ℹ️ 出现 patch-line-behind：上游在**新补丁线**上重新起预发布（patch 前进 + 阶段回退）。')
-    console.log('     旧分级阈值（「进入更晚的预发布阶段」才阻断）是按 dist-tag 基准写的；')
-    console.log('     换 Release 基准后该形状的定级**待重算**（计划 §17 → P0-2）。本次沿用阻断。')
+    console.log('  ℹ️ 出现 patch-line-behind：与**自己那条线**比时出现「补丁线前进 + 阶段回退」。')
+    console.log('     判定已按线，所以这不是跨线假象——该 dist-tag 大概率被上游**重指**到了另一条线，')
+    console.log('     目标表的 dshVersion 与补丁基线可能已过期，需人工确认后再动手（docs/dsh-upgrade-checklist.md）。')
+  }
+
+  // ---------------- 信息层（不参与判定，但取不到必须显式说明） ----------------
+  console.log('')
+  const releaseResult = fetchUpstreamReleases({ repo })
+  if (releaseResult.status === 'ok') {
+    const newest = pickNewestRelease(releaseResult.releases, compareVersionStrings)
+    console.log(`  [信息层·不参与判定] 上游最新 Release：${newest.tag}（${newest.prerelease ? 'prerelease' : 'release'}，${newest.publishedAt ?? '发布时刻未知'}）`)
+    console.log(`  [信息层·不参与判定] 参与比较 ${releaseResult.releases.length} 条；排除 ${releaseResult.ignored.length} 条${releaseResult.ignored.length > 0 ? `（例：${releaseResult.ignored[0].tag} — ${releaseResult.ignored[0].why}）` : ''}`)
+    console.log('  [信息层] 两个基准的差值就是「上游已宣布但 npm 还没跟上」的那一段；npm 上还没有的版本我们组装不出来，故不当阻断依据。')
+    const stableNote = noteStableLineRelease(releaseResult.releases)
+    if (stableNote !== null) console.log(`\n  ⚠️ ${stableNote}`)
+  } else {
+    const fatal = releaseResult.status === 'error'
+    console.log(`  [信息层·不参与判定] ${fatal ? 'FAIL' : 'SKIP'} —— ${releaseResult.reason}`)
+    console.log('  [信息层] ⚠️ 未核对：本次没拿到上游 Release 清单 ⇒ 「上游最近宣布了哪一版」与')
+    console.log('           「stable 线的叫号」这两项**未核对**（不影响上面的判定结论）。')
+    if (fatal) {
+      console.error('')
+      console.error('  上游 slug 是本仓写死的常量（scripts/upstream-release.mjs 的 UPSTREAM_REPO）')
+      console.error('  ⇒ 404 / 响应异常是**配置缺陷**，不是「外部状态没准备好」，故判红。')
+      exit(1)
+    }
   }
 
   if (blocked > 0) {

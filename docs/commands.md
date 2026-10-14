@@ -214,9 +214,11 @@ npm run gate -- plan-facts --self-test
 npm run gate -- doc-facts
 npm run gate -- doc-facts --self-test
 
-# 20. 上游版本漂移哨兵（基准 = **上游最新 GitHub Release**；2026-10-09 / 计划 2f 由
-#      npm dist-tag 换过来。真检查会因上游领先而红，跑在 nightly；CI 只跑自测。
-#      npm dist-tag 仍打印但只作参考；slug 404 判红（配置缺陷），离线才 SKIP）
+# 20. 上游版本漂移哨兵（判定基准 = **各目标自己那条线**的上游 npm dist-tag；2026-10-10 裁决
+#      恢复「按线判定」，取代 2f 的「全局最新 Release」——那次换基准让 next 拿 alpha 线的版本
+#      判自己落后。真检查会因该线领先而红，跑在 nightly；CI 只跑自测。
+#      上游 GitHub Release 保留为**信息层**（打印 + stable 线叫号），不参与判定；
+#      线名在响应里不存在 ⇒ 判红（upstreamDistTag 是本仓常量），信息层 slug 404 ⇒ 判红，取不到才 SKIP）
 npm run gate -- drift
 npm run gate -- drift --self-test
 

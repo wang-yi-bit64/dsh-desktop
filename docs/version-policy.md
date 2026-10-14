@@ -259,6 +259,8 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 ⚠️ **上游没有 `rc` 这条 dist-tag**（只有 `latest` / `next` / `alpha`）。因此
 `upstreamDistTag`（上游 dist-tag）与 `publishChannel`（桌面后缀）**必须解耦**：若两者同名，
 `tags['rc'] ?? latest` 会**静默退回 `latest`**，漂移哨兵永久误报。见 §3.3 的字段归属表。
+（2026-10-10 起判定层**已取消任何兜底**：线名在响应里不存在即**判红**，不再有「静默退回
+`latest`」这条退化路径 —— 判不了就说判不了。见 `scripts/verify-upstream-drift.mjs`。）
 
 ---
 
