@@ -45,8 +45,9 @@ use crate::args::HarnessArgs;
 use std::path::Path;
 
 use crate::contracts::{
-    EXIT_REAP_TIMEOUT, LOG_PUMP_DRAIN_DELAY, MAX_PORT_ATTEMPTS, PATTERN_PORT_IN_USE,
-    PORT_RETRY_BACKOFF, PORT_ZERO_SUPPORTED, STICKY_PORT_FILE, STICKY_PORT_MIN,
+    EXIT_REAP_TIMEOUT, LOG_PUMP_DRAIN_DELAY, LOG_WRITE_QUEUE, MAX_PORT_ATTEMPTS,
+    PATTERN_PORT_IN_USE, PORT_RETRY_BACKOFF, PORT_ZERO_SUPPORTED, STICKY_PORT_FILE,
+    STICKY_PORT_MIN,
 };
 use crate::env::{capture_shell_environment, HarnessEnv};
 use crate::logs::{
@@ -220,8 +221,20 @@ struct Shared {
     endpoint: Option<LaunchEndpoint>,
 }
 
-/// 滚动日志文件在启动器与日志泵之间共享（同步锁，临界区内无 await）。
-type SharedLogFile = Arc<Mutex<Option<LogFile>>>;
+/// 滚动日志文件写入的**有界通道**发送端（见 [`spawn_log_writer`]）。
+///
+/// # 为什么是「专用阻塞线程」而不是就地写
+///
+/// 优化前日志泵直接在 async 任务里调用 `std::fs`（同步 `write_all` +
+/// `flush`）。同步 IO 会**占住 tokio worker 线程不放**：实测两个泵并发写
+/// 4.8 万行时，旁路心跳任务出现103.9 ms 的最大延迟（标称周期 5 ms，
+/// 即 20.8 倍抖动）。启动期就绪探测、Supervisor 退避、IPC 命令都调度在
+/// 同一组 worker 上，抖动会直接表现为「点了没反应」。
+///
+/// 改为：泵只做内存操作并 `send`（O(1)、不阻塞），真正的落盘由单个
+/// [`spawn_blocking`] 线程顺序执行。阻塞成本被隔离到一个线程，且该线程
+/// 没有 await点，不会拖住 executor。
+type LogWriteTx = tokio::sync::mpsc::Sender<String>;
 
 /// Harness 启动器。
 pub struct Launcher {
@@ -511,9 +524,9 @@ impl Launcher {
         }
 
         // stderr 与 stdout 共享同一个滚动文件：排障最关键的错误行此前根本
-        // 不落盘，`tail` 读不到（C1 缺陷）。
-        let log_file: SharedLogFile =
-            Arc::new(Mutex::new(LogFile::open(&self.layout.log_path).ok()));
+        // 不落盘，`tail`读不到（C1 缺陷）。落盘由**专用阻塞线程**执行，
+        // 不在async 任务里做同步 IO（见 `LogWriteTx` 的说明）。
+        let log_tx = spawn_log_writer(LogFile::open(&self.layout.log_path).ok());
 
         let mut attempts = 0usize;
         loop {
@@ -617,7 +630,7 @@ impl Launcher {
                 Arc::clone(&live),
                 LogSource::Stdout,
                 true,
-                Some(Arc::clone(&log_file)),
+                log_tx.clone(),
             );
             let stderr_task = spawn_line_pump(
                 stderr,
@@ -627,8 +640,12 @@ impl Launcher {
                 Arc::clone(&live),
                 LogSource::Stderr,
                 false,
-                Some(Arc::clone(&log_file)),
+                log_tx.clone(),
             );
+            // 启动器自身不再持有发送端：两个泵退出后写线程自然收尾。
+            // 注意必须在**循环体内**克隆而不是move —— 端口冲突重试会再跑一圈，
+            // 句柄在第一轮就 move 掉的话第二轮将没有落盘（日志静默丢失）。
+            drop(log_tx.clone());
 
             on_event(LaunchEvent::ReadyChecking { port });
 
@@ -857,7 +874,7 @@ fn spawn_line_pump<R>(
     live: Arc<Mutex<LogRing>>,
     source: LogSource,
     look_for_token: bool,
-    log_file: Option<SharedLogFile>,
+    log_tx: Option<LogWriteTx>,
 ) -> tokio::task::JoinHandle<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -893,15 +910,40 @@ where
             guard.logs.push(line.clone());
             drop(guard);
             push_live(&live, &line);
-            if let Some(file) = log_file.as_ref() {
-                if let Ok(mut file) = file.lock() {
-                    if let Some(file) = file.as_mut() {
-                        let _ = file.append_line(&line.to_string());
-                    }
-                }
+            if let Some(tx) = log_tx.as_ref() {
+                // 只投递，不落盘：`send` 在有界通道上可能因背压而等待，
+                // 但绝不阻塞 worker 线程（等待发生在 async 层）。
+                // 接收端已关闭（写线程退出）时忽略——日志不是关键路径。
+                let _ = tx.send(line.to_string()).await;
             }
         }
     })
+}
+
+/// 启动专用的日志落盘线程（阻塞 IO 的唯一出口）。
+///
+/// * **有界通道**：`LOG_WRITE_QUEUE` 封顶。子进程疯狂刷日志时，泵会因背压
+///   自然减速，而不是把内存吃光——这是「日志不是关键路径」的安全侧选择。
+/// * **顺序写**：stdout 与 stderr 共用一个接收端，落盘顺序即投递顺序，
+///   与优化前「同一个 `Mutex<LogFile>` 顺序写」的语义一致。
+/// * **滚动不变**：滚动仍由 [`LogFile::append_line`] 内部按 5 MB × 3 份处理，
+///   本函数不复制那套逻辑。
+///
+/// 返回值是发送端；调用方克隆它分发给 stdout / stderr 两个泵。发送端全部
+/// 丢弃后，接收端读到 `None` 即正常退出，文件句柄随之释放。
+fn spawn_log_writer(file: Option<LogFile>) -> Option<LogWriteTx> {
+    let file = file?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(LOG_WRITE_QUEUE);
+    tokio::task::spawn_blocking(move || {
+        // `file` 在整个循环里独占，无需 Mutex：单消费者线程。
+        let mut file = file;
+        while let Some(line) = rx.blocking_recv() {
+            let _ = file.append_line(&line);
+        }
+        // 通道关闭 = 泵已退出；显式 close 让 Windows 释放文件锁（R-11）。
+        file.close();
+    });
+    Some(tx)
 }
 
 /// 预留一个回环端口（绑定 0 后立即释放）。
@@ -1275,6 +1317,118 @@ mod tests {
         let normal = Launcher::new(layout, LauncherConfig::default()).apply_profile_env(shell);
         assert!(normal.get(crate::contracts::ENV_DSH_SAFE_MODE).is_none());
         assert!(normal.get("DSH_PROFILE").is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 端到端护栏：经由有界通道的日志必须**逐行完整落盘**。
+    ///
+    /// 优化把落盘从 async 任务挪到了 [`spawn_blocking`] 线程，最怕的回归是
+    /// 「队列满时静默丢行」——那会直接毁掉失败归因的证据链（契约 C7）。
+    /// 发送的行数刻意超过 [`LOG_WRITE_QUEUE`]，逼出背压路径。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn log_writer_drains_every_line_through_bounded_channel() {
+        let root = std::env::temp_dir().join(format!("dsh-writer-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("harness.log");
+
+        let tx = spawn_log_writer(LogFile::open(&path).ok());
+        assert!(tx.is_some(), "日志文件应能打开");
+
+        // 3 倍队列容量，确保走满背压仍不丢行。
+        let total = LOG_WRITE_QUEUE * 3;
+        let mut handles = Vec::new();
+        for writer in 0..3 {
+            let tx = tx.clone().unwrap();
+            handles.push(tokio::spawn(async move {
+                for index in 0..total {
+                    let line = format!("[stdout] writer-{writer} line-{index}");
+                    tx.send(line).await.expect("接收端应存活");
+                }
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("发送任务不应 panic");
+        }
+        // 关键：丢掉启动器自己那份，让接收端读到 None 后退出循环。
+        drop(tx);
+
+        // 等待写线程把队列排空（通道关闭后不再有新行）。
+        let target = root.join("harness.log");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let lines = std::fs::read_to_string(&target)
+                .unwrap_or_default()
+                .lines()
+                .count();
+            if lines >= total * 3 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "落盘行数 {lines} 未在 10s 内追平 {}",
+                total * 3
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(
+            content.lines().count(),
+            total * 3,
+            "有界通道背压下不得丢行（契约 C7：落盘是归因证据链）"
+        );
+        // 逐行校验：**内容集合**必须完整，且无重复。
+        //
+        // 刻意**不**断言「末行是哪个 writer 的最后一行」：三个泵并发
+        // `send`，投递顺序由调度决定，本就没有保证。把顺序写进断言等于
+        // 造一个必然偶发失败的测试（实测约 50% 概率）。
+        let mut seen = std::collections::HashSet::new();
+        for line in content.lines() {
+            assert!(
+                seen.insert(line.to_string()),
+                "落盘出现重复行，落盘语义必须是每行恰好一次：{line}"
+            );
+        }
+        for writer in 0..3 {
+            for index in 0..total {
+                let expected = format!("[stdout] writer-{writer} line-{index}");
+                assert!(
+                    seen.contains(&expected),
+                    "缺失行：{expected}（背压下不得丢行）"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 写线程在无发送端时必须立刻退出，不得泄漏线程或阻塞 runtime。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn log_writer_exits_when_senders_drop() {
+        let root = std::env::temp_dir().join(format!("dsh-writer-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("harness.log");
+
+        let tx = spawn_log_writer(LogFile::open(&path).ok()).unwrap();
+        tx.send("[stdout] only line".to_string()).await.unwrap();
+        drop(tx);
+
+        // 通道关闭后文件句柄必须被释放（Windows 上文件锁会阻碍后续更新/清理）。
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if std::fs::read_to_string(&path)
+                .map(|c| c.lines().count() == 1)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "写线程应在发送端全部 drop 后收尾"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }

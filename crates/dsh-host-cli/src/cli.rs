@@ -78,6 +78,67 @@ pub enum Commands {
     Probe(ProbeArgs),
     /// 环境自检：node / 资源 / MANIFEST / 日志 / 端口 / pidfile。
     Doctor(DoctorArgs),
+    /// 崩溃自愈演示：启动 → 注入崩溃 → 指数退避重启 → 报告恢复结果（S6-2）。
+    ///
+    /// 这是`dsh_host::Supervisor` 唯一的命令行入口，因此也是 INV-6
+    /// 「主链路必须能在命令行独立复现」的兑现点之一：全程无 GUI、无窗口系统。
+    Recover(RecoverArgs),
+}
+
+/// `recover` 参数。
+#[derive(clap::Args, Debug)]
+pub struct RecoverArgs {
+    /// 只读资源目录（对应 `resource_dir()`）。
+    #[arg(long)]
+    pub resource: PathBuf,
+    /// 可写用户数据目录（pidfile 位于 `<data>/launch-root/harness.pid`）。
+    #[arg(long)]
+    pub data: PathBuf,
+    /// 就绪总超时（秒），默认取平台契约值。
+    #[arg(long)]
+    pub timeout: Option<u64>,
+    /// 固定监听端口；省略则自动预留。
+    #[arg(long)]
+    pub port: Option<u16>,
+    /// 监听地址，默认契约值 `127.0.0.1`。
+    #[arg(long)]
+    pub host: Option<String>,
+    /// 用 mock-harness 顶替真实入口（等价于环境变量 `DSH_MOCK=1`）。
+    #[arg(long)]
+    pub mock: bool,
+    /// 崩溃注入模式；默认 `startup`（启动即失败，触发退避重启路径）。
+    #[arg(long, value_enum, default_value = "startup")]
+    pub fail: FailModeArg,
+    /// 观察窗口（秒）：这段时间内 Supervisor 应至少完成一次重启。
+    #[arg(long, default_value_t = 60)]
+    pub observe_secs: u64,
+}
+
+/// `recover --fail` 的可选故障模式。
+///
+/// 刻意只暴露两种**启动即失败**的模式：`startup`（exit 3）与 `no-url`
+/// （永不打印就绪 URL）。两者都走 `LaunchOutcome::Failed` 分支——该分支
+/// **不经过**稳定窗口重置，因此退避与断路器才可被如实观测。
+///
+/// ⚠️ 不要加`after-ready`：它走 `Ready` 分支，每次崩溃都会因超过
+/// `SUPERVISOR_STABLE_UPTIME` 被重置计数与退避，观测到的将永远是初值。
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailModeArg {
+    /// 启动即退出（mock exit 3）。
+    Startup,
+    /// 卡住不打印 URL（触发就绪超时后失败）。
+    NoUrl,
+}
+
+impl FailModeArg {
+    /// 转为传给 mock 入口的 `--fail` 载荷。
+    #[must_use]
+    pub fn as_mock_value(self) -> &'static str {
+        match self {
+            FailModeArg::Startup => "startup",
+            FailModeArg::NoUrl => "no-url",
+        }
+    }
 }
 
 /// `start` 参数。

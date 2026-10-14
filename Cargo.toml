@@ -59,6 +59,21 @@ tokio = { version = "1", features = [
   "signal",
 ] }
 
+# 仅测试用的 dev-dependency（S6-3）：Supervisor 状态机的不变式性质测试。
+#
+# 为什么值得引入：`Supervisor` 的退避/断路器此前只有**举例式**测试（挑几个
+# 具体值断言），而它的输入空间是连续的（`Duration` / `f64` 倍数 / 重启上限）——
+# 举例测试只能证明「这几个点对」，证明不了「没有反例」。proptest 提供
+# 随机采样 + **自动收缩（shrinking）**，失败时打印最小反例序列，正是 S6-3
+# 判据「断言失败时能打印出反例序列」所要求的。
+#
+# 供应链核对（2026-10-11 实测）：新增 13 个包，许可证全部为
+# MIT 与/或 Apache-2.0，均在 `deny.toml` 的 `[licenses] allow` 白名单内
+# （proptest / bit-set / bit-vec / chacha20 / core_detect / num-traits /
+#  rand / rand_xorshift / regex-syntax / rusty-fork / tempfile / unarray /
+#  bitflags）。仅 dev-dependency，**不进任何发布产物**。
+proptest = "1"
+
 # Tauri 与插件（仅 src-tauri 使用，版本在此统一）
 #
 # `tray-icon` 是系统托盘（批次 0.2-B1）的前提：Tauri 2 把托盘做进 core，

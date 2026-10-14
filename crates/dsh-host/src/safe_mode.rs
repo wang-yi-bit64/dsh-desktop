@@ -243,7 +243,10 @@ mod tests {
 
     #[test]
     fn test_ensure_safe_mode_profile() {
-        let temp = std::env::temp_dir().join("dsh-safe-mode-host-test");
+        // 目录名带 PID：测试并行执行时固定路径会与同文件其它用例互相
+        // `remove_dir_all`（实测概率性失败）。
+        let temp =
+            std::env::temp_dir().join(format!("dsh-safe-mode-host-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp).unwrap();
 

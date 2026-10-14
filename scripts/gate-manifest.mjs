@@ -413,6 +413,14 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'dsh-host-headless',
+    script: 'scripts/verify-dsh-host-headless.mjs',
+    title: 'dsh-host 传递依赖闭包不得含窗口层 crate（INV-6 严格 headless，S6-1）',
+    why: '守的是 `AGENTS.md` §3.1 的硬不变量「无头核心库隔离」与 `docs/roadmap.md` §H1-a「把它变成对外承诺并加 gate」——在此之前这条不变量**只有人工遵守、零守卫**，而它当时的形状确实干净（dsh-host 只依赖 serde/tokio/regex/url/zip/windows-sys 等），于是「看起来没问题」，属于本仓反复出现的那一类：**注释里的现状声明零守卫**。为什么接线之后它会立刻承压：`Supervisor` 接入桌面壳（L1 调 L2）时，最省事的修法就是把壳需要的东西塞进 `dsh-host`，而 Tauri 类型（`AppHandle`/`Emitter`）一旦渗进 L2，`dsh-host` 就不能再在没有窗口系统的机器上独立测试，INV-6 当场失效且**编译不报错**。判据走**传递闭包**而非直接依赖——只看直接依赖会漏掉 `dsh-host → a → tauri` 这类两跳渗透（自检里有一条专门针对它的夹具，实测能连带抓出 gtk/tao/wry/webview2-com 共 18 个）。空集/解析失败判红：闭包恒含根节点，故阈值取「≥2（根+至少一个依赖）」，只拿到根节点说明 lock 没解析成功，不得给绿。依赖名歧义且无版本后缀时拒绝猜测、判红。刻意不调 cargo、不联网：直接读根 `Cargo.lock` 建图，进 fast 档零成本。已实证可证伪：在 `crates/dsh-host/Cargo.toml` 临时加 `tauri.workspace = true` 并重新解析 lock 后，真检查 exit 1 并逐条点名 18 个窗口层 crate；移除后回绿（闭包 90 个包）。',
+    real: { tiers: ['fast', 'ci', 'release'], args: [] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'remove-tree',
     script: 'scripts/remove-tree.mjs',
     title: '临时目录清理不得否决主结论',

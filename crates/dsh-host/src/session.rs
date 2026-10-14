@@ -288,9 +288,16 @@ mod tests {
     use super::*;
     use std::env::temp_dir;
 
+    /// 每个测试用例独占目录：测试默认并行执行，固定路径会让
+    /// `test_profile_crud` 与 `test_session_crud` 互相 `remove_dir_all`
+    /// 对方的 store 根目录（实测概率性失败）。
+    fn unique_temp(name: &str) -> std::path::PathBuf {
+        temp_dir().join(format!("dsh-{name}-{}", std::process::id()))
+    }
+
     #[test]
     fn test_profile_crud() {
-        let temp = temp_dir().join("dsh_test_profile_store");
+        let temp = unique_temp("test_profile_store");
         let _ = fs::remove_dir_all(&temp);
         let store = SessionStore::new(&temp);
 
@@ -319,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_session_crud() {
-        let temp = temp_dir().join("dsh_test_session_store");
+        let temp = unique_temp("test_session_store");
         let _ = fs::remove_dir_all(&temp);
         let store = SessionStore::new(&temp);
 
