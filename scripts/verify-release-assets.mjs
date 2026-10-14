@@ -361,7 +361,11 @@ export function judgeReleaseProperties(tag, properties) {
 }
 
 /**
- * L2 清单判据：核对一个**真实 Release** 的资产是否恰好是期望的 13 个。
+ * Check a real Release's expected assets and its prerelease/draft properties.
+ * Extra assets are reported but allowed, except for retired `dsh-host-cli` assets.
+ * Repository lookup errors, failed API commands, invalid JSON, and missing
+ * asset arrays return `ok: false` with problems. Errors thrown by an injected
+ * runner during the Release API call propagate.
  *
  * 需要 `gh` 与联网。适配 `gh api repos/<owner>/<repo>/releases/tags/<tag>` 的
  * `assets[].name`，并用**同一次调用**取回 `prerelease` / `draft`（见下）。
@@ -796,6 +800,15 @@ function printExpected() {
   }
 }
 
+/**
+ * Run the asset CLI: check workflow configuration by default, a real Release
+ * with `--check-release`, or asset names only with `--assets-from`.
+ * Also supports printing expected names and running self-tests.
+ *
+ * Prints results and exits with code 1 on a failed check or 2 when a required
+ * tag/file argument is absent. File I/O, self-test, and uncaught runner errors
+ * propagate.
+ */
 function run() {
   const args = argv.slice(2)
   if (args.includes('--print-expected')) {

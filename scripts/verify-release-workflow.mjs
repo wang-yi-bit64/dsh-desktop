@@ -655,7 +655,9 @@ export function checkDualChannelShape(text) {
  * （见 {@link shellContinuationProblems} 对续行的处理）。
  *
  * @param {string} code 已剥注释的文本
- * @returns {string[]} 逻辑行数组（续行已用空格拼接，缩进已归一）
+ * @returns {string[]} Trimmed lines joined with spaces across continuations.
+ *   Continuation backslashes are retained; an unfinished final group is included.
+ *   This groups text for matching rather than parsing shell syntax.
  */
 function logicalLines(code) {
   const out = []
@@ -1314,6 +1316,13 @@ export function selfTest() {
   return { passed }
 }
 
+/**
+ * Check local release workflow arguments, shell portability, artifact routing,
+ * checkout steps, channel baseline delegation, and retention of the CLI crate.
+ *
+ * Prints results and exits with code 1 if any check fails. Errors reading the
+ * workflow, Cargo manifest, or supporting scripts propagate.
+ */
 function run() {
   const text = readWorkflow()
   const { tauriScript, args } = extractTauriActionInputs(text)

@@ -220,6 +220,10 @@ export function compareVersionStrings(a, b) {
  * 于是哨兵要么永久误报、要么永久漏报，而日志上看起来一切正常（`docs/version-policy.md` §3.3
  * 记录的正是这个形态：`tags['rc'] ?? latest` 让哨兵静默退回 `latest`）。判不了就说判不了。
  *
+ * Trims the target's dist-tag name and the selected version. A missing name,
+ * non-string value, or blank value returns `missing`; version syntax is not
+ * validated here.
+ *
  * @param {object} tags - `fetchDistTags` 的 `tags`（dist-tag 名 → 版本串）。
  * @param {{upstreamDistTag?: string}} target - 目标定义（至少要带 `upstreamDistTag`）。
  * @returns {{status:'ok', distTag:string, version:string}
@@ -256,7 +260,10 @@ export function resolveLineVersion(tags, target) {
  *
  * @param {string} currentRaw 仓库钉住的版本
  * @param {string} latestRaw 该目标那条线的上游当前版本
- * @returns {{ok:boolean, level:string, message:string}}
+ * @returns {{ok:boolean, level:string, message:string}} `ok` is true when the
+ *   pinned version is not behind or only warrants a patch warning. Unparsable
+ *   versions, major/minor drift, a later stage, or a newer patch with an earlier
+ *   stage return `ok: false`.
  */
 export function judgeDrift(currentRaw, latestRaw) {
   const current = parseVersion(currentRaw)
@@ -343,13 +350,21 @@ export function distTagsUrl(registry) {
 /**
  * 拉取 npm dist-tags —— **判定基准**（2026-10-10 起）。
  *
- * 任何取不到的情形都返回 `status: 'skip'`，**不抛异常**：由调用方打印 SKIP 并说明「未核对」。
+ * Failed HTTP responses, invalid response shapes, and errors during fetching or
+ * JSON decoding return `skip` with a reason. A usable response must be a
+ * non-array object with at least one string value; individual lines are checked
+ * by {@link resolveLineVersion}.
  *
  * ⚠️ 形态判据**刻意不绑死某个 tag 名**（旧实现要求必须有 `latest`）：判定要的只是「那条线的
  * 名字在不在」，而这件事由 {@link resolveLineVersion} 逐目标判——在这里先要求 `latest` 存在，
  * 会在上游调整 dist-tag 时给出一条**假 SKIP**（把「我们依赖了一个没人要的字段」伪装成
  * 「外部状态没准备好」）。这里只判「像个 dist-tag 响应」。
  *
+ * @param {object} [options]
+ * @param {string} [options.registry] - Registry root URL; defaults to the npm registry.
+ * @param {number} [options.timeoutMs] - Milliseconds before requesting abort.
+ * @param {typeof fetch} [options.fetchImpl] - Fetch implementation; must honor
+ *   the abort signal for the timeout to stop the request.
  * @returns {Promise<{status:'ok',tags:object}|{status:'skip',reason:string}>}
  */
 export async function fetchDistTags({
@@ -582,6 +597,11 @@ async function selfTest() {
  * 主流程：
  *   ① 判定层 —— 各**在役**目标对照**自己那条线**的 npm dist-tag（休眠目标显式跳过）；
  *   ② 信息层 —— 上游 Release 清单（打印 + stable 线叫号），**不参与判定**。
+ *
+ * Returns early when npm dist-tags cannot be fetched, without checking Releases.
+ * Exits with code 1 for blocking drift, missing target lines, no active targets,
+ * or an information-layer `error`; information-layer `skip`/`empty` results
+ * alone do not fail the check. Supports `--self-test` instead of live checks.
  */
 async function main() {
   if (argv.includes('--self-test')) {

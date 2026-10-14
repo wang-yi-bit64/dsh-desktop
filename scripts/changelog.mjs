@@ -72,6 +72,9 @@ ${ENTRIES_ANCHOR}
  * 优先级：显式 `--channel` > `--version` > `--to` 的 tag 名。
  * 从 tag 名推导时剥掉前导 `v`；非 `v*` 形态（分支名、`HEAD`）推不出来。
  *
+ * An explicit channel is returned without validation. An unrecognized version
+ * returns `null` without trying `to` next.
+ *
  * @param {{channel?: string|null, version?: string|null, to?: string|null}} input
  * @returns {string|null} 通道名；推不出来时为 `null`（**不等于**「没有 tag」）
  */
@@ -97,14 +100,16 @@ function resolveChannel(input = {}) {
  * ## 两种模式的边界（诚实说明）
  *
  * · 推得出通道（`--version` 或 `--to` 是 `v*` tag）⇒ **通道感知**，取该线自己的上一个 tag。
- * · 推不出通道（`--to` 是 `HEAD`/分支名）⇒ 退回全局最近。此时「属于哪条通道」
- *   本身无定义，全局最近是唯一说得通的口径；但**必须留痕**，不能静默——
- *   否则又一次退化成「静默撒谎」。
+ * If no channel can be inferred, use the nearest global tag. Call `warn` only
+ * when that fallback finds a tag and a callback was provided.
+ * A nonempty `from` is returned unchanged, bypassing channel and Git checks.
+ * Git lookup failures return `null`, just as an absent matching tag does.
  *
  * @param {{from?: string|null, to?: string|null, version?: string|null,
  *          channel?: string|null, warn?: (msg: string) => void}} input
  * @returns {string|null} 起始基线 ref；`null` 表示从头读
- * @throws {Error} 显式给了 `channel` 但该名字未知（由 `latestTagForChannel` 抛）
+ * @throws {Error} An explicit channel is unknown, unless `from` bypasses lookup.
+ *   Errors thrown by `warn` also propagate.
  */
 function resolveBaseline(input = {}) {
   const { from = null, to = null, version = null, channel = null, warn } = input;
@@ -136,6 +141,8 @@ function resolveBaseline(input = {}) {
  *   from: string|null, to: string, version: string|null, channel: string|null,
  *   date: string|null, force: boolean, json: boolean,
  * }} 归一化后的选项。
+ * @throws {Error} An argument is not recognized. Option values are consumed
+ *   without validation; a missing value can be `undefined`.
  */
 function parseArgs(argv) {
   const options = {
@@ -607,7 +614,15 @@ if (isDirectRun) {
 /**
  * CLI 主入口。
  *
+ * Prints release notes, range metadata, or the channel baseline; `--write`
+ * updates CHANGELOG.md in the current directory. Baseline mode requires a
+ * resolvable channel and prints nothing when no matching tag is found or the
+ * Git lookup fails.
+ *
  * @param {string[]} argv - 命令行参数。
+ * @throws {Error} Arguments or channels are invalid, baseline mode cannot infer
+ *   a channel, notes contain no commits, or writing lacks a version or fails
+ *   changelog insertion checks. Git history and file I/O errors also propagate.
  * @returns {Promise<void>}
  */
 async function main(argv) {

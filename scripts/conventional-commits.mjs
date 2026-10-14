@@ -308,6 +308,17 @@ function comparePrereleaseParts(a, b) {
   }
   return 0;
 }
+/**
+ * Find the nearest matching tag reachable from `rev` using Git's tag selection.
+ *
+ * @param {object} [options]
+ * @param {string} [options.cwd] - Repository directory; defaults to the current directory.
+ * @param {string|string[]} [options.pattern='v*'] - Git tag globs; arrays match any entry.
+ * @param {string} [options.rev] - Search starting point; defaults to HEAD.
+ * @param {string[]} [options.excludes=[]] - Git tag globs to exclude.
+ * @returns {string|null} Selected tag, or `null` if none matches or Git fails,
+ *   including when the revision cannot be resolved.
+ */
 export function latestTag(options = {}) {
   const { cwd = process.cwd(), pattern = 'v*', rev, excludes = [] } = options;
   // `pattern` 允许是数组：通道感知取基线会把**该通道的全部候选 tag 名**逐个传进来
@@ -349,8 +360,10 @@ export function knownChannelNames() {
 /**
  * 取某个 tag 归属的桌面通道（纯函数，不碰 git）。
  *
- * 形状非法的 tag（非 `v<semver>`）返回 `null`——**排除**，不是抛错：
- * 历史里可能存在与本仓命名无关的 tag，为它中断整个取基线过程是错的。
+ * Accepts version strings with or without a leading `v`. Returns `stable` for
+ * versions without a prerelease suffix, or the matching target's publishChannel.
+ * Invalid version shapes and unknown prerelease channels return `null`; errors
+ * from version classification are caught.
  *
  * @param {string} tag 形如 `v0.2.1-alpha.1.2`
  * @returns {string|null}
@@ -382,7 +395,8 @@ export function filterTagsForChannel(tags, channel) {
  *    会把「尚未进入本分支的 tag」也算进来（例如另一条线刚推的 tag）。
  *
  * @param {{cwd?: string, rev?: string}} [options]
- * @returns {string[]}
+ * @returns {string[]} Reachable matching tags, or an empty array when none
+ *   exist or Git fails, including an unresolvable revision. `rev` defaults to HEAD.
  */
 export function reachableVersionTags(options = {}) {
   const { cwd = process.cwd(), rev = 'HEAD' } = options;
@@ -431,7 +445,9 @@ export function reachableVersionTags(options = {}) {
  * 不自己实现距离比较（自造第二套比较器 = 本仓明令禁止的形态）。
  *
  * @param {{channel: string, rev?: string, cwd?: string}} options
- * @returns {string|null} 该通道的上一个 tag；该通道尚无 tag 时为 `null`
+ * @returns {string|null} Nearest reachable tag in the channel, or `null` when
+ *   none matches or Git fails. The search starts at `rev` (default HEAD);
+ *   pass the release tag's parent to exclude that release itself.
  * @throws {Error} `channel` 不在 {@link knownChannelNames} 内（**不静默返回空**：
  *   「判不了」与「没有」必须分开，否则一个拼错的通道名会伪装成「首次发布」）
  */
