@@ -129,14 +129,14 @@ const PROSE_DECLARATIONS = [
   {
     file: 'README.zh-CN.md',
     target: 'next',
-    label: '通道表下方中文散文的「（next `…`、」',
-    res: [/（next `([0-9][^`]*)`、/g]
+    label: '通道表下方中文散文的「`next` 钉住 `…`」',
+    res: [/`next` 钉住 `([0-9][^`]*)`/g]
   },
   {
     file: 'README.zh-CN.md',
     target: 'alpha',
-    label: '通道表下方中文散文的「alpha `…`，与上游」',
-    res: [/alpha `([0-9][^`]*)`，与上游/g]
+    label: '通道表下方中文散文的「`alpha` 钉住 `…`（与上游」',
+    res: [/`alpha` 钉住 `([0-9][^`]*)`（与上游/g]
   },
   // 第三批（2026-10-08）：另外两处**无人守、且已实际漂移**的现状声明。
   //  1) `docs/dsh-upgrade-checklist.md` 的「`next` 锚 X / `alpha` 锚 Y」写法。该文件**已被**
@@ -499,7 +499,7 @@ function selfTest() {
     '| `alpha` | npm `alpha` dist-tag | `0.1.6-alpha.2` | `alpha` |'
   ].join('\n')
   const readmeProseZh =
-    '> ⚠️ …（next `0.1.5-rc.3`、alpha `0.1.6-alpha.2`，与上游 dist-tag 于 2026-10-08 实测一致）。'
+    '> ⚠️ … `next` 钉住 `0.1.5-rc.3`，`alpha` 钉住 `0.1.6-alpha.2`（与上游 dist-tag 于 2026-10-08 实测一致）。'
   const readmeZhOk = [readmeTableZh, '', readmeProseZh].join('\n')
   eq('夹具1：next 抽出 1 处且带行号', pinTableSites(readmeOk, 'next'), [{ line: 5, version: '0.1.5-rc.3' }])
   eq('夹具1：alpha 抽出 1 处', pinTableSites(readmeOk, 'alpha'), [{ line: 6, version: '0.1.6-alpha.2' }])
@@ -566,7 +566,7 @@ function selfTest() {
   )
 
   // --- 夹具 3c：中文 README 的散文声明同样在生效（新增点不是只测了英文） ---
-  const staleZh = readmeZhOk.replace('alpha `0.1.6-alpha.2`', 'alpha `0.1.6-alpha.1`')
+  const staleZh = readmeZhOk.replace('`alpha` 钉住 `0.1.6-alpha.2`', '`alpha` 钉住 `0.1.6-alpha.1`')
   const zhStale = checkVersionDeclarations({ ...docsOk, 'README.zh-CN.md': staleZh }, TARGETS, LEDGER)
   eq('夹具3c：中文散文过期 → 判红 1 条', zhStale.length, 1)
   eq('夹具3c：报错点名中文散文声明', zhStale[0].includes('中文散文'), true)
