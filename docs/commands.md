@@ -408,6 +408,278 @@ npm run gate -- release-ledger                            # 上述 --validate �
 # 27. 变更日志（产物入库 / 供 Release 正文使用）
 npm run changelog:write -- --version 0.2.0     # 写入 CHANGELOG.md
 npm run changelog:notes                        # 打印上个 tag..HEAD 的 Release 正文
+
+# 28. **本地** AI 代码评审（Gito CLI；ADR-065）——不进 CI、无仓库外服务
+#     定位：推之前自己先审一遍。它与 `.github/workflows/` 下的任何工作流**无关**，
+#     本仓刻意没有为它接线 `pull_request`（理由见 ADR-065「备选方案」）。
+#
+#     ⚠️ 为什么**不是** npm script：本工具是 Python 包（`gito.bot`，元数据要求
+#        `python >=3.11,<4.0`），且需要**每台机器各自的** venv 路径与一把模型 key。
+#        塞进 package.json 会让它看起来像一条「检出即可用」的仓库能力，而它其实依赖
+#        本机环境与凭据——那正是本仓 §7.1 规则 1 要防的形态（把未接线的东西呈现成可用能力）。
+#
+#     前置：Python 3.11~3.13 + git。按本机隔离纪律装进托管 venv。
+#     🔴 **本机必须先做这一步，否则 pip 静默卡死**：本机 `rustc` 由 mise shim 提供（启动 2.47s），
+#        而 pip 每条安装/下载命令都会去探它（`network/session.py:179-192`，`timeout=0.5`）
+#        ⇒ 必然超时 ⇒ Windows 的超时清理路径死锁。**先把 mise shims 从 PATH 摘掉**
+#        （不要整体替换 PATH——那会连带干掉 Git Bash 的 coreutils）：
+#          export PATH="${PATH//\/c\/Users\/Administrator\/AppData\/Local\/mise\/shims:/}"
+#        真因、15 行最小复现与「同命令红→绿」见文末「已登记的本机异常 ②」与 ADR-065 同节。
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\pip install -v gito.bot
+#     等价形态（无需自建 venv）：uvx gito.bot review
+#     ⚠️ 本机**没装** uv / uvx / pipx ⇒ 上面这条**当前不可执行**；要用得先自行装 uv。
+#     ✅ 本机现状（2026-10-15）：已装成 `gito.bot-4.5.0` + 110 个依赖（exit 0，3m45s），
+#        `Scripts/gito.exe` 与 `Scripts/gito.bot.exe` 均在位，`gito --help` 已实跑通过。
+#
+#     ── 跑起来的最短顺序（①② 都**不需要模型 key**，③ 才消耗额度）────────────────────
+#       ① gito setup                        # 生成 ~/.gito/.env（每台机器只做一次）
+#       ② gito files                        # 零 LLM：打印「本次会审哪些文件」
+#       ③ gito review --out .workbuddy/tmp   # 真评审
+#     ⚠️ `gito -v` 是 **gito 自己的详细度**（0-3，`--verbosity`），与 pip 的 `-v` 毫无关系。
+#     ⚠️ `gito files`/`gito review` 都必须在**仓库根**里跑（它按 cwd 解析 `.gito/config.toml`）。
+#
+#     凭据（**机器本地，绝不入库**）：`~/.gito/.env`。两种生成方式：
+#       · 交互式向导；· 手写（本机采用，见下）
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito setup
+#     🔴 **凭据落点有两处，只有一处是对的**，而错的那处此前**没有任何东西拦着**：
+#        · 对：`~/.gito/.env`（仓库外）——`constants.py:13` 只认这个路径；
+#        · 错：`<repo>/.gito/.env`——**Gito 永远不会读它**（`bootstrap.py:71` 把路径**显式**
+#          传给 `load_dotenv`，不在 cwd 搜 `.env`），但本仓的 `.gito/` 是**入库目录**
+#          ⇒ 一次误跑的 `gito setup` + 一次 `git add .gito/` = **明文密钥入库**。
+#        ⇒ 已加**嵌套 `.gito/.gitignore`**（内容一行 `.env`）拦住它。为什么不用根 `.gitignore`：
+#          根那份在 HEAD 里是 **CRLF blob**，编辑它会带出 53 行纯 EOL 差异（见下方仓库异常②）；
+#          嵌套 .gitignore 是**新文件、纯 LF** ⇒ 同一个保护，改动面 0 行噪音。
+#        ✅ 取证（成对）：`git check-ignore -v .gito/.env` ⇒ `.gito/.gitignore:23:.env`（exit 0）；
+#          真实写一个含哨兵值的 `.gito/.env` 后 `git status --untracked-files=all` **不列它**，
+#          而 `config.toml` 仍被列出（**保护没过度**）；**反向对照**：把该 .gitignore 移开 ⇒
+#          `?? .gito/.env` **立刻出现** ⇒ 证明起效的就是它（不是别的全局规则）。
+#
+#     ✅ **本机实际配置（2026-10-15 生成，已实测打通）**——来源是本机 DSH 用户层
+#        `%APPDATA%\io.dsh.desktop\harness\profiles\web\cordis.patch.yml` 的 `stepfun`
+#        provider（`displayName: 跃阶星辰`）。字段逐一对应：
+#
+#          DSH 字段                              →  gito / ai-microcore 字段
+#          apiKeyEnv: STEPFUN_API_KEY            →  LLM_API_KEY
+#          api: openai-completions               →  LLM_API_TYPE=openai
+#          baseURL: https://api.stepfun.com/step_plan/v1
+#                                                →  LLM_API_BASE（同值）
+#          models[].id                           →  MODEL
+#
+#        落盘内容（`~/.gito/.env`；**值只在本机，不要抄进仓库**）：
+#          LLM_API_TYPE=openai
+#          LLM_API_KEY=<STEPFUN_API_KEY>
+#          LLM_API_BASE=https://api.stepfun.com/step_plan/v1
+#          MODEL=step-5-preview
+#          MAX_CONCURRENT_TASKS=2
+#          （`=2` 是**实测选定值**，不是随手写的；推导见下面四条事实）
+#
+#        🔴 `MAX_CONCURRENT_TASKS` **必须按订阅的并发上限压下来**，否则**不是「慢」，
+#        是「静默少审文件」**。四个实测事实：
+#          ① 订阅上限 = **5 并发**。两个独立来源一致：**订阅持有者 2026-10-15 确认**；
+#             定标实测亦为 5——关掉 SDK 自带重试后并发打 N 个最小请求，
+#             N=1..5 全成功、N=6 恰好 1 个 429 ⇒ 可用坑位 5。
+#             🔴 **因此 `MAX_CONCURRENT_TASKS` 不能填 5**：见③，填 5 会让实际在飞达到 7。
+#          ② 库默认 `constants.py: DEFAULT_MAX_CONCURRENT_TASKS = 40` ⇒ **不设必炸**。
+#          ③ **gito 的实际在飞请求会超过这个设定值**：设为 4 时服务端**恒定**报
+#             `current: 6, limit: 5`（45 次采样全是 6），即 gito 侧多出约 2 个在飞请求。
+#             ⚠️ **根因未定，不猜**：`run_parallel` 的 `asyncio.Semaphore` 写法本身是对的
+#             （`microcore/utils.py:441`，`async with` 包住整个 task 含内部重试）；
+#             已**排除**「DSH 桌面端在占坑」（复核时该进程对外连接数为 0）。
+#             ⇒ 按「设定值 + 2」留余量，取 **2**（**已验证 0 跳过**）。
+#        🔴 **代价不是变慢，是覆盖率静默缩水**（这条比上面更值得记）——同一份 diff 的成对对照：
+#
+#            MAX_CONCURRENT_TASKS │ 429 次数 │ 被跳过 │ processing_warnings │ 真审文件 │ total_issues
+#            ─────────────────────┼──────────┼────────┼─────────────────────┼──────────┼─────────────
+#                    4             │   132    │ 11/15  │         11          │    4     │      3
+#                    2             │    **0** │  **0** │         **0**       │  **15**  │    **10**
+#
+#          ⇒ 那场 429 风暴里，报告抬头写的是 `**⚠️ 3 issues found** across 15 files`、
+#            JSON 里 `number_of_processed_files: 15`、**exit 0** —— 三处都看不出问题，
+#            **而它藏掉了 7 条真问题（占全部发现的 70%）**。
+#          ⇒ 判据只能这样下：**`number_of_processed_files` 数的是 diff 里的文件数、不是真审过的
+#            文件数；`exit 0` 也不代表全审过。脚本化调用必须读 `processing_warnings`。**
+#            （本仓 AGENTS.md §7.1/§7.2 治的正是这个形态：绿了但没验。）
+#          ⚠️ 全量覆盖的真实代价：15 个文件、并发 2、模型 `step-5-preview`，实测 **18 分 12 秒**。
+#            想快就在 `-f` 上限定文件集（见下），不要靠加并发——加了就回到上面那行的假绿。
+#
+#        ⚠️ 为什么 `LLM_API_TYPE` 写 `openai` 而不是某种 stepfun 专用取值：microcore 的
+#        `ApiType` 枚举里**没有** stepfun；官方注释原文「To use services that are not
+#        listed in `ApiType`, but provides OpenAI interface, use `ApiType.OPENAI`」——
+#        跃阶星辰正属此类（`step_plan/v1` 是 OpenAI Chat Completions 兼容端点）。
+#
+#        ✅ **实测（2026-10-15，真实调用，非夹具）**：`step-5-preview` 返回 `'OK'` ⇒
+#        「端点 + 模型名被 ai-microcore 接受」这一条**已闭合**（原 ADR-065 未闭合项 ②）。
+#        ⚠️ `step-3.7-flash` 是 **reasoning 模型**：先吐 `reasoning_content` 再吐 `content`。
+#        实测 `max_tokens=32` ⇒ `finish_reason=length` 且 **`content` 为空串**；
+#        给到 512 ⇒ `content='OK'`。**空串对评审工具就是静默假绿**（会被读成「0 issues」），
+#        所以**别给这个模型配小输出预算**。好消息：gito 评审路径 `mc.llm_parallel(...)`
+#        不传 `max_tokens`（core.py:496）⇒ 走服务端默认，当前路径安全。
+#        ⚠️ reasoning 强度**在本仓改不了**：microcore 只在 `azure_responses` 后端读
+#        `reasoning_effort`，`openai` 后端不传该参数 ⇒ 沿用服务端默认；DSH 里写的
+#        `defaultEffort: high` 只对 DSH 生效，gito 这边拿不到。
+#        开关 `SHOW_THINKING`（默认 false）决定是否把思考内容包进 `<think>`——评审要的是
+#        纯 JSON，**保持默认关闭**。
+#        切模型只改一行：`MODEL=step-3.7-flash`（上下文 262144，快而便宜）或
+#        `step-5-preview`（上下文 1024000，旗舰、带推理，本机默认选它）。
+#
+#     评审配置（**入库**，唯一产地 `.gito/config.toml`）：
+#       · `exclude_files` —— A 组真实命中 89 个已跟踪文件（`vendor/**/lib/**` 占 80），
+#         B 组是纵深防御（实测 0 命中，被 ignore 的目录，正常 diff 看不到）；
+#       · `[prompt_vars].requirements` —— 本仓判据进入模型的**唯一**通道。
+#     🔴 **不要加 `aux_files`**：它在 `gito review` 路径上**不生效**（源码级证据见
+#        `.gito/config.toml` 文件头与 ADR-065），加它只会让人以为判据已经喂进去了。
+#     核对「配置真的生效」——**下面三步都不需要模型 key**（前两步任意 shell 可跑，末步需装好 gito）：
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe -c "import tomllib,pathlib;print(sorted(tomllib.loads(pathlib.Path('.gito/config.toml').read_text(encoding='utf-8'))))"
+#       ↑ 应打印 ['exclude_files', 'prompt_vars']；出现 'aux_files' 即说明配置被退回旧写法
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('.gito/config.toml').read_text(encoding='utf-8'));print(len(d['exclude_files']), sorted(d['prompt_vars']))"
+#       ↑ 应打印 20 ['awards', 'requirements']
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito files
+#       ↑ 零 LLM、免 key，打印「本次会审哪些文件」——**这才是验 `exclude_files` 的正解**
+#     🔴 **`gito review --help` 不是免 key 步骤**（本轮实测更正）：`review` 的**任何**形态
+#        （`--help` / `-h` / `help review` / 裸 `review`）都在打印帮助**之前**先校验凭据，
+#        无 key 时一律 **rc=2** + `LLM configuration error: LLM_API_KEY is absent.`。
+#        只有顶层 `gito --help` 免 key（已实测通过）。
+#     真评审——⚠️ **一律带上 `--out .workbuddy/tmp`**（**需要 key**，先跑 `gito setup`）：
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito review --out .workbuddy/tmp
+#     为什么：报告默认写在**仓库根**（`out_folder` 缺省 = `repo.working_tree_dir`，core.py:553），
+#     而那两个文件（`code-review-report.md` / `.json`）**没有被 .gitignore 覆盖** ⇒ 会在
+#     `git status` 里常驻成未跟踪文件，稍不留意就被 commit 进去。`.workbuddy/` 早在
+#     `.gitignore:28` 被忽略，把报告导进去等于**不新增任何 ignore 规则**就解决这件事。
+#     （本仓刻意**没有**为这两个文件改 .gitignore：那个文件在 HEAD 里的 blob 是 CRLF，
+#      其余文件都是 LF，在 `core.autocrlf=true` 下**任何人编辑它都会带出 53 行纯 EOL 差异**
+#      ——见下面「已登记的仓库异常」。用 `--out` 绕开比修那行更划算。）
+#
+#     ⚡ **要快就用过滤器收窄文件集——这是本工具**唯一**安全的提速手段**（别加并发，见上）。
+#     🔴 **但在 Windows 上必须用 `--filter=模式` 的「单 token 带 `=`」形态**，不能用 `-f 模式`：
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito review --out .workbuddy/tmp --filter=scripts/**
+#     🔴 为什么——**Click 会在 Windows 上把整个 argv 做 glob 展开**（不是 gito，也不是 bash）：
+#        `click/core.py:1535-1539`，取 `sys.argv` 时若 `os.name == "nt" and windows_expand_args`
+#        （默认 True）就调 `_expand_args()`；而 `_expand_args`（`click/utils.py:649-666`）对**每个**
+#        token 依次做 `expanduser` → `expandvars` → `glob.glob(token, recursive=True)`，
+#        **命中就替换成匹配到的真实路径列表，不命中才保留字面量**。
+#        ⇒ `-f 'scripts/**'` 的**值**在 gito 看到之前就被换成 54 个 `scripts\*.mjs` 路径，
+#          于是 `-f` 只吃掉第一个、其余全变成多余位置参数 ⇒ **exit 2**
+#          + `Got unexpected extra arguments (scripts\changelog.mjs ...)`。
+#        ⇒ `--filter=scripts/**` 是一个**整体 token**，`glob.glob('--filter=scripts/**')` 匹配不到
+#          任何路径 ⇒ 原样保留 ⇒ gito 才真的拿到这个模式。
+#     ✅ **红→绿成对取证**（同命令、同树、**只差走不走 argv 展开**，据此排除「模式本身写错」）：
+#          gito files -f 'scripts/**'                       → exit 2（Got unexpected extra arguments）
+#          python -c "...from gito.cli import app; app(sys.argv[1:])" files -f 'scripts/**'
+#                                                          → exit 0（filtered by scripts/** --> 2 file(s)）
+#        后者把 args **显式**传给 Click ⇒ 走 `args is not None` 分支 ⇒ 跳过展开 ⇒ 模式生效。
+#     ⚠️ 另外三个由此派生的坑：
+#       · **短选项带 `=` 是坏的**：`-f=scripts/**` 传给 gito 的值是 `=scripts/**`（含那个 `=`），
+#         实测 `filtered by =scripts/** --> 0 file(s)` ⇒ 短形式只能分开传，而分开传又被展开
+#         ⇒ **本机用过滤器只能写 `--filter=` / `--filters=`**（长名）。
+#       · **任何 argv token 里的 `$VAR` 与 `~` 也会被展开**（`expandvars` / `expanduser`）——
+#         路径里带 `$` 或 `~` 的参数在本机会被改写，POSIX 上不会。
+#       · `--out .workbuddy/tmp` 之所以一直没事，只是因为它**恰好**是已存在的目录
+#         （glob 命中后替换回等值字符串）；若该目录不存在则原样保留，两种都无害。
+#       · 别名：`--filter` / `--filters` / `-f`（`cli_base.py:96-106`），值为 **glob/fnmatch** 模式；
+#         **可用逗号分隔给多个**：`--filter=scripts/**,docs/adr/**,AGENTS.md`
+#         （源码 `core.py:229`：`[f.strip() for f in filters.split(",") if f.strip()]`）；
+#       · **与 `exclude_files` 是叠加、不是覆盖**。顺序在 `core.py:345-348`：先 `filter_diff(filters)`
+#         取「只要这些」，再 `filter_diff(config.exclude_files, exclude=True)` 剔掉排除项
+#         ⇒ 一个文件**同时**命中过滤器与 `exclude_files` 时**仍被排除** ⇒ 不必临时改 config；
+#       · 全被排掉时抛 `AllChangesExcludedError`（**不是**静默空报告）——这条是设计，可依赖。
+#     ⚠️ **模式语义两个坑**（`fnmatch` 与 glob **不同**，实测见下方「已取证」）：
+#       ① `**` 与 `*` **完全等价**（都跨 `/`），写 `scripts/*` 与 `scripts/**` 是同一件事；
+#          反过来：`src/*.py` **会**匹配到 `src/a/b/c.py`，别按 glob 直觉当「只一层」。
+#       ② 本机（Windows）匹配**大小写不敏感**——`fnmatch.fnmatch` 内部先调 `os.path.normcase`
+#          （win32 下转小写并把 `/` 换成 `\`），而 POSIX 下 normcase 是恒等函数。
+#          实测：`'SRC-TAURI/RESOURCES/x.txt'` 对 `'src-tauri/resources/**'` 在 Windows **命中**、
+#          在 POSIX **不命中**。⇒ 同一份模式**两平台不等价**，且失效方向是**静默多排除**。
+#          本仓当前所有真实路径均为小写 ⇒ 现状不受影响；改模式时若引入大写字母，必须两平台各想一遍。
+#
+#     查看「本次会审哪些文件」（**零 LLM**，不需要 key——验 exclude_files 的正解）：
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito files
+#       ✅ 本机实跑（2026-10-15）：`Changed files: INDEX vs origin/main --> 15 file(s).`
+#       ⚠️ 它的 stdout **带 ANSI 颜色码**（形如 `- \x1b[34mAGENTS.md\x1b[39m`）⇒ 用脚本解析
+#          输出时**必须先剥色**（`re.sub(r"\x1b\[[0-9;]*m", "", s)`），否则「某文件在不在列表里」
+#          这类断言会**静默恒为假**——本轮夹具就栽在这里：它是**漏报**而不是报错。
+#     从仓库源码装（调试或钉特定 tag 时）：
+#       pip install git+https://github.com/Nayjest/Gito.git@<tag>
+#     重建项目配置的完整默认副本（**拒绝覆盖已有文件**，须 --force）：
+C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito populate-project-config
+#     命令没进 PATH 时用模块形态调用：
+#       C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\python.exe -m gito review
+#
+#     ⚠️ 已登记的限制（Gito 自述）：它在响应 PR 评论时**无法修改 `.github/workflows/` 下的
+#        文件**（GitHub 的安全限制，官方明确不建议用 PAT 绕过）。本仓的 PR 高频就是改
+#        workflows 与 patches ⇒ 这条是本仓选「本地 CLI 而非 PR 评论」的直接原因之一。
+#
+#     ✅ **已取证（2026-10-15，不需要 key 即可复核）**：① `fnmatch` 模式语义与命中数——
+#        对 `git ls-files` 的 543 个已跟踪文件实测，A 组命中 89、B 组命中 0，且做注入
+#        试验（去掉 `vendor/**/lib/**` 后总数恰降 80）⇒ 模式列表可独立证伪；② 判据通道——
+#        `gito review` 只渲染 `cfg.prompt` / `cfg.summary_prompt` 且只传 `**prompt_vars`，
+#        `aux_files` 只被 `answer()` 读取 ⇒ 本仓不配它（源码级证据，不需要跑模型）；
+#        ③ **端到端**（**比较器取自被测对象本身**，不再是我复算的 `fnmatch`）：基线
+#        `gito files` = 15 个变更文件 → 注入 `'AGENTS.md'` ⇒ **14** 个、AGENTS.md 消失、
+#        其余**逐字不变** → 注入 `'docs/**'` ⇒ **10** 个、5 个 `docs/*` 全消失、`AGENTS.md`
+#        仍在（顺带证实通配 `**` **跨 `/`**，与 `filter_diff` 的 `fnmatch` 语义一致）→
+#        两次注入后 `.gito/config.toml` `sha256[:16] = de90fa4e5a1b72fe` **字节级复原**。
+#        ⚠️ 上面③那条「`docs/**` 删掉 5 个 `docs/*`」只能证明「`**` 跨 `/`」——**证明不了**
+#        「`*` 不跨」，也就**区分不了** `fnmatch` 与 glob 语义。要区分得直接比翻译结果：
+#          python -c "import fnmatch;print(fnmatch.translate('docs/*'));print(fnmatch.translate('docs/**'))"
+#        ⇒ 两者**逐字相同** `(?s:docs/.*)\Z` ⇒ `**` ≡ `*`（`*` 同样翻成 `.*`，照样跨 `/`）。
+#        ④ **跨平台差异**（本轮实测，两平台不等价）：`fnmatch.fnmatch` 先 `os.path.normcase`
+#        （win32 转小写 + `/`→`\`；POSIX 恒等）⇒ 本机大小写不敏感。实测
+#        `'SRC-TAURI/RESOURCES/x.txt'` vs `'src-tauri/resources/**'`：Windows **True** / POSIX **False**。
+#        ⇒ 失效方向是**静默多排除**（本机少审文件而看不出来），与本仓最忌的形态同类。现状不受影响
+#        （所有真实路径均小写），但这是「本机绿 ≠ CI 绿」的一个潜在产地，见上方 `-f` 段。
+#
+#     ✅ **已跑成第一次真实评审**（2026-10-15，实测，非夹具）：模型调用路径**已自证**——
+#        `step-5-preview` 经 `https://api.stepfun.com/step_plan/v1` 真实返回 `'OK'`；
+#        并已对真实 diff 跑出报告：`--filter=scripts/**` ⇒ `exit 0`、**0 次 429**、
+#        `**⚠️ 2 issues found** across 2 files`（**2/2 全覆盖、无跳过**）、耗时 **231 s**，
+#        且抓出 **2 条门禁未覆盖的真缺陷**（已修，见 `docs/dev-plan-defect-remediation.md` §11 对应行）。
+#        ⚠️ 但这**不是**「已接线能力」：那只是**一次 2 文件的部分覆盖**，本仓**从未做过全量评审**，
+#        且它**不进任何 CI 档位**（ADR-065）⇒ AGENTS.md §7.2 的口径仍然适用。
+#        ⚠️ 另有一条**降级预警**（不影响结论，但要知道）：日志会刷
+#        `WARNING: Can't resolve tiktoken encoding for 'step-5-preview'` ⇒ 该模型名不在 tiktoken
+#        词表里，**token 计数走回落编码** ⇒ 与 `max_code_tokens` 相关的预算只是近似值。
+#        另：`max_code_tokens` 本仓**刻意用默认值**（32000），不写进 config——它只管
+#        diff / 全文上下文的预算上限，与本仓判据无关。
+#
+#     ⚠️ **已登记的仓库异常（本次发现，未修，等你裁定）**：`.gitignore` 在 HEAD 里的 blob
+#        带 **50 个 CR**（CRLF），而其余所有跟踪文件都是 **LF blob**。在 `core.autocrlf=true`
+#        下这意味着一件事：**任何人编辑 `.gitignore`，提交里都会多出 53 行纯 EOL 差异**
+#        （实测：`git add` 后 `--numstat` 为 `55 50`，而 `-w` 忽略空白后只剩 **5 行**真改动）。
+#        本次实现 Gito 时踩到了它，改为用 `--out` 绕开、**不动那个文件**。判据与复核：
+#          git cat-file -p HEAD:.gitignore | tr -cd '\r' | wc -c    # 50（其余文件皆为 0）
+#        要修就是一次性的 `git add --renormalize .gitignore`（53 行 EOL 差异只在这一次提交里
+#        出现，之后不再复现）；不修则每次编辑都要重新解释一遍这 53 行。**两者都行，但要有记录。**
+#
+#     ⚠️ **已登记的本机异常 ②：本机 `pip` 的任何安装/下载命令都会静默卡死**
+#        （表现是「什么都没发生」，所以比上一条更值得记）。**根因已定位到行**：
+#          · 必要条件——本机 `rustc` 由 **mise shim** 提供
+#            （`%LOCALAPPDATA%\mise\shims\rustc.EXE`），实测启动 **2.47s**。
+#          · pip 每条安装/下载命令都会构造 `PipSession`，其 `user_agent()`
+#            （`pip/_internal/network/session.py:179-192`）在 `shutil.which("rustc")` 命中时执行
+#            `subprocess.check_output(["rustc","--version"], timeout=0.5)`。2.47s > 0.5s
+#            ⇒ **必然** `TimeoutExpired`。
+#          · 充分条件——Windows 分支在超时后的清理里**再调一次** `process.communicate()`
+#            （`subprocess.py:565` → `_communicate` → `join`）。mise shim 是转发进程：shim 被 kill
+#            后它派生出的**孙进程仍持有继承来的 stdout 写端** ⇒ `_readerthread` 永不 EOF
+#            ⇒ 永久阻塞。
+#          · 反证（证明「慢」单独不成立）：`~/.cargo/bin/rustc.exe` 实测 **0.70s**，同样 > 0.5s、
+#            同样走超时分支，但**不死锁**——它自身持有写端，kill 即释放
+#            ⇒ 充分条件是 shim 的**进程转发结构**。
+#        取证：① `faulthandler.dump_traceback_later(25)` 抓到的栈逐帧为
+#        `user_agent → check_output → run → communicate → _communicate → join`（+ `_readerthread`）；
+#        ② 15 行最小复现（只用 stdlib、与本仓无关）：`check_output(["rustc", "--version"],
+#        stderr=STDOUT, timeout=0.5)` **卡死**，同调用 `timeout=10` **返回 OK**（2.1s）；
+#        ③ **同命令红→绿**（只差 PATH 里的一个目录）：
+#             pip install -v --no-index --no-deps --dry-run <whl>     → 卡死（exit 124，只打印横幅）
+#             同上 + PATH 剔除 mise/shims                             → exit 0（正常三行输出）
+#        ⇒ **处置**：pip 命令前把 mise shims 从 PATH 里**摘掉**——不要整个替换 PATH，那会连带干掉
+#        PortableGit 的 coreutils（`ls` / `rm` / `command` 全部 `command not found`）：
+#          export PATH="${PATH//\/c\/Users\/Administrator\/AppData\/Local\/mise\/shims:/}"
+#        ⚠️ 另一陷阱：pip 输出重定向到文件时是**块缓冲**的 ⇒ **日志 0 字节能被误读成「下载中」**，
+#        别据此判断「在跑」。（可读性上仍建议 pip 加 `-v`，但它**不是**判别量、也治不了这个卡死。）
+#        📌 **本轮推翻了两条自己先前的结论**：① 「出口代理慢」——证伪（`--noproxy` 无效）；
+#        ② 「判别变量是详细度」——证伪（当时那次 `-v` 成功只是因为那个 shell 的 PATH 恰不含
+#        mise shims；现在含 mise 的 PATH 下 `-v` 同样卡死，已复现）。
 ```
 
 集成测试（`crates/dsh-host/tests/`）会真实派生 Node 进程运行 `scripts/mock-harness.mjs`，需要 `PATH` 上有 Node.js（可用 `DSH_TEST_NODE` 指定）；找不到时测试自行跳过而非失败。故障模式经 `mock-harness.mjs` 的 argv / 环境变量注入，不在 Rust 侧打桩。

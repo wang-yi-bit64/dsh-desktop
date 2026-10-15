@@ -1,0 +1,23 @@
+# .gito/.gitignore —— 只为一件事：**拦住凭据**。
+#
+# 背景：Gito 的凭据文件是 `~/.gito/.env`（仓库**外**），但 `gito setup` 的默认落点
+# 在工作目录内是 `<repo>/.gito/.env`，而本仓的 `.gito/` 是**入库目录**（`config.toml`
+# 就是设计上要提交的）。两者叠加 ⇒ 一次误跑的 `gito setup` + 一次 `git add .gito/`
+# 就是**明文密钥入库**。
+#
+# 🔴 更关键的是：**那个文件对 Gito 完全无用**。
+#    `gito/constants.py:13` `HOME_ENV_PATH = Path("~/.gito/.env").expanduser()`
+#    ⇒ 只读 `$HOME/.gito/.env`，`bootstrap.py:71` 把它当 **显式路径** 传给 `load_dotenv`
+#    ⇒ 不在 cwd 搜 `.env` ⇒ 仓库内那份**永远不会被读**。
+#    ⇒ 所以它是「零收益 + 真泄漏」的组合，必须拦住。
+#
+# 为什么用**嵌套** .gitignore 而不是改根 .gitignore：
+#   根 `.gitignore` 在 HEAD 里的 blob 是 **CRLF**（50 个 CR），而其余跟踪文件都是 LF。
+#    在 `core.autocrlf=true` 下编辑它 ⇒ 提交里会多出 **53 行纯 EOL 差异**（实测
+#    `git add` 后 `--numstat` = `55 50`，`-w` 忽略空白后只剩 5 行真改动）。
+#   嵌套 .gitignore 是**新文件、纯 LF**，改动面 = 1 个文件、0 行 EOL 噪音。
+#   ⇒ 同一个保护，代价从「53 行噪音」降到 0。（判据见 docs/commands.md §28）
+#
+# 复核（应打印 `.gito/.gitignore:1:.env`，退出码 0）：
+#   git check-ignore -v .gito/.env
+.env

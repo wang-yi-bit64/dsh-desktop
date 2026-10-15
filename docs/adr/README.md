@@ -94,16 +94,17 @@
 |---|------|------|
 | [052](052-dual-upstream-channels-restored.md) | 双上游通道恢复在役（取代 ADR-048），按 0.8 计划 v1.1 修订 #1 | 已接受 |
 | [053](053-channelized-updater-manifest.md) | 更新链通道化：每通道一个滚动 Release manifest + 构建期注入端点 | 已接受，执行中 |
-| [054](054-ai-review-workflows-admission.md) | AI 评审工作流准入：接上而非删除，SHA 钉死 + 触发面收紧 | 已接受（决策 2 由 [ADR-058](058-retire-pullfrog-agent.md) 修订：pullfrog.yml 停用，AI 评审只保留 pr-agent.yml） |
+| [054](054-ai-review-workflows-admission.md) | AI 评审工作流准入：接上而非删除，SHA 钉死 + 触发面收紧 | 已接受（决策 2 由 [ADR-058](058-retire-pullfrog-agent.md) 修订：pullfrog.yml 停用；**决策 1/3/4/5/6 由 [ADR-065](065-retire-pr-agent-local-cli-review.md) 修订：pr-agent.yml 退役，AI 评审改走本地 CLI**） |
 | [055](055-keep-daily-ci-and-drift.md) | 保留每日 CI 与 drift 哨兵（修订 ADR-047 的删除清单第 2 项） | 已接受 |
 | [056](056-alpha-channel-dormant.md) | alpha 线休眠：不发布、不追漂移，补丁冻结保留（部分修订 ADR-052；**同日内被 ADR-057 修订**） | 已接受 |
 | [057](057-alpha-channel-restored-and-dual-promotion.md) | alpha 复役 + 双通道同步推进至 0.2.0-rc.2 / 0.1.7-alpha.2（修订 ADR-056 决策 1） | 已接受 |
 | [058](058-retire-pullfrog-agent.md) | 停用 Pullfrog：删除工作流文件，AI 评审收敛到 PR Agent（修订 ADR-054 决策 2） | 已接受（决策 1 的恢复路径由 [ADR-062](062-pullfrog-removal-irreversible.md) 关闭） |
-| [059](059-pr-agent-image-floating-and-command-gate.md) | action SHA 钉不死 Docker 镜像：触发面增补「评论以命令开头」（ADR-054 决策 3 的边界） | 已接受 |
+| [059](059-pr-agent-image-floating-and-command-gate.md) | action SHA 钉不死 Docker 镜像：触发面增补「评论以命令开头」（ADR-054 决策 3 的边界） | 已接受（**全部决策由 [ADR-065](065-retire-pr-agent-local-cli-review.md) 修订**：pr-agent.yml 退役；技术判断仍成立） |
 | [060](060-alpha-cross-minor-upgrade-and-shared-payload.md) | alpha 跨 minor 推进至 DSH `0.2.1-alpha.1`：退役判据、注入点迁移、共享载荷对齐 | 已接受 |
 | [061](061-synthetic-version-model.md) | **合成版本号**：上游 `x.y.z-<预发布>` 原样保留 + 本仓 `.<n>` 追加（排序键在**预发布段**，不落 build）；声明 ADR-057 守卫继续有效、接管 ADR-028 决策 4 | 已接受 |
 | [062](062-pullfrog-removal-irreversible.md) | Pullfrog **永久移除**：禁令写死为机器判据（`RETIRED_WORKFLOWS` + 规则 E），关闭 ADR-058 决策 1 的恢复路径 | 已接受 |
 | [063](063-bridge-release-for-version-model-cutover.md) | **换代桥接版**：合成号排序低于旧模型号时，用一次性放宽（`plugins.updater.allowDowngrades`）把已装用户带过版本号换代处；豁免凭据写进台账 `bridges[]` | 已接受 |
+| [065](065-retire-pr-agent-local-cli-review.md) | 退役 PR-Agent（自动评审 8 次运行 **0 成功**），AI 评审改走**本地 CLI**（Gito，不进 CI）；禁令写死为 `RETIRED_WORKFLOWS` + 规则 E；顺带修掉守卫里硬编码的条目专属暴露面文本 | 已接受 |
 
 ## 新增一条 ADR 的规则
 

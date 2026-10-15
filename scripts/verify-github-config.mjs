@@ -2,7 +2,7 @@
 /**
  * verify-github-config.mjs — .github/ 下的配置准入守卫（ADR-054）
  *
- * ## 它守什么（五条规则，各自都能静默失效）
+ * ## 它守什么（六条规则，各自都能静默失效）
  *
  * A. **工作流必须住在 .github/workflows/ 下**。GitHub Actions 只从该目录加载文件；
  *    放在别处的工作流是「看得见、从不运行」的死配置——YAML 合法、编辑器有高亮、
@@ -44,6 +44,14 @@
  *    它还额外守一条**空集判据**——**禁令表被清空同样报红**：清空这张表等于删掉禁令，
  *    而那种删除与「文件复活」一样静默（AGENTS.md §7.3：扫出 0 个不得冒充通过）。
  *    正当出路是**另立新工作流**（新文件名 + 新 ADR 过准入），不是复活旧文件。
+ *
+ *    2026-10-15 新增第二条（`pr-agent.yml`，ADR-065）。**这次是带着一条既有缺陷的修法
+ *    一起加的**：报错文本曾把 `13 个 provider key` 硬编码在通用的
+ *    {@link checkRetiredWorkflows} 里——那是 pullfrog 专属的事实。第二条一进表，那句
+ *    话就会**对着 pr-agent 说出一个假数字**。所以「文件回来会带回什么暴露面」现在是
+ *    **逐条目的字段**（`exposure`），不再由函数现编。本仓对这类形态有明确口径：
+ *    通用函数里不得内嵌某一个条目的具体事实（同 `SECURITY.md` 表按行记载、
+ *    `dependabot.yml` 头注释与守卫分工）。
  *
  * F. **`dependabot.yml` 声明的目录必须真有清单文件**（2026-10-09 新增）。
  *    Dependabot 按 `updates[].directory` / `directories[]` 找清单；目录里没有清单，
@@ -402,16 +410,18 @@ export function checkFiles(files, allowedFloating = PRE_EXISTING_FLOATING) {
 }
 
 /**
- * 退役工作流禁令表（规则 E 的唯一产地，ADR-062）。
+ * 退役工作流禁令表（规则 E 的唯一产地，ADR-062 / ADR-065）。
  *
  * ⚠️ 这张表是**写死的**，不是从别处推导来的：「哪些工作流被永久移除」无法由仓库当前
  * 状态推出（文件不在，就什么线索都没有），只能显式登记。加条目必须同时：
  *   · 在对应 ADR 里写明**为什么不可恢复**（不是「暂时停用」）；
- *   · 确认它在仓库里已无任何消费方（否则删除会让别的门禁/工作流失效）。
+ *   · 确认它在仓库里已无任何消费方（否则删除会让别的门禁/工作流失效）；
+ *   · 填 `exposure`——「这个文件回来会带回什么」。它是**逐条目的字段**，不是函数里
+ *     现编的一句话：本表 2026-10-15 加第二条时就撞上过这个坑（见文件头规则 E 末段）。
  *
  * ⚠️ **本表不得清空**：清空 == 删掉禁令。判据见 {@link checkRetiredWorkflows}。
  *
- * @type {{ file: string, adr: string, retired: string, irreversible: string, why: string }[]}
+ * @type {{ file: string, adr: string, retired: string, irreversible: string, why: string, exposure: string }[]}
  */
 export const RETIRED_WORKFLOWS = [
   {
@@ -424,6 +434,24 @@ export const RETIRED_WORKFLOWS = [
       '并在 SECURITY.md 里挂着 13 个 provider key 的暴露面。ADR-058 已裁定停用，' +
       '但它把「从 git 历史取回文件」写成了正当的恢复路径 ⇒ 该文件被恢复过一次' +
       '（commit d286f44）。ADR-062 关闭该路径：禁令写死在本表，文件重现即报红。',
+    exposure: '并重新带上那 13 个 provider key 的 secrets 暴露面',
+  },
+  {
+    file: '.github/workflows/pr-agent.yml',
+    adr: 'ADR-065',
+    retired: '2026-10-15',
+    irreversible: '2026-10-15',
+    why:
+      '自托管 PR-Agent（qodo-ai/pr-agent）的自动评审在本仓**从未成功过一次**：' +
+      '`pull_request` 事件 8 次运行 = 7 cancelled + 1 failure、成功 0。两个独立缺陷：' +
+      '① `concurrency` 把 `pull_request` 与 `issue_comment` 归入同一组，第三方评审' +
+      '机器人的 bot 评论会取消它自己的自动评审运行（PR #9 实证：job 在 `Set up job`' +
+      '阶段被 cancelled）；② action step 本身失败（run 38406308031）。维护者裁定' +
+      '「不予恢复接线」，理由是该 action 锁死单一模型供应商、评审配置不可自定义；' +
+      'AI 评审改走本地 CLI（Gito，不进 CI）。它在仓库内已零消费方。',
+    exposure:
+      '并重新带回一条假绿：它会在每个 PR 上亮出一个必然红/被取消的 check，' +
+      '同时让 `SECURITY.md` 表里的 `STEPFUN_API_KEY` 重新有了消费方',
   },
 ]
 
@@ -442,7 +470,7 @@ export const RETIRED_WORKFLOWS = [
  * 一样静默。这与本文件其它「扫出 0 个必须报红」的断言同形。
  *
  * @param {string[]} presentFiles 当前仓库里实际存在的文件（相对仓库根，任意分隔符）。
- * @param {typeof RETIRED_WORKFLOWS} [retired] 禁令表；默认 {@link RETIRED_WORKFLOWS}。
+ * @param {{ file: string, adr: string, retired: string, irreversible: string, why: string, exposure: string }[]} [retired] 禁令表；默认 {@link RETIRED_WORKFLOWS}。
  * @returns {{ problems: string[], checked: number, revived: number }}
  */
 export function checkRetiredWorkflows(presentFiles, retired = RETIRED_WORKFLOWS) {
@@ -471,9 +499,9 @@ export function checkRetiredWorkflows(presentFiles, retired = RETIRED_WORKFLOWS)
       `${item.file} 又出现了——该文件已于 ${item.retired} 被永久移除（${item.adr}，` +
         `不可恢复声明于 ${item.irreversible}）。原因：${item.why}\n` +
         '   禁止复活：GitHub 只从 .github/workflows/ 加载工作流，文件存在 == 工作流存在，' +
-        '它会立刻重新出现在可触发列表里，并重新带上那 13 个 provider key 的 secrets 暴露面。\n' +
-        '   正当出路：需要按需 agent 时**另立新工作流**（新文件名 + 新 ADR 过 ADR-054 的准入），' +
-        '不要复活这个文件。若确要推翻本禁令，须先显式改掉 ADR-062 与本表——那是有意的摩擦。',
+        `它会立刻重新出现在可触发列表里，${item.exposure}。\n` +
+        '   正当出路：需要按需 agent 时**另立新工作流**（新文件名 + 新 ADR 过准入），' +
+        `不要复活这个文件。若确要推翻本禁令，须先显式改掉 ${item.adr} 与本表——那是有意的摩擦。`,
     )
   }
   return { problems, checked: retired.length, revived }
@@ -898,10 +926,16 @@ export function selfTest() {
   )
 
   // ---------------------------------------------------------------------------
-  // 规则 E：退役工作流不得复活（ADR-062）的可证伪夹具
+  // 规则 E：退役工作流不得复活（ADR-062 / ADR-065）的可证伪夹具
   //
-  // 🔴 夹具用的就是真实形态：pullfrog.yml **确实复活过一次**（commit `d286f44`），
-  //    而当时没有任何检查报红——因为禁令只写在散文里。
+  // 🔴 pullfrog 那几条用的就是真实形态：pullfrog.yml **确实复活过一次**
+  //    （commit `d286f44`），而当时没有任何检查报红——因为禁令只写在散文里。
+  //
+  // ⚠️ pr-agent 那几条要**如实分类**：「pr-agent.yml 重新出现」对它是**假想分支**
+  //    （它从未复活过），本仓反对把假想分支当历史证据。它守的是另一个**真实存在过**的
+  //    缺陷——报错文本把 pullfrog 的暴露面硬编码在通用函数里（本次修前已存在，
+  //    加第二条就必然说假话）。因此它**可证伪**：把 `item.exposure` 改回一句写死的话，
+  //    「不得串条目」那条断言必须变红。
   // ---------------------------------------------------------------------------
   check(
     'E 好夹具：禁令表非空 + 文件缺席必须通过',
@@ -928,6 +962,45 @@ export function selfTest() {
   check(
     'E 分隔符归一：反斜杠路径也必须命中',
     checkRetiredWorkflows(['.github\\workflows\\pullfrog.yml']).problems.length > 0,
+  )
+
+  // --- 2026-10-15 第二条（pr-agent.yml，ADR-065）新增的夹具 ---
+  // 🔴 这一组直接钉住本次**顺手修掉的那个缺陷**：报错文本曾把 pullfrog 的
+  //    「13 个 provider key」硬编码在通用函数里。若有人把 `item.exposure` 改回
+  //    一句写死的话，下面的「不得串条目」断言就必须变红。
+  check(
+    'E 禁令表形状：非空，且每条都必须自带非空 exposure（否则报错文本会去现编）',
+    // 🔴 下界只能是 `> 0`，**不能**写 `>= 2`：本断言的不变式是「表非空」（防空集让 `every` 恒真），
+    //    而 2 只是**当时**的条目数快照 ⇒ 将来合法移除一条时 `>= 2` 会**无故报红**。
+    //    这正是 AGENTS.md §7 要治的「把快照当不变式」（2026-10-15 由 Gito 评审报出）。
+    RETIRED_WORKFLOWS.length > 0 &&
+      RETIRED_WORKFLOWS.every((it) => typeof it.exposure === 'string' && it.exposure.trim().length > 0),
+  )
+  const ePrAgent = checkRetiredWorkflows([join('.github', 'workflows', 'pr-agent.yml')])
+  check(
+    'E 可伪证：pr-agent.yml 重新出现必须报红',
+    ePrAgent.problems.some((p) => /又出现了/.test(p)),
+  )
+  check(
+    'E 报红必须点名**该条目自己**的 ADR 与日期（pr-agent ⇒ ADR-065 / 2026-10-15）',
+    ePrAgent.problems.some((p) => /ADR-065/.test(p) && /2026-10-15/.test(p)),
+  )
+  check(
+    'E 报红不得串条目：pr-agent 的报红里不许出现 pullfrog 的「13 个 provider key」',
+    ePrAgent.problems.every((p) => !/13 个 provider key/.test(p)),
+  )
+  check(
+    'E 配对反证：pullfrog 的报红仍必须保留它自己的暴露面描述（暴露面未被改成通用空话）',
+    checkRetiredWorkflows([join('.github', 'workflows', 'pullfrog.yml')]).problems.some((p) =>
+      /13 个 provider key/.test(p),
+    ),
+  )
+  // 反向：pr-agent.yml **缺席**时必须放行——它是本仓当前的真实状态，
+  // 若这里恒红就说明断言写成了「文件必须在」而不是「文件不得在」。
+  check(
+    'E 反向：pr-agent.yml 缺席（本仓真实状态）不得误报',
+    checkRetiredWorkflows([join('.github', 'workflows', 'ci.yml'), join('.github', 'workflows', 'drift.yml')])
+      .problems.length === 0,
   )
 
   // ---------------------------------------------------------------------------

@@ -92,7 +92,7 @@
 - `docs/dev-plan-supervisor-shell-wiring.md`：**Supervisor 接入桌面壳（L1→L2 接线）的设计与阻塞项**——集成点、`SupervisorState`↔`HarnessPhase` 映射表、启动/停止/安全模式生命周期、异常与边界清单（E1~E11），以及**接线前必须先在 `dsh-host` 补齐的三个 API 缺口**（`HarnessEnv` 传递 / 安全模式 profile / `extra_envs` 死字段）。**动 `HarnessSupervisor` 或 `Supervisor` 前先读它。**
 - `docs/recover-demo.md`：`recover` 子命令的一页式无 GUI 复现步骤（启动 → 注入崩溃 → 退避递增 → 断路器开路）——**改 Supervisor / 退避 / 断路器后必跑**，它同时是 §7.2「Supervisor 自愈与退避」的证据链之一。
 - `docs/version-policy.md`：**版本号策略唯一口径**——命名规则、按变更类型的递增条件、**递增权限**（谁有权决定版本号）、发布流程与守卫；**动版本模型或 `release.yml` 前先读它**。
-- `docs/adr/`：架构决策记录库（50 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
+- `docs/adr/`：架构决策记录库（51 篇，编号有空洞属正常——被否决的编号不复用）；新能力先写代码、再按 `docs/adr/README.md` 登记。
 - `docs/dsh-desktop-redesign-architecture-and-plan.md` 与 `docs/system_design.md`：系统重构设计与架构 / 缺陷 / 契约细则。
 - `docs/archive/model_gateway_design.md`、`docs/archive/plugin_isolation_architecture.md`：**已归档**，仅在追溯设计意图或评估恢复时读。
 - `crates/dsh-contracts/src/constants.rs`（契约常量）、`errors.rs`（错误码 + `AppError`）、`ipc.rs`（`IpcEnvelope<T>` + 形状测试）、`rpc.rs`（JSON-RPC 唯一契约源，⚠️ 无运行时消费者）。
