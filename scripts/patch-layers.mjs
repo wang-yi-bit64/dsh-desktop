@@ -88,6 +88,18 @@ export const PATCH_LAYERS = {
   },
 
   // ---- ui-behavior：视觉 / 文案 / 产品增强，缺失可用 -------------------------
+  // 📌 `@deepseek-ai/dsh-typert-registry`（2026-10-14 新增）与 B2 的两个补丁同源，
+  //    但**刻意不归 functional**：LAYERS.md §4 规则 3 明定「functional 只收『缺失即起不来』」。
+  //    本机真机 Cordis 夹具**未构造出可达路径**——同插件双挂载会先撞上 Cordis 自身的同名
+  //    服务守卫（`service "sessionController" has been registered at <…>`），且首次 apply
+  //    抛错后 `resolvers` 归空、无残留键 ⇒「缺失即起不来」不成立。判据与证据见 LAYERS.md
+  //    的「typert lookup 守卫」节。真正可达的那条（apply 后段、无 Cordis 保护的
+  //    `registerAgentResolver`）由同批的 `@deepseek-ai/dsh-client-file-upload` 负责。
+  '@deepseek-ai/dsh-typert-registry': {
+    layer: 'ui-behavior',
+    why: 'lookup 族三处注册器在「键已在册」时同步抛错，抛点在 `ctx.effect(...)` **之前**（apply 期）：`LookupStore.configure`（`lib/index.js:191` / `lib/client.js:983`）、`LookupStore.register`（`lib/index.js:220` / `lib/client.js:1012`）、`ContextStore.configureHost`（`lib/index.js:288` / `lib/client.js:1080`）。上游三处注释写「duplicate configuration is rejected, so this effect remains the key\'s unique owner」并配 `v8 ignore`——**该前提是错的**：键在册也可能是上一轮**尚未处置**的 effect，而非冲突；此时抛错会让 owner fiber 回滚。补丁照 B2 先例改为**接管 + warn**，并把错注释与 `v8 ignore` 一并订正为「该分支可达」。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**缺失该补丁的影响**：仅少一层纵深防御（该路径尚未被构造出可达），应用整体可用——这正是它不归 functional 的理由。',
+    retireWhen: '官方把 lookup 族注册改为幂等（或 reload 前先处置旧 effect、不再假定「重复配置不可能」）时。'
+  },
   // `dsh-client-ui-layout` 已于 2026-09-30 在 next 线退役（上游 0.2.0 的
   // computeColumns(…, collapsedWidth) + data-platform 推导覆盖了本补丁的全部意图；
   // alpha 线已于 2026-09-16 退役）——两线均无该补丁，分级表条目随之删除。

@@ -21,8 +21,8 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
 +		}
 +		/**
  		* Resolves inline-code references against one turn's produced or delivered
- 		paths and explicit mutation arguments. A reference resolves only when every
- 		exact or basename match identifies one target. Ambiguous and unknown tokens stay inert.
+ 		* paths and explicit mutation arguments. A reference resolves only when every
+ 		* exact or basename match identifies one target. Ambiguous and unknown tokens stay inert.
 @@ -1284,7 +1299,11 @@ window.__ModuleLoader__.load({
  			return { resolve(value) {
  				const matches = new Set(paths.filter((path) => path === value || basename(path) === value));
