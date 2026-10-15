@@ -311,6 +311,70 @@ override，把它反向钉到补丁所针对的 `1.0.3`；这与两线既有做�
 **验证（仅预检）**：在 `harness-deps/alpha-pristine-0.2.1-alpha.2/` 纯净树上逐补丁用
 `patch -p1 --dry-run` 验证，12/12 通过，但其中 3 个需要 fuzz 1~2；尚未通过 fuzz 0 或真实 `patch-package` 验证，不能据此认定组装成功。
 
+---
+
+### alpha 线两个既有冲突的逐个裁定（2026-10-15）
+
+> 背景：0.2.1-alpha.2 推进时**预检已报** `clean 10 / conflict 2`，但那一轮只做了「行号重算 +
+> 人工修复」，这两个冲突**未被处置**。2026-10-15 逐个取证并裁定。
+> 取证方法：从**真实 registry tgz** 拉上游 `lib/client.js`，**复用**
+> `check-patch-applicability.mjs` 的解析器与 fuzz 模型（直接 import，不重写判据），
+> 判「期望块能否逐字连续命中」与「漂移是否 ≤ 20」。
+>
+> 📌 **判据分水岭**：`patch-package` 的 fuzz 只是 `fuzzingOffset` **移动起始位置**（±20），
+> **不裁剪上下文** ⇒ `fuzz = 0` 才是对真实组装的忠实建模；`fuzz > 0` 一律判「真实组装仍会失败」。
+
+**取证结果（两个补丁病因完全不同，不能一把抓）：**
+
+| 补丁 | 诊断 | 病因 |
+|---|---|---|
+| `dsh-client-ui-deliverables` | hunk#2 / #3 **`fuzz=0 / drift=0` 干净**；hunk#1 `fuzz=2 / drift=0` | hunk#1 期望块第 5、6 行 context **缺 `* ` 前缀**（上游真实为 `\t\t* paths…` / `\t\t* exact…`） |
+| `dsh-client-ui-trajectory` | 唯一 hunk `fuzz=4`、命中行 **5,074**、漂移 **4,667 行** | 期望块把「i18n 键表 4 行」与「`requestErrorMessage` 5 行」拼成**连续块**，而真实文件里两者相距约 4,667 行；段头声明 `-407,5 +407,7`，实为 **9 行 / 13 行** |
+
+**根因（blob 级取证，不是推断）**：`8383225 Update patches/alpha/…trajectory….patch`
+（作者 `qianyeyixi`，2026-10-14 14:24）把**两个本应独立的 hunk 合并成一个**——删掉 hunk#1 的
+一行 context（`"details.failure.auth": "API key is invalid",`）与第二个 hunk 的段头
+`@@ -5074,5 +5076,7 @@`，补入 `"details.retry": "Retry",`，**且没有更新段头计数**。
+`-407,5 +407,7` 恰好等于合并前 hunk#1 的形态（5 ctx + 2 add），完全吻合；该提交自身
+`1 file changed, 1 insertion(+), 3 deletions(-)` 也印证是「删 3 加 1」的手工拼接。
+`git show 8383225^:<path>` 可见合并前的**正确 2 hunk 形态**。
+
+**为何当时没被发现**：上一轮记录的验证是 `patch -p1 --dry-run`，报告「12/12 通过，
+**但其中 3 个需要 fuzz 1~2**」。**`fuzz ≠ 0` 本身就是红旗**——GNU `patch` 允许裁剪上下文，
+`patch-package` 不允许。这条红旗当时已落在纸面，只是没走到「因此这 3 个在真实组装时必然失败」这一步。
+
+**裁定与处置：**
+
+| 补丁 | 裁定 | 处置 |
+|---|---|---|
+| `dsh-client-ui-deliverables` | **重生成**（最小修） | 只补 hunk#1 那 2 个 `* ` 字符，**不动语义、不动段头计数** |
+| `dsh-client-ui-trajectory` | **重做** | 生成器重做：拉真实 tgz → 3 处编辑（中文键表 / 英文键表 / `requestErrorMessage`）→ `git diff --no-index` → 归一化落盘 |
+
+**为何不退役**：上游 **0.2.1-alpha.2 与 0.2.0-rc.2 都搜不到** `details.failure.quota` /
+`details.failure.forbidden` / `"QUOTA"` / `"FORBIDDEN"`（`errorCode === "AUTH"` 各仅 1 处）
+⇒ 两个补丁的意图在两线**都仍成立**，`retireWhen`（「官方支持 …」）未满足。
+
+**顺带补齐的缺口（显式记录，属发现而非裁定范围）**：重做前的 alpha `trajectory` 补丁
+**从来没有中文键表 hunk**（next 线补丁自始就有），中文 UI 下 `QUOTA` / `FORBIDDEN` 只回落英文文案。
+重做时按 next 线的正确形态补回（上游 alpha 中文键表 `details.failure.auth` 邻域确实缺这两条）。
+若只想修冲突、不扩范围，可只保留英文键表 + 函数两段。
+
+**验证（红→绿成对，本地可复跑）：**
+
+| 判据 | 证据 |
+|---|---|
+| 适用性（真实 registry tgz） | **修复前**：alpha `clean 11 / conflict 2`、next `clean 13 / conflict 0`；**修复后**：alpha **`clean 13 / conflict 0`**、next **`clean 13 / conflict 0`**（两线同命令重跑） |
+| 成对对照（证明与同日 T2 补丁无关） | 同命令同树只差 T2：HEAD（12 补丁）`clean 10 / conflict 2` vs T2 后（13 补丁）`clean 11 / conflict 2`，**冲突项逐字相同** |
+| patch-package 忠实建模 | 两个补丁各自的 3 个 hunk 在真实上游 `0.2.1-alpha.2` 上 **`fuzz=0`** 全部可应用，drift ≤ 20 |
+| 段头计数自洽 | 全部 hunk 的 `@@ -a,b +c,d @@` 与 `ctx+del` / `ctx+add` 逐一相符（修前 trajectory **不相符**） |
+| 真实 `patch -p1` | 两补丁各打到一份纯净副本上：退出码 0、无 `FAILED`、关键新增行全部在位（trajectory 4 项 / deliverables 2 项） |
+| 锚点唯一性 | trajectory 重做的 3 处编辑各按**唯一字符串锚点**命中**恰好 1 次**（不依赖行号） |
+| 静态门禁 | `gate --tier=fast --no-cargo` 全绿 |
+
+**未覆盖（诚实声明）**：仍只到「上下文能对上 + GNU patch 能打上」这一层；**组装态**
+（`npm ci` 后 patch-package 逐条 `applied`）与「能启动」本机验不了
+（`prepare:harness --force` 被 `koffi` 拦），须由 CI 的 build / portable job 按名点名确认。
+
 ### next 线（0.2.0-rc.2）与 alpha 线（0.1.7-alpha.2）的移植裁定（2026-09-30）
 
 本轮推进的**做法**是把升级清单 §2 的三路合并移植**工具化**：新增
