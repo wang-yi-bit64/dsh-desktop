@@ -17,7 +17,7 @@
 
 - **内置运行时** ✅ —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
 - **独立契约库 (`dsh-contracts`)** ✅ —— 彻底剥离 UI 依赖，提炼统一常量、**标准错误码总表 (`E1xxx`~`E7xxx`)**、前后端 IPC 封套 (`IpcEnvelope<T>`，其 `error` 载荷为类型化的 `AppError`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
-- **全命令面统一 IPC 封套** ✅ —— **21 个命令中 20 个**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套；唯一刻意的例外是 `portable_mode`（便携版判定，直接返回裸 `bool`）。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
+- **全命令面统一 IPC 封套** ✅ —— **21 个命令中 20 个**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套；唯一刻意的例外是 `install_mode`（安装形态判定，直接返回裸字符串 `installed` / `portable` / `unknown`）。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
 - **Harness 核心生命周期** ✅ —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
@@ -110,7 +110,7 @@ src-tauri/
   frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、插件恢复页、更新页、日志查看器、反馈页）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
   src/                  # Tauri 桌面应用层（窗口管理、应用菜单、IPC 命令、安全模式切换、LAN 手机桥、壳层日志、自动更新）
-    commands.rs             # 完整 IPC 命令面：21 个命令（20 个返回 IpcEnvelope<T>，portable_mode 返回裸 bool）
+    commands.rs             # 完整 IPC 命令面：21 个命令（20 个返回 IpcEnvelope<T>，install_mode 返回裸字符串）
     logging.rs              # 壳层结构化日志（desktop.log，5MB × 2 轮转）
     mobile_bridge.rs        # 局域网手机桥（配对页 + dsh-auth-* cookie 握手 + RPC 转发）
 build/                  # 运行时组装与辅助注入脚本
@@ -156,7 +156,7 @@ docs/                   # 架构设计、契约定义与技术方案
 | P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
 | P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | 🗄️ **已归档（2026-09-10）**：从未有调用方，且根本不在插件挂载路径上；整体删除而非留着腐烂。只剩进程内故障归因 |
 | P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | 🗄️ **已归档（2026-09-10）**：已从 workspace 整体移除；归档文档保留恢复判据 |
-| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：21 个命令中 20 个返回 `IpcEnvelope<T>`（`portable_mode` 刻意返回 `bool`）；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：21 个命令中 20 个返回 `IpcEnvelope<T>`（`install_mode` 刻意返回裸字符串）；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
 
 ### 后续计划（尚未开工）
 
@@ -361,6 +361,7 @@ npm run gate -- harness-inject
 ## 安全与依赖说明
 
 - **Dependabot / RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g)** —— `glib 0.18.5` 被标记存在 `glib::VariantStrIter` 的内存不安全性。它是经 Tauri 的 GTK3 后端引入的**仅 Linux、传递性**依赖，且项目未调用受影响 API。修复版本（`glib ≥ 0.20.0`）需等待上游 Tauri 迁移至 gtk-rs 0.20+ 后自动解析更新。
+- **RUSTSEC-2026-0367 / 0368 / 0369（`zip < 9.0.0`）** —— 三条都属**解包侧**问题：解包时保留 SUID/SGID 位、符号链接目标可逃出解包目录、经符号链接套用 Unix 权限。`zip 4.6.1` 由 `tauri-plugin-updater` 传递引入，其最新版 2.14.0 仍锁定 `zip ^4`，本仓无法通过版本约束消除（把 `dsh-host` 自己的 zip 升到 9 只会并存第二个版本，告警照样按 4.6.1 报）。实际不可达：本仓代码从不调用 `extract`（只用 `ZipWriter` 写入）；updater 的 `ZipArchive::extract` 仅在下载物被识别为 zip 时才走，而本项目 `bundle.targets` 只有 `nsis`、更新物是 `*-setup.exe`，且 `download()` 在 `install()` 之前已完成 minisign 校验。处置口径记在 `deny.toml` 的 ignore 理由里，等上游改用 `zip 9` 后自动消失。
 - **诊断包是「写入前脱敏」，不是「写完之后再处理」。** 导出路径服务于「把你的日志发给我」这个场景，而用户手写这条消息时**不会先去删凭据**——`harness.log` 里就有明文的首航 token 与 `dsh-auth-*` cookie。因此每个文本条目在写进压缩包**之前**都要过五条脱敏规则（launch token / `dsh-auth-*` cookie / 路径用户名段 / API key 形态 / 代理口令），且每条规则的命中次数都会写进包内 `README.txt` 与命令返回值——「到底脱敏了没有」是可核对的事实，不是一句承诺。规则同时有正例（原文不得残留）与反例（版本号、端口、`E` 码、包名**不得**被误伤；一份把版本号涂掉的诊断包没有诊断价值）。包**不会**上传到任何地方，产物留在磁盘上，直到用户自己决定发出。
 
 ## 来源与致谢

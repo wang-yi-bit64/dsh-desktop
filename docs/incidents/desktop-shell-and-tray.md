@@ -48,3 +48,57 @@ E7 只认两种合法写法：`match` 臂**与守卫式早退**（`if id == CONS
 [`docs/dev-plan-0.2-hardening.md`](docs/dev-plan-0.2-hardening.md) 的「批次 0.2-B1 执行记录」——
 **不要因为「门禁全绿」就认为托盘在三平台都验过**。
 
+### 便携版判定恒真：`executable_dir()` 的语义误用（2026-10-17 实测定位）
+
+**现象**：Windows 上用 **NSIS 安装包**装在 `D:/Program Files\DSH Desktop`，运行后更新页
+显示「便携版不检查更新」，`desktop.log` 与 `update-journal/updates.jsonl` 每次启动都写
+`update Started: portable build: update polling skipped`。
+
+**根因不是判据写错，是取数的 API 语义错**：
+
+```rust
+// 修复前（src-tauri/src/update.rs）
+app.path().executable_dir()      // ← 语义是「用户的 bin 目录」，不是「当前 exe 所在目录」
+    .ok()
+    .and_then(|p| p.to_str().map(|s| s.to_owned()))
+    .map(|dir| !dir.contains("Program Files"))
+    .unwrap_or(true)             // ← 取不到 ⇒ 按便携处理
+```
+
+- `tauri-2.12.0/src/path/desktop.rs`：`dirs::executable_dir().ok_or(Error::UnknownPath)`
+- `dirs-7.0.0/src/win.rs`（`mac.rs` 同）：`pub fn executable_dir() -> Option<PathBuf> { None }`
+
+⇒ Windows / macOS 上**恒为 `None`**，链式 `map` 全部跳过，`.unwrap_or(true)` 兜底生效：
+**任何**安装形态（含装在 `Program Files` 的安装版）都判成便携版，自动更新轮询从不启动。
+只有 Linux 走得到那句 `contains`，而 `~/.local/bin` 同样不含 `Program Files` ⇒ 也恒真。
+
+**第二层坑（只改 API 仍会复发）**：`tauri.conf.json` 的 `bundle.windows.nsis.installMode`
+取 `both`，允许「仅为我安装」，其落点（`%LOCALAPPDATA%\...`）本来就不含 `Program Files`。
+路径字符串不是身份证明，任何形态的安装位置都能骗过它。
+
+**修复**：判据搬进无头 crate `crates/dsh-host/src/install.rs`（纯路径运算，按 §3 分流判据
+属于 `dsh-host`；留在 `src-tauri` 会让它**只能**在 CI 被测试——本机 GNU 工具链加载不了壳层
+测试二进制）。判定只认**正向信号**：
+
+1. `X.app/Contents/MacOS/<exe>` ⇒ 安装版（`dmg` 装出来的形态，updater 替换整个 bundle）；
+2. exe 同目录存在 `uninstall.exe` ⇒ 安装版（NSIS 必写，与落点无关）；
+3. 其余 ⇒ 便携版。
+
+命令面 `portable_mode(bool)` 更名为 `install_mode`（`installed` / `portable` / `unknown`）；
+`unknown`（取不到自身路径）只停自动轮询，**保留**手动检查并把原因显示在页面上——
+`unwrap_or(true)` 那种「未知就当便携」的静默兜底被删除。
+
+**取证手法（可复用，避免下次误判）**：安装目录含 `Program Files` 却判成 portable，
+按源码应判 `false` ⇒ 先怀疑「二进制与源码不一致」。用 `rustc --emit=obj -O` 编译等价函数
+证明字面量会**原样保留**（实测 count=1），再扫 release exe 得到 count=0 ⇒ 证明 `win.rs` 的
+`{ None }` 被 inline + LTO 常量折叠、闭包连同 `"Program Files"` 字面量一起被 DCE。
+**「二进制里没有某字面量」不等于「源码里没有这段逻辑」**，别据此判定产物被篡改。
+
+**守卫**：
+- 单测 `crates/dsh-host/src/install.rs`：`install_mode_follows_positive_signals`（per-machine /
+  per-user / 便携 三夹具）、`macos_app_bundle_counts_as_installed`、`unknown_is_reserved_for_unresolvable_paths`、
+  `wire_names_and_updatable_flag_are_stable`。**已实测可证伪**：把 `classify` 打回修复前的
+  「父目录含 `Program Files`」形态，两条断言立刻变红。
+- 静态守卫 `gate -- install-mode`（`scripts/verify-install-mode.mjs`，fast / ci / release 三档）：
+  A1 全仓 Rust 源码零命中 `executable_dir(`；A2 扫出文件数必须 > 0；A3 判据本体必须仍在
+  `crates/dsh-host/src/install.rs`（否则「没人用」会让 A1 假绿）。

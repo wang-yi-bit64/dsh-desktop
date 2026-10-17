@@ -93,8 +93,14 @@
             'E1006': 'The download stopped because of a network problem. Try again.',
             'E1007': 'The update downloaded but could not be handed to the installer. See the update journal in the diagnostics bundle.',
             'E1008': 'The downloaded update failed signature verification. A newer version may already be published — check again rather than retrying this one.'
-          }
+          },
           /* eslint-enable key-spacing */
+          // 安装形态的两种非安装版提示。`unknown` 不是便携版：自动轮询停下来，
+          // 但手动检查仍然可用，所以文案必须说「暂停」而不是「不支持」。
+          installMode: {
+            portable: 'Portable build: automatic updates are off. Replace the application files manually to upgrade.',
+            unknown: 'Could not determine how this copy was installed, so automatic update checks are paused. You can still check manually below.'
+          }
         },
         zh: {
           title: '软件更新',
@@ -120,8 +126,14 @@
             'E1006': '下载因网络问题中断，请重试。',
             'E1007': '更新已下载，但无法交给安装器。详见诊断包里的 update journal。',
             'E1008': '已下载的更新未通过签名校验。可能已有更新的版本发布——请重新检查，而不是重试这一个。'
-          }
+          },
           /* eslint-enable key-spacing */
+          // 安装形态的两种非安装版提示。`unknown` 不是便携版：自动轮询停下来，
+          // 但手动检查仍然可用，所以文案必须说「暂停」而不是「不支持」。
+          installMode: {
+            portable: '便携版不检查更新。请手动替换程序文件以完成升级。',
+            unknown: '无法判定当前的安装形态，自动检查已暂停。仍可在下方手动检查更新。'
+          }
         }
       };
       const t = zh ? TEXT.zh : TEXT.en;
@@ -173,7 +185,7 @@
        * 成功路径没有导航副作用（更新流程都在本页内推进），因此**恢复按钮**：
        * 用户可能想重试，把按钮永久禁用在成功路径上是错的。
        *
-       * **必须解包封套**：命令面（`portable_mode` 这类裸值探测命令除外）一律返回
+       * **必须解包封套**：命令面（`install_mode` 这类裸值探测命令除外）一律返回
        * `{success, data, error}`，业务失败
        * 也是成功返回（`success=false`）而不是 reject。只看 promise 有没有 reject，
        * 会把「下载失败 / 无可用版本」当成成功——按钮亮着，什么都没发生。
@@ -253,21 +265,44 @@
 
       // 进入页面立即拉取快照，不等第一次推送（周期检查间隔 6 小时）。
       //
-      // 便携版没有安装器落点，updater 不可用；先探测模式，再决定是否走更新流程。
-      async function initUpdatesPage() {
-        if (!invoke) return;
-        const isPortable = await invoke('portable_mode');
-        if (isPortable) {
+      // 先探测**安装形态**（`installed` / `portable` / `unknown`）：便携版没有安装器
+      // 落点，updater 不可用；`unknown` 只停自动轮询，手动检查仍然可用。
+      /**
+       * 按安装形态决定更新页的行为。
+       *
+       * @param {string} mode `install_mode` 的裸值（三态字符串）
+       * @returns {boolean} 是否应继续走更新流程
+       */
+      function applyInstallMode(mode) {
+        if (mode === 'portable') {
           Object.values(buttons).forEach((btn) => {
             if (btn.id !== 'back') btn.hidden = true;
           });
           const notice = el('portable-notice');
-          notice.textContent = zh
-            ? '便携版不检查更新。请手动替换程序文件以完成升级。'
-            : 'Portable mode does not check for updates. Please replace the application files manually to upgrade.';
+          notice.textContent = t.installMode.portable;
           notice.hidden = false;
-          return;
+          return false;
         }
+        // 只有 `installed` 是正常路径：其余值（`unknown`，或探测返回了意外值）
+        // 都按「无法判定」处理——不隐藏按钮，自动检查停了但手动检查仍可用。
+        if (mode !== 'installed') {
+          const notice = el('portable-notice');
+          notice.textContent = t.installMode.unknown;
+          notice.hidden = false;
+        }
+        return true;
+      }
+
+      async function initUpdatesPage() {
+        if (!invoke) return;
+        let mode = 'unknown';
+        try {
+          mode = await invoke('install_mode');
+        } catch (error) {
+          // 探测失败按 `unknown` 处理并**显示原因族**，不假装成安装版（§7.1 规则 3）。
+          console.error('install_mode probe failed', error);
+        }
+        if (!applyInstallMode(mode)) return;
         invoke('updates_status')
           .then((envelope) => {
             if (envelope && envelope.success === false) {
