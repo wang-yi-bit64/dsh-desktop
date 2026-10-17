@@ -19,7 +19,7 @@
  *
  * | 编号 | 检查 | 级别 |
  * |------|------|------|
- * | A1 | 全仓 Rust 源码零命中 `executable_dir(` | 错误 |
+ * | A1 | 全仓 Rust 代码零调用 `executable_dir`（允许名称与括号间有空白 / 注释） | 错误 |
  * | A2 | 扫描到的 Rust 文件数 > 0（E5-空 教训：扫出 0 不得冒充通过） | 错误 |
  * | A3 | 判据本体仍在 `crates/dsh-host/src/install.rs`（`classify` + `UNINSTALLER_NAME`） | 错误 |
  *
@@ -31,6 +31,7 @@
  *
  * · **修复前形态**：`app.path().executable_dir()` ⇒ 必须报红；
  * · 修复后形态：`std::env::current_exe()` ⇒ 必须放行；
+ * · 名称与括号之间含空白 / 注释的调用 ⇒ 必须报红；注释里的示例 ⇒ 必须放行；
  * · 扫描集合为空 ⇒ 必须报红；
  * · 判据本体缺失 ⇒ 必须报红。
  *
@@ -51,13 +52,45 @@ import { fileURLToPath } from 'node:url'
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** 被禁止的写法：拿「用户的 bin 目录」当「当前 exe 所在目录」用。 */
-const FORBIDDEN = 'executable_dir('
+const FORBIDDEN = 'executable_dir'
 
 /** 判据本体的唯一产地。 */
 const CLASSIFIER_PATH = join('crates', 'dsh-host', 'src', 'install.rs')
 
 /** 判据必须同时具备的两个符号：判定函数与卸载器文件名常量。 */
 const CLASSIFIER_MARKERS = ['pub fn classify(', 'UNINSTALLER_NAME']
+
+/** 屏蔽 Rust 注释与字面量，保留字符位置和换行，便于跨行匹配并报告原始行号。 */
+function rustCode(text) {
+  // 字符串必须作为整体跳过，否则其中的 /* 或 // 会被误当成注释起点。
+  // 字符字面量只吃一个字符（或转义），避免把 'a 这样的生命周期当成引号。
+  const tokens = /\/\/[^\r\n]*|\/\*|(?:br|cr|r)(#*)"|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\\r\n])'/g
+  let code = ''
+  let end = 0
+  let token
+  while ((token = tokens.exec(text))) {
+    code += text.slice(end, token.index)
+    end = token.index + token[0].length
+    if (token[0] === '/*') {
+      const delimiters = /\/\*|\*\//g
+      delimiters.lastIndex = end
+      let depth = 1
+      let delimiter
+      while (depth > 0 && (delimiter = delimiters.exec(text))) {
+        depth += delimiter[0] === '/*' ? 1 : -1
+        end = delimiters.lastIndex
+      }
+      if (depth > 0) end = text.length
+    } else if (token[1] !== undefined) {
+      const closing = `"${token[1]}`
+      const closingIndex = text.indexOf(closing, end)
+      end = closingIndex < 0 ? text.length : closingIndex + closing.length
+    }
+    code += text.slice(token.index, end).replace(/[^\r\n]/g, ' ')
+    tokens.lastIndex = end
+  }
+  return code + text.slice(end)
+}
 
 /**
  * 扫一个文件集合，返回问题清单（纯函数：不碰文件系统，自检直接喂夹具）。
@@ -74,24 +107,18 @@ export function checkSources(files, classifier) {
     problems.push('扫描到 0 个 Rust 源文件：扫描器或根目录写坏了，这不等于「没有违规」')
   }
 
-  // A1：语义误用的唯一写法。
-  //
-  // ⚠️ 只判**代码行**：判据本体的模块文档必须能写出「`dirs::executable_dir()` 在
-  // Windows 上返回 None」这样的解释，否则守卫会逼着人把事故原因从文档里删掉。
-  // 代价是写在字符串字面量里的同名字样不判——这里刻意接受：那条路径没有任何
-  // 运行期消费者，真有人这么写，A3 与代码评审都还兜得住。
+  // A1：先区分代码与注释，再匹配调用；注释替换为空白，不能拼接标识符。
+  // 模块文档与字符串中的 API 示例不属于调用，必须能正常保留。
   for (const file of files) {
-    const lines = file.text.split('\n')
-    lines.forEach((line, index) => {
-      if (line.trimStart().startsWith('//')) return
-      if (line.includes(FORBIDDEN)) {
-        problems.push(
-          `${file.path}:${index + 1} 使用了 \`${FORBIDDEN}\`——它返回的是「用户的可执行文件目录」` +
-            '（Windows / macOS 上恒为 None），不是当前 exe 所在目录。' +
-            '安装形态请走 `dsh_host::install::classify_current()`。'
-        )
-      }
-    })
+    const code = rustCode(file.text)
+    for (const match of code.matchAll(new RegExp(`\\b${FORBIDDEN}\\s*\\(`, 'g'))) {
+      const line = code.slice(0, match.index).split('\n').length
+      problems.push(
+        `${file.path}:${line} 使用了 \`${FORBIDDEN}(\`——它返回的是「用户的可执行文件目录」` +
+          '（Windows / macOS 上恒为 None），不是当前 exe 所在目录。' +
+          '安装形态请走 `dsh_host::install::classify_current()`。'
+      )
+    }
   }
 
   // A3：判据本体必须还在，否则 A1 会因为「没人用」而假绿。
@@ -156,7 +183,7 @@ function realCheck() {
 
   const problems = checkSources(files, classifier)
   if (problems.length === 0) {
-    console.log(`✅ 安装形态判定：扫描 ${files.length} 个 Rust 文件，零命中 \`${FORBIDDEN}\`，判据本体在位`)
+    console.log(`✅ 安装形态判定：扫描 ${files.length} 个 Rust 文件，零调用 \`${FORBIDDEN}\`，判据本体在位`)
     return 0
   }
   console.error(`❌ 安装形态判定：${problems.length} 个问题`)
@@ -167,7 +194,9 @@ function realCheck() {
 /** 自检：夹具全部可证伪（每条都必须能让判定函数给出预期结论）。 */
 function selfTest() {
   const failures = []
+  let checks = 0
   const check = (label, actual, expected) => {
+    checks += 1
     const ok = JSON.stringify(actual) === JSON.stringify(expected)
     if (!ok) failures.push(`${label}\n     期望：${JSON.stringify(expected)}\n     实际：${JSON.stringify(actual)}`)
     console.log(`${ok ? '✅' : '❌'} ${label}`)
@@ -211,11 +240,43 @@ function selfTest() {
     true
   )
 
+  // 注释与空白都属于 token 之间的间隔；同时核对 LF / CRLF 下的原始行号。
+  const fixtures = [
+    ['空白间隔调用', 'app.path().executable_dir \t ()', [1]],
+    ['跨行调用', 'app.path().executable_dir\n()', [1]],
+    ['块注释间隔调用', 'app.path().executable_dir /* reason */ ()', [1]],
+    ['跨行嵌套块注释间隔调用', 'app.path().executable_dir /* outer\n/* inner */ end */ ()', [1]],
+    ['行注释间隔调用', 'app.path().executable_dir // reason\n()', [1]],
+    ['块注释示例', '/* app.path().executable_dir() */', []],
+    ['跨行块注释示例', '/* example:\napp.path().executable_dir()\n*/', []],
+    ['嵌套块注释示例', '/* outer /* inner */ app.path().executable_dir() */', []],
+    ['块注释中的引号不影响后续字符串', '/* " */ let x = "/*"; executable_dir ();', [1]],
+    ['行注释与行尾注释示例', '// executable_dir()\nlet x = 1; // executable_dir()', []],
+    ['注释结束后的调用行号', '/* example:\nexecutable_dir()\n*/ app.path().executable_dir /* reason */ ();', [3]],
+    ['同一行多个调用', 'executable_dir (); executable_dir /* reason */ ();', [1, 1]],
+    ['相似标识符', 'other_executable_dir(); executable_directory();', []],
+    ['字符串中的注释标记不影响后续调用', 'let x = "/*";\napp.path().executable_dir ();', [2]],
+    ['字符字面量不影响后续调用', "let quote = '\"';\napp.path().executable_dir ();", [2]],
+    ['生命周期不影响后续调用', "fn f<'a>(app: &'a App) { app.path().executable_dir (); }", [1]],
+    ['字符串示例', 'let x = "executable_dir() // /*";', []],
+    ['原始字符串示例', 'let x = r##"executable_dir() " /* // */"##;\napp.path().executable_dir ();', [2]],
+  ]
+  for (const [label, text, expectedLines] of fixtures) {
+    for (const newline of ['\n', '\r\n']) {
+      const problems = checkSources([{ path: 'fixture.rs', text: text.replaceAll('\n', newline) }], classifierOk)
+      check(
+        `${label}（${newline === '\n' ? 'LF' : 'CRLF'}）`,
+        problems.map((problem) => Number(/^fixture\.rs:(\d+) /.exec(problem)?.[1])),
+        expectedLines
+      )
+    }
+  }
+
   if (failures.length > 0) {
     console.error(`\n自检失败 ${failures.length} 项：\n  - ${failures.join('\n  - ')}`)
     return 1
   }
-  console.log('\n✅ 安装形态判定守卫自检通过（5 项）')
+  console.log(`\n✅ 安装形态判定守卫自检通过（${checks} 项）`)
   return 0
 }
 
