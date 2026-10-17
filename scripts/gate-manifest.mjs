@@ -175,6 +175,14 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'install-mode',
+    script: 'scripts/verify-install-mode.mjs',
+    title: '安装形态判定（禁止用 executable_dir 猜身份）',
+    why: '2026-10-17 缺陷：`is_portable_mode` 把 `PathResolver::executable_dir()` 当成「当前 exe 所在目录」用，而它返回的是「用户的可执行文件目录」——`dirs` 在 Windows / macOS 上硬编码返回 None ⇒ 链式 map 全跳过、`unwrap_or(true)` 生效 ⇒ 任何安装形态（含装在 Program Files 的 NSIS 安装版）都被判成便携版，自动更新轮询从不启动。这类语义误用**编译得过、clippy 不报、当时的单测也绿**（判据本身没错，错在输入恒为 None），只能靠静态守卫。A1 禁掉该写法，A2 要求扫出数 > 0（E5-空），A3 要求判据本体仍在 dsh-host（否则「没人用」会让 A1 假绿）。',
+    real: { tiers: ['fast', 'ci', 'release'], args: [] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'shell-pages',
     script: 'scripts/verify-shell-pages.mjs',
     title: '壳内页面运行时冒烟（DOM 桩 + 按钮接线）',

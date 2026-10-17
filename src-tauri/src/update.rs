@@ -29,6 +29,15 @@ use crate::update_journal::{JournalAction, UpdateJournal};
 pub const STATUS_EVENT: &str = "updates://status";
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
+/// 安装形态判定住在**无头 crate**（[`dsh_host::install`]）：判据是纯路径运算，
+/// 按 `AGENTS.md` §3 的分流判据属于 `dsh-host`。留在 `src-tauri` 的代价是
+/// **本地无法证伪**——本机 GNU 工具链加载不了壳层测试二进制
+/// （`docs/incidents/local-toolchain-limits.md`），而这条判据正是 2026-10-17
+/// 事故的现场（`docs/incidents/desktop-shell-and-tray.md`）。
+///
+/// 这里 re-export 只为让命令面（`commands::install_mode`）不必写跨 crate 路径。
+pub use dsh_host::install::InstallMode;
+
 /// 稳定错误码 + 类别：让页面**分派**而不是匹配字符串。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateFailure {
@@ -220,14 +229,16 @@ impl UpdateManager {
 
     /// Start the periodic check loop.
     pub fn start(self: &Arc<Self>) {
-        // 便携版不经过安装器，没有 NSIS passive-update 的落点；与其让 updater
-        // 报「环境不可用」，不如在启动时就静默跳过轮询。
-        if Self::is_portable_mode(&self.app) {
+        // 只有**安装版**才有 NSIS passive-update 的落点。便携版与「取不到自身
+        // 路径」都跳过轮询——但两者的理由分开记：前者是设计事实，后者是环境异常，
+        // 混成一句话会让诊断包看不出到底是哪种（§7.1 规则 3）。
+        let mode = Self::install_mode();
+        if mode != InstallMode::Installed {
             self.journal(
                 JournalAction::Started,
                 None,
                 None,
-                "portable build: update polling skipped",
+                format!("{} build: update polling skipped", mode.as_str()),
             );
             return;
         }
@@ -498,21 +509,22 @@ impl UpdateManager {
         IpcEnvelope::failure(failure.code(), failure.category(), error.to_string())
     }
 
-    /// 当前可执行文件是否落在「便携版」形态下。
+    /// 当前进程的安装形态。
     ///
-    /// 判据：exe 的父目录路径若包含 `Program Files`（含 `Program Files (x86)`），
-    /// 则是安装器放好的位置，按安装版处理；否则认为是用户手动解压的便携目录，
-    /// 不启动 updater 轮询。
-    ///
-    /// 取不到 exe 路径时按便携处理（保守策略：宁可跳过更新，也不让 updater
-    /// 在无 installer 落点的环境里反复报错）。
-    pub(crate) fn is_portable_mode(app: &AppHandle) -> bool {
-        app.path()
-            .executable_dir()
-            .ok()
-            .and_then(|p| p.to_str().map(|s| s.to_owned()))
-            .map(|dir| !dir.contains("Program Files"))
-            .unwrap_or(true)
+    /// ⚠️ **禁止**改用 `app.path().executable_dir()` 推断：它返回的是「用户的
+    /// 可执行文件目录」，在 Windows / macOS 上恒为 `None`（详见 [`InstallMode`]
+    /// 与 `docs/incidents/desktop-shell-and-tray.md`）。判据只认
+    /// `dsh_host::install::classify` 的正向信号。
+    pub(crate) fn install_mode() -> InstallMode {
+        match dsh_host::install::classify_current() {
+            Ok(mode) => mode,
+            Err(error) => {
+                // 取不到自身路径属环境异常：允许降级，但必须留下可核对的理由
+                // （`AGENTS.md` §7.1 规则 3：禁止无声降级）。
+                log::warn!("cannot resolve the current executable path: {error}");
+                InstallMode::Unknown
+            }
+        }
     }
 
     /// Skip a specific version for automatic checks.

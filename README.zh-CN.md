@@ -17,7 +17,7 @@
 
 - **内置运行时** ✅ —— 自带 Node.js (v24) 与完整的 `@deepseek-ai/dsh` 依赖树，宿主机无需预先安装 Node.js。
 - **独立契约库 (`dsh-contracts`)** ✅ —— 彻底剥离 UI 依赖，提炼统一常量、**标准错误码总表 (`E1xxx`~`E7xxx`)**、前后端 IPC 封套 (`IpcEnvelope<T>`，其 `error` 载荷为类型化的 `AppError`) 以及 JSON-RPC 2.0 规范定义（唯一定义点，`dsh-host` 等下游 crate 仅 re-export，不重复定义）。
-- **全命令面统一 IPC 封套** ✅ —— **21 个命令中 20 个**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套；唯一刻意的例外是 `portable_mode`（便携版判定，直接返回裸 `bool`）。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
+- **全命令面统一 IPC 封套** ✅ —— **21 个命令中 20 个**返回 `IpcEnvelope<T>`（成败标记 + 类型化数据 + 机器可读的 `error.code` / `error.category`），且每个壳页面都会解包该封套；唯一刻意的例外是 `install_mode`（安装形态判定，直接返回裸字符串 `installed` / `portable` / `unknown`）。失败**不**用 reject 表达，因此页面可以按错误的**类别**分派（「端口占用」→ 换端口重试 vs「插件故障」→ 进入安全模式），而不是对英文文案做字符串匹配。
 - **Harness 核心生命周期** ✅ —— 在保留的 loopback 端口上拉起 Harness，提取进程级启动令牌，并轮询其 HTTP 就绪状态。
 - **看门狗与崩溃自愈 (Supervisor)** ✅ —— 核心宿主进程内嵌状态机与心跳监督器，提供自动恢复、进程级断路器与自愈能力。
 - **孤儿进程防护（INV-3）** ✅ —— Windows 走 Win32 JobObject (`KILL_ON_JOB_CLOSE`)，Linux 走 `PR_SET_PDEATHSIG` + 进程组，macOS 走进程组 + 退出扫描；主程序崩溃或退出时不残留子进程。
@@ -110,7 +110,7 @@ src-tauri/
   frontend/             # 壳页面静态资源（Splash 启动页、Error 错误归因页、插件恢复页、更新页、日志查看器、反馈页）
   resources/            # 组装好的 Harness 运行时 + 品牌资源（已 gitignore，构建自动生成）
   src/                  # Tauri 桌面应用层（窗口管理、应用菜单、IPC 命令、安全模式切换、LAN 手机桥、壳层日志、自动更新）
-    commands.rs             # 完整 IPC 命令面：21 个命令（20 个返回 IpcEnvelope<T>，portable_mode 返回裸 bool）
+    commands.rs             # 完整 IPC 命令面：21 个命令（20 个返回 IpcEnvelope<T>，install_mode 返回裸字符串）
     logging.rs              # 壳层结构化日志（desktop.log，5MB × 2 轮转）
     mobile_bridge.rs        # 局域网手机桥（配对页 + dsh-auth-* cookie 握手 + RPC 转发）
 build/                  # 运行时组装与辅助注入脚本
@@ -156,7 +156,7 @@ docs/                   # 架构设计、契约定义与技术方案
 | P1 | Supervisor 状态机与自愈、日志环形缓冲区（LogRing）、崩溃归因分析（DiagnosticsAnalyzer）、安全模式（Safe Mode）隔离 Profile | ✅ 已接线 |
 | P2 | 解耦 Worker 线程沙箱（`plugin-worker-host.mjs`）、JSON-RPC 2.0 双向通信、故障计数与断路器熔断自愈（`plugin_worker.rs`） | 🗄️ **已归档（2026-09-10）**：从未有调用方，且根本不在插件挂载路径上；整体删除而非留着腐烂。只剩进程内故障归因 |
 | P3 | 多厂商工具调用 Schema 清洗、复杂嵌套/`anyOf`/`oneOf` 降级、Payload 组装适配（`dsh-model-gateway`）、微秒级性能基准 | 🗄️ **已归档（2026-09-10）**：已从 workspace 整体移除；归档文档保留恢复判据 |
-| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：21 个命令中 20 个返回 `IpcEnvelope<T>`（`portable_mode` 刻意返回 `bool`）；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
+| P4 | Tauri Commands 统一采用 `IpcEnvelope<T>` 封套返回；一键脱敏导出诊断包 (`diagnostics.zip`)；应用内日志查看器 | ✅ **已接线**：21 个命令中 20 个返回 `IpcEnvelope<T>`（`install_mode` 刻意返回裸字符串）；脱敏导出（5 条规则，落 `app_data_dir/exports/`）；`frontend/logs.html` |
 
 ### 后续计划（尚未开工）
 
