@@ -16,6 +16,25 @@ ignore = [
     # 等 Tauri 迁移 gtk-rs 0.20+ 时随之消失。首跑（加 ignore 前）即在本机报红、
     # 加后转绿——「这条扫描真的在查」的实证（S3-2 判据）。
     "RUSTSEC-2024-0370",
+    # RUSTSEC-2026-0367 / 0368 / 0369（`zip < 9.0.0`）：三条**都是解包侧**问题——
+    # 解包时保留 SUID/SGID 位、符号链接目标可逃出解包目录、经符号链接套用 Unix 权限。
+    # 版本约束**无法在本仓消除**：`zip 4.6.1` 由 `tauri-plugin-updater` 传递引入，
+    # 其最新版 2.14.0（2026-10-14）仍声明 `zip = "^4"`（optional，由默认 feature
+    # `zip` 开启）。dsh-host 自身可以把 zip 升到 9，但那只是**并存另一个版本**——
+    # 告警按 lockfile 里的 4.6.1 报，升了也不会消失（2026-10-17 实测：升级后
+    # `cargo tree -i zip@4.6.1` 仍指向 tauri-plugin-updater）。
+    # 两条实际路径都碰不到受影响 API：
+    #   ① 本仓代码零处调用 `extract(`——唯一用法是 `diagnostics_export.rs` 里的
+    #      `ZipWriter` 写入，测试也只 `ZipArchive::new` + 逐条目读回；
+    #   ② updater 的 `ZipArchive::extract`（`tauri-plugin-updater 2.13.0` 的
+    #      `extract_zip`）仅在 `infer::archive::is_zip(bytes)` 为真时可达，而本项目
+    #      `bundle.targets` 只有 `nsis`（`src-tauri/tauri.conf.json`），下发的更新物
+    #      是 `*-setup.exe`，走 `extract_exe` 分支；且 `download()` 在 `install()`
+    #      之前已完成 minisign 校验，解包只可能看到**已签名**的字节。
+    # ⇒ 与 RUSTSEC-2024-0370 同性质：等上游改用 zip 9 后自动消失，不需要我们打补丁。
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
     # 注：Dependabot 报的 glib 0.18.5 告警（GHSA-wrw7-89jp-8q8g）在 RustSec 数据库
     # 中**无对应条目**（实测：RUSTSEC-2024-0429 与 GHSA ID 均报 not found /
     # not detected，0.18.5 不在其受影响区间）。该告警由 Dependabot 通道单独承担，
