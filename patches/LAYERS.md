@@ -438,8 +438,11 @@ clean 5 / conflict 6，其中 **2 个 functional**（`@deepseek-ai/dsh`、`dsh-t
 按三文件拆分重定向（逐文件 `node --check` 通过）。
 
 **结果（预检口径）**：`clean 12 / conflict 0 / skip 0`；补丁文件数 13 → 12。
-⚠️ **next 线的组装与三平台 smoke 尚未跑**——`check:patch-applicability` 只判上下文，
-组装结果须以 `smoke.yml -f dsh_target=next` 的 `MANIFEST` 为准。
+⚠️ 预检只判「上下文能否对上」，**不判语义**；组装结果须以 `MANIFEST` 为准。
+
+**CI 实测（2026-10-18，run 39118619794）**：`scope=full` + `dsh_target=next` + 三平台全绿。
+日志实证 —— `DSH_TARGET: next` → `staged patches for target next (DSH 0.2.1-rc.2)`
+→ `MANIFEST: dsh=0.2.1-rc.2 node=24.9.0 patches=12/12` → L2 GUI 冒烟与安装包体积采集通过。
 
 ---
 
