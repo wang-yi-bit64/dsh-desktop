@@ -7,6 +7,61 @@
 
 <!-- changelog-entries -->
 
+## [0.2.1-alpha.2.1] - 2026-10-18
+
+### ✨ 新功能
+
+- **shell**: 桌面壳改用 dsh_host::Supervisor（L1→L2 接线，ADR-064） ([c8f2b17](https://github.com/wang-yi-bit64/dsh-desktop/commit/c8f2b17d81c8ff1e00dd20c7476a2deaff617ba8))
+- **cli**: 新增 recover 子命令——一条命令跑通崩溃自愈三段流程（S6-2） ([f3a9e97](https://github.com/wang-yi-bit64/dsh-desktop/commit/f3a9e97ee3c5d8b050e1a7d264d4f4154894b0d6))
+- **host**: Supervisor 补齐 env/profile 通道、修稳定窗口零值语义，并加三层测试 ([30c6948](https://github.com/wang-yi-bit64/dsh-desktop/commit/30c6948ad4982a839e4ac0044cf55852bda44831))
+
+### 🐛 修复
+
+- **patches**: alpha 主补丁的 hunk 头计数写错 —— patch-package 无法解析 ([bfdd236](https://github.com/wang-yi-bit64/dsh-desktop/commit/bfdd2369381aa7c4385d5f373c1a84698f953803))
+- **harness**: 重建 alpha 提交式锁文件 —— 锁内仍解析到 prerelease，npm ci 必红 ([64a698d](https://github.com/wang-yi-bit64/dsh-desktop/commit/64a698d78c0fd65dd3e90f0f7352e11228c52a21))
+- **update**: 安装形态判定改用正向信号 —— executable_dir 在 Windows/macOS 恒为 None (#10) ([6e53e70](https://github.com/wang-yi-bit64/dsh-desktop/commit/6e53e704616f69496f6dbf93a397aa2460a61cdc))
+- **patches**: 修 alpha 线两个既有补丁冲突 —— deliverables 补 context，trajectory 拆回三 hunk ([5c7ee6d](https://github.com/wang-yi-bit64/dsh-desktop/commit/5c7ee6d188f12db7d0b6656352c7e2d26a45eab8))
+- **patches**: typert lookup 族重放不再致命 —— 三处注册器接管 + warn，并订正上游写死的错误前提（双线） ([0ab727b](https://github.com/wang-yi-bit64/dsh-desktop/commit/0ab727ba12193b3e2be5d2d9b6ce834e11a17496))
+- **clippy**: 删除 state.rs 两处多余 return（main c8f2b17 自带，CI 未捕获） ([2f0106a](https://github.com/wang-yi-bit64/dsh-desktop/commit/2f0106a23285531c69a567de39e12bebb9d3e43c))
+- **plan-facts**: 守卫锚点随 README.zh-CN.md 新措辞更新（78c6b901 漏改） ([6ed6550](https://github.com/wang-yi-bit64/dsh-desktop/commit/6ed6550a2cd623e1178b04449b95ed142a43a43f))
+- **ci**: resolve clippy warnings in supervisor integration tests ([704027e](https://github.com/wang-yi-bit64/dsh-desktop/commit/704027edf6c1026805d8c9095ccda88ed26535aa))
+- **drift**: preserve release checks when npm lookup fails and only fail on HTTP 404 ([94026e3](https://github.com/wang-yi-bit64/dsh-desktop/commit/94026e3ac7b2ad105363e66eb3b45dbdfdcc3cb1))
+- **host**: Supervisor::stop 在「启动中」窗口漏杀子进程，Linux/macOS 上产生孤儿 ([db74080](https://github.com/wang-yi-bit64/dsh-desktop/commit/db740804014a4a39be07181eded98cd94e81ba7d))
+- **clippy**: 修 3 类 4 处被 -D warnings 拦下的 lint，并订正误导性的本地回退建议 ([0d62511](https://github.com/wang-yi-bit64/dsh-desktop/commit/0d62511529671562cda1dfba13357d0a52f39c11))
+- **release**: 按通道取发布基线 + 补 prerelease/草稿两道发布门禁（F14/F15） ([a500047](https://github.com/wang-yi-bit64/dsh-desktop/commit/a500047e8d83d5110dc74a23115633dc81fd2762))
+
+### ⚡ 性能
+
+- **host**: 日志热路径去每行正则重编译 + 落盘移出 async 任务 ([275b789](https://github.com/wang-yi-bit64/dsh-desktop/commit/275b789743fb11773779f4053cc2013457609ff2))
+
+### 📝 文档
+
+- **release**: 批准 alpha 线 0.2.1-alpha.2.1 —— 上游锚点已随 alpha.2 前移 ([bec7edb](https://github.com/wang-yi-bit64/dsh-desktop/commit/bec7edbb42747ae190d3e5a744d78e961f4ff5f9))
+- **readme**: clarify pinned upstream versions for next and alpha ([78c6b90](https://github.com/wang-yi-bit64/dsh-desktop/commit/78c6b9011fe261fb6ce7e86468c75c24415a9de3))
+- **release**: clarify script contracts and failure behavior ([bc51e95](https://github.com/wang-yi-bit64/dsh-desktop/commit/bc51e95f835e1fff6333058bf86706c979eaacd8))
+- **shell**: 接线文档订正 E3 —— 它从「需补测试」变成了「抓到真实跨平台缺陷」 ([c2f5828](https://github.com/wang-yi-bit64/dsh-desktop/commit/c2f5828a1e5d9d707530c9d3500c77b3d00e6bf7))
+- **defects**: 订正台账的门禁计数与 alpha 通道销账事实 ([7a1aa77](https://github.com/wang-yi-bit64/dsh-desktop/commit/7a1aa77b8777b770cf1832fb2cec4bdf0b8ff8db))
+
+### 📦 构建与打包
+
+- **alpha**: upgrade DSH to 0.2.1-alpha.2 and refresh runtime locks ([b5db45b](https://github.com/wang-yi-bit64/dsh-desktop/commit/b5db45b6636809c720ad06f94f416823188cbc35))
+
+### 🧹 其他
+
+- Merge pull request #9 from wang-yi-bit64/chore/alpha-0.2.1-alpha.2 ([6525ca0](https://github.com/wang-yi-bit64/dsh-desktop/commit/6525ca0cf7a71bd67a9145f907c9d9108a96c836))
+- Merge pull request #8 from wang-yi-bit64/chore/alpha-0.2.1-alpha.2 ([84a6b33](https://github.com/wang-yi-bit64/dsh-desktop/commit/84a6b33cd7602a8816f3a053d2b2b78c8a07a7fc))
+- Merge main into chore/alpha-0.2.1-alpha.2（引入 PR #7 的两处 main 缺陷修复） ([a7b9e56](https://github.com/wang-yi-bit64/dsh-desktop/commit/a7b9e56eccdd1c6cb6428da968d0868a5624ae3a))
+- Merge pull request #7 from wang-yi-bit64/ci/verify-main-c8f2b17 ([467b89e](https://github.com/wang-yi-bit64/dsh-desktop/commit/467b89e9d95ab9e8ac3d479c75ef54d1bb0ac82b))
+- Merge origin/main into chore/alpha-0.2.1-alpha.2（并入 PR #8 冲突解决） ([475c103](https://github.com/wang-yi-bit64/dsh-desktop/commit/475c1035216c55ad626997820c82b11001d4ae31))
+- Update patches/LAYERS.md ([f94732e](https://github.com/wang-yi-bit64/dsh-desktop/commit/f94732e7b342097647652961c4ccaeb4b51b4e82))
+- Update patches/alpha/@deepseek-ai+dsh-client-ui-trajectory+0.2.1-alpha.2.patch ([8383225](https://github.com/wang-yi-bit64/dsh-desktop/commit/8383225da35edfbbf246c885c2578b9f6e2d9c2f))
+- **release**: upgrade alpha channel to 0.2.1-alpha.2 ([02f7677](https://github.com/wang-yi-bit64/dsh-desktop/commit/02f7677577630f9fe784501b25f30842c1d662f1))
+- reset ([916fecb](https://github.com/wang-yi-bit64/dsh-desktop/commit/916fecb2125ababdc36269f4c1f1852071c6ad46))
+- reset ([622ffef](https://github.com/wang-yi-bit64/dsh-desktop/commit/622ffef7d2b65f6e9e12a553f6bca6382b402190))
+- **ci**: 空提交 —— 用一次 pull_request 事件触发 main 的完整 CI 矩阵 ([e21dfb3](https://github.com/wang-yi-bit64/dsh-desktop/commit/e21dfb3bb5b9bc7fd037f46e4b73000e4bb6e494))
+- **gates**: 新增 dsh-host 零窗口层依赖守卫（S6-1） ([a4f7df9](https://github.com/wang-yi-bit64/dsh-desktop/commit/a4f7df9734de0361ddf296f753eb03c446c48d6b))
+- **release**: 0.2.0-rc.2.2 ([90df420](https://github.com/wang-yi-bit64/dsh-desktop/commit/90df420da446191e5a02bb1a127e38e05a3bd618))
+
 ## [0.2.0-rc.2.2] - 2026-10-10
 
 ### 🐛 修复

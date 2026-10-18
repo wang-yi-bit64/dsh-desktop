@@ -103,7 +103,17 @@
       "patchTarget": "alpha",
       "upstreamDistTag": "alpha",
       "status": "active",
-      "builds": []
+      "builds": [
+        {
+          "channel": "alpha",
+          "n": 1,
+          "desktopVersion": "0.2.1-alpha.2.1",
+          "tag": "v0.2.1-alpha.2.1",
+          "date": "2026-10-18",
+          "upstreamTag": "dsh-v0.2.1-alpha.2",
+          "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c"
+        }
+      ]
     }
   },
   "bridges": [
