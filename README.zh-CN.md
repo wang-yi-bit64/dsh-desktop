@@ -280,14 +280,14 @@ git push origin "<tag>"                     # 第二步：显式推 tag（触发
 
 | 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 桌面后缀（`publishChannel`） | 桌面版本形态 |
 |---------|---------------|-----------|-------------------------|-------------------------|
-| `next`（默认） | npm `next` dist-tag（rc 阶段） | `0.2.0-rc.2` | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
-| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.2.1-alpha.2` | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
+| `next`（默认） | npm `next` dist-tag（rc 阶段） | `0.2.1-rc.2` | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
+| `alpha` | npm `alpha` dist-tag（下一 minor 的早期预览） | `0.2.1-alpha.5` | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
 
 > **桌面版本号是「合成号」，不是上游版本号的副本。** 自 [ADR-061](docs/adr/061-synthetic-version-model.md) 起它是 `<上游精确版本>.<n>[+<w>]`：前三段**以及上游自己的整段预发布标识**（`rc.2`、`alpha.1`）原样照抄，`<n>` 是**本仓**的构建序号（按上游版本分组计数：台账 `builds[]` 里同组的 max(n) + 1），`+<w>` 是人读批次标签、**永不**参与排序。所以 `next` 目标（其上游是 `rc` 阶段版本）的桌面版本长成 `0.2.0-rc.2.<n>` 这样，而**不是** `0.7.x`。上表那一列因此给的是**形态而不是值**：写一个具体号，锚点一动它就漂，而没有任何守卫盯着那一格。ADR-057 的**跨通道单调**要求（alpha 线的版本必须排在最高 rc 线之上）**继续有效**——`x.y.z` 来自上游、`<n>` 归本仓，因此可满足；它原先那句数值示例（`0.7.3-alpha.1 > 0.7.2-rc.1`）是旧模型下的下游结论，已作废。
 
 **两个「通道名」不是一回事，别混用。** 每个目标带两个字段：`upstreamDistTag` 是**组装时拉哪条上游 npm dist-tag**（上游客观事实，改不了名；2026-10-09 由 `channel` 改名——旧名会被读成「本仓发布通道」），`publishChannel` 是**桌面 tag 的预发布后缀**（本仓自己的命名）。上游 `next` dist-tag 当下指向一个 `rc` 阶段版本，所以桌面后缀是 `rc` 而目标键仍是 `next`。**若把两者强行同名**，一改桌面后缀就会让漂移哨兵去查一个上游不存在的 `rc` tag，静默退回 `latest`。本仓「通道」一词现在**只**指**桌面通道**（`stable` / `rc` / `alpha`，由版本后缀推导）。
 
-> ⚠️ **目标键告诉不了你钉的是哪个上游版本。** 目标的 `upstreamDistTag` 是它**对着哪条上游 dist-tag 定义**的；本仓**实际钉住**的是哪个上游版本由 **`harness-locks/dsh-releases.json`**（每个目标一条在役键）回答——目标表的 `dshVersion` 只是**组装锚点**（答「用哪套补丁目录」），两者历史上可以不一致。截至 2026-10-14 alpha 线推进后，`next` 钉住 `0.2.0-rc.2`，`alpha` 钉住 `0.2.1-alpha.2`（与上游 dist-tag 是否一致可用 `npm run gate -- drift` 核对）。要权威值请读台账；**不要按目标键推断版本**。
+> ⚠️ **目标键告诉不了你钉的是哪个上游版本。** 目标的 `upstreamDistTag` 是它**对着哪条上游 dist-tag 定义**的；本仓**实际钉住**的是哪个上游版本由 **`harness-locks/dsh-releases.json`**（每个目标一条在役键）回答——目标表的 `dshVersion` 只是**组装锚点**（答「用哪套补丁目录」），两者历史上可以不一致。截至 2026-10-18 两线推进后，`next` 钉住 `0.2.1-rc.2`，`alpha` 钉住 `0.2.1-alpha.5`（与上游 dist-tag 是否一致可用 `npm run gate -- drift` 核对）。要权威值请读台账；**不要按目标键推断版本**。
 
 桌面版本号的**预发布后缀就是 `publishChannel`**——在合成号模型下，它就是**上游自己的**那段预发布标识，原样保留：`next` 目标（上游是 `rc` 阶段版本）的构建形如 `<x.y.z>-rc.<n>`，`alpha` 的形如 `<x.y.z>-alpha.<n>`。发布流程从 tag 本身反推构建目标（`scripts/dsh-targets.mjs --channel-of`），**tag 后缀因此自动决定组装哪条运行时**——不需要在 tag 之外再声明一次通道。后缀不对应任何已知通道的 tag（例如 `beta`）会**直接让发布失败**，而不是回退到默认目标：静默回退会产出「版本号说一条线、运行时却是另一条线」的包，这类错配只有用户装上之后才会被发现。⚠️ 旧的 `-next.1` 后缀**已不再是合法输入**——随 2026-10-09 的改名退役，合成号模型也不会产出它。
 
@@ -362,6 +362,7 @@ npm run gate -- harness-inject
 
 - **Dependabot / RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g)** —— `glib 0.18.5` 被标记存在 `glib::VariantStrIter` 的内存不安全性。它是经 Tauri 的 GTK3 后端引入的**仅 Linux、传递性**依赖，且项目未调用受影响 API。修复版本（`glib ≥ 0.20.0`）需等待上游 Tauri 迁移至 gtk-rs 0.20+ 后自动解析更新。
 - **RUSTSEC-2026-0367 / 0368 / 0369（`zip < 9.0.0`）** —— 三条都属**解包侧**问题：解包时保留 SUID/SGID 位、符号链接目标可逃出解包目录、经符号链接套用 Unix 权限。`zip 4.6.1` 由 `tauri-plugin-updater` 传递引入，其最新版 2.14.0 仍锁定 `zip ^4`，本仓无法通过版本约束消除（把 `dsh-host` 自己的 zip 升到 9 只会并存第二个版本，告警照样按 4.6.1 报）。实际不可达：本仓代码从不调用 `extract`（只用 `ZipWriter` 写入）；updater 的 `ZipArchive::extract` 仅在下载物被识别为 zip 时才走，而本项目 `bundle.targets` 只有 `nsis`、更新物是 `*-setup.exe`，且 `download()` 在 `install()` 之前已完成 minisign 校验。处置口径记在 `deny.toml` 的 ignore 理由里，等上游改用 `zip 9` 后自动消失。
+- **RUSTSEC-2026-0370 / 0371 / 0372（`zvariant` / `zbus_names` / `zvariant_derive` 已停止维护）** —— 三个 crate 都已被并入 `zbus` 6.0.0（分别成为其 `wire` 模块、`names` 模块与内建 derive），所以公告的 `patched = []`：不存在「修好」的版本，只有「换掉依赖」这一条路。`zbus 6.0.0` 虽已发布，但把 5.x 引进来的两个 crate 仍声明旧线——`notify-rust 4.18.2` 要求 `zbus ^5`、`tauri-plugin-single-instance` 要求 `zbus ^5.9`（2026-10-18 用 crates.io sparse index 实测）——本仓无法通过版本约束消除。三条均为 `informational = "unmaintained"`，**不含任何已知缺陷或安全影响**，且两条链各有自己的 `cfg` 门：`notify-rust` 链覆盖**非 macOS 的 Unix 目标**（`cfg(all(unix, not(target_os = "macos")))`——含 Linux 与 BSD 等，本仓只构建 Windows/macOS/Linux），`tauri-plugin-single-instance` 链**仅 Linux**（`cfg(target_os = "linux")`）。与 RUSTSEC-2024-0370 同性质：处置口径记在 `deny.toml` 的 ignore 理由里，等上游中间件改吃 `zbus 6` 后自动消失。这三条公告 **2026-10-16 报告、2026-10-17 入库**，**无需本仓任何改动就自行让 main 的定时 CI 变红**。
 - **诊断包是「写入前脱敏」，不是「写完之后再处理」。** 导出路径服务于「把你的日志发给我」这个场景，而用户手写这条消息时**不会先去删凭据**——`harness.log` 里就有明文的首航 token 与 `dsh-auth-*` cookie。因此每个文本条目在写进压缩包**之前**都要过五条脱敏规则（launch token / `dsh-auth-*` cookie / 路径用户名段 / API key 形态 / 代理口令），且每条规则的命中次数都会写进包内 `README.txt` 与命令返回值——「到底脱敏了没有」是可核对的事实，不是一句承诺。规则同时有正例（原文不得残留）与反例（版本号、端口、`E` 码、包名**不得**被误伤；一份把版本号涂掉的诊断包没有诊断价值）。包**不会**上传到任何地方，产物留在磁盘上，直到用户自己决定发出。
 
 ## 来源与致谢

@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js b/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js
 --- a/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-client-file-upload/lib/index.js
-@@ -187,7 +187,10 @@ let FileUploads = (() => {
+@@ -186,7 +186,10 @@ let FileUploads = (() => {
  		* @returns disposer removing this resolver.
  		*/
  		registerAgentResolver(resolve) {

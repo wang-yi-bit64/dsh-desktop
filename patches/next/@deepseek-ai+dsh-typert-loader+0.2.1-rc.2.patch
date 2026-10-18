@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js b/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js
 --- a/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js
-@@ -313,10 +313,10 @@ async function apply(ctx, config) {
+@@ -336,10 +336,10 @@ async function apply(ctx, config) {
  			try {
  				const task = processOne(entryName);
  				if (task !== void 0) tasks.push(task.catch((error) => {
@@ -14,7 +14,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-typert-loader/lib/index.js b/node_mod
  			}
  		}
  		return tasks;
-@@ -338,10 +338,13 @@ async function apply(ctx, config) {
+@@ -361,10 +361,13 @@ async function apply(ctx, config) {
  	for (const packageName of configured) dirty.add(packageName);
  	for (const entry of ctx.loader.entries()) dirty.add(entry.options.name);
  	const failures = [];
