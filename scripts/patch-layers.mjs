@@ -118,18 +118,13 @@ export const PATCH_LAYERS = {
   // `@deepseek-ai/dsh-agent-preset` + agentPresets 注册模型，四个导入符号整体消失，
   // 插件无法移植；vendor 源码已删、dsh 补丁的依赖声明与 patch.yml 的 insert 行同步移除。
   // 恢复前提：上游重新暴露文件系统预设根，或有新 UI 消费方重建导入/导出。
-  // ⚠️ `dsh-client-ui-settings-models` 的 retireWhen **已在 alpha 线成立**：上游
-  // 0.2.1-alpha.4 起原生提供「自定义模型 API 的每模型推理等级」（alpha.5 代码可见
-  // `reasoningLevels` prop、`ModelReasoningEfforts` 组件、`modelReasoning*` 中英文案
-  // 含「API 参数值 / Off 语义 / 空值校验」），能力严格强于本补丁的
-  // `advancedExtra` 插槽 + 逗号分隔字符串 ⇒ **alpha 线补丁于 2026-10-18 退役**
-  // （随锚点 0.2.1-alpha.5）。next 线补丁尚在（其锚点仍 0.2.0-rc.2，重锚到
-  // 0.2.1-rc.2 时同轮退役）——故本条**暂时保留**，两线都退役后再删。
-  '@deepseek-ai/dsh-client-ui-settings-models': {
-    layer: 'ui-behavior',
-    why: '模型设置页的每模型推理等级（advancedExtra 插槽 + reasoningEfforts 字段）。（Provider 选择器与搜索已于 2026-09-30 随上游目录/自定义添加流退役——官方提供等价能力。alpha 线已于 2026-10-18 退役，见上方注释；next 线待重锚。）',
-    retireWhen: '官方提供 per-model 推理等级控件时（当前上游源码明确注释「刻意不做」）。'
-  },
+  // ⚠️ `dsh-client-ui-settings-models` 已于 2026-10-18 **双线退役**（alpha 随锚点
+  // 0.2.1-alpha.5、next 随锚点 0.2.1-rc.2）：上游自 0.2.1-alpha.4 起原生提供
+  // 「自定义模型 API 的每模型推理等级」（`reasoningLevels` prop、`ModelReasoningEfforts`
+  // 组件、`modelReasoning*` 中英文案，含「API 参数值 / Off 语义 / 空值校验」），能力
+  // 严格强于本补丁的 `advancedExtra` 插槽 + 逗号分隔字符串 ⇒ retireWhen 成立，属
+  // 「上游追上我们」而非能力回退（与 2026-10-07 退役 `model-selection` 同类型）。
+  // 补丁文件已删、本表条目同步移除；两线均无补丁引用它，故不能再留条目。
   '@deepseek-ai/dsh-client-ui-chat': {
     layer: 'ui-behavior',
     why: '会话内 QUOTA / FORBIDDEN 错误文案。缺失时退回原始错误文本。',

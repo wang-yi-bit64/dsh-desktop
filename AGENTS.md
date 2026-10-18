@@ -209,7 +209,7 @@
 
 | 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.2.0-rc.2` | `patches/next/`（10 个）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
+| `next`（默认） | npm `next` dist-tag | `0.2.1-rc.2` | `patches/next/`（条数以 `--list` 为准）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
 | `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.5` | `patches/alpha/`（12 个）、`packages/alpha/`（已清空） | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
 
 > 🔴 **桌面版本号 = 合成号**（[ADR-061](docs/adr/061-synthetic-version-model.md)），**不是上游版本号的副本**：

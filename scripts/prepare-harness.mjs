@@ -95,8 +95,8 @@ const vendorDir = join(projectRoot, 'vendor')
 // ---------------------------------------------------------------------------
 // 构建目标：决定内置哪个上游 DSH 版本、用哪一套补丁与 vendored 覆盖包。
 // 双通道（next / alpha）并存，见 [`dsh-targets.mjs`](./dsh-targets.mjs)。
-//   next  → DSH 0.2.0-rc.2    （默认；桌面后缀 rc。2026-09-30 从 0.1.5-rc.3 跨两个
-//                               minor 推进，与上游 `next` dist-tag 实测一致）
+//   next  → DSH 0.2.1-rc.2    （默认；桌面后缀 rc。2026-10-18 从 0.2.0-rc.2 推进，
+//                               与上游 `next` dist-tag 实测一致）
 //   alpha → DSH 0.2.1-alpha.5 （桌面后缀 alpha；2026-10-18 从 0.2.1-alpha.2 推进）
 // ⚠️ 上面两行的版本号是**现状声明**，由 `verify:plan-facts` 的 C1 直接比对
 //    `dsh-targets.mjs`（2026-10-08 起纳入；此前靠人工同步，已漂移过一次）。

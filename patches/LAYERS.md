@@ -16,7 +16,7 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.0-rc.2`**（2026-09-30 从 `0.1.5-rc.3` 跨两个 minor 推进，含上游重构；预检 clean 2 / conflict 12，经三路合并后 10 个补丁全部 clean） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.1-rc.2`**（2026-10-18 从 `0.2.0-rc.2` 推进，含上游 0.2.1 整段变更；预检 clean 5 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean；同轮退役 settings-models、typert-registry 随三文件拆分重定向） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
 | `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.5`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）；2026-10-18 推进到 `0.2.1-alpha.5`，**退役 1 个**（`settings-models`，上游 alpha.4 起原生提供每模型推理等级）、**重定向 1 个**（`typert-registry` 覆盖上游拆分出的三个文件），预检 clean 12 / conflict 0）。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
@@ -92,11 +92,11 @@
 
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
-| `dsh-typert-registry` | lookup 族三处注册器（`LookupStore.configure` / `.register` / `ContextStore.configureHost`）在「键已在册」时**同步抛错**，抛点在 `ctx.effect(...)` **之前**（apply 期）⇒ 同一 owner 的 apply 被重跑、而上一轮 effect 尚未处置时，抛错会让 owner fiber 回滚。上游三处注释写「duplicate configuration is rejected, so this effect remains the key's unique owner」并配 `v8 ignore`——**该前提是错的**，注释与 `v8 ignore` 一并订正为「该分支**可达**」。补丁照 B2 先例改为**接管 + warn**（AGENTS §7.1：降级必须可见）；旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。<br>⚠️ **alpha 线自 `0.2.1-alpha.5` 起覆盖三个文件**：上游把 `lib/client.js` 拆成 `client.browser.js` / `client.node.js` / `index.js`，同一段代码三份并存 ⇒ 每份各 6 处改动，只补一份会让浏览器 / Node / 汇总入口三个消费者行为分裂。<br>⚠️ **为何不归 `functional`**：本机真机 Cordis 夹具**未构造出可达路径**（详见本节末「typert lookup 守卫」），「缺失即起不来」不成立，按 §4 规则 3 归此层。缺失时仅少一层纵深防御 | 官方把 lookup 族注册改为幂等（或 reload 前先处置旧 effect、不再假定「重复配置不可能」） |
+| `dsh-typert-registry` | lookup 族三处注册器（`LookupStore.configure` / `.register` / `ContextStore.configureHost`）在「键已在册」时**同步抛错**，抛点在 `ctx.effect(...)` **之前**（apply 期）⇒ 同一 owner 的 apply 被重跑、而上一轮 effect 尚未处置时，抛错会让 owner fiber 回滚。上游三处注释写「duplicate configuration is rejected, so this effect remains the key's unique owner」并配 `v8 ignore`——**该前提是错的**，注释与 `v8 ignore` 一并订正为「该分支**可达**」。补丁照 B2 先例改为**接管 + warn**（AGENTS §7.1：降级必须可见）；旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。<br>⚠️ **自 alpha `0.2.1-alpha.5` / next `0.2.1-rc.2` 起覆盖三个文件**：上游把 `lib/client.js` 拆成 `client.browser.js` / `client.node.js` / `index.js`，同一段代码三份并存 ⇒ 每份各 6 处改动，只补一份会让浏览器 / Node / 汇总入口三个消费者行为分裂。<br>⚠️ **为何不归 `functional`**：本机真机 Cordis 夹具**未构造出可达路径**（详见本节末「typert lookup 守卫」），「缺失即起不来」不成立，按 §4 规则 3 归此层。缺失时仅少一层纵深防御 | 官方把 lookup 族注册改为幂等（或 reload 前先处置旧 effect、不再假定「重复配置不可能」） |
 | ~~`dsh-client-ui-layout`~~ | 🗄️ **已全线退役**：alpha 线 2026-09-16、next 线 2026-09-30（上游 0.2.0 的 `computeColumns(…, collapsedWidth)` + `data-platform` 推导覆盖本补丁全部意图，两线判据均已满足）。补丁文件两线均已删除 | 官方区分平台宽度 ← **已满足（两线）** |
 | `dsh-client-ui-sidebar` | 注入壳层锚点属性（`data-dsh-sidebar-root` / `-wide` / `-settings`），供 Harness 页注入脚本挂载手机状态指示器。**自定义 padding 已于 2026-09-16 移除**（上游原生适配 macOS，叠加会成双份留白） | 官方侧栏暴露等效锚点（本仓注入脚本可挂到官方标记上）时 |
 | ~~`dsh-client-ui-workspace`~~ | 🗄️ **两线退役（2026-09-30）**：上游原生 `completionUnread` → `SessionStatusDots`/`StateDot` 未读完成态 + 完整会话行样式。补丁文件两线均已删除 | 官方列表补齐未读与行样式 ← **已满足（两线）** |
-| `dsh-client-ui-settings-models` | 模型设置页的**每模型推理等级**注入（`ModelReasoningEffortsField`，经上游 `ModelRow` 的插槽挂载）。（Provider 选择器 / 搜索自 2026-09-30 起随上游目录添加流退役；alpha 线于 2026-10-07 推进时同轮退役）<br>🗄️ **alpha 线已于 2026-10-18 退役**（随锚点 `0.2.1-alpha.5`）：上游 `0.2.1-alpha.4` 起原生提供每模型推理等级，实测见下节移植裁定；next 线补丁尚在（其锚点仍 `0.2.0-rc.2`），重锚到 `0.2.1-rc.2` 时同轮退役 | 官方提供 per-model 推理等级控件（上游源码明确注释「刻意不做」）← **alpha 线已满足（2026-10-18）** |
+| ~~`dsh-client-ui-settings-models`~~ | 🗄️ **两线退役（2026-10-18）**：alpha 随锚点 `0.2.1-alpha.5`、next 随锚点 `0.2.1-rc.2`。上游自 `0.2.1-alpha.4` 起原生提供「自定义模型 API 的每模型推理等级」（`reasoningLevels` prop、`ModelReasoningEfforts` 组件、`modelReasoning*` 中英文案，含 API 参数值 / Off 语义 / 空值校验），能力**严格强于**本补丁的 `advancedExtra` 插槽 + 逗号分隔字符串 ⇒ 属「上游追上我们」而非能力回退（与 `model-selection` 同类型）。补丁文件两线均已删除，分层表条目同步移除 | 官方提供 per-model 推理等级控件 ← **已满足（两线）** |
 | ~~`dsh-client-ui-model-selection`~~ | 🗄️ **已全线退役**：next 线 2026-09-30、alpha 线 2026-10-07（上游 `0.2.1-alpha.1` 实测自带模糊搜索 `search`×30 / `fuzzy` / 键盘导航 `moveFocus`，判据满足）。补丁文件两线均已删除 | 官方自带搜索 ← **已满足（两线）** |
 | ~~`dsh-client-ui-agent-preset`~~ | 🗄️ **两线退役（2026-09-30）**：上游重写为卡片式预设管理 UI（`cardBroken`/`guideTitle` 键域），旧菜单/对话框锚点整体消失；**整条预设传递链路同轮退役**（`dsh-desktop-preset-transfer`）。补丁文件两线均已删除 | 官方提供预设包导入导出 ← **判据已转化为「上游重写」** |
 | `dsh-client-ui-chat` | 会话内 `FORBIDDEN` 错误文案。（`QUOTA` / `ACCOUNT_*` 族上游已于 `0.2.1-alpha.1` 内置，自 2026-10-07 起本补丁只重放 `FORBIDDEN`） | 官方补齐 `FORBIDDEN` 文案 |
@@ -407,7 +407,39 @@ lookup 族三处注册器与三处 `v8 ignore` 注释**三份并存**。补丁�
 
 **结果（预检口径）**：`clean 12 / conflict 0 / skip 0`；补丁文件数 13 → 12。
 ⚠️ 预检只判「上下文能否对上」，**不判语义**；组装（`MANIFEST.json` 逐条 `applied`）
-与三平台 smoke 是独立判据，结果见当轮提交的发布记录。
+与三平台 smoke 是独立判据。
+
+**CI 实测（2026-10-18，run 39116222295）**：`scope=full` + `dsh_target=alpha` + 三平台全绿。
+日志实证 —— `DSH_TARGET: alpha` → `staged patches for target alpha (DSH 0.2.1-alpha.5)`
+→ 12 个补丁逐条 `applied`（无 skip）→ `MANIFEST: dsh=0.2.1-alpha.5 node=24.9.0 patches=12/12`
+→ L2 GUI 冒烟与安装包体积采集通过。**这一轮是「真组装过」而非仅预检通过。**
+
+### next 线（0.2.1-rc.2）的移植裁定（2026-10-18；**补丁 13 → 12**）
+
+上游 `next` dist-tag 已从 `0.2.0-rc.2` 改指 `0.2.1-rc.2`（2026-10-17）。若不跟随，next 线
+会在一条上游已离开的分支上继续打补丁，且与 alpha 线共享的大部分修复无法比对。故同轮推进。
+
+**预检基线**（`npm run check:patch-applicability -- --dsh-target=next --target=0.2.1-rc.2`）：
+clean 5 / conflict 6，其中 **2 个 functional**（`@deepseek-ai/dsh`、`dsh-typert-loader`）。
+
+**做法**：复用 alpha 的三路合并流程与裁定，但 rc.2 相对 alpha.5 有自己的差异，额外需要人判
+3 个文件（`dsh/package.json`、`ui-chat`、`deliverables`）：
+
+| 文件 | 冲突形态 | 裁定 |
+|---|---|---|
+| `@deepseek-ai/dsh/package.json` | 整块 `dependencies` 对撞 | 取上游整套依赖 + 插入 3 条 `dsh-desktop-*`。**比 alpha 少一条**：`dsh-desktop-preset-transfer` 已于 2026-09-30 双线退役（上游 `agent-presets` → `agent-preset` 重铸，`vendor/` 源码已删），next 补丁里那行是残留，本轮一并去掉 |
+| `dsh-client-ui-chat` | 3 处一行插入被三路合并判成 **358 行冲突区**（上游在同区域重构 `UserStyleBubble` / `PendingSteeringBubble`） | 取上游 + **按新锚点重放** 3 处一行插入：`FORBIDDEN` 分支、中英文案各一条。上游 `0.2.1-rc.2` 仍无 `message.failure.forbidden`（实测计数 0），`retireWhen` 未成立 |
+| `dsh-client-ui-deliverables` | 3 处 | 两条意图都仍成立（上游 `localPathReference` 计数 0）：a) Codex 风格本地路径兜底 —— 上游把 `onlyPathWithBasename` **内联进了 Set 匹配**，兜底改挂在 `matches.size === 1 ? … : localPathReference(value)` 的三元上；b) `paths === null` 早退 —— 上游原样保留，照旧删除。⚠️ 上游新增 `operations` 参数（按 `argumentPath` 补匹配），与本补丁**正交**，未触碰 |
+
+**`dsh-typert-loader` / `dsh-llm-pi-ai` / `dsh-client-ui-trajectory`**：预检判「内容匹配但行号
+漂移超 20 行窗口」，三路合并自动消解（0 冲突），`regen` 时重算行号。
+
+**同轮处理**：`dsh-client-ui-settings-models` 退役（判据同 alpha 节）、`dsh-typert-registry`
+按三文件拆分重定向（逐文件 `node --check` 通过）。
+
+**结果（预检口径）**：`clean 12 / conflict 0 / skip 0`；补丁文件数 13 → 12。
+⚠️ **next 线的组装与三平台 smoke 尚未跑**——`check:patch-applicability` 只判上下文，
+组装结果须以 `smoke.yml -f dsh_target=next` 的 `MANIFEST` 为准。
 
 ---
 

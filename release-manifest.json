@@ -24,7 +24,12 @@
     "⇒ releaseType = desktop-fix（§3.2：x.y.z 不变、n+1）。",
     "alpha 线在上游 0.2.1-alpha.2 组内此前**零构建** ⇒ n = 1；next 线在 0.2.0-rc.2 组内已用 n = 1、2 ⇒ 下一个 n = 3。",
     "n 不由人填，此处只是本轮**决策**的批准值，第 4 步会再逐字核对（见 harness-locks/dsh-releases.json）。",
-    "breaking = false：判据见 docs/releases/FEATURES.md §2（四条可证伪判据，全部零命中）。"
+    "breaking = false：判据见 docs/releases/FEATURES.md §2（四条可证伪判据，全部零命中）。",
+    "",
+    "⚠️ 2026-10-18 之后锚点**又动过一次**（同日两轮，均未发布）：alpha 0.2.1-alpha.2 → 0.2.1-alpha.5，",
+    "   next 0.2.0-rc.2 → 0.2.1-rc.2。⇒ 上面那轮的 lines 现在描述的是**已交付**的 v0.2.1-alpha.2.1，",
+    "   其中 lines.next.n=3 指的是已退役锚点下的序号，**不可直接用于下一次发布**（--validate 会把它标为「历史值」）。",
+    "   下次发布前必须重写 lines：届时两条在役键（alpha=0.2.1-alpha.5、next=0.2.1-rc.2）的 builds 均为空 ⇒ n 各为 1。"
   ],
   "schemaVersion": 1,
   "releaseType": "desktop-fix",
