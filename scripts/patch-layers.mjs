@@ -97,7 +97,7 @@ export const PATCH_LAYERS = {
   //    `registerAgentResolver`）由同批的 `@deepseek-ai/dsh-client-file-upload` 负责。
   '@deepseek-ai/dsh-typert-registry': {
     layer: 'ui-behavior',
-    why: 'lookup 族三处注册器在「键已在册」时同步抛错，抛点在 `ctx.effect(...)` **之前**（apply 期）：`LookupStore.configure`（`lib/index.js:191` / `lib/client.js:983`）、`LookupStore.register`（`lib/index.js:220` / `lib/client.js:1012`）、`ContextStore.configureHost`（`lib/index.js:288` / `lib/client.js:1080`）。上游三处注释写「duplicate configuration is rejected, so this effect remains the key\'s unique owner」并配 `v8 ignore`——**该前提是错的**：键在册也可能是上一轮**尚未处置**的 effect，而非冲突；此时抛错会让 owner fiber 回滚。补丁照 B2 先例改为**接管 + warn**，并把错注释与 `v8 ignore` 一并订正为「该分支可达」。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**缺失该补丁的影响**：仅少一层纵深防御（该路径尚未被构造出可达），应用整体可用——这正是它不归 functional 的理由。',
+    why: 'lookup 族三处注册器在「键已在册」时同步抛错，抛点在 `ctx.effect(...)` **之前**（apply 期）：`LookupStore.configure`、`LookupStore.register`、`ContextStore.configureHost`。⚠️ **上游 0.2.1-alpha.5 起把 `lib/client.js` 拆成 `client.browser.js` / `client.node.js` / `index.js`**，同一段代码三份并存 ⇒ alpha 线补丁自本轮起**同时覆盖三个文件**（每份 6 处改动：3 处 throw→接管 + 3 处 disposer 注释订正），只改其中一份会让「浏览器 / Node / 汇总入口」三个消费者行为分裂。上游三处注释写「duplicate configuration is rejected, so this effect remains the key\'s unique owner」并配 `v8 ignore`——**该前提是错的**：键在册也可能是上一轮**尚未处置**的 effect，而非冲突；此时抛错会让 owner fiber 回滚。补丁照 B2 先例改为**接管 + warn**，并把错注释与 `v8 ignore` 一并订正为「该分支可达」。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**缺失该补丁的影响**：仅少一层纵深防御（该路径尚未被构造出可达），应用整体可用——这正是它不归 functional 的理由。',
     retireWhen: '官方把 lookup 族注册改为幂等（或 reload 前先处置旧 effect、不再假定「重复配置不可能」）时。'
   },
   // `dsh-client-ui-layout` 已于 2026-09-30 在 next 线退役（上游 0.2.0 的
@@ -118,9 +118,16 @@ export const PATCH_LAYERS = {
   // `@deepseek-ai/dsh-agent-preset` + agentPresets 注册模型，四个导入符号整体消失，
   // 插件无法移植；vendor 源码已删、dsh 补丁的依赖声明与 patch.yml 的 insert 行同步移除。
   // 恢复前提：上游重新暴露文件系统预设根，或有新 UI 消费方重建导入/导出。
+  // ⚠️ `dsh-client-ui-settings-models` 的 retireWhen **已在 alpha 线成立**：上游
+  // 0.2.1-alpha.4 起原生提供「自定义模型 API 的每模型推理等级」（alpha.5 代码可见
+  // `reasoningLevels` prop、`ModelReasoningEfforts` 组件、`modelReasoning*` 中英文案
+  // 含「API 参数值 / Off 语义 / 空值校验」），能力严格强于本补丁的
+  // `advancedExtra` 插槽 + 逗号分隔字符串 ⇒ **alpha 线补丁于 2026-10-18 退役**
+  // （随锚点 0.2.1-alpha.5）。next 线补丁尚在（其锚点仍 0.2.0-rc.2，重锚到
+  // 0.2.1-rc.2 时同轮退役）——故本条**暂时保留**，两线都退役后再删。
   '@deepseek-ai/dsh-client-ui-settings-models': {
     layer: 'ui-behavior',
-    why: '模型设置页的每模型推理等级（advancedExtra 插槽 + reasoningEfforts 字段）。（Provider 选择器与搜索已于 2026-09-30 随上游目录/自定义添加流退役——官方提供等价能力。）',
+    why: '模型设置页的每模型推理等级（advancedExtra 插槽 + reasoningEfforts 字段）。（Provider 选择器与搜索已于 2026-09-30 随上游目录/自定义添加流退役——官方提供等价能力。alpha 线已于 2026-10-18 退役，见上方注释；next 线待重锚。）',
     retireWhen: '官方提供 per-model 推理等级控件时（当前上游源码明确注释「刻意不做」）。'
   },
   '@deepseek-ai/dsh-client-ui-chat': {

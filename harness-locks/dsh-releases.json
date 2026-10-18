@@ -102,7 +102,7 @@
     "0.2.1-alpha.2": {
       "patchTarget": "alpha",
       "upstreamDistTag": "alpha",
-      "status": "active",
+      "status": "dormant",
       "builds": [
         {
           "channel": "alpha",
@@ -114,6 +114,12 @@
           "upstreamCommit": "d743267388641bc76f17c45ce8b4c231aed1d32c"
         }
       ]
+    },
+    "0.2.1-alpha.5": {
+      "patchTarget": "alpha",
+      "upstreamDistTag": "alpha",
+      "status": "active",
+      "builds": []
     }
   },
   "bridges": [

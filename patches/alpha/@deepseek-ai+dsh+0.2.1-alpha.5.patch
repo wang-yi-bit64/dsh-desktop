@@ -1,11 +1,13 @@
 diff --git a/node_modules/@deepseek-ai/dsh/package.json b/node_modules/@deepseek-ai/dsh/package.json
 --- a/node_modules/@deepseek-ai/dsh/package.json
 +++ b/node_modules/@deepseek-ai/dsh/package.json
-@@ -21,4 +21,7 @@
+@@ -20,6 +20,9 @@
+   ],
    "license": "MIT",
    "dependencies": {
 +    "dsh-desktop-client-ui": "0.1.0",
 +    "dsh-desktop-hmr-fallback": "0.1.0",
 +    "dsh-desktop-market-installer": "0.1.0",
-     "@deepseek-ai/cordis": "~4.0.5-alpha.1",
-     "@deepseek-ai/dsh-hmr": "0.2.1-alpha.2",
+     "@deepseek-ai/cordis": "~4.0.5-alpha.2",
+     "@deepseek-ai/dsh-hmr": "0.2.1-alpha.5",
+     "@deepseek-ai/cordis-plugin-include": "~1.0.10-alpha.2",
