@@ -19,18 +19,18 @@
     "   按 §7.4 三条豁免判据全部成立（同通道 / bridge.version ≥ 该通道最高已发布 tag / 该 tag 已发布）。",
     "   ⇒ 本轮两条合成号可以直接发，**不需要**再补一轮桥接版。",
     "",
-    "本轮变更性质：上游锚点**不动**（next 仍钉 0.2.0-rc.2、alpha 仍钉 0.2.1-alpha.1，两端同批核对过），",
-    "本仓只有 fix: / perf: 提交（4 条，即启动五缺陷的 B1–B4 修复批次），**无 feat:**、**无破坏性**",
+    "本轮（2026-10-18）变更性质：alpha 锚点已随上游于 2026-10-14 推进到 0.2.1-alpha.2（next 仍钉 0.2.0-rc.2），",
+    "本仓自上个 tag 起只有 fix: / ci: 提交（安装形态判定改正向信号 + deny 豁免），**无 feat:**、**无破坏性**",
     "⇒ releaseType = desktop-fix（§3.2：x.y.z 不变、n+1）。",
-    "两条线各自第 2 次交付 ⇒ n = 2（台账 builds[] 里该 (上游精确版本, 通道) 组已各有一条 n = 1，",
-    "见 harness-locks/dsh-releases.json；n 不由人填，此处只是本轮**决策**的批准值，第 4 步会再逐字核对）。",
+    "alpha 线在上游 0.2.1-alpha.2 组内此前**零构建** ⇒ n = 1；next 线在 0.2.0-rc.2 组内已用 n = 1、2 ⇒ 下一个 n = 3。",
+    "n 不由人填，此处只是本轮**决策**的批准值，第 4 步会再逐字核对（见 harness-locks/dsh-releases.json）。",
     "breaking = false：判据见 docs/releases/FEATURES.md §2（四条可证伪判据，全部零命中）。"
   ],
   "schemaVersion": 1,
   "releaseType": "desktop-fix",
   "breaking": false,
   "lines": {
-    "alpha": { "n": 2, "w": null },
-    "next": { "n": 2, "w": null }
+    "alpha": { "n": 1, "w": null },
+    "next": { "n": 3, "w": null }
   }
 }
