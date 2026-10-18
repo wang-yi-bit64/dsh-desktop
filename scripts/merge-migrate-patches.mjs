@@ -47,7 +47,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, 
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fetchPackageFiles, parsePatch } from './check-patch-applicability.mjs'
+import { fetchPackageFiles, parsePatch, targetPackageVersion } from './check-patch-applicability.mjs'
 import { packageNameFromPatchFile, versionFromPatchFile } from './patch-layers.mjs'
 import { patchesDirFor, resolveDshTargetArg, resolveTarget } from './dsh-targets.mjs'
 
