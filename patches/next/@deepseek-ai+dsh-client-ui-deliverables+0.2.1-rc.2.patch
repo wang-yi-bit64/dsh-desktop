@@ -28,7 +28,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
  				const matches = new Set(paths.filter((path) => path === value || basename(path) === value));
  				for (const operation of operations) if (operation.argumentPath === value) matches.add(operation.path);
 -				const path = matches.size === 1 ? matches.values().next().value : void 0;
-+				const path = matches.size === 1 ? matches.values().next().value : localPathReference(value);
++				const path = matches.size === 1 ? matches.values().next().value : matches.size === 0 ? localPathReference(value) : void 0;
  				if (path === void 0) return void 0;
  				return {
  					open: () => {

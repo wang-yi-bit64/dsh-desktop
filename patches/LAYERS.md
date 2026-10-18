@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.1-rc.2`**（2026-10-18 从 `0.2.0-rc.2` 推进，含上游 0.2.1 整段变更；预检 clean 5 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean；同轮退役 settings-models、typert-registry 随三文件拆分重定向） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.5`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）；2026-10-18 推进到 `0.2.1-alpha.5`，**退役 1 个**（`settings-models`，上游 alpha.4 起原生提供每模型推理等级）、**重定向 1 个**（`typert-registry` 覆盖上游拆分出的三个文件），预检 clean 12 / conflict 0）。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.5`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）；2026-10-18 推进到 `0.2.1-alpha.5`，**退役 1 个**（`settings-models`，上游 alpha.4 起原生提供每模型推理等级）、**重定向 1 个**（`typert-registry` 覆盖上游拆分出的三个文件）；预检 clean 7 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -429,7 +429,7 @@ clean 5 / conflict 6，其中 **2 个 functional**（`@deepseek-ai/dsh`、`dsh-t
 |---|---|---|
 | `@deepseek-ai/dsh/package.json` | 整块 `dependencies` 对撞 | 取上游整套依赖 + 插入 3 条 `dsh-desktop-*`。**比 alpha 少一条**：`dsh-desktop-preset-transfer` 已于 2026-09-30 双线退役（上游 `agent-presets` → `agent-preset` 重铸，`vendor/` 源码已删），next 补丁里那行是残留，本轮一并去掉 |
 | `dsh-client-ui-chat` | 3 处一行插入被三路合并判成 **358 行冲突区**（上游在同区域重构 `UserStyleBubble` / `PendingSteeringBubble`） | 取上游 + **按新锚点重放** 3 处一行插入：`FORBIDDEN` 分支、中英文案各一条。上游 `0.2.1-rc.2` 仍无 `message.failure.forbidden`（实测计数 0），`retireWhen` 未成立 |
-| `dsh-client-ui-deliverables` | 3 处 | 两条意图都仍成立（上游 `localPathReference` 计数 0）：a) Codex 风格本地路径兜底 —— 上游把 `onlyPathWithBasename` **内联进了 Set 匹配**，兜底改挂在 `matches.size === 1 ? … : localPathReference(value)` 的三元上；b) `paths === null` 早退 —— 上游原样保留，照旧删除。⚠️ 上游新增 `operations` 参数（按 `argumentPath` 补匹配），与本补丁**正交**，未触碰 |
+| `dsh-client-ui-deliverables` | 3 处 | 两条意图都仍成立（上游 `localPathReference` 计数 0）：a) Codex 风格本地路径兜底 —— 上游把 `onlyPathWithBasename` **内联进了 Set 匹配**，兜底改挂在 `matches.size === 1 ? … : matches.size === 0 ? localPathReference(value) : void 0` 上。⚠️ **`matches.size === 0` 这个守卫不可省**：`size > 1` 是**歧义**（同一 basename 命中多个本轮产物），此时回退到 `localPathReference` 会把 `index.js` 解析成相对路径 `index.js` 并打开一个本不该打开的目标，直接违反该函数 docstring 的「Ambiguous and unknown tokens stay inert」。alpha 线自始就带这个守卫，next 线 2026-10-18 迁移时一度简化成二元三元的版本已按本条修正，两线行为现一致（行为断言见本节末）；b) `paths === null` 早退 —— 上游原样保留，照旧删除。⚠️ 上游新增 `operations` 参数（按 `argumentPath` 补匹配），与本补丁**正交**，未触碰 |
 
 **`dsh-typert-loader` / `dsh-llm-pi-ai` / `dsh-client-ui-trajectory`**：预检判「内容匹配但行号
 漂移超 20 行窗口」，三路合并自动消解（0 冲突），`regen` 时重算行号。
@@ -443,6 +443,23 @@ clean 5 / conflict 6，其中 **2 个 functional**（`@deepseek-ai/dsh`、`dsh-t
 **CI 实测（2026-10-18，run 39118619794）**：`scope=full` + `dsh_target=next` + 三平台全绿。
 日志实证 —— `DSH_TARGET: next` → `staged patches for target next (DSH 0.2.1-rc.2)`
 → `MANIFEST: dsh=0.2.1-rc.2 node=24.9.0 patches=12/12` → L2 GUI 冒烟与安装包体积采集通过。
+
+**`dsh-client-ui-deliverables` 兜底守卫的行为断言（2026-10-18，CodeRabbit 评审后补）**
+把补丁打到一个洁净的上游树上（真实 `patch-package --error-on-fail`），再对**打补丁后的
+`lib/client.js` 原文**取 `localPathReference` + `producedFileMentions` 两段做 `new Function`
+求值，直接调用 `resolve()` 断言六种输入：
+
+| 场景（`paths` / `value`） | 期望 | 修前（无 `size===0` 守卫） |
+|---|---|---|
+| `['a/index.js','b/index.js']` / `index.js`（歧义，2 命中） | `undefined` | **`"index.js"`（错）** |
+| `['src/app.ts']` / `app.ts`（唯一 basename） | `src/app.ts` | 同 |
+| `['a/index.js','b/index.js']` / `a/index.js`（精确） | `a/index.js` | 同 |
+| `[]` / `src/other.ts`（零命中 + 像路径） | `src/other.ts` | 同 |
+| `[]` / `npm`（裸标识符） | `undefined` | 同 |
+| `[]` / `https://x.test/a.ts`（URL） | `undefined` | 同 |
+
+⚠️ **可证伪性**：把守卫换回旧写法后，第一行从 `undefined` 变成 `"index.js"` —— 该断言
+**能**捕获这个缺陷，不是恒绿的摆设。
 
 ---
 

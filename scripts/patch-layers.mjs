@@ -97,7 +97,7 @@ export const PATCH_LAYERS = {
   //    `registerAgentResolver`）由同批的 `@deepseek-ai/dsh-client-file-upload` 负责。
   '@deepseek-ai/dsh-typert-registry': {
     layer: 'ui-behavior',
-    why: 'lookup 族三处注册器在「键已在册」时同步抛错，抛点在 `ctx.effect(...)` **之前**（apply 期）：`LookupStore.configure`、`LookupStore.register`、`ContextStore.configureHost`。⚠️ **上游 0.2.1-alpha.5 起把 `lib/client.js` 拆成 `client.browser.js` / `client.node.js` / `index.js`**，同一段代码三份并存 ⇒ alpha 线补丁自本轮起**同时覆盖三个文件**（每份 6 处改动：3 处 throw→接管 + 3 处 disposer 注释订正），只改其中一份会让「浏览器 / Node / 汇总入口」三个消费者行为分裂。上游三处注释写「duplicate configuration is rejected, so this effect remains the key\'s unique owner」并配 `v8 ignore`——**该前提是错的**：键在册也可能是上一轮**尚未处置**的 effect，而非冲突；此时抛错会让 owner fiber 回滚。补丁照 B2 先例改为**接管 + warn**，并把错注释与 `v8 ignore` 一并订正为「该分支可达」。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**缺失该补丁的影响**：仅少一层纵深防御（该路径尚未被构造出可达），应用整体可用——这正是它不归 functional 的理由。',
+    why: 'lookup 族三处注册器在「键已在册」时同步抛错，抛点在 `ctx.effect(...)` **之前**（apply 期）：`LookupStore.configure`、`LookupStore.register`、`ContextStore.configureHost`。⚠️ **上游自 alpha `0.2.1-alpha.5` / next `0.2.1-rc.2` 起把 `lib/client.js` 拆成 `client.browser.js` / `client.node.js` / `index.js`**，同一段代码三份并存 ⇒ 两线补丁自本轮起**同时覆盖三个文件**（每份 6 处改动：3 处 throw→接管 + 3 处 disposer 注释订正），只改其中一份会让「浏览器 / Node / 汇总入口」三个消费者行为分裂。上游三处注释写「duplicate configuration is rejected, so this effect remains the key\'s unique owner」并配 `v8 ignore`——**该前提是错的**：键在册也可能是上一轮**尚未处置**的 effect，而非冲突；此时抛错会让 owner fiber 回滚。补丁照 B2 先例改为**接管 + warn**，并把错注释与 `v8 ignore` 一并订正为「该分支可达」。**只动 lookup 族这 3 个方法**：同文件另 6 处 `is already registered`（`validate` / Remote package `register` / `registerProvider` / `validatePackage` / `validateSchemas`）是**真冲突检测器**，接管会吞掉真错，不动；`register` 里那条「wire 声明不得中途改变」校验同样保留。旧 effect 的 disposer 本就有 entry 身份比较（`if (resolvers.get(key) !== entry) return`），说明作者本就预期多 owner 并存，故接管不会误删新 entry。**缺失该补丁的影响**：仅少一层纵深防御（该路径尚未被构造出可达），应用整体可用——这正是它不归 functional 的理由。',
     retireWhen: '官方把 lookup 族注册改为幂等（或 reload 前先处置旧 effect、不再假定「重复配置不可能」）时。'
   },
   // `dsh-client-ui-layout` 已于 2026-09-30 在 next 线退役（上游 0.2.0 的
@@ -137,7 +137,7 @@ export const PATCH_LAYERS = {
   },
   '@deepseek-ai/dsh-client-ui-deliverables': {
     layer: 'ui-behavior',
-    why: '交付物中的 Codex 风格本地路径引用解析，以及 paths 为 null 时的空数组兜底（旧行为是直接不渲染）。',
+    why: '交付物中的 Codex 风格本地路径引用解析，以及 paths 为 null 时的空数组兜底（旧行为是直接不渲染）。⚠️ 兜底只在 `matches.size === 0`（确实未命中）时生效：`size > 1` 是歧义引用，必须保持惰性，否则 `index.js` 这类 token 会被解析成同名相对路径并打开错误目标——alpha 线自始带此守卫，next 线 2026-10-18 迁移时一度丢失，已补回。',
     retireWhen: '官方支持本地路径引用解析时。'
   },
   '@deepseek-ai/dsh-llm-deepseek': {
