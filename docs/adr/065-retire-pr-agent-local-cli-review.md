@@ -5,7 +5,7 @@
 | 状态 | 已接受 |
 | 日期 | 2026-10-15 |
 | 唯一产地 | `.github/workflows/` 目录内容（`pr-agent.yml` 缺席即退役）+ `scripts/verify-github-config.mjs` 的 `RETIRED_WORKFLOWS`（禁令表，含 pr-agent 条目）+ `.gito/config.toml`（本地评审配置） |
-| 修订 | ~~[ADR-054](054-ai-review-workflows-admission.md) 决策 1 / 3 / 4 / 5 / 6~~（本 ADR 修订之：`pr-agent.yml` 退役 ⇒ 那五条决策失去标的）；~~[ADR-059](059-pr-agent-image-floating-and-command-gate.md) 全部决策~~（其标的即 `pr-agent.yml` 的触发面，随文件退役而闭合） |
+| 修订 | ~~[ADR-054](054-ai-review-workflows-admission.md) 决策 1 / 4 / 5~~（本 ADR 修订之：`pr-agent.yml` 退役 ⇒ 那三条决策失去标的；决策 3 / 6 的**规则仍在役**，由 `gate -- github-config` 规则 B 与 ADR-005 承载）；~~[ADR-059](059-pr-agent-image-floating-and-command-gate.md) 全部决策~~（其标的即 `pr-agent.yml` 的触发面，随文件退役而闭合） |
 | 关联 | [ADR-058](058-retire-pullfrog-agent.md)（停用 = 删除文件的判据来源）；[ADR-062](062-pullfrog-removal-irreversible.md)（禁令写死为机器判据的范式）；ADR-005（准入纪律：死配置要么接上要么删掉）；ADR-007（进不了仓库的状态不配称作决策）；ADR-030（日常零自动化的取舍形态）；`SECURITY.md`「CI 密钥暴露面」；`docs/dev-plan-defect-remediation.md` C1 / S0-3 |
 
 ## 背景
@@ -49,10 +49,10 @@
 1. **AI 评审改走本地 CLI（Gito），且不进 CI。**
    配置唯一产地：`.gito/config.toml`（**入库**，随仓库共享）；凭据唯一产地：`~/.gito/.env`（**机器本地，绝不入库**）。
    🔴 **「凭据在仓库外」此前只是约定，不是判据**——本轮补上强制面：Gito 只读 `$HOME/.gito/.env`（`constants.py:13`，且 `bootstrap.py:71` 把路径**显式**交给 `load_dotenv` ⇒ **不在 cwd 搜**），但 `gito setup` 在多处会落到 `<repo>/.gito/.env`，而本仓 `.gito/` 是**入库目录** ⇒ 一次误跑 + 一次 `git add .gito/` 即**明文密钥入库**，且那个文件**对 Gito 完全无用**。
-   ⇒ 新增**嵌套 `.gito/.gitignore`**（内容一行 `.env`）。**刻意不编辑根 `.gitignore`**：根那份是 CRLF blob，编辑它必带 53 行纯 EOL 差异（见「已登记的仓库异常」）；嵌套文件是新文件、纯 LF ⇒ **同一个保护，0 行噪音**。
+   ⇒ 新增**嵌套 `.gito/.gitignore`**（只有一条规则 `.env`，位于该文件第 23 行）。**刻意不编辑根 `.gitignore`**：根那份是 CRLF blob，编辑器把整份文件重写成 LF 时必带 50 行纯 EOL 差异（见「已登记的仓库异常」）；嵌套文件是新文件、纯 LF ⇒ **同一个保护，0 行噪音**。
    取证（成对）：`git check-ignore -v .gito/.env` ⇒ `.gito/.gitignore:23:.env`（exit 0）；真实放入含哨兵值的 `.gito/.env` 后 `git status -uall` **不列它**、而 `config.toml` 仍被列（保护未过度）；**反向对照**：移开该文件 ⇒ `?? .gito/.env` **立刻出现** ⇒ 起效者唯一。
    判据进入模型的通道**只有一个**：`[prompt_vars].requirements`——本仓判据（唯一产地 / 禁止硬编码 / 协议类型 / INV-6 / 禁止伪造成功 / 禁止无声降级 / 「配置看着在、实际不生效」/ 门禁文档一致 / 版本号纪律）的**手工节选**，产地标注在段内。
-   `exclude_files` 分两组：**A 组真实命中**（实测 89 个已跟踪文件，`vendor/**/lib/**` 占 80）+ **B 组纵深防御**（实测 0 命中，理由见「守卫与证据」）。
+   `exclude_files` 分两组：**A 组真实命中**（实测 86 个已跟踪文件，`vendor/**/lib/**` 占 80）+ **B 组纵深防御**（实测 0 命中，理由见「守卫与证据」）。
    使用入口登记在 `docs/commands.md` §28。
 
 2. **删除 `.github/workflows/pr-agent.yml`。** 退役判据与 ADR-058 同构：**文件缺席即退役**（GitHub 只从 `.github/workflows/` 加载；UI 的 Disable 开关是服务器端状态、不进仓库、不可被门禁看见）。
@@ -76,7 +76,7 @@
 8. **不配 `aux_files`——它在 `gito review` 路径上不生效（源码级证伪）。**
    这是本 ADR 里**唯一一条把「看起来最像对的写法」判红的决策**，故单列。
    `aux_files` 在 Gito 文档与它自己仓库的配置里都存在，读起来就是「把仓库纪律喂给评审器」；实测**接不上**：
-   - `gito/core.py::review()`（463–578）只有两处渲染提示词——498 行 `cfg.prompt`、297 行 `cfg.summary_prompt`，两处变量表都只有 `**cfg.prompt_vars`，**没有 `aux_files`**；
+   - `gito/core.py::review()`（463–580）只有两处渲染提示词——499 行 `cfg.prompt`，以及 573 行**调用**的 `make_cr_summary()`（定义于 293–320，其 298 行渲染 `cfg.summary_prompt`）；两处变量表都只有 `**cfg.prompt_vars`，**没有 `aux_files`**（行号 2026-10-19 按本机 4.5.0 wheel 复核）；
    - 读 `aux_files` 的代码在 `core.py::answer()`（617–620），那是 `gito answer` / PR 评论问答这**另一条**路径；
    - 模板侧同证：`gito/tpl/partial/aux_files.j2` 只被 `answer.j2` 与 `questions/{release_notes,test_cases}.j2` include，**默认评审提示词不 include 它**。
    ⇒ 它**没有**任何配置层解法（连自定义 `prompt` 也不行——变量压根没进渲染上下文）。
@@ -84,13 +84,13 @@
    代价如实记账：`requirements` 里那份判据成了**重复产地**（手工节选 `AGENTS.md` §3/§7 与 `docs/version-policy.md`），没有门禁能盯住它漂移 ⇒ 登记为下方「未闭合项 4」。
 
 9. **报告输出一律带 `--out .workbuddy/tmp`，并据此**不动** `.gitignore`。**
-   `out_folder` 缺省是 `repo.working_tree_dir`（core.py:553）⇒ 报告的 `code-review-report.md` / `.json` 默认落在**仓库根**。本仓**没有**为它们加 ignore 规则，原因是踩到了一个更值得记的坑（见下「已登记的仓库异常」）：`.gitignore` 的 HEAD blob 是 **CRLF**，在 `core.autocrlf=true` 下**任何人编辑它都会带出 53 行纯 EOL 差异**（实测 `--numstat` `55 50`，`-w` 忽略空白后只剩 **5 行**真改动）。
+   `out_folder` 缺省是 `repo.working_tree_dir`（core.py:553）⇒ 报告的 `code-review-report.md` / `.json` 默认落在**仓库根**。本仓**没有**为它们加 ignore 规则，原因是踩到了一个更值得记的坑（见下「已登记的仓库异常」）：`.gitignore` 的 HEAD blob 是 **CRLF**，在 `core.autocrlf=true` 下**编辑器把整份文件重写成 LF 时**会带出 **50 行**纯 EOL 差异（原地保留 CRLF 追加 = `5 0` 零噪音，2026-10-19 受控复测；实测 `--numstat` `55 50`，`-w` 忽略空白后只剩 **5 行**真改动）。
    ⇒ 处置：用 `--out` 把报告导进**早已被忽略**的暂存目录（`.gitignore:28` 的 `/.workbuddy/`），**不新增任何 ignore 规则**；`exclude_files` 里那两条则降级为「忘了带 `--out` 又手一抖 commit 了」的保险。
-   这条同时是一个**取舍记录**：本可以为两个报告文件去改 `.gitignore`，但那样会让 53 行 EOL 噪音混进一个无关变更——本仓刚在 PR #9 上以 hunk 为单位审查过提交，这个代价不值。
+   这条同时是一个**取舍记录**：本可以为两个报告文件去改 `.gitignore`，但那样会让 50 行 EOL 噪音混进一个无关变更——本仓刚在 PR #9 上以 hunk 为单位审查过提交，这个代价不值。
 
 ### 已登记的仓库异常（本轮发现，**未修**，等维护者裁定）
 
-`.gitignore` 在 HEAD 里的 blob 带 **50 个 CR**（CRLF），而本仓**其余所有**跟踪文件都是 LF blob（同批实测：`AGENTS.md` / `SECURITY.md` / `docs/commands.md` / `scripts/verify-github-config.mjs` 的 HEAD blob 全为 0 CR）。在 `core.autocrlf=true` 下，这意味着**任何人编辑 `.gitignore` 都会在提交里带出 53 行纯 EOL 差异**——判据：
+`.gitignore` 在 HEAD 里的 blob 带 **50 个 CR**（CRLF），而本仓**其余所有**跟踪文件都是 LF blob（同批实测：`AGENTS.md` / `SECURITY.md` / `docs/commands.md` / `scripts/verify-github-config.mjs` 的 HEAD blob 全为 0 CR）。在 `core.autocrlf=true` 下，这意味着**编辑器把整份文件重写成 LF 时**才会在提交里带出 **50 行**纯 EOL 差异（50 = 55−5 的纯 EOL 对；**原地保留 CRLF 追加 = `5 0` 零噪音**——噪音**有条件**，取决于编辑器是否整份回写）——判据：
 
 ```bash
 git cat-file -p HEAD:.gitignore | tr -cd '\r' | wc -c   # 50（其余文件皆为 0）
@@ -99,7 +99,7 @@ git diff --cached -w .gitignore                                  # 只看真改�
 ```
 
 ⚠️ 注意**换行符匹配陷阱**：`grep -c $'\r'` 会退化成匹配空模式（恒等于行数），判 EOL 必须用 `tr -cd '\r' | wc -c`。
-两条出路都成立，但必须有记录：**①** 一次性 `git add --renormalize .gitignore`（53 行差异只出现这一次，之后永不复现）；**②** 不动它，每次编辑都重新解释一遍那 53 行。本轮选了**绕开**（决策 9），把选择权留给维护者。
+两条出路都成立，但必须有记录：**①** 一次性 `git add --renormalize .gitignore`（50 行差异只出现这一次，之后永不复现）；**②** 不动它，整份重写式编辑都要重新解释一遍那 50 行。本轮选了**绕开**（决策 9），把选择权留给维护者。
 
 ### 已登记的本机环境异常（本轮发现，**根因已定位到行**）
 
@@ -155,7 +155,7 @@ git diff --cached -w .gitignore                                  # 只看真改�
 - **把 Gito 接成 `pull_request` 工作流**：否决，三条理由。① 新增三处 SHA 钉死义务（`checkout` / `setup-python` / `upload-artifact`，`PRE_EXISTING_FLOATING` 为空表 ⇒ 浮动 ref 一律报红）；② 新增一条 CI secret 暴露面并要在 `SECURITY.md` 登记；③ **Gito 自述它在响应 PR 评论时无法修改 `.github/workflows/` 下的文件**（GitHub 安全限制，官方明确不建议用 PAT 绕过）——而本仓的 PR 高频就是改 `workflows/` 与 `patches/`。收益只是「把本地就能跑的事搬到 CI 上跑」。
 - **在 `.gito/config.toml` 里自定义整个 `prompt`，以便 include `tpl:partial/aux_files.j2`**：否决，**做不到**。`review()` 的渲染调用（498–506）根本没有把 `aux_files` 放进变量表，模板里 `{% if aux_files %}` 恒为假；要让它生效必须改 Gito 源码（上游可修：`review()` 应当像 `answer()` 那样读并传入）。另有一层独立代价：整份 `prompt` 抄进仓库会把提示词**按版本冻住**（Gito 明示全量副本后上游的提示词改进不再到达），而这份副本**没有任何门禁能发现它漂移**——用一个新缺陷换一个旧缺陷。
 - **把 `aux_files` 配上「反正没坏处」**：否决。它不报错、不影响运行，**只是永远不生效**——这正是本仓 §7.1/决策 7 反复治的「配置看着在、实际不生效」。它会对着下一个读配置的人陈述一件假事。
-- **改 `.gitignore` 加两行，把两个报告文件忽略掉**：否决（本轮）。功能上等价，代价是把 **53 行纯 EOL 差异**混进一个与它无关的变更里——本仓刚在 PR #9 上按 hunk 审查过提交，这么做的比值不划算。改用 `--out`（决策 9），零新增规则、零 EOL 噪音。
+- **改 `.gitignore` 加两行，把两个报告文件忽略掉**：否决（本轮）。功能上等价，代价是把 **50 行纯 EOL 差异**混进一个与它无关的变更里——本仓刚在 PR #9 上按 hunk 审查过提交，这么做的比值不划算。改用 `--out`（决策 9），零新增规则、零 EOL 噪音。
 - **改用托管 SaaS 评审（CodeRabbit / Qodo 等）**：否决。ADR-059 已登记理据（不在本仓控制与审计范围内），且**实测两者都撞上配额**——CodeRabbit「0 remain」、Qodo「paused」。把评审能力建在一个会因额度而静默消失的外部依赖上，正是本仓最忌的形态。
 - **两份 Qodo 面只关一半（只删托管 App、保留仓内 action）**：否决。维护者指令针对的是「Qodo 的 PR 审核功能」整体；且仓内那份**成功率为 0**，保留它只能得到持续的红 check。
 
@@ -165,10 +165,10 @@ git diff --cached -w .gitignore                                  # 只看真改�
 - **评审不进 CI ⇒ 不影响任何发布门禁**（`ci.yml` / `smoke.yml` / `release.yml` 与 4 道 preflight 的判据一条未动）。
 - **已登记的代价（不粉饰）**：本地 CLI 模式的**可追溯性弱于 PR 评论**——「审了什么、什么时候审的」只留在本机，PR 上没有记录，也没有任何门禁强制它在推之前被跑过一次。本仓接受这个代价，因为换取的是「不引入新的托管面与新的 secret」。这一取舍与 ADR-030「日常提交零自动化」同形：把成本换成「靠人记得」+ 一条明确的补偿动作。
 - **`SECURITY.md` 暴露面表从 2 行回到 1 行**（只剩签名私钥）。⚠️ 但**识别出的缺口未闭合**：那张表依然不覆盖「哪些外部 App 能读本仓 diff」，而 `coderabbitai[bot]` 仍在读。本 ADR **不假装它已被解决**——它是一个待登记项，见下方「守卫与证据」末段。
-- ADR-054 的决策 1/3/4/5/6 与 ADR-059 的全部决策失去标的，状态改为被本 ADR 修订；ADR-054 与 ADR-059 的原文保留。
+- ADR-054 的决策 1/4/5 与 ADR-059 的全部决策失去标的，状态改为被本 ADR 修订（决策 3/6 的**规则仍在役**，由 `gate -- github-config` 规则 B 与 ADR-005 承载）；ADR-054 与 ADR-059 的原文保留。
 - `verify-github-config` 的扫描基数变为「8 个 YAML / **4 个工作流** / 34 个 uses / 错放 0」。⚠️ **uses 计数不得与 ADR-058/062 记录的历史值直接相减**（那是本仓记录在案的同一条教训：2026-10-09 之后其它批次也改过它）。该守卫不依赖具体数量——只有「扫出 0 个」才报红。
 
-- **评审范围被收窄到 454 个文件**（543 已跟踪 − 89 被排除），且**收窄的是「非本仓写的」那一部分**：上游编译产物 80、提交式 lockfile 2、根锁文件 2、历史 CHANGELOG 1，其余 4（sourcemap 等）。⚠️ **`harness-locks/**` 曾整目录排除，本轮改为只排 `harness-locks/*/package-lock.json`**——因为该目录里另有**发布台账 `dsh-releases.json`** 与**本仓自己钉的 `inputs.json`**，它们是判据产地，排除掉正好漏在本仓缺陷最密的地方（版本对齐）。这是一次**对首稿的自我纠错**，不是新增决定。
+- **评审范围被收窄到 457 个文件**（实测时 543 已跟踪 − 86 被排除；2026-10-19 复核 545 个，A 组仍 86），且**收窄的是「非本仓写的」那一部分**：上游编译产物 80、提交式 lockfile 2、根锁文件 2、历史 CHANGELOG 1、sourcemap 1。⚠️ **`harness-locks/**` 曾整目录排除，本轮改为只排 `harness-locks/*/package-lock.json`**——因为该目录里另有**发布台账 `dsh-releases.json`** 与**本仓自己钉的 `inputs.json`**，它们是判据产地，排除掉正好漏在本仓缺陷最密的地方（版本对齐）。这是一次**对首稿的自我纠错**，不是新增决定。
 - **判据通道只剩一条**：`[prompt_vars].requirements`。所以它的内容质量直接等于评审质量；它**不是**权威产地（权威是 `AGENTS.md` / `version-policy.md`），见未闭合项 4。
 
 ## 守卫与证据
@@ -180,7 +180,7 @@ git diff --cached -w .gitignore                                  # 只看真改�
 | 文件缺席（目标状态） | `node scripts/verify-github-config.mjs` | `退役工作流禁令：2 项在册 · 复活 0 项` | **0** |
 | 文件被放回（注入缺陷） | 同上（`git checkout HEAD -- .github/workflows/pr-agent.yml` 后） | `复活 **1** 项` + `❌ .github/workflows/pr-agent.yml 又出现了` | **1** |
 
-**自检**：`node scripts/verify-github-config.mjs --self-test` → **54 项通过**。本次新增 6 项，其中三条是可伪证的：
+**自检**：`node scripts/verify-github-config.mjs --self-test` → **55 项通过**（2026-10-19 二审后 +1：报红必须**逐字**带回条目自己的 `exposure`——旧「配对反证」匹配的短语在 `why` 里也有，钉不住 `exposure`）。2026-10-15 那轮新增 6 项，其中三条是可伪证的：
 
 - 「pr-agent.yml 重新出现必须报红」（假想分支，已如实标注——见下）
 - 「报红必须点名**该条目自己**的 ADR 与日期（pr-agent ⇒ ADR-065 / 2026-10-15）」——实测通过，报错文本里**没有**出现 pullfrog 的「13 个 provider key」。**可伪证方式**：把 `item.exposure` 改回一句写死的话，本条与「不得串条目」必须变红。
@@ -198,10 +198,10 @@ git diff --cached -w .gitignore                                  # 只看真改�
 |---|---|---|
 | `exclude_files` 真的在评审路径上 | `review()` → `_prepare()`（392）→ `get_target_diff()`（335–353）→ `filter_diff(diff, config.exclude_files, exclude=True)` | ✅ 在路径上；且**过宽会响**（全部变更被排除时抛 `AllChangesExcludedError`，打印 `All changes belong to excluded files, nothing to review.`）——不是静默空报告 |
 | 模式语义（`fnmatch`，不是 glob） | `filter_diff` 逐条调 `fnmatch.fnmatch(file.path, pattern)` | ✅ `**` 与 `*` **等价**（都跨 `/`）；**不含 `/` 的模式只匹配根目录同名文件**。⚠️ 直接证据是 `fnmatch.translate('docs/*') == translate('docs/**') == '(?s:docs/.*)\Z'` **逐字相同**——注入试验只能证明「`**` 跨 `/`」，**区分不了** `fnmatch` 与 glob（glob 的 `*` 也跨吗？在这种写法下不成立，故不能靠它下结论） |
-| 🔴 `fnmatch` **两平台不等价** | `fnmatch.fnmatch` 内部先 `os.path.normcase`（win32 转小写 + `/`→`\`；POSIX 恒等） | 实测 `'SRC-TAURI/RESOURCES/x.txt'` vs `'src-tauri/resources/**'`：Windows **True** / POSIX **False** ⇒ 同一份模式在两平台结论不同，失效方向是**静默多排除**（本机少审文件）。本仓现存路径全小写 ⇒ 现状不受影响，但这是「本机绿 ≠ CI 绿」的一个潜在产地 |
+| 🔴 `fnmatch` **两平台不等价** | `fnmatch.fnmatch` 内部先 `os.path.normcase`（win32 转小写 + `/`→`\`；POSIX 恒等） | 实测 `'SRC-TAURI/RESOURCES/x.txt'` vs `'src-tauri/resources/**'`：Windows **True** / POSIX **False** ⇒ 同一份模式在两平台结论不同，失效方向是**静默多排除**（本机少审文件）。本仓 `exclude_files` 模式与其命中路径**大小写逐字一致**（`CHANGELOG.md` 即含大写、模式为同一串）⇒ 现状不受影响，但这是「本机绿 ≠ CI 绿」的一个潜在产地 |
 | `--filter` 的语义与可用形态 | `get_target_diff`：`filter_diff(diff, filters)`（345）**先** → `filter_diff(config.exclude_files, exclude=True)`（348）**后**；别名见 `cli_base.py:96–106` | ✅ **叠加而非覆盖**（同时命中两者仍被排除）；逗号分隔多模式（`core.py:229`）；全被排掉抛 `AllChangesExcludedError` 而非空报告。🔴 **Windows 上只有 `--filter=模式` 可用**，分开传的 `-f 模式` 会 exit 2（见「已登记的本机环境异常」②） |
-| A 组命中数（对 `git ls-files` 的 **543** 个已跟踪文件） | 逐条算命中 | `vendor/**/lib/**` **80** · `harness-locks/*/package-lock.json` **2** · `vendor/**/client/*.js.map` 1 · `package-lock.json` 1 · `Cargo.lock` 1 · `CHANGELOG.md` 1 ⇒ **合计 89** |
-| **可伪证**：每条模式独立有效 | 去掉 `vendor/**/lib/**` 重算 | 总数 **89 → 9**，差值 **80** = 该模式命中数 ⇒ 不是「靠别的模式碰巧命中」 |
+| A 组命中数（对 `git ls-files` 实测，当时 **543** 个；2026-10-19 复核 545 个） | 逐条算命中 | `vendor/**/lib/**` **80** · `harness-locks/*/package-lock.json` **2** · `vendor/**/client/*.js.map` 1 · `package-lock.json` 1 · `Cargo.lock` 1 · `CHANGELOG.md` 1 ⇒ **合计 86** |
+| **可伪证**：每条模式独立有效 | 去掉 `vendor/**/lib/**` 重算 | 总数 **86 → 6**，差值 **80** = 该模式命中数 ⇒ 不是「靠别的模式碰巧命中」 |
 | B 组（8 个被 ignore 的目录 + 4 个临时目录） | `git ls-files` + `git check-ignore -v` | **命中 0**：这些路径 `.gitignore` 全部覆盖（`harness-deps/` `.gitignore:3`、`node_modules/` `:2`、`/target/` `:23`、`src-tauri/target/` `:7`、`src-tauri/resources/` `:8`、`src-tauri/gen/` `:9`、`dist/` `:12`、`out/` `:13`）⇒ branch diff **看不到**它们。⚠️ 故这一组**不是省 token 的手段**，只是防 `git add -f` / ignore 规则变更的保险。盘上实况：`target/` 68,877 文件 · `harness-deps/` 25,555 · `src-tauri/resources/` 13,815 · `node_modules/` 873，合计约 **10.9 万** |
 | 另 2 条（`code-review-report.{md,json}`）**不属上表** | `out_folder` 缺省 = `repo.working_tree_dir`（core.py:553） | ⚠️ 这两个文件**默认落在仓库根、且未被 `.gitignore` 覆盖**（`git check-ignore` 实测对两者均无命中，**退出码 1**）⇒ 当时「命中 0」只是因为**还没跑过**。📌 **2026-10-15 已跑过，但该预测仍未被观察**：两次运行都带了 `--out`，仓库根至今**没有**这两个文件（`ls code-review-report.*` 为空）⇒ 仍属**源码级证据**，不是实测事实。处置见决策 9 |
 | 🔴 `aux_files` 在 `gito review` 上失效 | 源码 + 模板 + CLI 三证（见决策 8） | ✅ 确认失效 ⇒ 本仓**不配**它 |
@@ -212,7 +212,7 @@ git diff --cached -w .gitignore                                  # 只看真改�
 
 1. `SECURITY.md`「CI 密钥暴露面」表**不覆盖外部 App 读取面**，而 `coderabbitai[bot]` 仍在读本仓 diff。要闭合需新增一张表 + 一条清单判据；本 ADR 不代做。
 2. ~~Gito 的**模型调用路径从未在本仓跑通过**~~ ✅ **本轮已闭合**（2026-10-15）：按本机 DSH 用户层 `profiles/web/cordis.patch.yml` 的 `stepfun` provider（`displayName: 跃阶星辰`）生成 `~/.gito/.env` 后，`step-5-preview` 经 `https://api.stepfun.com/step_plan/v1` 真实返回 **`'OK'`**；并已跑成**第一次真实评审**——`gito review --out .workbuddy/tmp --filter=scripts/**` ⇒ `exit 0`、**0 次 429**、`**⚠️ 2 issues found** across 2 files`（**2/2 全覆盖、无跳过**）、231 s，抓出 **2 条三道相关门禁全部漏过的真缺陷**（`scripts/verify-github-config.mjs` 文件头规则计数与实际不符、`:973` 自检把「快照」当不变式；均已修）。
-    ⚠️ **但仍不得把 `.gito/config.toml` 引用为「已接线能力」**（AGENTS.md §7.2）：那只是**一次 2 文件的部分覆盖**，本仓**从未做过一次全量评审**，且按本 ADR 决策它**不进任何 CI 档位**——「跑过」与「已接线」不是同一件事。
+    ⚠️ **但仍不得把 `.gito/config.toml` 引用为「已接线能力」**（AGENTS.md §7.2）：2026-10-15 那次是 2 文件的部分覆盖；**2026-10-19 已补第一次全量评审**（PR #12：`--what 54baac0 --against e66f04c`，12 文件 / 19m6s / `processing_warnings=[]` 零跳过），但按本 ADR 决策它**不进任何 CI 档位**——「跑过」与「已接线」不是同一件事。
     📌 顺带登记一条**降级预警**：运行日志会刷 `WARNING: Can't resolve tiktoken encoding for 'step-5-preview'` ⇒ 该模型名不在 tiktoken 词表内、**token 计数走回落编码** ⇒ 与 `max_code_tokens` 有关的预算只是近似值（当前路径不传 `max_tokens`，故不影响评审结论）。
    **本轮补充的实测事实（顺带纠正了本 ADR 与 `docs/commands.md §28` 初版的一处说法）**：`gito review` 的**任何**形态——`--help` / `-h` / `help review` / 裸 `review`——都在打印帮助**之前**先校验凭据，无 key 时一律 **`rc=2`** + `LLM configuration error: LLM_API_KEY is absent.`。初版把 `gito review --help` 写成「不需要 key 的核对步骤」，**该说法是错的**（已改为 `gito files`）。免 key 的只有顶层 `gito --help` 与 `gito files`。
 3. 两个托管 App 的**安装清单**在仓库内不可读（`gh api repos/.../installation` 实测返回 401，需 App JWT）⇒ 本 ADR 对其状态只能给行为证据，不能给配置事实。

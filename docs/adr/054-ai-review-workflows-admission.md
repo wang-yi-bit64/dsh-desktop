@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| 状态 | 已接受（**2026-10-15 决策 1 / 3 / 4 / 5 / 6 已由 [ADR-065](065-retire-pr-agent-local-cli-review.md) 修订**：`pr-agent.yml` 退役，AI 评审改走本地 CLI；本 ADR 保留为决策沿革） |
+| 状态 | 已接受（**2026-10-15 决策 1 / 4 / 5 已由 [ADR-065](065-retire-pr-agent-local-cli-review.md) 修订**：`pr-agent.yml` 退役，AI 评审改走本地 CLI；**决策 3 / 6 的规则仍在役**、只随标的退役——见下方「修订」行；本 ADR 保留为决策沿革） |
 | 日期 | 2026-09-30 |
 | 唯一产地 | [ADR-065](065-retire-pr-agent-local-cli-review.md)（`pr-agent.yml` 与 `pullfrog.yml` 均已退役 ⇒ 原来的「文件头注释」这个产地已随文件消失） |
 | 修订 | ~~决策 2（pullfrog.yml 保留在 workflows/、一并接上）~~（已被 [ADR-058](058-retire-pullfrog-agent.md) 修订：pullfrog.yml 删除、停用，AI 评审只保留 pr-agent.yml）<br>~~决策 1 / 4 / 5（pr-agent.yml 接线 / 触发面收紧 / 最小权限 + concurrency）~~（已被 [ADR-065](065-retire-pr-agent-local-cli-review.md) 修订：该文件于 2026-10-15 永久移除，禁令写死在 `scripts/verify-github-config.mjs` 的 `RETIRED_WORKFLOWS`）<br>⚠️ **决策 3 与 6 不在此列**——它们的**规则本身仍然在役**：决策 3（第三方 action 钉 40 位 SHA）现由 `gate -- github-config` 规则 B 承载；决策 6（文件头写存在理由与删除判据）现由 [ADR-005](005-ipc-command-surface-admission.md) 承载。ADR-065 让**标的**（pr-agent 的 action、`pr-agent.yml` 这个文件）消失了，**不等于规则失效**；下方决策状态表逐条区分了这两件事 |

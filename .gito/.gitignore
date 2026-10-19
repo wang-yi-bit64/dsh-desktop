@@ -13,11 +13,12 @@
 #
 # 为什么用**嵌套** .gitignore 而不是改根 .gitignore：
 #   根 `.gitignore` 在 HEAD 里的 blob 是 **CRLF**（50 个 CR），而其余跟踪文件都是 LF。
-#    在 `core.autocrlf=true` 下编辑它 ⇒ 提交里会多出 **53 行纯 EOL 差异**（实测
+#    编辑器把整份文件重写成 LF 时（`core.autocrlf=true`）⇒ 提交里会多出 **50 行纯 EOL 差异**（实测
 #    `git add` 后 `--numstat` = `55 50`，`-w` 忽略空白后只剩 5 行真改动）。
 #   嵌套 .gitignore 是**新文件、纯 LF**，改动面 = 1 个文件、0 行 EOL 噪音。
-#   ⇒ 同一个保护，代价从「53 行噪音」降到 0。（判据见 docs/commands.md §28）
+#   ⇒ 同一个保护，代价从「最多 50 行 EOL 噪音」降到 0。（判据见 docs/commands.md §28；
+#   ⚠️ 噪音**有条件**：原地保留 CRLF 追加 = `5 0` 零噪音，只有整份重写成 LF 才 50 行）
 #
-# 复核（应打印 `.gito/.gitignore:1:.env`，退出码 0）：
+# 复核（应打印 `.gito/.gitignore:23:.env`，退出码 0）：
 #   git check-ignore -v .gito/.env
 .env
