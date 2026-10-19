@@ -623,13 +623,18 @@ pub async fn updates_skip(
     ok(())
 }
 
-/// 当前是否为便携版（exe 不在 `Program Files` 下）。
+/// 当前安装形态：`installed` / `portable` / `unknown`。
 ///
-/// 便携版没有安装器落点，updater 的 NSIS passive 路径不可用；前端据此
-/// 隐藏更新按钮并显示手动替换提示。
+/// 便携版没有安装器落点，updater 的 NSIS passive 路径不可用；前端据此隐藏更新
+/// 按钮并显示手动替换提示。`unknown`（取不到自身路径）只降级为「不自动轮询」，
+/// **保留**手动检查入口并把原因显示在页面上——不得伪装成便携版
+/// （`AGENTS.md` §7.1 规则 3）。
+///
+/// ⚠️ 刻意返回裸值而不是 `IpcEnvelope<T>`：它是**探测类**命令，不存在业务失败面，
+/// 包一层封套只会让调用方多一次解包（同一取向见 `docs/adr/005`）。
 #[tauri::command]
-pub fn portable_mode(app: tauri::AppHandle) -> bool {
-    crate::update::UpdateManager::is_portable_mode(&app)
+pub fn install_mode() -> crate::update::InstallMode {
+    crate::update::UpdateManager::install_mode()
 }
 
 /// 更新器不可用：`E1003`（环境类，不是网络类）。

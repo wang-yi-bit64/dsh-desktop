@@ -12,6 +12,7 @@
 //! | [`args`] | argv / env 的构造、校验、透传分流、`--print-argv` 快照 | C1、C2 |
 //! | [`paths`] | 资源目录 / userData 目录布局 | C8 |
 //! | [`env`] | 子进程环境变量（PATH 合并、注册表 / login shell 捕获、覆盖） | C2 |
+//! | [`install`] | 安装形态判定（安装版 / 便携版 / 未知）：只看卸载器与 `.app` 结构，不看路径字符串 | — |
 //! | [`token`] | stdout 中 `dsh web:` URL 与 token 解析 | C3 |
 //! | [`readiness`] | HTTP/1.0 就绪探测（上游自报 + HTTP 双确认） | C4 |
 //! | [`process`] | 子进程派生、平台孤儿防护、陈旧进程清扫、控制台清洗 | C1、INV-3 |
@@ -30,6 +31,7 @@ pub mod diagnostics;
 pub mod diagnostics_export;
 pub mod env;
 pub mod error;
+pub mod install;
 pub mod launch;
 pub mod logging;
 pub mod logs;
@@ -53,6 +55,7 @@ pub use diagnostics::{
 };
 pub use diagnostics_export::{export as export_diagnostics, ExportSummary, RedactionHit};
 pub use error::{HostError, HostResult};
+pub use install::{classify as classify_install, InstallMode};
 pub use launch::{LaunchOutcome, Launcher, LauncherConfig};
 pub use logs::{FailureCause, LogLevel, LogLine, LogRing, LogSource};
 pub use logs_view::{LogFile, LogSlice};

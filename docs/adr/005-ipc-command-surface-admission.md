@@ -15,7 +15,7 @@
 
 ## 决策
 
-1. 每个 `#[tauri::command]` 只保留**有真实前端调用方**的；当前 21 个命令全部有调用方（2026-10-03 复核：新增 `portable_mode`——便携版判定，返回裸 `bool`，调用方 `updates.html`；准入纪律不变）。
+1. 每个 `#[tauri::command]` 只保留**有真实前端调用方**的；当前 21 个命令全部有调用方（2026-10-03 复核：新增 `portable_mode`——便携版判定，返回裸 `bool`，调用方 `updates.html`；**2026-10-17 更名为 `install_mode`**，返回裸三态字符串 `installed` / `portable` / `unknown`——判定本身从「路径字符串猜测」改为「卸载器 / `.app` 结构」正向信号，见 `docs/incidents/desktop-shell-and-tray.md`；准入纪律不变）。
 2. 死命令要么接上、要么删掉——**不得为「可能有用的未来 UI」预留**。
 3. 命令不返回裸 `false` / 伪造成功：失败必须是封套里的 `success: false` + 稳定
    `error.code`（恢复页按钮「点了没反应」的根因就是静默 `false`，改为 `E7002` 后才

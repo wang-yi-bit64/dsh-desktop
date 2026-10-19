@@ -320,7 +320,7 @@ pub fn run() {
             commands::updates_download,
             commands::updates_install,
             commands::updates_skip,
-            commands::portable_mode,
+            commands::install_mode,
             commands::feedback_context,
             commands::feedback_open,
             commands::feedback_channel_open

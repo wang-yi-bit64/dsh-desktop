@@ -1,0 +1,27 @@
+diff --git a/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js
+--- a/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js
++++ b/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js
+@@ -5279,6 +5279,7 @@ window.__ModuleLoader__.load({
+ 			if (code === "ACCOUNT_SIGNED_OUT") return t("message.failure.accountSignedOut");
+ 			if (code === "INTERRUPTED") return t("message.failure.interrupted");
+ 			if (code === "ACCOUNT_SIGN_IN_REQUIRED") return t("message.failure.accountSignInRequired");
++			if (code === "FORBIDDEN") return t("message.failure.forbidden");
+ 			if (code === "QUOTA" || code === "ACCOUNT_QUOTA") return t("message.failure.quota");
+ 			return code === "AUTH" ? t("message.failure.auth") : message;
+ 		}
+@@ -5881,6 +5882,7 @@ window.__ModuleLoader__.load({
+ 			"message.failure.interrupted": "DSH 进程在本轮完成前退出（例如被强制结束、崩溃或关闭超时），重新启动后本轮已中止。未完成的工具调用结果未知。",
+ 			"message.failure.accountSignInRequired": "请先登录 DeepSeek，并确认请求地址支持账号认证。",
+ 			"message.failure.quota": "当前请求的额度已用尽",
++			"message.failure.forbidden": "模型服务商拒绝了本次请求，请检查账号权限、地区限制或模型开通情况。",
+ 			"message.turnError": "本轮运行失败",
+ 			"message.maxTokens": "已达到输出 token 上限",
+ 			"message.maxTokens.hint": "回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。",
+@@ -6075,6 +6077,7 @@ window.__ModuleLoader__.load({
+ 			"message.failure.interrupted": "The DSH process exited before this turn finished (for example, it was killed, crashed, or timed out while shutting down), so the turn was closed when DSH restarted. Unfinished tool calls have unknown outcomes.",
+ 			"message.failure.accountSignInRequired": "Sign in to DeepSeek and ensure the request destination supports account authentication.",
+ 			"message.failure.quota": "Request quota exhausted.",
++			"message.failure.forbidden": "The model provider denied this request. Check your account permissions, region, or model access.",
+ 			"message.turnError": "This turn failed",
+ 			"message.maxTokens": "Output token limit reached",
+ 			"message.maxTokens.hint": "The reply was cut off; earlier output is preserved in the conversation. Send \"continue\" to let the model resume.",
