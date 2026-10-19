@@ -14,28 +14,26 @@
     "",
     "⚠️ 桥接版（ADR-063）**不**出现在 lines[] 里：它们是旧模型的高号（0.7.x），由人写进版本文件，",
     "   只登记在台账的 bridges[] 中，**不**由台账的 n 派生——写进这里等于宣称它们可被派生。",
-    "   本轮（第二代版本号模型的第二次发版）的前置**已完成**：两条桥接版（rc 线 v0.7.3-rc.1、",
-    "   alpha 线 v0.7.4-alpha.1）已于 2026-10-09 各自发出（Release 存在、13 资产），",
-    "   按 §7.4 三条豁免判据全部成立（同通道 / bridge.version ≥ 该通道最高已发布 tag / 该 tag 已发布）。",
-    "   ⇒ 本轮两条合成号可以直接发，**不需要**再补一轮桥接版。",
+    "   换代前的前置**已完成**：两条桥接版（rc 线 v0.7.3-rc.1、alpha 线 v0.7.4-alpha.1）已于 2026-10-09",
+    "   各自发出（Release 存在、13 资产），按 §7.4 三条豁免判据全部成立",
+    "   （同通道 / bridge.version ≥ 该通道最高已发布 tag / 该 tag 已发布）⇒ 合成号可以直接发，不需再补桥接版。",
     "",
-    "本轮（2026-10-18）变更性质：alpha 锚点已随上游于 2026-10-14 推进到 0.2.1-alpha.2（next 仍钉 0.2.0-rc.2），",
-    "本仓自上个 tag 起只有 fix: / ci: 提交（安装形态判定改正向信号 + deny 豁免），**无 feat:**、**无破坏性**",
-    "⇒ releaseType = desktop-fix（§3.2：x.y.z 不变、n+1）。",
-    "alpha 线在上游 0.2.1-alpha.2 组内此前**零构建** ⇒ n = 1；next 线在 0.2.0-rc.2 组内已用 n = 1、2 ⇒ 下一个 n = 3。",
+    "本轮（2026-10-18，两条线同时重锚）变更性质：两条在役锚点当天各自前移一次",
+    "（alpha 0.2.1-alpha.2 → 0.2.1-alpha.5；next 0.2.0-rc.2 → 0.2.1-rc.2，落在 e66f04c），",
+    "且区间内含本仓需发版改动（PR #11 的补丁重锚 + settings-models 双线退役 + deliverables 兜底守卫修正），",
+    "rc 线区间另含 3 条 feat:（Supervisor 接线 / CLI recover / supervisor env-profile 通道）",
+    "⇒ releaseType = mixed（§3.2：上游前进 且 本仓有需发版改动 ⇒ x.y.z 前进、n = 1）。",
+    "两条在役键（alpha=0.2.1-alpha.5、next=0.2.1-rc.2）的 builds[] 均为空 ⇒ n 各为 1。",
     "n 不由人填，此处只是本轮**决策**的批准值，第 4 步会再逐字核对（见 harness-locks/dsh-releases.json）。",
-    "breaking = false：判据见 docs/releases/FEATURES.md §2（四条可证伪判据，全部零命中）。",
-    "",
-    "⚠️ 2026-10-18 之后锚点**又动过一次**（同日两轮，均未发布）：alpha 0.2.1-alpha.2 → 0.2.1-alpha.5，",
-    "   next 0.2.0-rc.2 → 0.2.1-rc.2。⇒ 上面那轮的 lines 现在描述的是**已交付**的 v0.2.1-alpha.2.1，",
-    "   其中 lines.next.n=3 指的是已退役锚点下的序号，**不可直接用于下一次发布**（--validate 会把它标为「历史值」）。",
-    "   下次发布前必须重写 lines：届时两条在役键（alpha=0.2.1-alpha.5、next=0.2.1-rc.2）的 builds 均为空 ⇒ n 各为 1。"
+    "w 取 null（偏离 §3.2 对 mixed 的「w 标批次」建议，理由）：`+w` 会改变安装包文件名与 latest.json 的 URL",
+    "   （多一处必须正确处理的 `+` 编码面），而批次身份已由台账的 upstream 键 + n 唯一确定，且 w 不承担排序（§1.3）。",
+    "breaking = false：判据见 docs/releases/FEATURES.md §2（四条可证伪判据，全部零命中）。"
   ],
   "schemaVersion": 1,
-  "releaseType": "desktop-fix",
+  "releaseType": "mixed",
   "breaking": false,
   "lines": {
     "alpha": { "n": 1, "w": null },
-    "next": { "n": 3, "w": null }
+    "next": { "n": 1, "w": null }
   }
 }
