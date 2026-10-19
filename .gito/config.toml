@@ -1,0 +1,153 @@
+# .gito/config.toml — Gito 本地 CLI 评审配置（**项目层**）
+#
+# ## 这是什么
+# 本仓的 AI 代码评审走**本地 CLI**：`gito review` 在你自己的机器上跑，直连你配置的
+# 模型端点，不经过任何中间服务器。它与 `.github/workflows/` 下的任何工作流**无关**
+# ——本仓刻意**没有**为它接线 CI，理由与取舍见 `docs/adr/065-*.md`「备选方案」。
+# 使用入口与已登记的局限见 `docs/commands.md` §28。
+#
+# ## 两层配置模型（**别把凭据写进这个文件**）
+#   · 环境层 `~/.gito/.env`（**机器本地，绝不入库**）——LLM provider / model / API key / 并发；
+#   · 项目层 本文件（入库，随仓库共享）——评审行为、纳入与排除的文件。
+# 本文件进版本库 ⇒ 它是**唯一会被提交的那一层**，任何密钥写进来就是一次真实泄漏。
+#
+# ---------------------------------------------------------------------------
+# 🔴 为什么这里**没有** `aux_files`（一个被源码证伪的默认写法）
+#
+# `aux_files` 是本工具文档里最像「喂仓库纪律给模型」的旋钮，Gito 自己的仓库也用它。
+# 但它在 `gito review` 这条路径上**不生效**——这不是配置写错，是**工具的能力边界**：
+#
+#   · `gito/core.py::review()`（463–578 行）里**只有两处**渲染提示词：498 行 `cfg.prompt`
+#     与 297 行 `cfg.summary_prompt`，两处的变量表都只有 `**cfg.prompt_vars`
+#     ——`aux_files` **不在其中**；
+#   · 读 `aux_files` 的代码在 `core.py::answer()`（617–620 行）里，那是
+#     `gito answer` / PR 评论问答这条**另一条**路径；
+#   · 模板侧同一个事实：`gito/tpl/partial/aux_files.j2` 只被 `answer.j2` 与
+#     `questions/{release_notes,test_cases}.j2` include，**默认评审提示词不 include 它**。
+#
+# ⇒ 结论：**没有任何配置写法能让 `aux_files` 进入 `gito review`**（连自定义 `prompt`
+#   也不行——变量根本没被传进渲染上下文）。
+#   按 ADR-005 的准入纪律，这种「配了但接不上」的项**不许留在配置文件里**：它会让人
+#   以为判据已经喂进去了，而实际上模型一个字都没看到——正是本仓最忌的
+#   「配置看着在、实际不生效」。
+#   ⇒ 判据改走 `[prompt_vars].requirements`（**唯一**被评审提示词渲染的通道，证据同上）。
+#
+# 📌 这条是**降低**暴露面，不是引入：`requirements` 的内容是手工从 `AGENTS.md` §3/§7
+#    与 `docs/version-policy.md` 摘的**节选**，属于登记在案的重复产地。它没有门禁能
+#    盯住漂移，所以**改了那两份文件请回来同步这一段**（ADR-065「未闭合项」第 4 条）。
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 排除：**凡「不是本仓写的、或不是本仓打算维护的」，一律排除**
+#
+# 判据由 `gito/core.py::filter_diff()` 执行，用的是 **`fnmatch.fnmatch(file.path, 模式)`**
+# ——注意它的语义与直觉不同：`**` 与 `*` **等价**（都匹配含 `/` 的任意串），而
+# `package-lock.json` 这种**不含 `/` 的模式只匹配根目录同名文件**，不匹配嵌套的同名文件。
+#
+# 命中数是 **2026-10-15 对 `git ls-files`（543 个已跟踪文件）的实测值**，不是估计。
+# 「注入试验」：把 `vendor/**/lib/**` 从列表里去掉，被排除总数恰从 89 降到 9
+# （差 80 = 该模式的命中数）⇒ 每条模式都可独立证伪。
+# ---------------------------------------------------------------------------
+exclude_files = [
+  # ---- A 组：真实命中（89 个已跟踪文件）。这些**会**进 branch diff，必须排除 ----
+  # 上游包的**编译产物**（80 个）。保留其 `src/`、`package.json`、`cordis.patch.yml`
+  # ——那些是本仓维护的桌面定制与 peer 区间产地（见 AGENTS.md §3 与守卫规则 3）。
+  'vendor/**/lib/**',
+  # 同一包里的 sourcemap（1 个）
+  'vendor/**/client/*.js.map',
+  # 提交式 lockfile（2 个）：逐字抄自上游 `version` / `peerDependencies`，审它等于审上游。
+  # ⚠️ 只排 package-lock.json，**不排整个 harness-locks/**：
+  #    `harness-locks/dsh-releases.json` 是**发布台账**（本仓的判据产地），
+  #    `harness-locks/*/inputs.json` 是**本仓自己钉的输入快照**——这两类是「本仓写的」，
+  #    排除掉会让评审看不到版本对齐决策，正好漏在本仓缺陷最密的地方。
+  'harness-locks/*/package-lock.json',
+  # 根锁文件（各 1 个）：解析结果，不是源码。真正的守卫是
+  # `gate -- cargo-lock-scope`（只认根 lock）与 `gate -- harness-lockfile`，不是 AI 评审。
+  'package-lock.json',
+  'Cargo.lock',
+  # 历史产物（1 个）：不参与新决策，审它只会产出「历史不该这么写」这类噪声。
+  'CHANGELOG.md',
+
+  # ---- B 组：纵深防御（**实测命中 0**）。别把这一组读成「省 token 的手段」----
+  # 下面这些路径在本仓**全部被 `.gitignore` 忽略，0 个已跟踪文件** ⇒ 正常的 branch
+  # diff 根本看不到它们，所以这一组**省不到任何 token**。留着它们的作用只有一个：
+  # 当 ignore 规则被改动、或有人 `git add -f` 时，不至于把整棵树送进模型。
+  # 收益是**响亮**而非静默：Gito 在全部变更都被排除时会抛
+  # `AllChangesExcludedError` 并明确打印「All changes belong to excluded files」
+  # ——不会安静地评出一份空报告。
+  #
+  # 盘上实况（同一次实测）：`target/` 68,877 文件 · `harness-deps/` 25,555 ·
+  # `src-tauri/resources/` 13,815 · `node_modules/` 873 · 其余个位数，合计约 10.9 万。
+  'harness-deps/**',
+  'node_modules/**',
+  'target/**',
+  'src-tauri/target/**',
+  'src-tauri/resources/**',
+  'src-tauri/gen/**',
+  'dist/**',
+  'out/**',
+  # 本工具自己的产出。⚠️ 它们**默认落在仓库根且未被 ignore**（`out_folder` 缺省是
+  # `repo.working_tree_dir`，见 core.py:553）⇒ 推荐按 §28 用 `--out .workbuddy/tmp`
+  # 让它落进**已被忽略**的暂存目录（`.gitignore:28` 的 `/.workbuddy/`）。
+  # 这两条是「忘了带 `--out` 又手一抖 commit 了报告」的保险——正常路径下它们是空转的。
+  'code-review-report.md',
+  'code-review-report.json',
+  # 门禁的临时工作目录（见 .gitignore 末尾同名条目）
+  '.recount-tmp/**',
+  '.port-alpha2/**',
+  '.merge-migrate-tmp/**',
+  '.upgrade-scratch/**',
+]
+
+# ---------------------------------------------------------------------------
+# 提示词变量
+#
+# ⚠️ `[prompt_vars]` 是**合并**语义（`default | project`，见 `project_config.py:128`）
+#    ——所以这里只写要覆盖的键，没写的（`self_id` / `json_requirements`）保留默认。
+#    而**顶层键是替换语义**（`config.update(project_config)`，同文件 126 行）
+#    ——`exclude_files` 写在这里会整体替换默认值（默认是空表，无副作用）。
+# ---------------------------------------------------------------------------
+[prompt_vars]
+# 关掉「表彰」段：本仓要的是缺陷清单，不是鼓励。
+awards = ""
+
+# 🔴 本仓判据进入模型的**唯一**通道（理由见文件头「为什么没有 aux_files」）。
+# 这段是手工节选，产地：AGENTS.md §3 / §7 与 docs/version-policy.md。
+requirements = """
+你是 dsh-desktop（Rust + Tauri 2.0 桌面壳，上游是 DeepSeek Harness）的评审者。
+本仓把什么当成**缺陷**与常规项目不同，请在评审时按下表检查，并明确指出违反了哪一条。
+
+判据（编号 → 违反即缺陷；括号内是人工复核时该翻的产地）：
+1. 唯一产地：同一事实不得有第二个产地。常量、路径、URL、版本锚点、超时值在两处各写一份
+   就是缺陷。（AGENTS.md §3）
+2. 禁止硬编码：业务逻辑里不得出现硬编码的超时、路径、URL、正则；这些必须进
+   `crates/dsh-contracts/src/constants.rs` 并带 `CX-` 编号。（AGENTS.md §3）
+3. 协议类型不得重复定义：JSON-RPC 2.0 消息模型唯一定义点是
+   `crates/dsh-contracts/src/rpc.rs`（`transport.rs` 仅 re-export）。（AGENTS.md §3）
+4. 无头隔离（INV-6）：`dsh-contracts` 与 `dsh-host` 严禁依赖 Tauri、UI 框架或窗口系统。
+   判据：它能不能在没有窗口系统的机器上被测试？能才属无头 crate。（AGENTS.md §3 / §7）
+5. 禁止伪造成功：桩实现被调用时必须返回可辨识的错误，不得返回 Ok / success: true /
+   空数组这类「看起来合理的默认值」。（AGENTS.md §7）
+6. 禁止无声降级：允许降级，但降级事实必须写进产物（如 MANIFEST.json 逐条记
+   applied / skipped / failed）；缺记录即视为未应用。（AGENTS.md §7）
+7. 「配置看着在、实际不生效」：本仓最忌讳的形态（工作流放错目录从未运行、CODEOWNERS
+   规则被静默覆盖、守卫扫描模式变更后静默归零都发生过）。任何「有配置但无执行者」
+   「有断言但恒为真」「扫出数为 0 却报绿」的形态都要报出。（AGENTS.md §7）
+8. 门禁与文档一致：文档里写死的数字（条目数、步骤数、ADR 篇数、版本号）是最容易漂的
+   一类事实。文档宣称与代码现实不一致**必须报出**。（AGENTS.md §7）
+9. 版本号纪律：桌面合成版本号 `<上游x.y.z>-<上游预发布>.<n>[+<w>]`，序号必须落在
+   **预发布段**；上游身份**不可**由桌面号反推。改动版本相关代码时按
+   `docs/version-policy.md` 判，不要按 semver 直觉判。（docs/version-policy.md）
+
+输出姿态（对**你的输出**的要求，不是代码要求）：
+- 只报缺陷，不报风格（行宽、命名偏好、注释多少）。
+- 每条缺陷必须给出：违反了上面第几条 + 可定位的 `文件:行`。
+- 不要建议引入新依赖、新服务或新 CI 工作流——本仓每新增一处即新增一处需要钉死与审计的面。
+- 上游第三方代码不在评审范围内。🔴 **判据是路径，不是内容**：只有当变更文件的**路径**命中
+  `exclude_files`（如 `vendor/**/lib/**`）时才报「排除项失效」。`patches/**` 天然含上游代码、
+  `harness-locks/*/inputs.json` 抄的是上游元数据——这些是**本仓产物、故意不排除**，
+  **即使内容逐字来自上游，也按本仓变更审**，不得因此报「排除项失效」。
+  （这条收窄是为了消掉一个已知误报：补丁文件曾被判成「排除项失效」。）
+- **不确定的事标为「需人工确认」，不要给出看起来合理的推测**；不要用通用最佳实践
+  替代本仓判据。你把不确定说清楚，比多报三条不成立的缺陷有用。
+"""
