@@ -36,7 +36,7 @@
  *      D4. 模式不能含 `!` 取反 / `[ ]` 字符范围——这两条是 gitignore 语法，
  *          在 CODEOWNERS 里**不生效**（GitHub 文档明列）。写了等于没写。
  *
- * E. **已退役的工作流不得复活**（ADR-062，2026-10-09 新增）。
+ * E. **已退役的工作流不得复活**（ADR-062 / ADR-065；2026-10-09 新增，2026-10-15 加 pr-agent 条目）。
  *    `.github/workflows/pullfrog.yml` 按 ADR-058 删除过一次，随后**被恢复过一次**
  *    （commit `d286f44`）。这就是「把禁令写在散文里」的实测结果：散文没有执行者，
  *    下一个人（或下一个 agent）读到的只是一段说明，而恢复文件不需要通过任何检查。
@@ -456,7 +456,7 @@ export const RETIRED_WORKFLOWS = [
 ]
 
 /**
- * 规则 E：已退役的工作流不得复活（ADR-062）。
+ * 规则 E：已退役的工作流不得复活（ADR-062 / ADR-065）。
  *
  * ## 为什么是「文件存在性」而不是「文件内容」
  *
@@ -479,7 +479,7 @@ export function checkRetiredWorkflows(presentFiles, retired = RETIRED_WORKFLOWS)
     problems.push(
       '退役工作流禁令表是空的。这不是「没有退役项」，是**禁令被删掉了**——' +
         '空表与「文件复活」一样静默（AGENTS.md §7.3：扫出 0 个不得冒充通过）。' +
-        '若确实不再需要任何禁令，请连同 ADR-062 与 ADR-058 的修订行一起显式处置。',
+        '若确实不再需要任何禁令，请连同本表各条目对应 ADR（ADR-062 / ADR-058 / ADR-065）的修订行一起显式处置。',
     )
     return { problems, checked: 0, revived: 0 }
   }
@@ -700,7 +700,7 @@ function main() {
     }
   }
 
-  // 规则 E：退役工作流不得复活（ADR-062）。
+  // 规则 E：退役工作流不得复活（ADR-062 / ADR-065）。
   // 判据只看「路径在不在」，不扫内容——见 checkRetiredWorkflows 的注释。
   const retired = checkRetiredWorkflows(files.map((f) => f.path))
   console.log(
@@ -989,11 +989,26 @@ export function selfTest() {
     'E 报红不得串条目：pr-agent 的报红里不许出现 pullfrog 的「13 个 provider key」',
     ePrAgent.problems.every((p) => !/13 个 provider key/.test(p)),
   )
+  // 🔴 只匹配「13 个 provider key」**钉不住 `exposure`**：pullfrog 的 `why` 字段里也有这串，
+  //    而报红文本同时拼 `why` 与 `exposure` ⇒ 就算把 `exposure` 改成通用空话，
+  //    上面那个短语照样出现、断言照样过（2026-10-19 Gito 二审 #15）。
+  //    正确判据是「报红必须**逐字**包含该条目自己的 `exposure` 字段值」，且两侧都要钉。
+  //    ⚠️ 该断言钉的是「**模板插值在场**」：删掉 `${item.exposure}` 即红（2026-10-19 实测）；
+  //    而**改字段内容仍绿是预期**——插值语义本就随字段走，内容质量由「非空 + why 独立」兜底。
+  const ePullfrog = checkRetiredWorkflows([join('.github', 'workflows', 'pullfrog.yml')])
   check(
-    'E 配对反证：pullfrog 的报红仍必须保留它自己的暴露面描述（暴露面未被改成通用空话）',
-    checkRetiredWorkflows([join('.github', 'workflows', 'pullfrog.yml')]).problems.some((p) =>
-      /13 个 provider key/.test(p),
-    ),
+    'E 配对反证：pullfrog 的报红仍必须逐字带回它自己的 exposure（钉住模板插值——删插值即红）',
+    (() => {
+      const item = RETIRED_WORKFLOWS.find((it) => it.file.endsWith('pullfrog.yml'))
+      return item !== undefined && ePullfrog.problems.some((p) => p.includes(item.exposure))
+    })(),
+  )
+  check(
+    'E 正向：pr-agent 的报红也必须逐字带回它自己的 exposure（钉住模板插值——删插值即红）',
+    (() => {
+      const item = RETIRED_WORKFLOWS.find((it) => it.file.endsWith('pr-agent.yml'))
+      return item !== undefined && ePrAgent.problems.some((p) => p.includes(item.exposure))
+    })(),
   )
   // 反向：pr-agent.yml **缺席**时必须放行——它是本仓当前的真实状态，
   // 若这里恒红就说明断言写成了「文件必须在」而不是「文件不得在」。

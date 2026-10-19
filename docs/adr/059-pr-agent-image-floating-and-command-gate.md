@@ -75,7 +75,7 @@
 
 本节为**新增**，上方原文一字未改。ADR-065 裁定了 `pr-agent.yml` 的永久退役，本 ADR 的全部决策因此失去标的。**但本 ADR 记录的技术结论不因标的消失而失效**，它们对将来任何引入同类工具的尝试依然有效：
 
-1. **「action 钉 40 位 SHA」钉不住 Docker action 真正执行的代码。** 本 ADR 背景段第 3 条的行号证据（`Unknown command` 日志 363 / 源码 381 等）说明：`uses: repo@<sha>` 只钉住 `action.yaml` 与 `Dockerfile`，而 `FROM pragent/pr-agent:github_action` 是**浮动镜像标签**，真正跑的版本由 Docker Hub 决定。判据留给将来：**若某个 action 从「脚本 action」改为「Docker action」，原先的 SHA 钉死保证就降级了**——这类变更不会让任何现有门禁报红。
+1. **「action 钉 40 位 SHA」钉不住 Docker action 真正执行的代码。** 本 ADR 背景段第 2 条的行号证据与第 3 条的结构分析（`Unknown command` 日志 363 / 源码 381 等）说明：`uses: repo@<sha>` 只钉住 `action.yaml` 与 `Dockerfile`，而 `FROM pragent/pr-agent:github_action` 是**浮动镜像标签**，真正跑的版本由 Docker Hub 决定。判据留给将来：**若某个 action 从「脚本 action」改为「Docker action」，原先的 SHA 钉死保证就降级了**——这类变更不会让任何现有门禁报红。
 2. **「补偿控制」的形态值得复用。** 本 ADR 决策 1 把触发面第③条提前到 workflow 层执行（`startsWith` 而非 `contains`，因为镜像按第一个 token 解析）——在无法钉死镜像的前提下，用**入口处的一道窄门**替代无法实现的钉死。ADR-065 决策 4 修掉的那个缺陷（通用函数里硬编码条目专属事实）与它是同一条纪律：**约束要放在真正能生效的那一层的边界上，且不能靠「里面那层已经修好了」来兜底。**
 3. **撤回一条未兑现的宣称。** 本 ADR「后果」段写着「`/review` 命令路径与 `pull_request` 路径**能否真正产出评审**……需要一次真实的 `/review` 评论在线验证」，并明确「本 ADR 不宣称它已工作」。ADR-065 的取证给出了答案：**到退役为止，那条路径一次都没有成功过**（8 次 `pull_request` 运行 0 成功）。本 ADR 当时的不宣称是**对的**——这条留作「拒绝提前宣称」这一纪律的正例。
 4. **`concurrency` 的那一行是缺陷来源。** 本 ADR 未涉及 `concurrency`（它来自 ADR-054 决策 5），但 ADR-065 查明：正是因为 `pull_request` 与 `issue_comment` 共用一个 concurrency group，第三方机器人的评论才会取消本工作流自己的评审运行。**教训**：`cancel-in-progress` 与「多个事件源共用一个语义组」组合时，会造出「A 触发取消 B」这种跨来源的互相抵消——它是一个**跨模块**的失效，任何单看其中一个触发器的评审都发现不了。

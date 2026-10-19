@@ -446,8 +446,8 @@ C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito setu
 #        · 错：`<repo>/.gito/.env`——**Gito 永远不会读它**（`bootstrap.py:71` 把路径**显式**
 #          传给 `load_dotenv`，不在 cwd 搜 `.env`），但本仓的 `.gito/` 是**入库目录**
 #          ⇒ 一次误跑的 `gito setup` + 一次 `git add .gito/` = **明文密钥入库**。
-#        ⇒ 已加**嵌套 `.gito/.gitignore`**（内容一行 `.env`）拦住它。为什么不用根 `.gitignore`：
-#          根那份在 HEAD 里是 **CRLF blob**，编辑它会带出 53 行纯 EOL 差异（见下方仓库异常②）；
+#        ⇒ 已加**嵌套 `.gito/.gitignore`**（只有一条规则 `.env`，位于该文件第 23 行）拦住它。为什么不用根 `.gitignore`：
+#          根那份在 HEAD 里是 **CRLF blob**，编辑器把整份文件重写成 LF 时会带出 50 行纯 EOL 差异（见下方仓库异常②）；
 #          嵌套 .gitignore 是**新文件、纯 LF** ⇒ 同一个保护，改动面 0 行噪音。
 #        ✅ 取证（成对）：`git check-ignore -v .gito/.env` ⇒ `.gito/.gitignore:23:.env`（exit 0）；
 #          真实写一个含哨兵值的 `.gito/.env` 后 `git status --untracked-files=all` **不列它**，
@@ -523,7 +523,7 @@ C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito setu
 #        `step-5-preview`（上下文 1024000，旗舰、带推理，本机默认选它）。
 #
 #     评审配置（**入库**，唯一产地 `.gito/config.toml`）：
-#       · `exclude_files` —— A 组真实命中 89 个已跟踪文件（`vendor/**/lib/**` 占 80），
+#       · `exclude_files` —— A 组真实命中 86 个已跟踪文件（`vendor/**/lib/**` 占 80），
 #         B 组是纵深防御（实测 0 命中，被 ignore 的目录，正常 diff 看不到）；
 #       · `[prompt_vars].requirements` —— 本仓判据进入模型的**唯一**通道。
 #     🔴 **不要加 `aux_files`**：它在 `gito review` 路径上**不生效**（源码级证据见
@@ -546,7 +546,7 @@ C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito revi
 #     `git status` 里常驻成未跟踪文件，稍不留意就被 commit 进去。`.workbuddy/` 早在
 #     `.gitignore:28` 被忽略，把报告导进去等于**不新增任何 ignore 规则**就解决这件事。
 #     （本仓刻意**没有**为这两个文件改 .gitignore：那个文件在 HEAD 里的 blob 是 CRLF，
-#      其余文件都是 LF，在 `core.autocrlf=true` 下**任何人编辑它都会带出 53 行纯 EOL 差异**
+#      其余文件都是 LF，编辑器把整份文件重写成 LF 时会带出 **50 行**纯 EOL 差异（原地保留 CRLF 追加 = 零噪音）
 #      ——见下面「已登记的仓库异常」。用 `--out` 绕开比修那行更划算。）
 #
 #     ⚡ **要快就用过滤器收窄文件集——这是本工具**唯一**安全的提速手段**（别加并发，见上）。
@@ -609,7 +609,7 @@ C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito popu
 #        workflows 与 patches ⇒ 这条是本仓选「本地 CLI 而非 PR 评论」的直接原因之一。
 #
 #     ✅ **已取证（2026-10-15，不需要 key 即可复核）**：① `fnmatch` 模式语义与命中数——
-#        对 `git ls-files` 的 543 个已跟踪文件实测，A 组命中 89、B 组命中 0，且做注入
+#        对 `git ls-files` 实测（当时 543 个，2026-10-19 复核 545 个），A 组命中 86、B 组命中 0，且做注入
 #        试验（去掉 `vendor/**/lib/**` 后总数恰降 80）⇒ 模式列表可独立证伪；② 判据通道——
 #        `gito review` 只渲染 `cfg.prompt` / `cfg.summary_prompt` 且只传 `**prompt_vars`，
 #        `aux_files` 只被 `answer()` 读取 ⇒ 本仓不配它（源码级证据，不需要跑模型）；
@@ -633,7 +633,7 @@ C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito popu
 #        并已对真实 diff 跑出报告：`--filter=scripts/**` ⇒ `exit 0`、**0 次 429**、
 #        `**⚠️ 2 issues found** across 2 files`（**2/2 全覆盖、无跳过**）、耗时 **231 s**，
 #        且抓出 **2 条门禁未覆盖的真缺陷**（已修，见 `docs/dev-plan-defect-remediation.md` §11 对应行）。
-#        ⚠️ 但这**不是**「已接线能力」：那只是**一次 2 文件的部分覆盖**，本仓**从未做过全量评审**，
+#        ⚠️ 「已接线能力」仍留给维护者定性：2026-10-19 已跑过一次**全量**真实评审（PR #12，12 文件 / 零跳过），但它**不进任何 CI 档位**，
 #        且它**不进任何 CI 档位**（ADR-065）⇒ AGENTS.md §7.2 的口径仍然适用。
 #        ⚠️ 另有一条**降级预警**（不影响结论，但要知道）：日志会刷
 #        `WARNING: Can't resolve tiktoken encoding for 'step-5-preview'` ⇒ 该模型名不在 tiktoken
@@ -643,12 +643,12 @@ C:\Users\Administrator\.workbuddy\binaries\python\envs\default\Scripts\gito popu
 #
 #     ⚠️ **已登记的仓库异常（本次发现，未修，等你裁定）**：`.gitignore` 在 HEAD 里的 blob
 #        带 **50 个 CR**（CRLF），而其余所有跟踪文件都是 **LF blob**。在 `core.autocrlf=true`
-#        下这意味着一件事：**任何人编辑 `.gitignore`，提交里都会多出 53 行纯 EOL 差异**
+#        下这意味着一件事：**编辑器把整份文件重写成 LF 时，提交里会多出 50 行纯 EOL 差异**（原地保留 CRLF 追加 = `5 0` 零噪音，2026-10-19 受控复测）
 #        （实测：`git add` 后 `--numstat` 为 `55 50`，而 `-w` 忽略空白后只剩 **5 行**真改动）。
 #        本次实现 Gito 时踩到了它，改为用 `--out` 绕开、**不动那个文件**。判据与复核：
 #          git cat-file -p HEAD:.gitignore | tr -cd '\r' | wc -c    # 50（其余文件皆为 0）
-#        要修就是一次性的 `git add --renormalize .gitignore`（53 行 EOL 差异只在这一次提交里
-#        出现，之后不再复现）；不修则每次编辑都要重新解释一遍这 53 行。**两者都行，但要有记录。**
+#        要修就是一次性的 `git add --renormalize .gitignore`（50 行 EOL 差异只在这一次提交里
+#        出现，之后不再复现）；不修则整份重写式编辑都要重新解释一遍这 50 行。**两者都行，但要有记录。**
 #
 #     ⚠️ **已登记的本机异常 ②：本机 `pip` 的任何安装/下载命令都会静默卡死**
 #        （表现是「什么都没发生」，所以比上一条更值得记）。**根因已定位到行**：
