@@ -125,7 +125,17 @@
       "patchTarget": "alpha",
       "upstreamDistTag": "alpha",
       "status": "active",
-      "builds": []
+      "builds": [
+        {
+          "channel": "alpha",
+          "n": 1,
+          "desktopVersion": "0.2.1-alpha.5.1",
+          "tag": "v0.2.1-alpha.5.1",
+          "date": "2026-10-19",
+          "upstreamTag": "dsh-v0.2.1-alpha.5",
+          "upstreamCommit": "1517a4dbca0a2789ff1d41ba439600f8547d23fa"
+        }
+      ]
     }
   },
   "bridges": [

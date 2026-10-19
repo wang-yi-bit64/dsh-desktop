@@ -7,6 +7,27 @@
 
 <!-- changelog-entries -->
 
+## [0.2.1-alpha.5.1] - 2026-10-19
+
+### 🐛 修复
+
+- **docs**: 落地 Gito 二审 PR #12 的 15 条成立项（EOL 噪音判据修正 + exposure 断言补钉） ([a8d7594](https://github.com/wang-yi-bit64/dsh-desktop/commit/a8d7594219fc19f854ec9810211e0935c5a3e41c))
+
+### 📝 文档
+
+- **release**: 批准双线重锚轮 —— alpha 0.2.1-alpha.5.1 / next 0.2.1-rc.2.1 ([1ac23fa](https://github.com/wang-yi-bit64/dsh-desktop/commit/1ac23facaf5ce6940c28c5cec8662a0979307fcc))
+
+### 📦 构建与打包
+
+- 推进 DSH 锚点 alpha 0.2.1-alpha.2→alpha.5 / next 0.2.0-rc.2→0.2.1-rc.2 (#11) ([e66f04c](https://github.com/wang-yi-bit64/dsh-desktop/commit/e66f04c0c388673341ea2ad579ce32663f9533dc))
+
+### 🧹 其他
+
+- Merge pull request #13 from wang-yi-bit64/docs/gito-review2-fixes ([93c018e](https://github.com/wang-yi-bit64/dsh-desktop/commit/93c018e1f7d452f65e31da23ec4fd39e158751bc))
+- Merge pull request #12 from wang-yi-bit64/chore/local-review-and-retire-pr-agent ([85d14b1](https://github.com/wang-yi-bit64/dsh-desktop/commit/85d14b1734984722065325dd57abbec709fbef83))
+- Merge origin/main 至 chore/local-review-and-retire-pr-agent ([54baac0](https://github.com/wang-yi-bit64/dsh-desktop/commit/54baac0f1656b68a00b0472af6441a1cb7aa2206))
+- **ci**: 退役 pr-agent，AI 评审改走本地 CLI（ADR-065） ([39121f7](https://github.com/wang-yi-bit64/dsh-desktop/commit/39121f7c5e12df87f8c0b6f0d19d1cfc42a920f3))
+
 ## [0.2.1-alpha.2.1] - 2026-10-18
 
 ### ✨ 新功能
