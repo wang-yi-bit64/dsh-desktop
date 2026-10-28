@@ -153,8 +153,31 @@ jobs:
       # **不含 doc-test**（44 项 doc-test 单轮 ≥258s，是快反馈的最大单项成本）。
       # doc-test 归入 full 档，由下面的 schedule-only 步骤承接（每日一次的
       # 「最后一道网」语义，与 ADR-055 一致）；发布前也可本地 `npm run verify:full`。
+      #
+      # 诊断通道（2026-10-28）：job 日志的下载接口要求 admin 权限，未认证的读者
+      # （含外部工具）只能看到「Process completed with exit code N」——**看不出
+      # 是哪条测试挂了**。下面两步把失败明细搬到 annotation 上：check-runs 的
+      # annotations 端点在公开仓库上未认证可读，这是唯一穿得过那道墙的通道。
+      # 判据不变（任何测试失败即红）；`--no-fail-fast` 只扩大**报告**范围，
+      # 让一次运行就能看到全部失败，而不是修一个再跑一轮。
       - name: "cargo test (fast tier: unit + integration, no doc-tests)"
-        run: cargo test --workspace --tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --tests --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+
+      - name: Publish failing-test digest as annotations
+        if: failure()
+        shell: bash
+        run: |
+          if [ ! -f "$RUNNER_TEMP/cargo-test.log" ]; then
+            echo "::error title=cargo-test::测试日志缺失——失败发生在 cargo test 之前"
+            exit 0
+          fi
+          grep -E '^test .+ \.\.\. FAILED$|panicked at |^failures:$|^---- .+ stdout ----$|^error(\[|:)' \
+            "$RUNNER_TEMP/cargo-test.log" | head -80 | while IFS= read -r line; do
+              echo "::error title=cargo-test::${line//'%'/[pct]}"
+            done
 
       - name: cargo doc-test (full tier, schedule only)
         if: github.event_name == 'schedule'
