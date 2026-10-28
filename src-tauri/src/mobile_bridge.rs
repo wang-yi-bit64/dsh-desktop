@@ -1708,10 +1708,21 @@ mod tests {
             .port
             .expect("监听后必须拿到端口");
 
+        // 探测地址必须是**通配 `0.0.0.0`**，不能是 `127.0.0.1`。
+        //
+        // 这是 2026-10-28 CI 实证出来的（PR #14 首跑：windows-latest 与
+        // macos-latest 在同一条断言上红）：桥监听 `0.0.0.0:<port>`，若用
+        // `127.0.0.1:<port>` 去探测，**绑定会成功**——Windows 与 BSD 都允许
+        // 「具体地址覆盖通配地址」的并存绑定（Windows 只要首个 socket 没设
+        // `SO_EXCLUSIVEADDRUSE`），于是「应当绑不上」被写成了「绑上了」。
+        // 通配探测则相反：任何平台下 `0.0.0.0:<port>` 都与该端口的**任意**
+        // 既有绑定冲突，因此它才是「这个端口被占着」的可移植判据。
+        let probe = ("0.0.0.0", port);
+
         // 负例（对照组）：**监听中**的端口必须绑不上。没有这一条，下面的
         // 「能绑定」可能只是因为这个端口本来就没被占用。
         assert!(
-            std::net::TcpListener::bind(("127.0.0.1", port)).is_err(),
+            std::net::TcpListener::bind(probe).is_err(),
             "桥还在监听 {port}，该端口却可被再次绑定——断言对象选错了"
         );
 
@@ -1721,7 +1732,7 @@ mod tests {
         // 否则真正泄漏时这条测试会挂住而不是失败。
         let mut rebound = None;
         for _ in 0..50 {
-            if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+            if let Ok(listener) = std::net::TcpListener::bind(probe) {
                 rebound = Some(listener);
                 break;
             }

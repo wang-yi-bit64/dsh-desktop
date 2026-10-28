@@ -310,41 +310,40 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 （缺 `api-ms-win-core-winrt-error-l1-1-0.dll`，加载期失败）。
 ⇒ 权威执行者是 CI 的 MSVC runner；本档不把「本地未跑」包装成「本地通过」。
 
-### 8.3 CI：**本轮未触发（运行号：无）**
+### 8.3 CI：已触发，**当前仍红**（PR #14）
 
 - 工作流定义：`.github/workflows/ci.yml` 的触发面是 `pull_request` / `workflow_dispatch` /
-  `schedule`，**刻意不监听 `push`**（文件头有理由）。因此「推了分支」不会产生任何运行。
-- 触发所需凭据在本机**不可用**，实测（含 2026-10-28 二次核对——连接器已重新授权）：
+  `schedule`，**刻意不监听 `push`**（文件头有理由）。因此「推了分支」不会产生任何运行，
+  必须走 PR。
+- 触发历史（这是本节唯一的事实来源，逐条可查）：
+
+  | run | 提交 | 结果 | 失败步 |
+  |---|---|---|---|
+  | [`40639578293`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40639578293) | `c081794` | ❌ 三平台全红 | win/mac：`cargo test --workspace --tests`；ubuntu：`cargo-deny` |
+  | [`40640715876`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40640715876) | `9f8b808` | ❌ 三平台全红 | 同上（+ 诊断步已就位，拿到了具体测试名） |
+
+- 凭据侧记录（2026-10-28 实测，保留是为了让下一个人不必重试一遍）：
 
   | 通道 | 实测结果 |
   |---|---|
   | `gh` CLI | 未安装（`which gh` 无命中） |
   | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | 均未设置 |
-  | GitHub 连接器（**读**） | 用户完成授权后 `status: connected`；`get_me`（`wang-yi-bit64`）、`list_branches` 均成功 |
-  | GitHub 连接器（**写**） | ❌ 开 PR 被拒：`POST /repos/wang-yi-bit64/dsh-desktop/pulls` → **403 `Resource not accessible by integration`**（安装令牌缺 `pull_requests: write`）。该连接器也未暴露 `workflow_dispatch` 能力 |
-
-  ⇒ **读通了、写不通**。既不能开 PR，也不能 `workflow_dispatch`。依赖的检查
-  （`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
-  `cargo test --workspace --tests`，其中 `cargo test` 覆盖本文件新增的 15 条测试）
-  **一条都没跑过**。
+  | GitHub 连接器（**读**） | `status: connected`；`get_me`（`wang-yi-bit64`）、`list_branches`、PR 读接口、**check-run annotations** 均可用 |
+  | GitHub 连接器（**写**） | ❌ `POST …/pulls` → **403 `Resource not accessible by integration`**（缺 `pull_requests: write`）；且未暴露 `workflow_dispatch` |
+  | 未认证 REST（公开仓库） | ✅ `api.github.com` 的 runs / jobs / annotations 可读 |
+  | job **日志**下载（未认证） | ❌ `403 Must have admin rights to Repository` ⇒ 只能读 annotation，读不到原始日志 |
 
 - 推送时的快照：分支 `feat/v2-mobile-bridge-adversarial`，远端 SHA 与当时的本地 HEAD
   一致（`2e49e48`，含 `8ebc748`/`d3ac36a`/`2e49e48` 三个提交）；其后的提交不在此
   推送记录范围内。
-- 与 `main` 的关系：落后 2 个 `chore(release)` 提交（`bfda0c2`、`f3efda2`），
+- 该快照与 `main` 的关系：落后 2 个 `chore(release)` 提交（`bfda0c2`、`f3efda2`），
   但这 2 个提交只动 `CHANGELOG.md` / `Cargo.lock` / `Cargo.toml` /
   `harness-locks/dsh-releases.json` / `package.json`，与本次改动的四个文件
   **零重叠**（`comm -12` 空输出）⇒ GitHub 的 test-merge 不会冲突，**无需先 rebase**。
-- **待办（需要凭据的那一侧）**：开 PR 或对该分支 dispatch CI → 拿到运行号后回填本节，
-  并把 §2 的结论按实际颜色同步（红色就写成红色，**不得**只改代码不改结论）。
-  两条不需要 AI 会话接触凭据的路径：
-  1. 浏览器直接打开
-     `https://github.com/wang-yi-bit64/dsh-desktop/compare/main...feat/v2-mobile-bridge-adversarial?expand=1`
-     → 点 `Create pull request`（已登录即可，一次点击）；
-  2. 在**自己的**终端跑 `gh pr create --base main --head feat/v2-mobile-bridge-adversarial`
-     （标题/正文可沿用提交信息）。
-
-  在回填之前，本文档中的「✅ 已修」只表示**代码与测试已就位**，不表示「CI 验证通过」。
+- **待办**：本节的失败项已按 §8.5 修（两条测试断言）→ 需再跑一轮 CI 确认转绿后，
+  把上面的表格补上最终一行的结论，并把 §2 的结论按实际颜色同步
+  （红色就写成红色，**不得**只改代码不改结论）。
+  在转绿之前，本文档中的「✅ 已修」只表示**代码与测试已就位**，不表示「CI 验证通过」。
 
 ### 8.4 复现单条判据
 
@@ -354,6 +353,33 @@ cargo test -p dsh-desktop --lib mobile_bridge -- --nocapture
 # 逐条
 cargo test -p dsh-desktop --lib mobile_bridge::tests::v2_2 -- --nocapture
 ```
+
+### 8.5 CI 实证：首跑抓到的两条真缺陷（2026-10-28）
+
+PR #14 首跑（run `40639578293`）三平台全红，其中**两条是本轮改动自身的缺陷**，
+一条是既有问题。记在这里是因为它们都属于「本地不可执行 ⇒ 只能靠 CI 发现」的那一类，
+且失效方式都**不是**「代码写错」，而是**断言写错**（这类缺陷 clippy / fmt 一条都拦不住）：
+
+| # | 缺陷 | 失效方式 | 修法 |
+|---|---|---|---|
+| 1 | `v2_5` 断言 `body.contains("stub-ok")`，而 stub 的响应体是 `{"stub":"ok"}` | `"stub-ok"` 在响应里**不可能出现** ⇒ 恒定失败，与平台无关 | 断言改为 `body.contains(r#""stub":"ok""#)` |
+| 2 | `v2_1` 用 `127.0.0.1:<port>` 探测「桥是否还占着端口」，而桥监听的是 `0.0.0.0:<port>` | Windows 与 BSD 允许**具体地址覆盖通配地址**的并存绑定（Windows 只要首个 socket 没设 `SO_EXCLUSIVEADDRUSE`）⇒ 「应当绑不上」变成「绑上了」，断言方向反了 | 探测地址改为通配 `0.0.0.0:<port>`：该地址在任何平台都与该端口的**任意**既有绑定冲突 |
+
+第 2 条的教训值得单独记住：**「端口被占」的可移植判据是通配探测，不是回环探测。**
+Linux 上两者都冲突，所以只在 Linux 跑过的测试会给出一条平台相关的经验——
+这次是 Windows 与 macOS 同时把它揪出来的。
+
+第 3 条是既有问题，与本轮无关：**Linux 的 `cargo-deny` 从 2026-10-24 起就是红的**
+（`main` 上 `f3efda2` 的定时 CI 同样红，最后一次通过是 10-23 的 run `39920850383`），
+且在 `cargo-deny` 之后的每一步都是 skipped——包括所有测试。因此 **PR #14 的 Linux 腿
+从未执行过任何测试**，Linux 侧的测试证据目前仍为空。
+
+> 方法学附注（可复用）：job 日志的下载接口要求 admin 权限（未认证请求返回
+> `403 Must have admin rights to Repository`），但 **check-run 的 annotations 端点
+> 在公开仓库上未认证可读**。因此 `ci.yml` 里加了一步「失败时把
+> `test … FAILED` / `panicked at` 转成 `::error` annotation」，这才是外部读者
+> 能拿到失败明细的通道。只加 `--no-fail-fast` 不够——它只扩大报告范围，
+> 输出仍然待在读不到的日志里。
 
 ## 9. 未解风险汇总
 
