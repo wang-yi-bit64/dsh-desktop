@@ -685,8 +685,10 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
 ## 4. 维护规则
 
 1. 新增补丁 → 在 `scripts/patch-layers.mjs` 的 `PATCH_LAYERS` 中登记（**包名** + layer + why +
-   retireWhen），并在本文件对应小节补一行。未登记会被 `npm run gate -- patches` 报为问题。
+   retireWhen + **regressionTest**），并在本文件对应小节补一行。未登记会被 `npm run gate -- patches` 报为问题。
    该表按包名索引，因此**加一条上游通道不需要动它**；只有新包才要补。
+   `functional` 层的 `regressionTest` **必填**（`路径::符号` 或 `none: <理由 + 销账批次>`），
+   格式与判据见下文 §5。
 2. 删除补丁 → 同步删除分级表条目；`--self-test` 会检查「分级表引用了不存在的包」与
    「目录里有未登记的补丁」两侧。
 3. 调整层 → 必须同时说明理由；`functional` 只收「缺失即起不来」的补丁。
@@ -699,3 +701,66 @@ clean 4 / conflict 9。经 merge 工具自动三路合并后，需要人工裁�
    3. `npm run prepare:harness -- --dsh-target=<目标> --force` 真实组装并确认**本目标**全部 `applied`（条数以
      `node scripts/patch-layers.mjs --list --dsh-target=<目标>` 为准，不在此写死）
       ——**这一步不可省略**：预检与真实组装在行号口径上不同，只有它能证明补丁真的落盘。
+
+---
+
+## 5. 退役复核与回归测试指向（V6，2026-10-28）
+
+> 背景：`docs/dev-plan-external-assessment-response.md` §3 V6。评估说「补丁层是长期维护
+> 成本中心」，本仓复查后的真缺口只有两条：**①补丁改了运行时行为时没有「移除补丁即红」的
+> 回归测试指向**（一个在解冲突时被改回上游写法的补丁仍能过组装 + 分级门禁，因为
+> applicable ≠ 语义还在）；**②上游发布新版本时没有触发退役复核的机制**——
+> `retireWhen` 写的是「官方做 X 时退役」，而没人盯着官方做没做 X。
+
+> ⚠️ **同时纠正计划文档的一处错**：§3 V6 的「⚠️ 更正（2026-10-27 复审）」段称
+> `retireWhen` 已由 `auditPatchLayers` **强制非空**——**不成立**。2026-10-28 逐行核对：
+> 该函数此前只校验 `why`，`retireWhen` 全仓**零门禁**（`grep -rn retireWhen scripts/` 只命中
+> 读它的 `report-patches.mjs`）。本批把这条补上（判据见 §5.3 的 V-1）。
+
+### 5.1 `regressionTest` 的固定格式
+
+写在 `scripts/patch-layers.mjs` 的 `PATCH_LAYERS` 条目里（**独立字段，不塞进 `why` 末尾**——
+`why` 是给人读的散文，往里嵌机器格式会让「散文改一个标点 ⇒ 解析静默归零」重演 E5-空事故）：
+
+| 形态 | 写法 | 判据 |
+|---|---|---|
+| 指向 | `scripts/<file>.mjs::<symbol>` | 路径必须存在；`symbol` 必须在该文件里**有声明**（`function`/`const`/`let`/`var`/`class`，可带 `export`）——只在注释里出现**不算** |
+| 无载体 | `none: <理由>` | 理由 ≥ 10 字，且必须点名「为什么没有离线载体」+ 销账批次 |
+
+`functional` 层**缺该字段直接判红**（那一层的定义就是「缺失即起不来」，连一条回归指向都没有
+等于替一个没人验过的主张背书）；`ui-behavior` 层可以不填。
+
+### 5.2 V6-0 盘点：5 个 `functional` 补丁的回归载体
+
+盘点日期 2026-10-28，对象 = `next` / `alpha` 两线各 5 个 `functional` 补丁（两线同名同判据）。
+分类口径：**A** = 仓内已有载体；**B** = 可新写离线测试（不联网、不需组装树）；**C** = 无诚实载体。
+
+| # | 补丁（包名） | 行为落点 | 现有载体 | 分类 | 结论 |
+|---|---|---|---|---|---|
+| 1 | `@deepseek-ai/dsh` | `package.json` 里声明 3 个 `dsh-desktop-*` 依赖 | 无 | **B → 已落地** | 静态三面契约：补丁 `+` 依赖行 ↔ `build/dsh-desktop.patch.yml` 的 `insert: name` ↔ `vendor/<name>` 目录，三面必须相等。指向 `scripts/verify-patch-layers.mjs::checkDesktopDependencyDeclaration` |
+| 2 | `@deepseek-ai/cordis-plugin-loader` | `EntryTree.import` 里修复失效的绝对 `file://` 入口 + 裸名 `createRequire` 回退 | 无（B4 的夹具在工作区外，未入仓） | **C** | 需真实上游模块 + stub ctx 才能构造「失效绝对入口」；本机只有 gitignored 的 `harness-deps/`，CI 无组装树 |
+| 3 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 的 `${pkg}/package.json` 解析回退 | 无 | **C** | 解析发生在私有方法里，需真实上游类 + `node_modules` 布局；离线只能验「抄下来的副本」= 造假测试 |
+| 4 | `@deepseek-ai/dsh-typert-loader` | 启动路径 contributor 失败降级为带 entry 名的 logged error | 无（B2 的桩 `apply()` 夹具未入仓） | **C** | 需真跑 `apply()`（依赖上游 loader/ctx 与 Cordis fiber 时序） |
+| 5 | `@deepseek-ai/dsh-client-file-upload` | `registerAgentResolver` 由「已注册即抛」改为接管 + warn | 无（T2 的夹具未入仓） | **C** | 接管语义依赖 `Fiber._reload()` 的重放时序（先重跑 apply、后处置旧 effect），离线无诚实载体 |
+
+**C 类缺口（显式记账，不造假测试）**：2~5 号四个补丁目前只有 `none: <理由>` 声明，
+`verify-patch-layers.mjs` 每次运行都会把「显式无载体」计数打进摘要行。
+销账批次：**V6-B**（= 把这四个夹具从工作区搬进仓，并解决「CI 无上游代码」这个前提——
+大致形态是把 pristine 上游包按目标钉成 CI 可拉的小夹具，或在 `harness-deps/` 组装后按名点名，
+与 `harness-tree`/`target` 两条 `needsAssembly` 门禁同路）。
+
+> 为什么**不**先写「静态语义断言」顶上：那只能证明「我们的意图还写在补丁里」，证明不了
+> 「补丁落盘后行为还对」。把它命名为回归测试就是造假——本仓宁可留一条可数清的空缺。
+
+### 5.3 三条判据各在哪跑
+
+| # | 判据 | 产地 | 谁跑 | 可证伪（实测 2026-10-28） |
+|---|---|---|---|---|
+| V-1 | `retireWhen` 非空 | `patch-layers.mjs::auditPatchLayers` | `gate -- patches` / `patch-layers-selftest`（fast/ci/release） | 把 `@deepseek-ai/dsh` 的 `retireWhen` 置空 ⇒ `gate -- patches` 红 |
+| V-2 | `regressionTest` 可解（路径存在 + 符号有声明） | 同上 + `checkRegressionTest` | 同上 | 指成 `scripts/verify-nope.mjs::…` ⇒ 红；整条删掉 ⇒ 红（`functional` 缺字段）；符号改名 ⇒ 红 |
+| V-3 | 三面契约（补丁 ↔ patch.yml ↔ `vendor/`） | `verify-patch-layers.mjs::checkDesktopDependencyDeclaration` | `gate -- patches`（fast/ci/release） | 删补丁里一行依赖 ⇒ 红；`patch.yml` 多一行 insert ⇒ 红；整个补丁文件不在 ⇒ 红 |
+| V-4 | 上游前进时打印退役复核清单 | `verify-upstream-drift.mjs::retireReviewCandidates` | `gate -- drift`（sentinel，`echoOutput: true`） | 上游确实前进过一次（2026-10-28 实测 `next=0.2.1-rc.4` / `alpha=0.2.2-alpha.2`）：打印 12 条、**exit 0**（只打印不判红）；离线时明写「未核对」 |
+
+**为什么 V-4 不判红**：退役与否是人工裁决（§4 规则 4）。上游前进一格时绝大多数补丁的
+`retireWhen` 并**未**满足，判红会让哨兵长期常驻红灯（ADR-030 明确要避免的形态）——
+而人一旦习惯忽略红灯，真正的漂移也会被忽略。
