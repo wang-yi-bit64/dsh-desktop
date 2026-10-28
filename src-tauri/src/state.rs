@@ -158,7 +158,28 @@ fn bridge_state_is_current(expected_generation: u64, current_generation: u64) ->
     expected_generation == current_generation
 }
 
-/// 一次就绪之后壳层要写入的相位 + 要缓存的端点（V1-3，纯函数）。
+/// 代号相符才执行 `apply`，返回**是否真的执行了**（V1-2 的写入边界）。
+///
+/// [`bridge_state_is_current`] 只回答「该不该」，本函数回答「有没有写进去」——
+/// 后者才是用户能看见的后果。分开的原因：谓词可以单独证伪，但「谓词为假时
+/// 壳层状态**未被改动**」是一条独立的事实，若把 `if` 写成
+/// `if bridge_state_is_current(..) { } else { apply() }`，谓词测试仍然全绿。
+///
+/// `apply` 只做 `SupervisorInner` 的写入，**不得**带副作用（emit / 导航 / 弹页）：
+/// 那些发生在锁外，由调用方按返回值决定。
+fn apply_if_current(
+    apply: impl FnOnce(),
+    expected_generation: u64,
+    current_generation: u64,
+) -> bool {
+    if !bridge_state_is_current(expected_generation, current_generation) {
+        return false;
+    }
+    apply();
+    true
+}
+
+/// 一次就绪之后壳层要写入的「导航 URL + 要缓存的端点」（V1-3，纯函数）。
 ///
 /// ## 为什么端点必须跟着每次就绪刷新
 ///
@@ -172,20 +193,33 @@ fn bridge_state_is_current(expected_generation: u64, current_generation: u64) ->
 ///
 /// C12 的 Windows 桌面模式参数也在这里拼，原因相同：它是导航 URL 的一部分，
 /// 与「哪一次就绪」绑定，不该散落在两处。
-fn ready_shell_state(endpoint: &LaunchEndpoint) -> (HarnessPhase, LaunchEndpoint) {
+fn ready_shell_state(endpoint: &LaunchEndpoint) -> (String, LaunchEndpoint) {
     // C12：Windows 追加桌面模式参数；titlebar-inset 留待阶段 2 决策。
     let extra: &[(&str, &str)] = if cfg!(windows) {
         &[WINDOWS_QUERY_MODE, WINDOWS_QUERY_PLATFORM]
     } else {
         &[]
     };
-    let url = endpoint.navigate_url(extra).to_string();
     (
-        HarnessPhase::Ready { url },
+        endpoint.navigate_url(extra).to_string(),
         // 缓存的是**原始端点**（含 token / host / port），不是导航 URL：
         // 导航 URL 带 C12 参数且可能已被消费，不能反推出退出检查要用的首航 token。
         endpoint.clone(),
     )
+}
+
+/// 把一次就绪**真正写进**壳层内部状态，返回供调用方导航的 URL（V1-3 的写入点）。
+///
+/// 与 [`ready_shell_state`] 的分工：前者算值，后者落盘（`SupervisorInner`）。
+/// 拆开是为了让「端点到底有没有被换掉」这条断言不必构造 `AppHandle`
+/// ——测试可以直接造一个 `SupervisorInner` 再调本函数。
+fn write_ready(inner: &mut SupervisorInner, endpoint: &LaunchEndpoint) -> String {
+    let (url, stored) = ready_shell_state(endpoint);
+    inner.phase = HarnessPhase::Ready { url: url.clone() };
+    inner.message = "Harness is ready.".to_string();
+    inner.endpoint = Some(stored);
+    inner.push_desktop(format!("ready → {url}"));
+    url
 }
 
 /// 终态失败时壳层要写入的相位（V1-6 的页面路径，纯函数）。
@@ -202,6 +236,17 @@ fn failed_phase(cause: &FailureCause) -> HarnessPhase {
         plugin_fault: cause.is_plugin_fault(),
         retryable: cause.is_retryable(),
     }
+}
+
+/// 把终态失败**真正写进**壳层内部状态（V1-6 的写入点）。
+///
+/// 只做数据写入：清手机桥目标、弹错误页、`emit()` 都在调用方（`on_failed`），
+/// 因为它们需要 `AppHandle`。这样「页面到底拿到什么 `cause_kind`」可以被单测
+/// 直接断言，而不是只断言一个中间值。
+fn write_failed(inner: &mut SupervisorInner, cause: &FailureCause) {
+    inner.phase = failed_phase(cause);
+    inner.message = cause.to_string();
+    inner.push_desktop(format!("failed: {cause}"));
 }
 
 /// 推送给前端的完整快照。
@@ -440,14 +485,18 @@ impl HarnessSupervisor {
             loop {
                 match rx.recv().await {
                     Ok(state) => {
-                        if !bridge_state_is_current(
+                        // V1-2：代号失配即整段丢弃，**连写入都不发生**。
+                        // 判定与写入一起收在 `apply_if_current` 里，
+                        // 否则「谓词对、但写在了 else 分支」这种错法测不出来。
+                        let applied = apply_if_current(
+                            || bridge.apply_supervisor_state(state, &mut pending_cause),
                             generation,
                             bridge.generation.load(Ordering::SeqCst),
-                        ) {
+                        );
+                        if !applied {
                             // 上一轮的迟到状态：丢弃，别覆盖新一轮的相位。
                             continue;
                         }
-                        bridge.apply_supervisor_state(state, &mut pending_cause);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -670,24 +719,13 @@ impl HarnessSupervisor {
     }
 
     fn on_ready(&self, endpoint: LaunchEndpoint) {
-        let (phase, stored_endpoint) = ready_shell_state(&endpoint);
-        let HarnessPhase::Ready { url } = &phase else {
-            // `ready_shell_state` 的契约是「必回 Ready」；走到这里说明它被改坏了。
-            // 不 panic（状态机回调里 panic 会掀掉整个壳层），但也不静默降级：
-            // 记一条桌面日志，让日志查看器与诊断包留痕（§7.1 规则 3）。
-            self.lock_inner()
-                .push_desktop("ready_shell_state 未返回 Ready 相位（契约被破坏）".to_string());
-            return;
-        };
-        let url = url.clone();
-
-        {
+        // 相位 / 端点 / 日志三处写入收在 `write_ready` 里，本方法只做需要
+        // `AppHandle` 的副作用（清 cookie、导航、手机桥、抛事件）。
+        // 这样「端点到底有没有被换成新端口」可以被单测直接断言。
+        let url = {
             let mut inner = self.lock_inner();
-            inner.phase = phase;
-            inner.message = "Harness is ready.".to_string();
-            inner.endpoint = Some(stored_endpoint);
-            inner.push_desktop(format!("ready → {url}"));
-        }
+            write_ready(&mut inner, &endpoint)
+        };
 
         // 任务 1.5：导航前清掉陈旧的 dsh-auth-* cookie（HTTP 431 防护）。
         if let Some(webview) = window::main_window(&self.app) {
@@ -701,8 +739,8 @@ impl HarnessSupervisor {
                 }
             }
             // 导航要 `Url`，相位里存的是 `String`（IPC/序列化用）。这里解析回
-            // `Url`：`ready_shell_state` 的入参本身就是 `Url` 派生出来的，故解析
-            // 必然成功；但仍不 `unwrap`——解析失败时留痕而不是 panic。
+            // `Url`：`write_ready` 返回的字符串就是 `Url::to_string()` 的产物，
+            // 故解析必然成功；但仍不 `unwrap`——解析失败时留痕而不是 panic。
             match url.parse() {
                 Ok(parsed) => {
                     let _ = webview.navigate(parsed);
@@ -724,9 +762,7 @@ impl HarnessSupervisor {
         self.sync_mobile_target(None);
         {
             let mut inner = self.lock_inner();
-            inner.phase = failed_phase(&cause);
-            inner.message = cause.to_string();
-            inner.push_desktop(format!("failed: {cause}"));
+            write_failed(&mut inner, &cause);
         }
         window::show_error_page(&self.app);
     }
@@ -996,10 +1032,27 @@ mod tests {
 
     // ---- V1 生命周期竞态：壳层两窗 + V1-6 页面路径 ----
     //
-    // 这三条与 `tests/supervisor_lifecycle_races.rs` 的分工：那边测 core 层
-    // （真派生进程、本机可跑），这边测**壳层决策**。壳层的 `HarnessSupervisor`
-    // 与 `AppState` 都要 `AppHandle` 才能构造，因此只能断言被抽出来的纯函数——
-    // 这也是 `classify_state` 当初被抽出来的同一理由。
+    // 这几条与 `tests/supervisor_lifecycle_races.rs` 的分工：那边测 core 层
+    // （真派生进程、本机可跑），这边测**壳层**。
+    //
+    // ## 覆盖到哪一层（2026-10-12 加固）
+    //
+    // `HarnessSupervisor` / `AppState` 需要真实 `AppHandle` 才能构造，单测够不到。
+    // 但 `SupervisorInner` 是**本模块的私有结构**，`#[cfg(test)] mod tests` 可以直接
+    // 造一个实例，再调 `write_ready` / `write_failed` / `apply_if_current`——
+    // 也就是把断言从「纯函数的返回值」推进到「壳层内部状态到底被写成什么」。
+    //
+    // 这不是多余的：值算对了但**没写进 `inner`**（或写在了 `if` 的 else 分支）
+    // 是编译器完全看不见的错法，而它恰好是用户能看见的那一半后果。
+    //
+    // ## 仍未覆盖（如实登记，不假装覆盖）
+    //
+    // 以下都需要 `AppHandle`，本组**不覆盖**，权威执行者是 CI（MSVC）上的集成测试：
+    //   · `emit()` 真的把快照投递给前端；
+    //   · `webview.navigate()` 真的导航、`clear_auth_cookies` 真的清 cookie；
+    //   · `sync_mobile_target` 真的把目标写进 `MobileBridge`；
+    //   · 写入与 emit 的**先后顺序**（本组只验证写入内容）；
+    //   · `try_lock_inner()` 忙时跳过（并发下才出现，单线程单测造不出来）。
     //
     // ⚠️ 本组在 GNU 工具链下**本机无法执行**（`dsh-desktop` 测试二进制缺
     // WinRT DLL 无法加载，见 `docs/incidents/local-toolchain-limits.md`），
@@ -1046,52 +1099,121 @@ mod tests {
     /// 若壳层留着旧端点：退出检查会问死端口（于是每次退出都弹「可能有工作在跑」）、
     /// 手机桥把请求转发到死端口、页面停在旧地址。
     ///
-    /// ⚠️ 本断言的对象是**纯函数边界**（相位 + 要缓存的端点）。真正写进
-    /// `SupervisorInner.endpoint` 的那一步需要 `AppHandle`，不在本组覆盖范围内
-    /// ——这一点如实登记，不假装覆盖。
+    /// 断言打在 `SupervisorInner` 的**真实字段**（`endpoint` / `phase`）上，而不是
+    /// `ready_shell_state` 的返回值——值算对了却没写进去，用户一样看到旧页面。
     #[test]
-    fn ready_endpoint_follows_a_port_change() {
-        let first = endpoint(1234, "tok-a");
-        let (phase_a, stored_a) = ready_shell_state(&first);
-        assert_eq!(stored_a.port, 1234, "首次就绪应缓存本次端点");
-        match &phase_a {
-            HarnessPhase::Ready { url } => assert!(url.contains(":1234"), "{url}"),
-            other => panic!("就绪必须映射到 Ready 相位，实际 {other:?}"),
+    fn ready_write_replaces_the_cached_endpoint_with_the_new_port() {
+        let mut inner = SupervisorInner::default();
+
+        let url_a = write_ready(&mut inner, &endpoint(1234, "tok-a"));
+        assert!(
+            url_a.contains(":1234"),
+            "首次就绪的导航 URL 应指向本次端口：{url_a}"
+        );
+        {
+            let stored = inner
+                .endpoint
+                .as_ref()
+                .expect("就绪后必须缓存端点（退出检查要用）");
+            assert_eq!(stored.port, 1234, "首次就绪应缓存本次端点");
+            assert_eq!(stored.token, "tok-a");
         }
 
-        // 崩溃重启换了端口与 token：两个量都必须跟着换。
-        let second = endpoint(2345, "tok-b");
-        let (phase_b, stored_b) = ready_shell_state(&second);
-        assert_eq!(
-            stored_b.port, 2345,
-            "端口变化后缓存的端点必须换成新的（旧端口已不在监听）"
+        // 崩溃重启换了端口与 token：三个量都必须跟着换。
+        let url_b = write_ready(&mut inner, &endpoint(2345, "tok-b"));
+        {
+            let stored = inner.endpoint.as_ref().expect("端点不得在第二次就绪后消失");
+            assert_eq!(
+                stored.port, 2345,
+                "端口变化后缓存的端点必须换成新的（旧端口已不在监听）"
+            );
+            assert_eq!(
+                stored.token, "tok-b",
+                "token 是首航凭证，重启即换——沿用旧 token 会让退出检查 401"
+            );
+        }
+        assert!(url_b.contains(":2345"), "相位 URL 应带新端口：{url_b}");
+        assert!(
+            !url_b.contains(":1234"),
+            "相位 URL 里仍残留旧端口 ⇒ 页面会访问一个已关闭的端口：{url_b}"
         );
-        assert_eq!(
-            stored_b.token, "tok-b",
-            "token 是首航凭证，重启即换——沿用旧 token 会让退出检查 401"
-        );
-        match &phase_b {
-            HarnessPhase::Ready { url } => {
-                assert!(url.contains(":2345"), "相位 URL 应带新端口：{url}");
-                assert!(
-                    !url.contains(":1234"),
-                    "相位 URL 里仍残留旧端口 ⇒ 页面会访问一个已关闭的端口：{url}"
-                );
-            }
+
+        match &inner.phase {
+            HarnessPhase::Ready { url } => assert_eq!(
+                url, &url_b,
+                "写进相位的 URL 必须就是本次要导航的 URL（否则页面与守卫各拿一个地址）"
+            ),
             other => panic!("就绪必须映射到 Ready 相位，实际 {other:?}"),
         }
     }
 
-    /// **V1-6 的页面路径：就绪超时必须带着自己的 `cause_kind` 到达页面。**
+    /// **V1-2 的写入边界：代号失配时壳层状态必须一字未动。**
+    ///
+    /// [`bridge_state_is_current`] 只回答「该不该应用」。真正的危险是判对了却写错
+    /// 地方——例如把 `apply()` 写进 `else` 分支。那时谓词测试仍全绿，而用户点了退出
+    /// 之后界面确实会被上一轮的迟到状态拉回去。
+    #[test]
+    fn stale_generation_leaves_shell_state_untouched() {
+        let mut inner = SupervisorInner::default();
+        write_ready(&mut inner, &endpoint(1234, "tok-a"));
+        let phase_before = inner.phase.clone();
+        let port_before = inner.endpoint.as_ref().map(|endpoint| endpoint.port);
+        let log_count_before = inner.logs.tail(200).len();
+
+        // 上一轮（代号 6）的桥在代号 7 生效之后才吐出一条迟到状态。
+        let applied = apply_if_current(
+            || {
+                write_ready(&mut inner, &endpoint(2345, "tok-b"));
+            },
+            6,
+            7,
+        );
+
+        assert!(!applied, "代号失配 ⇒ 不得执行写入");
+        assert_eq!(
+            inner.phase, phase_before,
+            "迟到状态不得改动相位（否则用户点了退出却被拉回启动屏）"
+        );
+        assert_eq!(
+            inner.endpoint.as_ref().map(|endpoint| endpoint.port),
+            port_before,
+            "迟到状态不得改动端点（否则退出检查会去问上一轮的端口）"
+        );
+        assert_eq!(
+            inner.logs.tail(200).len(),
+            log_count_before,
+            "连日志都不该多出一行——`apply` 是整段丢弃，不是部分执行"
+        );
+
+        // 反方向：同一代号必须**真的**写进去。
+        // 缺了这半条，把 `apply_if_current` 改成「永不调用 apply」也能让上面全绿。
+        let applied = apply_if_current(
+            || {
+                write_ready(&mut inner, &endpoint(3456, "tok-c"));
+            },
+            7,
+            7,
+        );
+        assert!(applied, "代号相符 ⇒ 必须执行写入");
+        assert_eq!(
+            inner.endpoint.as_ref().map(|endpoint| endpoint.port),
+            Some(3456),
+            "代号相符时写入必须真的落到 `inner` 上（而不只是返回 true）"
+        );
+    }
+
+    /// **V1-6 的页面路径：就绪超时必须带着自己的 `cause_kind` 写进壳层状态。**
     ///
     /// core 层已由 `mock_launch.rs::no_url_times_out_with_startup_timeout` 钉住
     /// （退出码 6 + `startup_timeout` 归因）。缺的那半是**页面能不能拿到它**：
     /// `frontend/error.html` 按 `cause_kind` 分派文案与按钮，若这里退化成常量
     /// 或泛化归因，页面会显示成「未知错误」，用户看不出「进程起来了但服务没就绪」。
     #[test]
-    fn startup_timeout_reaches_the_page_as_its_own_kind() {
-        let phase = failed_phase(&FailureCause::StartupTimeout { seconds: 2 });
-        match &phase {
+    fn startup_timeout_is_written_to_the_shell_as_its_own_kind() {
+        let mut inner = SupervisorInner::default();
+        write_failed(&mut inner, &FailureCause::StartupTimeout { seconds: 2 });
+
+        match &inner.phase {
             HarnessPhase::Failed {
                 cause_kind,
                 cause,
@@ -1099,7 +1221,8 @@ mod tests {
                 ..
             } => {
                 assert_eq!(
-                    cause_kind, "startup_timeout",
+                    cause_kind.as_str(),
+                    "startup_timeout",
                     "页面按 cause_kind 分派，这里必须是 startup_timeout"
                 );
                 assert!(
@@ -1107,17 +1230,32 @@ mod tests {
                     "文案应带超时秒数（否则用户不知道等了多久）：{cause}"
                 );
                 assert!(
-                    !plugin_fault,
+                    !*plugin_fault,
                     "就绪超时不是插件故障——误标会让错误页推出「进入安全模式」"
                 );
             }
             other => panic!("终态必须映射到 Failed 相位，实际 {other:?}"),
         }
+        assert!(
+            inner.message.contains('2'),
+            "壳层提示文案也应带上超时秒数：{}",
+            inner.message
+        );
+        assert!(
+            inner
+                .logs
+                .tail(200)
+                .iter()
+                .any(|line| line.contains("failed")),
+            "失败归因必须落进桌面日志（诊断包靠它）：{:?}",
+            inner.logs.tail(200)
+        );
 
         // 归因不得被泛化吞掉：具体原因与兜底 Unknown 必须是不同相位。
+        let mut fallback = SupervisorInner::default();
+        write_failed(&mut fallback, &FailureCause::Unknown);
         assert_ne!(
-            failed_phase(&FailureCause::StartupTimeout { seconds: 2 }),
-            failed_phase(&FailureCause::Unknown),
+            inner.phase, fallback.phase,
             "就绪超时与「无可用线索」必须可区分，否则页面无法给出可操作提示"
         );
     }
