@@ -1301,7 +1301,9 @@ mod tests {
                     if let Ok(mut log) = recorded.lock() {
                         log.push(head.clone());
                     }
-                    match script(&path) {
+                    // 显式解引用：`Arc<F>` 本身不实现 `Fn`，`script(&path)` 这种写法
+                    // 依赖自动解引用的调用规则，换编译器版本容易翻车。
+                    match (*script)(&path) {
                         StubReply::Silent => {
                             // 连接保持打开、不发任何字节：被测方必须靠自己的
                             // 超时收场（这里用一次阻塞读把连接留住）。

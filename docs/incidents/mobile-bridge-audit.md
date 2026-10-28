@@ -44,6 +44,9 @@
 
 ## 2. 八项逐条结论
 
+> ⚠️ 读法：「✅ 已修」= **代码与测试已就位**，不等于「CI 已验证」——本轮 CI 未被触发
+> （原因与凭据缺口见 §8.3）。CI 一旦给出颜色，本节与 §8.3 必须同步更新。
+
 | 编号 | 判据 | 结论 | 代码证据 | 测试（含负例） |
 |---|---|---|---|---|
 | V2-1 | 监听绑定只在 `start`；`stop` 后端口真的可重绑 | ✅ 已修（并发现一处竞态） | `MobileBridge::start` / `stop`；`shutdown: watch` 通道 | `v2_1_tcp_listener_bind_is_confined_to_start`（静态，带植入夹具）、`v2_1_stop_releases_the_port_for_rebinding`（含「监听中绑不上」对照） |
@@ -275,9 +278,18 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 
 ### 8.1 本地能跑的（已跑）
 
-```bash
-cargo fmt --all -- --check      # 通过（exit 0）
-```
+| 命令 | 结果 |
+|---|---|
+| `cargo fmt --all -- --check` | ✅ exit 0（改动前该命令在 `mobile_bridge.rs` 上无 diff；改后仍无 diff） |
+| `rustfmt --edition 2021 --check src-tauri/src/mobile_bridge.rs` | ✅ exit 0（rustfmt 会**解析**整个文件，语法错误必然报错——这是本机唯一可用的语法级校验） |
+| `npm run gate -- --tier=fast` | ❌ 48 步中 2 步失败，**均与环境有关、与本改动无关**（见下） |
+
+`gate --tier=fast` 的两步失败，逐条给了归因证据：
+
+| 失败步 | 报错 | 归因与证据 |
+|---|---|---|
+| `cli-package`（自检） | `tar: C\:\\...\\dsh-cli-selftest-*\tamper: Cannot open` | 本机 GNU tar 对 Windows 路径的转义问题。**把工作树 `git stash` 到干净 HEAD 后复跑，报同一句**——与本改动无关 |
+| `cargo test --tests` | `error calling dlltool 'dlltool.exe': program not found`（编译 `windows-sys` 时） | GNU 工具链缺 `dlltool`，见 §8.2 |
 
 ### 8.2 本地**跑不了**的（如实记录，不是「没跑」）
 
@@ -285,29 +297,42 @@ cargo fmt --all -- --check      # 通过（exit 0）
 
 | 层 | 现象 | 归属 |
 |---|---|---|
-| 编译 | `error: could not execute process ...build-script-build (never executed) ... 拒绝访问。(os error 5)` | 本机环境（见 `docs/incidents/local-toolchain-limits.md` 的 `ERROR_PIPE_BUSY` 一族） |
-| 链接 | `error: error calling dlltool 'dlltool.exe': program not found` | GNU 工具链缺 `dlltool`；本机无 MSVC 工具链 |
+| 编译（build script 执行） | `error: could not execute process ...build-script-build (never executed) ... 拒绝访问。(os error 5)` | 本机环境（同族现象见 `docs/incidents/local-toolchain-limits.md` 的 `ERROR_PIPE_BUSY` 一节：本机无法为子进程建立 stdin 管道，node 侧报 `EBUSY`、Rust 侧报 pipe/access-denied） |
+| 链接 | `error: error calling dlltool 'dlltool.exe': program not found` | GNU 工具链缺 `dlltool`；本机无 MSVC 工具链（`rustup toolchain list` 只有三个 gnu 工具链） |
 
-第二道与本文件记录的历史结论一致：**`src-tauri` 的单测只能编译、不能本地执行**
+与本文件记录的历史结论一致：**`src-tauri` 的单测只能编译、不能本地执行**
 （缺 `api-ms-win-core-winrt-error-l1-1-0.dll`，加载期失败）。
 ⇒ 权威执行者是 CI 的 MSVC runner；本档不把「本地未跑」包装成「本地通过」。
 
-### 8.3 CI
+### 8.3 CI：**本轮未触发（运行号：无）**
 
-- 工作流：`.github/workflows/ci.yml`（`pull_request` 触发；`push` **刻意不触发**）。
-- 覆盖：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
-  `cargo test --workspace --tests`（含本文件的 15 条测试）。
-- **运行号与结论：见本 PR 的检查页**（提交 `feat/v2-mobile-bridge-adversarial` 的
-  最新提交）。本档在 CI 返回前**不写「绿」**；若 CI 报红，此处与 §2 的结论必须
-  同步改成红，不得只改代码不改结论。
+- 工作流定义：`.github/workflows/ci.yml` 的触发面是 `pull_request` / `workflow_dispatch` /
+  `schedule`，**刻意不监听 `push`**（文件头有理由）。因此「推了分支」不会产生任何运行。
+- 触发所需凭据在本机**不可用**，实测：
+
+  | 通道 | 实测结果 |
+  |---|---|
+  | `gh` CLI | 未安装（`which gh` 无命中） |
+  | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | 均未设置 |
+  | GitHub 连接器 | `list_installed_plugins` 返回 `"status":"auth-required"` |
+
+  ⇒ 既不能开 PR，也不能 `workflow_dispatch`。依赖的检查（`cargo fmt --check`、
+  `cargo clippy --workspace --all-targets -- -D warnings`、
+  `cargo test --workspace --tests`，其中 `cargo test` 覆盖本文件新增的 15 条测试）
+  **一条都没跑过**。
+
+- 已推送：分支 `feat/v2-mobile-bridge-adversarial`（提交 `8ebc748` 及其后的修正提交）。
+- **待办（需要凭据的那一侧）**：开 PR 或对该分支 dispatch CI → 拿到运行号后回填本节，
+  并把 §2 的结论按实际颜色同步（红色就写成红色，**不得**只改代码不改结论）。
+  在回填之前，本文档中的「✅ 已修」只表示**代码与测试已就位**，不表示「CI 验证通过」。
 
 ### 8.4 复现单条判据
 
 ```bash
-# 只看本模块（本地不可执行时的 CI 等价命令）
+# 只看本模块（CI 上的等价命令）
 cargo test -p dsh-desktop --lib mobile_bridge -- --nocapture
 # 逐条
-cargo test -p dsh-desktop --lib mobile_bridge::tests::v2_2 -- --exact
+cargo test -p dsh-desktop --lib mobile_bridge::tests::v2_2 -- --nocapture
 ```
 
 ## 9. 未解风险汇总
