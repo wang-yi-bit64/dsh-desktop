@@ -1978,7 +1978,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, 200, "转发失败: {body}");
-        assert!(body.contains("stub-ok"), "响应体没有透传: {body}");
+        assert!(body.contains(r#""stub":"ok""#), "响应体没有透传: {body}");
 
         // 证据：握手得到的 cookie 确实进了转发请求（否则 `authenticated`
         // 只是一个没人读的字段）。
