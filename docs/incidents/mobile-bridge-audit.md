@@ -44,10 +44,10 @@
 
 ## 2. 八项逐条结论
 
-> ⚠️ 读法：「✅ 已修」= **代码与测试已就位**，且已被 CI 的 **Windows + macOS** 两条腿
-> 验证通过（run [`40641551999`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40641551999)）。
-> **不包含 Linux**：Linux 腿红在既有的 `cargo-deny`，测试从未执行（证据与归因见 §8.3 / §8.5）。
-> 若只写「已修」而不写这条边界，就等于把两平台的结论冒充成三平台。
+> ⚠️ 读法：「✅ 已修」= **代码与测试已就位**，且已被 CI 的**三平台**（Windows / macOS /
+> Linux）验证通过——run [`40644014490`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40644014490)。
+> 在此之前的两轮只覆盖到 Windows + macOS，Linux 腿被既有的 `cargo-deny` 挡在测试之前；
+> 那条红已单独处置，过程见 §8.3 / §8.5。
 
 | 编号 | 判据 | 结论 | 代码证据 | 测试（含负例） |
 |---|---|---|---|---|
@@ -312,7 +312,7 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 （缺 `api-ms-win-core-winrt-error-l1-1-0.dll`，加载期失败）。
 ⇒ 权威执行者是 CI 的 MSVC runner；本档不把「本地未跑」包装成「本地通过」。
 
-### 8.3 CI：Windows / macOS **已绿**，Linux 红在既有的 `cargo-deny`（PR #14）
+### 8.3 CI：**三平台全绿**（PR #14）
 
 - 工作流定义：`.github/workflows/ci.yml` 的触发面是 `pull_request` / `workflow_dispatch` /
   `schedule`，**刻意不监听 `push`**（文件头有理由）。因此「推了分支」不会产生任何运行，
@@ -325,9 +325,10 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   | [`40640715876`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40640715876) | `9f8b808` | ❌ | ❌ | ❌ | 同上；诊断 annotation 就位，定位到具体测试名 |
   | [`40641551999`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40641551999) | `5239cc5` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（**既有问题**，见 §8.5） |
   | [`40642526948`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40642526948) | `8720cda` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（同上） |
+  | [`40644014490`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40644014490) | `a5bb353` | ✅ | ✅ | **✅** | 无（Linux 腿首次跑完测试） |
 
-> 本节结论**绑定在被验证的提交上**（`8720cda`），不绑在分支名上：此后任何仅文档的
-> 提交都会让 HEAD 前进，但不改变这里记录的代码状态。要复核就看那两个 run/job 号。
+> 本节结论**绑定在被验证的提交上**（`a5bb353`），不绑在分支名上：此后任何仅文档的
+> 提交都会让 HEAD 前进，但不改变这里记录的代码状态。要复核就看 run/job 号。
 
 - `40641551999` 的 Windows job（`122660621965`）逐 step 结论：`Static gates` ✅、
   `cargo fmt` ✅、**`cargo clippy --workspace --all-targets -- -D warnings` ✅**、
@@ -336,12 +337,15 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   macOS 上全部通过**，`clippy`/`fmt` 两项验收拿到 CI 证据。
   `40642526948` 在同一组运行里再次确认（Windows job `122664012802`、
   macOS job `122664013143`），且这次包含了两处后续修正（响应头上限加固 + 端口探测改通配）。
+- `40644014490` 补齐了 Linux 这一格（job `122668513249`）：`cargo-deny` ✅、
+  `Static gates` ✅、`cargo fmt` ✅、`cargo clippy` ✅、`cargo test -p dsh-host -p dsh-host-cli` ✅、
+  **`cargo test --workspace --tests` ✅**。这是 **Linux 腿第一次真正执行测试**
+  ——在此之前它一直卡在 `cargo-deny`（见 §8.5 第 3 条）。Windows job `122668513808`、
+  macOS job `122668513458` 同轮同构。⇒ 三平台证据齐全，§2 的条目不再有「仅两平台」的边界。
 - 诊断步本身也验证过：`40642526948` 的 ubuntu job（`122664013083`）里
   `Publish failing-test digest` 是 **skipped**（step 15）——上一轮它会在 `cargo-deny`
   红时误触发并输出误导性 annotation，现已锚定到测试步的 `outcome`。
-- **未拿到证据的一项**：Linux 腿的测试。`cargo-deny` 排在测试之前，它一红后面每一步
-  都是 skipped（症状见 §8.5 第 3 条）。因此 Linux 上的测试结论**目前为空**，
-  本档不把它推定为绿。
+  三平台全绿后它同样保持 skipped（`40644014490` 三个 job 的第 14/15 步）。
 
 - 凭据侧记录（2026-10-28 实测，保留是为了让下一个人不必重试一遍）：
 
@@ -357,8 +361,8 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 - 分支：`feat/v2-mobile-bridge-adversarial`，远端 = 本地 HEAD。与 `main` 的 2 个
   `chore(release)` 提交**零文件重叠**（那 2 个提交只动 `CHANGELOG.md` / `Cargo.lock` /
   `Cargo.toml` / `harness-locks/dsh-releases.json` / `package.json`），test-merge 无冲突。
-- **待办**：Linux 腿的 `cargo-deny`（既有问题）修好之后，本节需补上 ubuntu 的测试结论；
-  在那一格填上之前，§2 里标 ✅ 的条目其证据面是「Windows + macOS」，不含 Linux。
+- **待办**：无。三平台证据齐全（`40644014490`）。此前的缺口（Linux 腿从未跑过测试）
+  已随 `cargo-deny` 的处置关闭，见 §8.5 第 3 条。
 
 
 ### 8.4 复现单条判据
@@ -385,15 +389,25 @@ PR #14 首跑（run `40639578293`）三平台全红，其中**两条是本轮改
 Linux 上两者都冲突，所以只在 Linux 跑过的测试会给出一条平台相关的经验——
 这次是 Windows 与 macOS 同时把它揪出来的。
 
-第 3 条是既有问题，与本轮无关：**Linux 的 `cargo-deny` 从 2026-10-24 起就是红的**，
-且在 `cargo-deny` 之后的每一步都是 skipped——包括所有测试。因此 **PR #14 的 Linux 腿
-从未执行过任何测试**，Linux 侧的测试证据目前仍为空。
+第 3 条是既有问题，与本轮无关，**已处置**：Linux 的 `cargo-deny` 从 2026-10-24 起变红，
+且在它之后的每一步都是 skipped——包括所有测试，因此 **PR #14 的 Linux 腿在此之前
+从未执行过任何测试**。
 
-归因证据：`main` 的 HEAD 是 `f3efda2` 且 10-23 之后没有再变过，而定时 CI 在
-**同一个提交**上是 `10-23 绿（run 39920850383）→ 10-24 起红`。仓库内容没变
-⇒ 触发点在本仓之外（RustSec advisory 库新增条目，或 `cargo-deny` / toolchain 漂移）。
-**这是推断，不是已核实结论**——`cargo-deny` 的失败明细同样只在 job 日志里，
-而那份日志未认证读不到，本轮未取得具体 advisory 编号。
+归因（先推断、后被用户提供的日志证实）：`main` 的 HEAD 是 `f3efda2` 且 10-23 之后没有
+再变过，而定时 CI 在**同一个提交**上是 `10-23 绿（run 39920850383）→ 10-24 起红`。
+仓库内容没变 ⇒ 触发点在本仓之外。实际原因是 **RustSec 新增了 `RUSTSEC-2026-0386`**
+（`tokio` 的 `AsyncFd` 构造器违反 I/O safety，unsound），命中的是 `tokio 1.53.1`。
+
+处置：把 `tokio` 抬到 advisory 给出的修复边界 **1.53.3**（`>=1.51.6, <1.52.0` 或
+`>=1.53.3`）。只改 `Cargo.lock` 的两行（`version` + `checksum`），因为
+`cargo update -p tokio` 在本机会连带把 `windows-sys` / `syn` 降级，产生 15 行无关变更
+（本机 MSRV 重解析噪音）。等价性有据：稀疏索引里 1.53.1 与 1.53.3 的依赖声明逐字相同
+（`windows-sys ^0.61`、`tokio-macros ~2.7.0`，MSRV 同为 1.71），1.53.3 未被 yank，
+checksum 与索引一致，`cargo metadata --locked` exit 0，本地 `cargo-lock-scope` 门禁通过。
+修复后 run `40644014490` 的 ubuntu 腿 `cargo-deny` ✅ 且**首次跑完 `cargo test --workspace --tests` ✅**。
+
+> 关于「该 advisory 与本仓的实际相关性」：`AsyncFd` 是 unix-only API，本仓未使用。
+> 升版是遵守「advisories 在役即失败」的判据，不是因为这个缺陷在本仓可被触发。
 
 > 方法学附注（可复用）：job 日志的下载接口要求 admin 权限（未认证请求返回
 > `403 Must have admin rights to Repository`），但 **check-run 的 annotations 端点
