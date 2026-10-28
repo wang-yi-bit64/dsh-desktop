@@ -95,8 +95,7 @@ enum StateAction {
 }
 
 /// 把一条 L2 状态分类成 [`StateAction`]（纯函数，可单测）。
-fn classify_state(state: &SupervisorState) -> StateAction {
-    match state {
+fn classify_state(state: &SupervisorState) -> StateAction {    match state {
         SupervisorState::Starting { attempt } => {
             if *attempt <= 1 {
                 StateAction::Transition(
@@ -141,6 +140,66 @@ fn classify_state(state: &SupervisorState) -> StateAction {
         SupervisorState::Idle | SupervisorState::Stopping | SupervisorState::Stopped => {
             StateAction::Ignore
         }
+    }
+}
+
+/// 状态桥收到的这条状态**是否属于当前这一轮**（V1-2，纯函数）。
+///
+/// ## 为什么这一条必须被钉住
+///
+/// 「关窗/退出」与「自动重启」同时发生时，真正的危险不是重启本身，而是
+/// **上一轮的状态迟到**：`stop()` 先自增 `generation` 再取走 supervisor，
+/// 但旧状态桥任务还没退出（通道要到最后一个 sender drop 才 `Closed`）。
+/// 若判据写反（`==` 写成 `!=`），迟到状态会被当成当前状态应用：
+/// 用户点了退出，界面却被拉回 `Starting` → 下一次 `Running` 甚至会重新导航。
+/// 编译器对这类错误完全沉默，只能靠这条断言。
+fn bridge_state_is_current(expected_generation: u64, current_generation: u64) -> bool {
+    expected_generation == current_generation
+}
+
+/// 一次就绪之后壳层要写入的相位 + 要缓存的端点（V1-3，纯函数）。
+///
+/// ## 为什么端点必须跟着每次就绪刷新
+///
+/// sticky port（CX-14）只保证**尽力**复用同一端口；端口被占用时重启会换一个。
+/// 若壳层把首轮的端点留着，那么崩溃重启之后：「退出检查」会去问一个已不在监听
+/// 的端口（`quit_probe` 会 `Unknown` ⇒ 每次退出都弹「可能有工作在跑」）、
+/// 手机桥会把请求转发到死端口、前端页面则停留在旧地址。
+///
+/// 因此本函数**只认入参端点**，不读任何历史值——历史值不参与计算，就没有
+/// 「旧端点胜出」这种回归空间。
+///
+/// C12 的 Windows 桌面模式参数也在这里拼，原因相同：它是导航 URL 的一部分，
+/// 与「哪一次就绪」绑定，不该散落在两处。
+fn ready_shell_state(endpoint: &LaunchEndpoint) -> (HarnessPhase, LaunchEndpoint) {
+    // C12：Windows 追加桌面模式参数；titlebar-inset 留待阶段 2 决策。
+    let extra: &[(&str, &str)] = if cfg!(windows) {
+        &[WINDOWS_QUERY_MODE, WINDOWS_QUERY_PLATFORM]
+    } else {
+        &[]
+    };
+    let url = endpoint.navigate_url(extra).to_string();
+    (
+        HarnessPhase::Ready { url },
+        // 缓存的是**原始端点**（含 token / host / port），不是导航 URL：
+        // 导航 URL 带 C12 参数且可能已被消费，不能反推出退出检查要用的首航 token。
+        endpoint.clone(),
+    )
+}
+
+/// 终态失败时壳层要写入的相位（V1-6 的页面路径，纯函数）。
+///
+/// `cause_kind` 是**给页面看的分派键**（`frontend/error.html` 按它决定文案与
+/// 按钮）。就绪超时（`startup_timeout`）这条尤其重要：它的产品后果是
+/// 「进程起来了但服务永远不就绪」，页面必须显示「启动超时 + 可重试」，
+/// 而不是无限停在启动屏。若这里退化成常量或丢掉 cause，页面会静默显示成
+/// 泛化错误——那正是 AGENTS.md §7.1 禁止的「无声降级」。
+fn failed_phase(cause: &FailureCause) -> HarnessPhase {
+    HarnessPhase::Failed {
+        cause_kind: cause.kind().to_string(),
+        cause: cause.to_string(),
+        plugin_fault: cause.is_plugin_fault(),
+        retryable: cause.is_retryable(),
     }
 }
 
@@ -380,7 +439,10 @@ impl HarnessSupervisor {
             loop {
                 match rx.recv().await {
                     Ok(state) => {
-                        if bridge.generation.load(Ordering::SeqCst) != generation {
+                        if !bridge_state_is_current(
+                            generation,
+                            bridge.generation.load(Ordering::SeqCst),
+                        ) {
                             // 上一轮的迟到状态：丢弃，别覆盖新一轮的相位。
                             continue;
                         }
@@ -607,21 +669,22 @@ impl HarnessSupervisor {
     }
 
     fn on_ready(&self, endpoint: LaunchEndpoint) {
-        // C12：Windows 追加桌面模式参数；titlebar-inset 留待阶段 2 决策。
-        let extra: &[(&str, &str)] = if cfg!(windows) {
-            &[WINDOWS_QUERY_MODE, WINDOWS_QUERY_PLATFORM]
-        } else {
-            &[]
+        let (phase, stored_endpoint) = ready_shell_state(&endpoint);
+        let HarnessPhase::Ready { url } = &phase else {
+            // `ready_shell_state` 的契约是「必回 Ready」；走到这里说明它被改坏了。
+            // 不 panic（状态机回调里 panic 会掀掉整个壳层），但也不静默降级：
+            // 记一条桌面日志，让日志查看器与诊断包留痕（§7.1 规则 3）。
+            self.lock_inner()
+                .push_desktop("ready_shell_state 未返回 Ready 相位（契约被破坏）".to_string());
+            return;
         };
-        let url = endpoint.navigate_url(extra);
+        let url = url.clone();
 
         {
             let mut inner = self.lock_inner();
-            inner.phase = HarnessPhase::Ready {
-                url: url.to_string(),
-            };
+            inner.phase = phase;
             inner.message = "Harness is ready.".to_string();
-            inner.endpoint = Some(endpoint.clone());
+            inner.endpoint = Some(stored_endpoint);
             inner.push_desktop(format!("ready → {url}"));
         }
 
@@ -636,7 +699,17 @@ impl HarnessSupervisor {
                     ));
                 }
             }
-            let _ = webview.navigate(url.clone());
+            // 导航要 `Url`，相位里存的是 `String`（IPC/序列化用）。这里解析回
+            // `Url`：`ready_shell_state` 的入参本身就是 `Url` 派生出来的，故解析
+            // 必然成功；但仍不 `unwrap`——解析失败时留痕而不是 panic。
+            match url.parse() {
+                Ok(parsed) => {
+                    let _ = webview.navigate(parsed);
+                }
+                Err(error) => self.lock_inner().push_desktop(format!(
+                    "就绪 URL 无法解析为 Url，跳过导航（{error}）：{url}"
+                )),
+            }
         }
 
         // LAN 手机桥：注入转发目标 + 首航 token（**不**启动监听——监听是显式
@@ -650,12 +723,7 @@ impl HarnessSupervisor {
         self.sync_mobile_target(None);
         {
             let mut inner = self.lock_inner();
-            inner.phase = HarnessPhase::Failed {
-                cause_kind: cause.kind().to_string(),
-                cause: cause.to_string(),
-                plugin_fault: cause.is_plugin_fault(),
-                retryable: cause.is_retryable(),
-            };
+            inner.phase = failed_phase(&cause);
             inner.message = cause.to_string();
             inner.push_desktop(format!("failed: {cause}"));
         }
@@ -923,5 +991,133 @@ mod tests {
             }
             other => panic!("第 3 次尝试应走「重启中」分支，实际 {other:?}"),
         }
+    }
+
+    // ---- V1 生命周期竞态：壳层两窗 + V1-6 页面路径 ----
+    //
+    // 这三条与 `tests/supervisor_lifecycle_races.rs` 的分工：那边测 core 层
+    // （真派生进程、本机可跑），这边测**壳层决策**。壳层的 `HarnessSupervisor`
+    // 与 `AppState` 都要 `AppHandle` 才能构造，因此只能断言被抽出来的纯函数——
+    // 这也是 `classify_state` 当初被抽出来的同一理由。
+    //
+    // ⚠️ 本组在 GNU 工具链下**本机无法执行**（`dsh-desktop` 测试二进制缺
+    // WinRT DLL 无法加载，见 `docs/incidents/local-toolchain-limits.md`），
+    // 权威执行者是 CI（MSVC）。本地只能做到「编译 + clippy 通过」。
+
+    /// 造一个指定端口与 token 的端点（与 `terminal_and_running_classification`
+    /// 里的构造方式一致：`LaunchEndpoint` 的字段即测试要控制的三个量）。
+    fn endpoint(port: u16, token: &str) -> LaunchEndpoint {
+        LaunchEndpoint {
+            url: format!("http://127.0.0.1:{port}/?token={token}")
+                .parse()
+                .expect("测试用 URL 应可解析"),
+            token: token.to_string(),
+            host: "127.0.0.1".to_string(),
+            port,
+        }
+    }
+
+    /// **V1-2：退出与自动重启相撞时，上一轮的迟到状态必须被丢弃。**
+    ///
+    /// `stop()` 先自增 `generation` 再取走 supervisor，但旧桥任务要等通道
+    /// `Closed` 才退出——在这段间隙里，上一轮排队的状态仍会到达。
+    /// 判据写反（`==` → `!=`）的后果：用户点了退出，界面被拉回 `Starting`，
+    /// 紧随的 `Running` 甚至重新导航一次。编译器完全看不见这种错误。
+    #[test]
+    fn bridge_state_generation_rejects_stale_states() {
+        assert!(
+            bridge_state_is_current(7, 7),
+            "同一轮（代号相等）的状态必须应用"
+        );
+        assert!(
+            !bridge_state_is_current(6, 7),
+            "代号 6 的桥在代号 7 生效后仍在吐状态 ⇒ 必须丢弃（否则退出被重启覆盖）"
+        );
+        assert!(
+            !bridge_state_is_current(7, 8),
+            "stop() 自增代号之后，旧桥的一切状态都必须失效"
+        );
+    }
+
+    /// **V1-3：端口变化后壳层必须持有新端点，而不是留在旧端口。**
+    ///
+    /// sticky port（CX-14）只保证尽力复用；端口被占用时重启会换一个。
+    /// 若壳层留着旧端点：退出检查会问死端口（于是每次退出都弹「可能有工作在跑」）、
+    /// 手机桥把请求转发到死端口、页面停在旧地址。
+    ///
+    /// ⚠️ 本断言的对象是**纯函数边界**（相位 + 要缓存的端点）。真正写进
+    /// `SupervisorInner.endpoint` 的那一步需要 `AppHandle`，不在本组覆盖范围内
+    /// ——这一点如实登记，不假装覆盖。
+    #[test]
+    fn ready_endpoint_follows_a_port_change() {
+        let first = endpoint(1234, "tok-a");
+        let (phase_a, stored_a) = ready_shell_state(&first);
+        assert_eq!(stored_a.port, 1234, "首次就绪应缓存本次端点");
+        match &phase_a {
+            HarnessPhase::Ready { url } => assert!(url.contains(":1234"), "{url}"),
+            other => panic!("就绪必须映射到 Ready 相位，实际 {other:?}"),
+        }
+
+        // 崩溃重启换了端口与 token：两个量都必须跟着换。
+        let second = endpoint(2345, "tok-b");
+        let (phase_b, stored_b) = ready_shell_state(&second);
+        assert_eq!(
+            stored_b.port, 2345,
+            "端口变化后缓存的端点必须换成新的（旧端口已不在监听）"
+        );
+        assert_eq!(
+            stored_b.token, "tok-b",
+            "token 是首航凭证，重启即换——沿用旧 token 会让退出检查 401"
+        );
+        match &phase_b {
+            HarnessPhase::Ready { url } => {
+                assert!(url.contains(":2345"), "相位 URL 应带新端口：{url}");
+                assert!(
+                    !url.contains(":1234"),
+                    "相位 URL 里仍残留旧端口 ⇒ 页面会访问一个已关闭的端口：{url}"
+                );
+            }
+            other => panic!("就绪必须映射到 Ready 相位，实际 {other:?}"),
+        }
+    }
+
+    /// **V1-6 的页面路径：就绪超时必须带着自己的 `cause_kind` 到达页面。**
+    ///
+    /// core 层已由 `mock_launch.rs::no_url_times_out_with_startup_timeout` 钉住
+    /// （退出码 6 + `startup_timeout` 归因）。缺的那半是**页面能不能拿到它**：
+    /// `frontend/error.html` 按 `cause_kind` 分派文案与按钮，若这里退化成常量
+    /// 或泛化归因，页面会显示成「未知错误」，用户看不出「进程起来了但服务没就绪」。
+    #[test]
+    fn startup_timeout_reaches_the_page_as_its_own_kind() {
+        let phase = failed_phase(&FailureCause::StartupTimeout { seconds: 2 });
+        match &phase {
+            HarnessPhase::Failed {
+                cause_kind,
+                cause,
+                plugin_fault,
+                ..
+            } => {
+                assert_eq!(
+                    cause_kind, "startup_timeout",
+                    "页面按 cause_kind 分派，这里必须是 startup_timeout"
+                );
+                assert!(
+                    cause.contains('2'),
+                    "文案应带超时秒数（否则用户不知道等了多久）：{cause}"
+                );
+                assert!(
+                    !plugin_fault,
+                    "就绪超时不是插件故障——误标会让错误页推出「进入安全模式」"
+                );
+            }
+            other => panic!("终态必须映射到 Failed 相位，实际 {other:?}"),
+        }
+
+        // 归因不得被泛化吞掉：具体原因与兜底 Unknown 必须是不同相位。
+        assert_ne!(
+            failed_phase(&FailureCause::StartupTimeout { seconds: 2 }),
+            failed_phase(&FailureCause::Unknown),
+            "就绪超时与「无可用线索」必须可区分，否则页面无法给出可操作提示"
+        );
     }
 }
