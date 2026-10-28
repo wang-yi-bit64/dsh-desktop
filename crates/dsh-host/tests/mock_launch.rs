@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use dsh_host::contracts::{
     EXIT_HARNESS_FAILED, EXIT_PORT_IN_USE, EXIT_READY_TIMEOUT, MAX_PORT_ATTEMPTS,
+    PORT_RETRY_BACKOFF,
 };
 use dsh_host::launch::{LaunchEvent, LaunchOutcome};
 use dsh_host::process::is_process_alive;
@@ -172,6 +173,35 @@ async fn no_url_times_out_with_startup_timeout() {
 /// 「耗尽 MAX_PORT_ATTEMPTS 次」与「重试循环被删 / MAX_PORT_ATTEMPTS 被误改后
 /// 只试 1 次就返回 exit 7」。因此用 `on_event` 对 `LaunchEvent::Spawned` 计数
 /// （lib 层事件，不数日志字符串）。
+///
+/// ## 「快速失败」这条判据为什么改过（2026-10-12）
+///
+/// 原断言是 `elapsed < Duration::from_secs(25)`。它在高负载下**假红过一次**
+/// （实测 93.25s，而 `spawned == 3` 与归因断言均通过）。定位后确认是**判据与
+/// 阈值双错位**，不是产品缺陷：
+///
+/// 1. **真正的判据是结构性的，不是墙钟。** `wait_for_ready` 只在 deadline
+///    之前看到 `port_in_use` 才返回 `PortInUse`，否则返回 `Timeout`。
+///    因此下面 `kind() == "port_in_use"` 这条断言**已经证明**「探测没有干等
+///    总超时」——墙钟再紧也只是给这条已证事实加一个更弱的复述。
+/// 2. **墙钟里混进了不可界定的一项。** `terminate_process_tree` 在 Windows 上是
+///    `taskkill /PID /T /F` 的一次**同步子进程调用**
+///    （`crates/dsh-host/src/process.rs`），每次尝试付一次，且没有任何超时包着
+///    它。杀软扫描新进程 / 磁盘争用时它可以耗时数十秒——93s 就是这样攒出来的
+///    （3 次尝试 ≈ 3 × 30s）。`25s` 隐含假设了 `taskkill` 接近零成本。
+/// 3. **阈值从未推导。** `25s` 是个魔法数，既不来自 `probe.total_timeout`，
+///    也不来自尝试次数。
+///
+/// 现在的做法：墙钟上界由契约常量相乘得出（见 [`port_in_use_wall_clock_bound`]），
+/// 含义是「每次尝试都不得退化成等满平台默认就绪超时」，而不是「必须很快」。
+///
+/// ⚠️ **残余风险（如实登记）**：一条「功能正确但每次都要等满 `total_timeout`
+/// 才判出 PortInUse」的回归，本用例**抓不到**（那种情况下归因会变成 `Timeout`，
+/// 仍被 `kind()` 抓住；但只是「慢一些」的回归不会红）。要补这一半，需要给
+/// `terminate_process_tree` 加超时或改成异步——属生产改动，另案决策。
+///
+/// 若本用例再次因耗时翻红：先量 `taskkill` 的实际耗时（见
+/// `docs/incidents/local-toolchain-limits.md`），**不要**直接调大常数。
 #[tokio::test]
 async fn port_in_use_retries_then_fails_fast() {
     let Some(fx) = fixture() else {
@@ -179,15 +209,18 @@ async fn port_in_use_retries_then_fails_fast() {
         return;
     };
 
+    // 就绪总超时：压到 15s（平台默认 120s 不适用于测试）。
+    const PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
+
     let env = fx.env_with(&[
         ("DSH_MOCK_FAIL", "port-in-use"),
         // 把 mock 的 EADDRINUSE 保活时长从默认 500ms 拉到 2s：确保宿主日志泵在
         // 探测循环里稳定置位 port_in_use（消除「子进程退出先于置位」竞态）。
         // 保活时长几乎不增加墙钟——wait_for_ready 判出 PortInUse 后宿主
-        // terminate_process_tree 会提前杀死仍在保活的 mock，三次总耗时仍 ≪ 25s。
+        // terminate_process_tree 会提前杀死仍在保活的 mock。
         ("DSH_MOCK_PORT_IN_USE_MS", "2000"),
     ]);
-    let launcher = fx.launcher(Duration::from_secs(15));
+    let launcher = fx.launcher(PROBE_TOTAL_TIMEOUT);
     let started_at = std::time::Instant::now();
     let mut spawned = 0usize;
     let error = match launcher
@@ -201,27 +234,61 @@ async fn port_in_use_retries_then_fails_fast() {
         Ok(_) => panic!("mock EADDRINUSE 时 run() 不应返回 Ok"),
         Err(error) => error,
     };
+    let elapsed = started_at.elapsed();
+    // 永远留一行数字：这条用例的争议点从来是「它花了多久」，而失败信息里
+    // 缺的正是这个量级（`cargo test -- --nocapture` / CI 日志可见）。
+    eprintln!(
+        "[port-in-use] spawned={spawned} elapsed={elapsed:?} \
+         max_port_attempts={MAX_PORT_ATTEMPTS} probe_total_timeout={PROBE_TOTAL_TIMEOUT:?}"
+    );
 
     // 重试真实发生：spawned 必须等于 MAX_PORT_ATTEMPTS（== 3）。
     assert_eq!(
         spawned, MAX_PORT_ATTEMPTS,
-        "应真实重试 MAX_PORT_ATTEMPTS 次后失败（spawned={spawned}）"
+        "应真实重试 MAX_PORT_ATTEMPTS 次后失败（spawned={spawned}，\
+         期望 {MAX_PORT_ATTEMPTS}，elapsed={elapsed:?}）"
     );
-    // 快速失败：远小于平台默认 120s 就绪超时。
-    assert!(
-        started_at.elapsed() < Duration::from_secs(25),
-        "EADDRINUSE 应快速失败而非干等 120s"
-    );
+
+    // 结构化判据：只有重试真实发生且归因是 PortInUse，才说明「探测在总超时前
+    // 判出端口冲突」——否则 `wait_for_ready` 会返回 `Timeout`，下面
+    // `kind() == "port_in_use"` 就不成立。这一条才是「快速失败」的**证明**。
     assert_eq!(
         error.exit_code(),
         EXIT_PORT_IN_USE,
-        "EADDRINUSE 重试耗尽应映射到退出码 7：{error}"
+        "EADDRINUSE 重试耗尽应映射到退出码 7（实际 elapsed={elapsed:?}）：{error}"
     );
     assert_eq!(
         error.to_failure_cause().kind(),
         "port_in_use",
-        "归因应为 port_in_use：{error}"
+        "归因应为 port_in_use——若这里是 timeout，说明探测等满了总超时，\
+         端口冲突识别失效（elapsed={elapsed:?}）：{error}"
     );
+
+    // 墙钟兜底：只排除「退化成 N × 平台默认就绪超时」。
+    let bound = port_in_use_wall_clock_bound(PROBE_TOTAL_TIMEOUT);
+    assert!(
+        elapsed < bound,
+        "port-in-use 全流程耗时 {elapsed:?} 超过上界 {bound:?}\
+         （每次尝试 {PROBE_TOTAL_TIMEOUT:?} × {MAX_PORT_ATTEMPTS} 次 + 重试退避）。\
+         spawned={spawned}，归因={}。\
+         上界只兜「退化成干等平台默认超时」这一种情况；\
+         若你以为这是性能断言而想调大它，先读本用例文档第 2 条\
+         （墙钟里含不可界定的 taskkill 成本）。",
+        error.to_failure_cause().kind()
+    );
+}
+
+/// port-in-use 用例的墙钟上界（**推导**而非魔数）。
+///
+/// 含义：最坏情况下每次尝试都等满 `probe_total_timeout`，共
+/// [`MAX_PORT_ATTEMPTS`] 次，再来 `MAX_PORT_ATTEMPTS - 1` 次重试退避。
+/// 这正好是「不会退化成 `MAX_PORT_ATTEMPTS × 平台默认 120s`」这条量级判据。
+///
+/// 刻意**不**把 `taskkill` 的耗时算进去——它没有上界，见用例文档第 2 条；
+/// 把它折算成一个便宜常数只会制造下一个假红。
+fn port_in_use_wall_clock_bound(probe_total_timeout: Duration) -> Duration {
+    probe_total_timeout * MAX_PORT_ATTEMPTS as u32
+        + PORT_RETRY_BACKOFF * (MAX_PORT_ATTEMPTS as u32 - 1)
 }
 
 /// after-ready 故障：就绪后子进程崩溃 → exit watcher 捕获（RunningHarness 通道）。
