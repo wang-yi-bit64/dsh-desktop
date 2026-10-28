@@ -172,7 +172,7 @@ jobs:
       # 这步会跑起来并宣称「失败发生在 cargo test 之前」——话是对的，但会把读的人
       # 引向错误的方向（真正红的是 cargo-deny）。
       - name: Publish failing-test digest as annotations
-        if: steps.cargo-test.outcome == 'failure'
+        if: failure() && steps.cargo-test.outcome == 'failure'
         shell: bash
         run: |
           grep -E '^test .+ \.\.\. FAILED$|panicked at |^failures:$|^---- .+ stdout ----$|^error(\[|:)' \
