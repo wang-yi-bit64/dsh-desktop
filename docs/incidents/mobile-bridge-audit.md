@@ -308,22 +308,35 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 
 - 工作流定义：`.github/workflows/ci.yml` 的触发面是 `pull_request` / `workflow_dispatch` /
   `schedule`，**刻意不监听 `push`**（文件头有理由）。因此「推了分支」不会产生任何运行。
-- 触发所需凭据在本机**不可用**，实测：
+- 触发所需凭据在本机**不可用**，实测（含 2026-10-28 二次核对——连接器已重新授权）：
 
   | 通道 | 实测结果 |
   |---|---|
   | `gh` CLI | 未安装（`which gh` 无命中） |
   | `GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_PAT` | 均未设置 |
-  | GitHub 连接器 | `list_installed_plugins` 返回 `"status":"auth-required"` |
+  | GitHub 连接器（**读**） | 用户完成授权后 `status: connected`；`get_me`（`wang-yi-bit64`）、`list_branches` 均成功 |
+  | GitHub 连接器（**写**） | ❌ 开 PR 被拒：`POST /repos/wang-yi-bit64/dsh-desktop/pulls` → **403 `Resource not accessible by integration`**（安装令牌缺 `pull_requests: write`）。该连接器也未暴露 `workflow_dispatch` 能力 |
 
-  ⇒ 既不能开 PR，也不能 `workflow_dispatch`。依赖的检查（`cargo fmt --check`、
-  `cargo clippy --workspace --all-targets -- -D warnings`、
+  ⇒ **读通了、写不通**。既不能开 PR，也不能 `workflow_dispatch`。依赖的检查
+  （`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
   `cargo test --workspace --tests`，其中 `cargo test` 覆盖本文件新增的 15 条测试）
   **一条都没跑过**。
 
-- 已推送：分支 `feat/v2-mobile-bridge-adversarial`（提交 `8ebc748` 及其后的修正提交）。
+- 已推送：分支 `feat/v2-mobile-bridge-adversarial`，远端 sha 与本地 HEAD 一致
+  （`2e49e48`，含 `8ebc748`/`d3ac36a`/`2e49e48` 三个提交）。
+- 与 `main` 的关系：落后 2 个 `chore(release)` 提交（`bfda0c2`、`f3efda2`），
+  但这 2 个提交只动 `CHANGELOG.md` / `Cargo.lock` / `Cargo.toml` /
+  `harness-locks/dsh-releases.json` / `package.json`，与本次改动的四个文件
+  **零重叠**（`comm -12` 空输出）⇒ GitHub 的 test-merge 不会冲突，**无需先 rebase**。
 - **待办（需要凭据的那一侧）**：开 PR 或对该分支 dispatch CI → 拿到运行号后回填本节，
   并把 §2 的结论按实际颜色同步（红色就写成红色，**不得**只改代码不改结论）。
+  两条不需要 AI 会话接触凭据的路径：
+  1. 浏览器直接打开
+     `https://github.com/wang-yi-bit64/dsh-desktop/compare/main...feat/v2-mobile-bridge-adversarial?expand=1`
+     → 点 `Create pull request`（已登录即可，一次点击）；
+  2. 在**自己的**终端跑 `gh pr create --base main --head feat/v2-mobile-bridge-adversarial`
+     （标题/正文可沿用提交信息）。
+
   在回填之前，本文档中的「✅ 已修」只表示**代码与测试已就位**，不表示「CI 验证通过」。
 
 ### 8.4 复现单条判据
