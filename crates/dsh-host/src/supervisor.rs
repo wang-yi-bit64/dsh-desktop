@@ -8,6 +8,22 @@
 //! - **强隔离生命周期（INV-3）**：崩溃检测并安全回收子进程树。
 //! - **指数退避（Exponential Backoff）**：避免高频崩溃造成 CPU/IO 风暴。
 //! - **稳定窗口重置**：子进程存活超过 `SUPERVISOR_STABLE_UPTIME` 后重置退避。
+//!
+//! ## 并发语义：`start()` 是**互斥**的，不是叠加的
+//!
+//! V1-4（「两个 Supervisor 周期同时控制同一服务」）的裁定是**互斥**，
+//! 落点见 [`Supervisor::start`] 开头的 `supervision_task` 判定：
+//!
+//! * 监督协程**仍在运行** ⇒ 直接返回，不派生第二个循环（第二次 `start()`
+//!   既不重置退避计数、也不重新 spawn 子进程）；
+//! * 协程**已自然结束**（断路器开路进 `Failed`，或已 `Stopped`）⇒ 取走旧句柄
+//!   再派生新循环。这条分支是必要的：`Failed` 之后重新启动恰恰是最常见的诉求
+//!   （错误页的「重试」），若按「句柄为 `Some` 就返回」判，重试会永久卡死。
+//!
+//! ⚠️ **互斥的粒度是「单个 `Supervisor` 实例」**。两个独立实例各自持有自己的
+//! `is_stopping` / `supervision_task`，同时 `start()` 会各派生一条循环、各 spawn
+//! 一个子进程——跨实例互斥**不在本类型职责内**，由调用方（壳层 `AppState`
+//! 的 `generation` 代号 + 单例持有）保证。见 `src-tauri/src/state.rs`。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -538,10 +554,26 @@ impl Supervisor {
 mod tests {
     use super::*;
 
+    /// 测试临时目录的唯一后缀（V1-0 第一项）。
+    ///
+    /// 旧写法只带 `pid`：同一测试进程内**所有**用例共享同一个目录树，并行执行时
+    /// 会在 `create_dir_all` / 清理之间互相踩（本机 Windows 上的表现是瞬态
+    /// `PermissionDenied`）。计数器单调递增 ⇒ 同进程内不可能撞，跨进程由 `pid` 区分。
+    static TEMP_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// 生成本次调用独有的临时目录名 `dsh-supervisor-<tag>-<pid>-<seq>`。
+    fn unique_temp(tag: &str) -> std::path::PathBuf {
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "dsh-supervisor-{tag}-{}-{seq}",
+            std::process::id()
+        ))
+    }
+
     #[tokio::test]
     async fn test_supervisor_config_and_state_channel() {
-        // 目录名带 PID：测试并行执行时固定路径会与其它用例共用同一目录树。
-        let temp = std::env::temp_dir().join(format!("dsh-supervisor-test-{}", std::process::id()));
+        // 目录名带 pid + 序号：测试并行执行时固定路径会与其它用例共用同一目录树。
+        let temp = unique_temp("test");
         let layout = Layout::resolve(temp.join("res"), temp.join("user"));
 
         let supervisor = Supervisor::new(layout, SupervisorConfig::default());
@@ -679,8 +711,7 @@ mod tests {
     // 这一组锁定它真的被消费，并锁定向后兼容的那条分支。
 
     fn test_layout(tag: &str) -> Layout {
-        let base =
-            std::env::temp_dir().join(format!("dsh-supervisor-env-{tag}-{}", std::process::id()));
+        let base = unique_temp(tag);
         Layout::resolve(base.join("res"), base.join("user"))
     }
 
