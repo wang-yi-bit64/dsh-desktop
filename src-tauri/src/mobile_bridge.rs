@@ -43,25 +43,40 @@
 //! （30 天），后续 `/api/*` 全部靠 cookie 鉴权（见 `crate::cookies`）。
 //! 因此转发前必须完成一次握手，否则 `/api/rpc` 只会拿到未授权响应。
 //! 握手在 [`MobileBridge::start`] 时尽力执行，失败则在首次转发时重试。
+//!
+//! ## 对抗性审计（V2，2026-10-28）
+//!
+//! 八条判据的结论、逐条证据（代码位置 + 测试名）、CORS/CSRF 边界与未解风险
+//! 登记在 `docs/incidents/mobile-bridge-audit.md`。本头只记**改过语义**的三条：
+//!
+//! 1. **监听绑定只有一处、且在 [`MobileBridge::start`] 内**——「桥默认不监听」
+//!    靠这一点成立；测试 `v2_1_tcp_listener_bind_is_confined_to_start` 静态守着
+//!    （带植入夹具，扫描器失效时会报红）。
+//! 2. **`/api/rpc` 的鉴权是精确 Bearer 匹配 + 常数时间比较**，不是子串包含；
+//!    未授权一律 401，且 401 先于方法白名单（不泄漏「哪些方法被放行」）。
+//! 3. **转发链每一步都有上限**：建连 / 写出 / 单次读空闲 / 整链总时长 /
+//!    响应体字节数（CX-18）；并发上限 4，超出直接 429 而不是排队。
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use dsh_contracts::constants::{
+    AUTH_COOKIE_PREFIX, MOBILE_BRIDGE_FORWARD_CONNECT_TIMEOUT, MOBILE_BRIDGE_FORWARD_READ_TIMEOUT,
+    MOBILE_BRIDGE_FORWARD_TOTAL_TIMEOUT, MOBILE_BRIDGE_FORWARD_WRITE_TIMEOUT,
+    MOBILE_BRIDGE_HANDSHAKE_TIMEOUT, MOBILE_BRIDGE_MAX_CONCURRENT_FORWARDS,
+    MOBILE_BRIDGE_MAX_REQUEST_BYTES, MOBILE_BRIDGE_MAX_RESPONSE_BYTES,
+    MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES, MOBILE_BRIDGE_PAIRING_TTL_MS,
+};
 use rand::Rng;
 use serde::Serialize;
-use tokio::sync::Mutex;
-
-const PAIRING_TTL_MS: u128 = 5 * 60 * 1000;
-const MAX_BODY_BYTES: usize = 64 * 1024;
-/// 握手与转发的单次网络超时。
-const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+use tokio::sync::{Mutex, Semaphore};
 
 /// Harness 端点注入值：转发目标 + 首航鉴权凭据。
 #[derive(Clone, Debug)]
@@ -130,7 +145,21 @@ struct BridgeState {
     session_token: Mutex<Option<String>>,
     connected: Mutex<bool>,
     port: Mutex<Option<u16>>,
-    shutdown: tokio::sync::Notify,
+    /// 停止信号（V2-1 的同族缺陷修复）。
+    ///
+    /// 原实现是 `tokio::sync::Notify` + `notify_waiters()`：**通知不存许可**，
+    /// 若 `stop()` 发生在 serve 任务第一次 `notified().await` 之前（`start()`
+    /// 里 spawn 之后紧跟握手，无目标时握手立刻失败返回，窗口只有微秒级），
+    /// 这次通知就丢了——监听器永远不关，端口一直占着，而 `port` 字段已被置
+    /// `None`，快照上看不出任何异常（§7.1 规则 3 的无声降级）。
+    /// `watch` 保存**最新值**，接收方无论何时开始等都不会漏掉已经发生的翻转。
+    shutdown: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    /// 转发并发闸门（CX-18 的 `MOBILE_BRIDGE_MAX_CONCURRENT_FORWARDS`）。
+    ///
+    /// 放在状态里而不是每次请求新建：上限的意义是**全桥共享**，一次一新建
+    /// 等于没有上限。`Arc` 是为了让 `try_acquire_owned` 能把许可带过 `await`
+    /// 边界（借用式许可撑不住 axum 处理器的生命周期）。
+    forward_slots: Arc<Semaphore>,
     /// 配对状态监听器；用同步锁是因为触发点（[`BridgeState::set_connected`]）
     /// 不持有它跨 `await`。
     listener: std::sync::Mutex<Option<ConnectedListener>>,
@@ -183,7 +212,8 @@ impl MobileBridge {
                 session_token: Mutex::new(None),
                 connected: Mutex::new(false),
                 port: Mutex::new(None),
-                shutdown: tokio::sync::Notify::new(),
+                shutdown: Mutex::new(None),
+                forward_slots: Arc::new(Semaphore::new(MOBILE_BRIDGE_MAX_CONCURRENT_FORWARDS)),
                 listener: std::sync::Mutex::new(None),
             }),
         }
@@ -285,7 +315,7 @@ impl MobileBridge {
             let mut pairing = self.state.pairing.lock().await;
             *pairing = Some(PendingPairing {
                 token: token.clone(),
-                expires_at: now_ms() + PAIRING_TTL_MS,
+                expires_at: now_ms() + MOBILE_BRIDGE_PAIRING_TTL_MS,
             });
         }
 
@@ -308,17 +338,40 @@ impl MobileBridge {
             .route("/api/rpc", post(rpc_forward))
             .with_state(state);
 
-        let shutdown_state = Arc::clone(&self.state);
+        // 每轮 start 一条独立通道：上一轮的「已停止」值不会被下一轮继承
+        // ——继承的后果是新监听器一挂上就自己关掉。
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        *self.state.shutdown.lock().await = Some(shutdown_tx);
         tokio::spawn(async move {
             axum::serve(listener, app)
-                .with_graceful_shutdown(async move { shutdown_state.shutdown.notified().await })
+                .with_graceful_shutdown(async move {
+                    // 先看一次当前值：`stop()` 可能已经发生在注册之前。
+                    if *shutdown_rx.borrow() {
+                        return;
+                    }
+                    while shutdown_rx.changed().await.is_ok() {
+                        if *shutdown_rx.borrow() {
+                            return;
+                        }
+                    }
+                })
                 .await
                 .ok();
         });
 
         // 尽力握手：失败只记日志，不阻断配对流程。
+        //
+        // 走 `log` 门面而不是 `eprintln!`：`eprintln!` 写的是**无人接管**的
+        // stderr（打包后的 GUI 进程根本没有控制台），因此「握手失败」这件事
+        // 在用户机器上既不可见也**不可测**——V2-7 的判据（日志里不得出现完整
+        // token / cookie）需要能捕获日志的观察点，而 `eprintln!` 没有任何
+        // 可注入的观察点。错误文本先过 [`scrub_secrets`]：握手失败的原始
+        // 错误可能夹带 `?token=…`（URL 解析失败时由底层错误回显）。
         if let Err(error) = self.ensure_auth_cookie().await {
-            eprintln!("[mobile-bridge] auth cookie handshake deferred: {error}");
+            log::warn!(
+                "[mobile-bridge] auth cookie handshake deferred: {}",
+                scrub_secrets(&error)
+            );
         }
 
         Ok(self.snapshot().await)
@@ -329,7 +382,12 @@ impl MobileBridge {
     /// 不保留凭据是有意的：停止菜单是「现在不要局域网暴露」的表达，
     /// 若保留 `session_token`，已配对的手机在下次启动后仍可继续调用。
     pub async fn stop(&self) {
-        self.state.shutdown.notify_waiters();
+        // 先取走 sender 再发信号：这样重复 stop 是 no-op，也不会给下一轮留下
+        // 「已停止」的许可（老实现用 `notify_waiters`，在无人等待时**直接丢失**）。
+        let sender = self.state.shutdown.lock().await.take();
+        if let Some(sender) = sender {
+            let _ = sender.send(true);
+        }
         *self.state.port.lock().await = None;
         // 经 set_connected 而不是直接写字段：停止桥同样是一次配对状态翻转
         // （已配对的手机不再有效），壳侧的菜单状态行必须一起回到 off。
@@ -489,8 +547,11 @@ pub fn parse_auth_cookie(headers: &str) -> Option<String> {
     })
 }
 
-/// Harness 鉴权 cookie 前缀（与 `crate::cookies` 的 431 防护共用同一前缀）。
-const AUTH_COOKIE_PREFIX: &str = "dsh-auth-";
+// Harness 鉴权 cookie 前缀来自 `dsh_contracts::constants::AUTH_COOKIE_PREFIX`
+// （CONTRACT C5 的唯一产地）。本模块**刻意不再抄一份字面量**：此前这里有一份
+// `const AUTH_COOKIE_PREFIX: &str = "dsh-auth-";`，而 `state.rs` / `quit_probe.rs`
+// 用的是契约库那份——两处 `dsh-auth-` 各自演进时不会报错，只会让「清 cookie」
+// 与「读 cookie」默默认不同的前缀（AGENTS.md §3.2 明令禁止的重复定义）。
 
 /// 首航握手：`GET {base_url}/?token=…` → 取回 `dsh-auth-*` cookie。
 ///
@@ -508,7 +569,7 @@ async fn fetch_auth_cookie(base_url: &str, token: &str) -> Result<String, String
     let port = url.port().unwrap_or(80);
 
     let mut stream = tokio::time::timeout(
-        HTTP_TIMEOUT,
+        MOBILE_BRIDGE_HANDSHAKE_TIMEOUT,
         tokio::net::TcpStream::connect(format!("{host}:{port}")),
     )
     .await
@@ -521,18 +582,24 @@ async fn fetch_auth_cookie(base_url: &str, token: &str) -> Result<String, String
         host = host,
         port = port,
     );
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| format!("handshake write failed: {e}"))?;
+    // 写与读同样要有超时：`connect` 成功不代表对端会读/会写。只给建连加超时
+    // 时，一条「连上了但永不响应」的连接会让 `start()` 永远停在握手上——
+    // 而 `start()` 是在菜单点击的调用链上跑的（V2-6 的同族问题）。
+    tokio::time::timeout(
+        MOBILE_BRIDGE_HANDSHAKE_TIMEOUT,
+        stream.write_all(request.as_bytes()),
+    )
+    .await
+    .map_err(|_| "handshake write timeout".to_string())?
+    .map_err(|e| format!("handshake write failed: {e}"))?;
 
     let mut buffer = Vec::new();
     // 只需要响应头；响应体可能很大（HTML 首页），因此限制读取量。
     let mut chunk = [0u8; 8192];
-    while buffer.len() < 64 * 1024 {
-        let read = stream
-            .read(&mut chunk)
+    while buffer.len() < MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES {
+        let read = tokio::time::timeout(MOBILE_BRIDGE_HANDSHAKE_TIMEOUT, stream.read(&mut chunk))
             .await
+            .map_err(|_| "handshake read timeout".to_string())?
             .map_err(|e| format!("handshake read failed: {e}"))?;
         if read == 0 {
             break;
@@ -691,22 +758,31 @@ async fn rpc_forward(
     headers: header::HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if body.len() > MAX_BODY_BYTES {
+    if body.len() > MOBILE_BRIDGE_MAX_REQUEST_BYTES {
         return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
     }
-    // Require an authorized session.
+
+    // 鉴权先于一切语义判断（V2-8）。
+    //
+    // 顺序不是风格问题：若先查方法白名单再查鉴权，未授权者就能靠 401 / 403
+    // 的差异逐条枚举「桥到底放行了哪些方法」。旧测试正是在这一点上写错的
+    // （未鉴权却断言 403），它把**缺陷**当成了契约。
+    let supplied = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
     let authed = {
         let session = state.session_token.lock().await;
-        let supplied = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
         match session.as_ref() {
-            Some(token) => supplied.contains(token),
+            Some(token) => bearer_matches(supplied, token),
             None => false,
         }
     };
     if !authed {
+        // 只记**方案名 + 长度**，绝不记内容：这条日志会被用户贴进 issue（V2-7）。
+        log::warn!(
+            "[mobile-bridge] /api/rpc rejected 401 (authorization: {})",
+            describe_authorization(supplied)
+        );
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
 
@@ -722,6 +798,20 @@ async fn rpc_forward(
         return (StatusCode::FORBIDDEN, "method not allowed").into_response();
     };
 
+    // 并发闸门（V2-6）。`try_acquire` 而不是 `acquire`：排队只会把过载转成
+    // 延迟（手机侧看到的是「转圈直到总超时」），而 429 能让调用方明确退避。
+    let _slot = match Arc::clone(&state.forward_slots).try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            log::warn!("[mobile-bridge] /api/rpc rejected 429 (forward slots exhausted)");
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many concurrent forwards",
+            )
+                .into_response();
+        }
+    };
+
     let harness_url = state.harness_url.lock().await.clone();
     let Some(harness_url) = harness_url else {
         return (StatusCode::SERVICE_UNAVAILABLE, "harness not ready").into_response();
@@ -732,9 +822,14 @@ async fn rpc_forward(
     let mut cookie = state.auth_cookie.lock().await.clone();
     if cookie.is_none() {
         if let Err(error) = bridge_ensure_cookie(&state).await {
+            // 同样过一遍擦除：握手失败的原始错误可能回显 `?token=…`。
+            log::warn!(
+                "[mobile-bridge] forward aborted 503 (handshake: {})",
+                scrub_secrets(&error)
+            );
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("harness auth handshake failed: {error}"),
+                format!("harness auth handshake failed: {}", scrub_secrets(&error)),
             )
                 .into_response();
         }
@@ -745,7 +840,13 @@ async fn rpc_forward(
     let target = format!("{}/api/{}", harness_url.trim_end_matches('/'), endpoint);
     match forward_request(&target, &payload, cookie.as_deref()).await {
         Ok(response) => response,
-        Err(error) => (StatusCode::BAD_GATEWAY, format!("forward failed: {error}")).into_response(),
+        Err(error) => {
+            log::warn!(
+                "[mobile-bridge] forward to {endpoint} failed: {}",
+                scrub_secrets(&error.to_string())
+            );
+            (StatusCode::BAD_GATEWAY, format!("forward failed: {error}")).into_response()
+        }
     }
 }
 
@@ -768,7 +869,55 @@ async fn bridge_ensure_cookie(state: &Arc<BridgeState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 转发链路的时间/体积上限。
+///
+/// 做成结构体而不是直接读常量，唯一目的是**测试可注入**：慢连接与超大响应这
+/// 两条判据若只能等生产的 10 s / 4 MiB，测试就得跑十几秒或分配 4 MiB——那种
+/// 测试的结局是被人注释掉。生产路径只用 [`ForwardLimits::default`]，它逐字段
+/// 取自 `dsh-contracts` 的 CX-18，因此「调参」仍然只有一个产地。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ForwardLimits {
+    pub connect: Duration,
+    pub write: Duration,
+    pub read: Duration,
+    pub total: Duration,
+    pub max_response_bytes: usize,
+}
+
+impl Default for ForwardLimits {
+    fn default() -> Self {
+        Self {
+            connect: MOBILE_BRIDGE_FORWARD_CONNECT_TIMEOUT,
+            write: MOBILE_BRIDGE_FORWARD_WRITE_TIMEOUT,
+            read: MOBILE_BRIDGE_FORWARD_READ_TIMEOUT,
+            total: MOBILE_BRIDGE_FORWARD_TOTAL_TIMEOUT,
+            max_response_bytes: MOBILE_BRIDGE_MAX_RESPONSE_BYTES,
+        }
+    }
+}
+
+/// 超时类的 `io::Error`（统一构造，避免各处各写一种 `ErrorKind`）。
+fn timeout_error(message: &str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, message.to_string())
+}
+
+/// 协议/体积违规的 `io::Error`。
+fn protocol_error(message: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+}
+
 /// Minimal HTTP POST forwarder over a raw TCP socket (avoids extra deps).
+///
+/// 整条链的每一步都有各自的上限（V2-6）：建连、写出、单次读的空闲、以及
+/// **总时长**。缺任何一步都能被一条构造出来的上游拖死：
+///
+/// | 缺口 | 后果 |
+/// |---|---|
+/// | 无建连超时 | 对端丢包时卡到 OS 的 SYN 重传上限（Windows 约 21 s） |
+/// | 无写超时 | 对端只连不读，`write_all` 卡在发送窗口满 |
+/// | 无读超时 | 对端连上不发字节，`read_to_end` 无限等 |
+/// | 只有单次读超时 | 「每 9 秒吐 1 字节」可无限延长（故另有总超时） |
+/// | 无响应体上限 | 上游吐 1 GiB → 桥进程 OOM（桥是**本机**进程，可被远程触发） |
 ///
 /// # 参数
 ///
@@ -781,7 +930,19 @@ async fn forward_request(
     payload: &serde_json::Value,
     cookie: Option<&str>,
 ) -> std::io::Result<Response> {
+    forward_request_with_limits(target, payload, cookie, ForwardLimits::default()).await
+}
+
+/// [`forward_request`] 的可注入上限版本（生产只经 `default()` 调用）。
+async fn forward_request_with_limits(
+    target: &str,
+    payload: &serde_json::Value,
+    cookie: Option<&str>,
+    limits: ForwardLimits,
+) -> std::io::Result<Response> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let deadline = Instant::now() + limits.total;
 
     let url = url::Url::parse(target)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
@@ -805,21 +966,67 @@ async fn forward_request(
     );
 
     let mut stream = tokio::time::timeout(
-        HTTP_TIMEOUT,
+        limits.connect,
         tokio::net::TcpStream::connect(format!("{host}:{port}")),
     )
     .await
-    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "connect timeout"))??;
+    .map_err(|_| timeout_error("connect timeout"))??;
 
-    stream.write_all(request.as_bytes()).await?;
-    stream.write_all(&body).await?;
+    // 头与体共用一次写超时：分两次给超时只会让「头写完了、体卡住」这条路径
+    // 拿到 2 倍预算。
+    tokio::time::timeout(limits.write, async {
+        stream.write_all(request.as_bytes()).await?;
+        stream.write_all(&body).await
+    })
+    .await
+    .map_err(|_| timeout_error("write timeout"))??;
 
+    // 响应读取：单次读受「空闲超时」约束，整体受 `deadline` 约束；体积在
+    // **读的过程中**就设上限，而不是读完再比长度——后者对 OOM 毫无帮助。
+    let head_cap = MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES;
+    let hard_cap = limits
+        .max_response_bytes
+        .saturating_add(head_cap)
+        .saturating_add(4);
     let mut buffer = Vec::new();
-    stream.read_to_end(&mut buffer).await?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        if buffer.len() >= hard_cap {
+            return Err(protocol_error(format!(
+                "upstream response exceeds {} bytes (head cap {} + body cap {})",
+                hard_cap, head_cap, limits.max_response_bytes
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(timeout_error("total timeout"));
+        }
+        let slice = limits.read.min(remaining);
+        let read = tokio::time::timeout(slice, stream.read(&mut chunk))
+            .await
+            .map_err(|_| {
+                if slice < remaining {
+                    timeout_error("read idle timeout")
+                } else {
+                    timeout_error("total timeout")
+                }
+            })??;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
 
     // Split headers/body at the blank line.
     let header_end = find_header_end(&buffer);
     let (head, rest) = buffer.split_at(header_end);
+    if head.len() > head_cap {
+        return Err(protocol_error(format!(
+            "upstream head {} bytes exceeds cap {}",
+            head.len(),
+            head_cap
+        )));
+    }
     let head_text = String::from_utf8_lossy(head);
     let status = head_text
         .split_whitespace()
@@ -827,6 +1034,13 @@ async fn forward_request(
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(502);
     let body_bytes = rest.strip_prefix(b"\r\n\r\n").unwrap_or(rest).to_vec();
+    if body_bytes.len() > limits.max_response_bytes {
+        return Err(protocol_error(format!(
+            "upstream body {} bytes exceeds cap {}",
+            body_bytes.len(),
+            limits.max_response_bytes
+        )));
+    }
 
     let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     Ok((
@@ -835,6 +1049,112 @@ async fn forward_request(
         body_bytes,
     )
         .into_response())
+}
+
+/// 授权头的方案名（RFC 7235：方案名大小写不敏感）。
+const BEARER_SCHEME: &str = "Bearer";
+
+/// 精确 Bearer 匹配（V2-2）。
+///
+/// 旧实现是 `supplied.contains(token)`——它把「任何**包含**令牌子串的字符串」
+/// 都当成合法凭据：`Authorization: x<token>y`、`Bearer <token>extra`、
+/// 甚至 `Authorization: Basic <base64 里恰好含 token>` 全部通过。这类判定
+/// 等价于把令牌降级成「口令的一个片段」，任何能读出部分历史响应的攻击者
+/// 都可能拼出可用的头。
+///
+/// 现在的形状：方案名必须是 `Bearer`（大小写不敏感），后接**恰好**一个空格，
+/// 值与令牌**等长且逐字节相同**。
+fn bearer_matches(supplied: Option<&str>, token: &str) -> bool {
+    let Some(raw) = supplied else {
+        return false;
+    };
+    let Some((scheme, presented)) = raw.split_once(' ') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME) {
+        return false;
+    }
+    // 只裁尾部空白。`Bearer  <token>`（双空格）在这里得到 `" <token>"`，与
+    // 令牌不等——刻意不做 `trim()`：宽松解析只会扩大可接受形状。
+    ct_eq(presented.trim_end().as_bytes(), token.as_bytes())
+}
+
+/// 等长时逐字节比较，**不提前返回**。
+///
+/// 为什么手写：`==` 在首个不同字节处短路，同网段攻击者理论上可用计时差
+/// 逐字节恢复会话令牌。长度本身仍然泄漏（长度不同立即返回），这不构成实际
+/// 风险——令牌长度是固定常量，而「长度正确、内容错误」的那部分已经常数时间。
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// 把疑似凭据折叠成「长度」——日志里只留这个（V2-7）。
+///
+/// 为什么连前几位都不留：短令牌（如 8 位配对令牌）留 4 位就等于泄漏一半，
+/// 而「前 4 位」对排查没有任何价值。长度足够回答「头到底带没带东西」。
+pub(crate) fn redact_secret(secret: &str) -> String {
+    if secret.is_empty() {
+        return "<empty>".to_string();
+    }
+    format!("<redacted:{}B>", secret.len())
+}
+
+/// 授权头的一句话描述：方案名 + 脱敏后的值。
+fn describe_authorization(raw: Option<&str>) -> String {
+    match raw {
+        None => "absent".to_string(),
+        Some(value) => match value.split_once(' ') {
+            Some((scheme, rest)) => format!("{scheme} {}", redact_secret(rest.trim_end())),
+            None => format!("malformed {}", redact_secret(value)),
+        },
+    }
+}
+
+/// 兜底擦除：把文本里的 `token=…` 与 `dsh-auth-…=…` 的值替换掉。
+///
+/// 面向**错误文本**而不是结构化字段：底层错误（URL 解析、TLS、上游回显）的
+/// 措辞不受本模块控制，唯一稳妥的做法是在写日志前统一过一遍。保守地多擦
+/// 一点是可接受的（日志少一点可读性），漏擦一次则是一条永久泄漏。
+pub(crate) fn scrub_secrets(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let next = match (rest.find("token="), rest.find(AUTH_COOKIE_PREFIX)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let Some(position) = next else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..position]);
+        let tail = &rest[position..];
+        let Some(value_start) = tail.find('=').map(|index| index + 1) else {
+            // 裸前缀无 `=`（例如文档正文里提到 `dsh-auth-`）：跳过前缀本身，
+            // 避免在同一个位置反复匹配造成死循环。
+            let skip = AUTH_COOKIE_PREFIX.len().min(tail.len());
+            out.push_str(&tail[..skip]);
+            rest = &tail[skip..];
+            continue;
+        };
+        let (key, value_and_tail) = tail.split_at(value_start);
+        let end = value_and_tail
+            .find(|c: char| c.is_whitespace() || c == ';' || c == '&')
+            .unwrap_or(value_and_tail.len());
+        out.push_str(key);
+        out.push_str("<redacted>");
+        rest = &value_and_tail[end..];
+        if rest.is_empty() {
+            return out;
+        }
+    }
 }
 
 fn find_header_end(buffer: &[u8]) -> usize {
@@ -849,6 +1169,271 @@ fn find_header_end(buffer: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::{Mutex as StdMutex, OnceLock};
+
+    use axum::body::Bytes;
+    use axum::http::HeaderValue;
+
+    // -----------------------------------------------------------------
+    // 测试基建
+    // -----------------------------------------------------------------
+
+    /// 日志捕获器（V2-7 的观察点）。
+    ///
+    /// 为什么要在测试里装一个全局 logger：本模块在被测的日志路径上必须先
+    /// **可观察**，否则「日志不含令牌」就只能靠人眼 review 断言——那不是测试。
+    /// 这里捕获的是 `log` 门面的输出，因此断言与生产代码走同一条路径（若哪天
+    /// 有人把 `log::warn!` 改回 `eprintln!`，断言会因为**一条都抓不到**而失败）。
+    struct CaptureLogger {
+        lines: &'static StdMutex<Vec<String>>,
+    }
+
+    impl log::Log for CaptureLogger {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if let Ok(mut lines) = self.lines.lock() {
+                lines.push(format!("{}: {}", record.level(), record.args()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn captured_log() -> &'static StdMutex<Vec<String>> {
+        static LINES: OnceLock<StdMutex<Vec<String>>> = OnceLock::new();
+        let lines = LINES.get_or_init(|| StdMutex::new(Vec::new()));
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            // 装不上就让它失败在断言里，而不是静默跳过：`-D warnings` 环境下
+            // 任何「看不见」的测试都是假绿。lib 测试里没有别的 logger（
+            // `tauri-plugin-log` 只在运行时初始化）。
+            if log::set_boxed_logger(Box::new(CaptureLogger { lines })).is_ok() {
+                log::set_max_level(log::LevelFilter::Trace);
+            }
+        });
+        lines
+    }
+
+    fn auth_headers(token: &str) -> header::HeaderMap {
+        let mut headers = header::HeaderMap::new();
+        let value = HeaderValue::from_str(&format!("Bearer {token}"))
+            .expect("Bearer <token> 一定是合法 header 值");
+        headers.insert(header::AUTHORIZATION, value);
+        headers
+    }
+
+    /// 本地 stub upstream 的应答脚本（V2-4 / V2-5 / V2-6）。
+    ///
+    /// 为什么不用真实 Harness：这些判据要验证的是**转发层**（状态码透传、超时、
+    /// 体积上限），把它绑到「Node 运行时能不能起来」上，等于让一个转发层红灯
+    /// 同时可能是运行时红灯——分不清是谁坏了。
+    #[derive(Clone)]
+    enum StubReply {
+        /// 固定状态码 + 可选 `Set-Cookie` + 固定响应体。
+        Canned {
+            status: u16,
+            set_cookie: Option<&'static str>,
+            body: Vec<u8>,
+        },
+        /// 原始 HTTP 响应（用于精确控制响应头字节数）。
+        Raw(Vec<u8>),
+        /// 接受连接，但**一个字节都不发**（慢连接判据）。
+        Silent,
+        /// 先发头声明总长，再发 `size` 字节（体积上限判据）。
+        Oversized(usize),
+    }
+
+    /// stub 的句柄：端口 + 收到的请求头（供「cookie 确实被转发」这类断言用）。
+    struct StubHandle {
+        port: u16,
+        requests: Arc<StdMutex<Vec<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for StubHandle {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl StubHandle {
+        fn base_url(&self) -> String {
+            format!("http://127.0.0.1:{}", self.port)
+        }
+
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().expect("stub 请求记录未被毒化").clone()
+        }
+    }
+
+    async fn spawn_stub<F>(script: F) -> StubHandle
+    where
+        F: Fn(&str) -> StubReply + Send + Sync + 'static,
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("stub 绑定回环临时端口");
+        let port = listener.local_addr().expect("stub 端口一定可读").port();
+        let script = Arc::new(script);
+        let requests: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let recorded = Arc::clone(&requests);
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let script = Arc::clone(&script);
+                let recorded = Arc::clone(&recorded);
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    loop {
+                        let Ok(read) = stream.read(&mut chunk).await else {
+                            return;
+                        };
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        if find_header_end(&request) < request.len() {
+                            break;
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&request).to_string();
+                    let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    if let Ok(mut log) = recorded.lock() {
+                        log.push(head.clone());
+                    }
+                    // 显式解引用：`Arc<F>` 本身不实现 `Fn`，`script(&path)` 这种写法
+                    // 依赖自动解引用的调用规则，换编译器版本容易翻车。
+                    match (*script)(&path) {
+                        StubReply::Raw(response) => {
+                            let _ = stream.write_all(&response).await;
+                        }
+                        StubReply::Silent => {
+                            // 连接保持打开、不发任何字节：被测方必须靠自己的
+                            // 超时收场（这里用一次阻塞读把连接留住）。
+                            let _ = stream.read(&mut chunk).await;
+                        }
+                        StubReply::Canned {
+                            status,
+                            set_cookie,
+                            body,
+                        } => {
+                            let mut head = format!(
+                                "HTTP/1.1 {status} STUB\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+                                body.len()
+                            );
+                            if let Some(cookie) = set_cookie {
+                                head.push_str(&format!("Set-Cookie: {cookie}\r\n"));
+                            }
+                            head.push_str("Connection: close\r\n\r\n");
+                            if stream.write_all(head.as_bytes()).await.is_err() {
+                                return;
+                            }
+                            let _ = stream.write_all(&body).await;
+                        }
+                        StubReply::Oversized(size) => {
+                            let head = format!(
+                                "HTTP/1.1 200 STUB\r\nContent-Type: application/json\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n"
+                            );
+                            if stream.write_all(head.as_bytes()).await.is_err() {
+                                return;
+                            }
+                            let block = vec![b'x'; 8192];
+                            let mut sent = 0usize;
+                            while sent < size {
+                                let take = (size - sent).min(block.len());
+                                if stream.write_all(&block[..take]).await.is_err() {
+                                    return;
+                                }
+                                sent += take;
+                            }
+                        }
+                    }
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        StubHandle {
+            port,
+            requests,
+            task: handle,
+        }
+    }
+
+    /// 桥自己的 HTTP 客户端（V2-5 / V2-8：直接打真实监听端口，
+    /// 而不是绕开 axum 去调处理器——绕过去就测不到路由与提取器）。
+    async fn http_call(
+        port: u16,
+        method: &str,
+        path: &str,
+        headers: &[(&str, String)],
+        body: &[u8],
+    ) -> (u16, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("连接桥的监听端口");
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("\r\n");
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("写出请求头");
+        stream.write_all(body).await.expect("写出请求体");
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.expect("读响应");
+        let text = String::from_utf8_lossy(&response).to_string();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(0);
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, rest)| rest.to_string())
+            .unwrap_or_default();
+        (status, body)
+    }
+
+    /// 从配对 URL 里取 token（与桌面菜单把 URL 变成二维码是同一条来源）。
+    fn pairing_token(snapshot: &MobileBridgeSnapshot) -> String {
+        let url = snapshot
+            .pairing_url
+            .as_deref()
+            .expect("监听后必须有配对 URL");
+        url::Url::parse(url)
+            .expect("配对 URL 必须可解析")
+            .query_pairs()
+            .find(|(key, _)| key == "token")
+            .map(|(_, value)| value.to_string())
+            .expect("配对 URL 必须带 token")
+    }
+
+    /// 取一个「确定没人监听」的端口：绑一次再立刻释放。
+    ///
+    /// 不用硬编码端口（例如 1 或 9）：那类端口在部分环境里**有人监听**，
+    /// 于是「死端口」测试会静默变成「连上了一个陌生服务」。
+    fn dead_port() -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("取临时端口");
+        let port = listener.local_addr().expect("临时端口可读").port();
+        drop(listener);
+        port
+    }
 
     #[test]
     fn extracts_auth_cookie_and_drops_attributes() {
@@ -1048,5 +1633,637 @@ mod tests {
         bridge.stop().await;
 
         assert_eq!(*notified.lock().unwrap(), vec![true, false]);
+    }
+
+    // =================================================================
+    // V2-1 — 端口生命周期：绑定只在 start，stop 后端口必须真的可重绑
+    // =================================================================
+
+    /// 生产段 = 首个顶格 `#[cfg(test)]` 之前的部分。
+    ///
+    /// 静态守卫只看生产段是**必须的**：测试里自己也会写 `TcpListener::bind`
+    /// 字面量（stub 与对照），不切出去就等于让守卫去数自己。
+    fn production_source() -> &'static str {
+        include_str!("mobile_bridge.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+    }
+
+    /// 每一处 `TcpListener::bind` 的宿主函数名。
+    fn bind_call_sites(source: &str) -> Vec<String> {
+        source
+            .match_indices("TcpListener::bind")
+            .map(|(index, _)| enclosing_fn_name(source, index))
+            .collect()
+    }
+
+    fn enclosing_fn_name(source: &str, index: usize) -> String {
+        let head = &source[..index];
+        let start = match head.rfind("fn ") {
+            Some(position) => position + "fn ".len(),
+            None => return "<top-level>".to_string(),
+        };
+        let tail = &head[start..];
+        let end = tail.find('(').unwrap_or(tail.len());
+        tail[..end].trim().to_string()
+    }
+
+    /// V2-1（静态）：「桥默认不监听」这条安全语义，靠的是**全模块只有一处**
+    /// 监听绑定，且它写在用户显式动作的 `start()` 里。
+    ///
+    /// 这类断言的失效方式是「写法变了，扫描器不认」（AGENTS.md §7.3），因此
+    /// 下面同时给出植入夹具：把同样的扫描器指到一个「绑定写在 stop 里」的
+    /// 合成源上，它必须报出 `stop`——否则这条断言只是装饰。
+    #[test]
+    fn v2_1_tcp_listener_bind_is_confined_to_start() {
+        assert_eq!(
+            bind_call_sites(production_source()),
+            vec!["start".to_string()],
+            "监听绑定必须恰好一处、且在 start() 里；多出来的绑定意味着某条路径会自己开端口"
+        );
+
+        let planted =
+            "async fn stop() {\n    let _ = tokio::net::TcpListener::bind(addr).await;\n}\n";
+        assert_eq!(
+            bind_call_sites(planted),
+            vec!["stop".to_string()],
+            "扫描器连植入的违规都看不见——它没在检查"
+        );
+    }
+
+    /// V2-1（运行时）：`stop()` 之后端口必须能被**别人**重新绑定。
+    ///
+    /// 为什么不能只断言 `snapshot.port == None`：那个字段是桥自己写的，
+    /// 把它置空与「内核真的释放了端口」是两件事——老实现用
+    /// `Notify::notify_waiters()`，在 serve 任务注册等待之前调用会丢通知，
+    /// 端口就一直被占着，而快照看起来完全正常。
+    #[tokio::test]
+    async fn v2_1_stop_releases_the_port_for_rebinding() {
+        let bridge = MobileBridge::new();
+        let port = bridge
+            .start(None)
+            .await
+            .expect("绑定临时端口")
+            .port
+            .expect("监听后必须拿到端口");
+
+        // 探测地址必须是**通配 `0.0.0.0`**，不能是 `127.0.0.1`。
+        //
+        // 这是 2026-10-28 CI 实证出来的（PR #14 首跑：windows-latest 与
+        // macos-latest 在同一条断言上红）：桥监听 `0.0.0.0:<port>`，若用
+        // `127.0.0.1:<port>` 去探测，**绑定会成功**——Windows 与 BSD 都允许
+        // 「具体地址覆盖通配地址」的并存绑定（Windows 只要首个 socket 没设
+        // `SO_EXCLUSIVEADDRUSE`），于是「应当绑不上」被写成了「绑上了」。
+        // 通配探测则相反：任何平台下 `0.0.0.0:<port>` 都与该端口的**任意**
+        // 既有绑定冲突，因此它才是「这个端口被占着」的可移植判据。
+        let probe = ("0.0.0.0", port);
+
+        // 负例（对照组）：**监听中**的端口必须绑不上。没有这一条，下面的
+        // 「能绑定」可能只是因为这个端口本来就没被占用。
+        assert!(
+            std::net::TcpListener::bind(probe).is_err(),
+            "桥还在监听 {port}，该端口却可被再次绑定——断言对象选错了"
+        );
+
+        bridge.stop().await;
+
+        // 优雅关闭发生在后台任务上，允许一个收敛窗口；但必须有上界，
+        // 否则真正泄漏时这条测试会挂住而不是失败。
+        let mut rebound = None;
+        for _ in 0..50 {
+            if let Ok(listener) = std::net::TcpListener::bind(probe) {
+                rebound = Some(listener);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            rebound.is_some(),
+            "stop() 之后 5 秒内端口 {port} 仍不可绑定——监听器泄漏"
+        );
+    }
+
+    // =================================================================
+    // V2-2 — Bearer 精确匹配（旧实现是 contains）
+    // =================================================================
+
+    #[test]
+    fn v2_2_bearer_token_must_match_exactly() {
+        let token = "0123456789abcdef";
+        assert!(bearer_matches(Some("Bearer 0123456789abcdef"), token));
+        assert!(
+            bearer_matches(Some("bearer 0123456789abcdef"), token),
+            "方案名大小写不敏感（RFC 7235）"
+        );
+        assert!(
+            bearer_matches(Some("Bearer 0123456789abcdef "), token),
+            "尾空白可容忍"
+        );
+
+        // 以下每一条在 `supplied.contains(token)` 下**都会通过**：
+        assert!(
+            !bearer_matches(Some("Bearer 0123456789abcdef00"), token),
+            "令牌是前缀也不行"
+        );
+        assert!(
+            !bearer_matches(Some("Bearer fa0123456789abcdef"), token),
+            "令牌在中间也不行"
+        );
+        assert!(
+            !bearer_matches(Some("Basic 0123456789abcdef"), token),
+            "方案不是 Bearer"
+        );
+        assert!(
+            !bearer_matches(Some("0123456789abcdef"), token),
+            "没有方案名"
+        );
+        assert!(
+            !bearer_matches(Some("Bearer  0123456789abcdef"), token),
+            "双空格不放宽"
+        );
+        assert!(!bearer_matches(Some("Bearer "), token));
+        assert!(!bearer_matches(Some(""), token));
+        assert!(!bearer_matches(None, token));
+        assert!(
+            !bearer_matches(Some("Bearer 0123456789ABCDEF"), token),
+            "令牌比较区分大小写"
+        );
+    }
+
+    /// V2-2 的端到端负例：走真实处理器，三种「包含令牌」的头都必须 401。
+    #[tokio::test]
+    async fn v2_2_substring_authorization_is_rejected_over_the_handler() {
+        let bridge = MobileBridge::new();
+        let token = "v2-2-session-token";
+        *bridge.state.session_token.lock().await = Some(token.to_string());
+
+        for bad in [
+            format!("Bearer {token}extra"),
+            format!("x{token}"),
+            format!("Bearer x{token}"),
+        ] {
+            let mut headers = header::HeaderMap::new();
+            headers.insert(
+                header::AUTHORIZATION,
+                HeaderValue::from_str(&bad).expect("构造的授权头是合法 header 值"),
+            );
+            let response = rpc_forward(
+                State(Arc::clone(&bridge.state)),
+                headers,
+                Bytes::from_static(br#"{"method":"session.list"}"#),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "以 `{bad}` 通过了鉴权"
+            );
+        }
+    }
+
+    // =================================================================
+    // V2-3 — 请求体上限与形状（白名单外的两种拒绝）
+    // =================================================================
+
+    #[tokio::test]
+    async fn v2_3_oversized_body_is_413_and_malformed_json_is_400() {
+        let bridge = MobileBridge::new();
+        let token = "v2-3-session";
+        *bridge.state.session_token.lock().await = Some(token.to_string());
+
+        let oversized = vec![b' '; MOBILE_BRIDGE_MAX_REQUEST_BYTES + 1];
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from(oversized),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(b"{not json"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 负例：合法请求不得落在 400 / 413（否则上面两条只是「什么都拒」）。
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "没有 Harness 目标时应当走到 503，而不是被参数校验拦下"
+        );
+    }
+
+    // =================================================================
+    // V2-4 — 转发状态码透传；死端口不得断言 200
+    // =================================================================
+
+    #[tokio::test]
+    async fn v2_4_forward_returns_the_upstream_status_verbatim() {
+        let ok = spawn_stub(|_| StubReply::Canned {
+            status: 200,
+            set_cookie: None,
+            body: br#"{"stub":"ok"}"#.to_vec(),
+        })
+        .await;
+        let response = forward_request(
+            &format!("{}/api/session/list", ok.base_url()),
+            &serde_json::json!({"method": "session.list"}),
+            Some("dsh-auth-1=abc"),
+        )
+        .await
+        .expect("200 上游必须成功");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let boom = spawn_stub(|_| StubReply::Canned {
+            status: 500,
+            set_cookie: None,
+            body: b"internal".to_vec(),
+        })
+        .await;
+        let response = forward_request(
+            &format!("{}/api/session/list", boom.base_url()),
+            &serde_json::json!({}),
+            None,
+        )
+        .await
+        .expect("上游 500 仍是一次成功的转发（状态码交给调用方看）");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// 死端口：必须 502。**不得**断言 200——那正是被删掉的那条错误测试。
+    #[tokio::test]
+    async fn v2_4_dead_upstream_is_502_never_200() {
+        let port = dead_port();
+        let bridge = MobileBridge::new();
+        bridge
+            .set_harness_target(Some(HarnessTarget {
+                base_url: format!("http://127.0.0.1:{port}"),
+                launch_token: None,
+            }))
+            .await;
+        // 直接给一个已握手的 cookie：本条的判据是**转发失败**，不是握手失败。
+        *bridge.state.auth_cookie.lock().await = Some("dsh-auth-1=stub".to_string());
+        let token = "v2-4-session";
+        *bridge.state.session_token.lock().await = Some(token.to_string());
+
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_GATEWAY,
+            "上游拒绝连接必须翻译成 502"
+        );
+        assert_ne!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "鉴权是通过的：502 不能与 401 混淆"
+        );
+    }
+
+    // =================================================================
+    // V2-5 — 端到端必须操作 bridge.state，而不是另建一份状态
+    // =================================================================
+
+    /// 真实链路：start（含握手）→ `POST /pair` → `POST /api/rpc` → stub 上游。
+    ///
+    /// 这条测试走的是**真实监听端口**与 `bridge.state`，因此它同时钉住三件事：
+    /// 握手拿到的 cookie 真的被转发、配发出来的 session 真的能鉴权、
+    /// 处理器用的确实是桥自己的状态（另建一份状态的写法会在这里 401）。
+    #[tokio::test]
+    async fn v2_5_round_trip_through_the_bridge_state() {
+        let stub = spawn_stub(|path| {
+            if path.starts_with("/api/") {
+                StubReply::Canned {
+                    status: 200,
+                    set_cookie: None,
+                    body: br#"{"stub":"ok"}"#.to_vec(),
+                }
+            } else {
+                StubReply::Canned {
+                    status: 200,
+                    set_cookie: Some("dsh-auth-4173=stub-cookie; Path=/; HttpOnly"),
+                    body: b"<html>pair</html>".to_vec(),
+                }
+            }
+        })
+        .await;
+
+        let bridge = MobileBridge::new();
+        bridge
+            .set_harness_target(Some(HarnessTarget {
+                base_url: stub.base_url(),
+                launch_token: Some("launch-token".to_string()),
+            }))
+            .await;
+
+        let snapshot = bridge.start(None).await.expect("绑定临时端口");
+        assert!(snapshot.authenticated, "start 应完成首航握手");
+        let port = snapshot.port.expect("监听后必须拿到端口");
+        let token = pairing_token(&snapshot);
+
+        // 请求头/体先落到局部变量：临时值跨 `await` 只靠语句级延长，读起来脆。
+        let json_header = [("Content-Type", "application/json".to_string())];
+        let pair_body = format!("{{\"token\":\"{token}\"}}");
+        let (status, body) =
+            http_call(port, "POST", "/pair", &json_header, pair_body.as_bytes()).await;
+        assert_eq!(status, 200, "配对失败: {body}");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("配对响应必须是 JSON");
+        let session = parsed
+            .get("session")
+            .and_then(|value| value.as_str())
+            .expect("配对响应必须带 session")
+            .to_string();
+
+        let rpc_headers = [
+            ("Content-Type", "application/json".to_string()),
+            ("Authorization", format!("Bearer {session}")),
+        ];
+        let (status, body) = http_call(
+            port,
+            "POST",
+            "/api/rpc",
+            &rpc_headers,
+            br#"{"method":"session.list"}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "转发失败: {body}");
+        assert!(body.contains(r#""stub":"ok""#), "响应体没有透传: {body}");
+
+        // 证据：握手得到的 cookie 确实进了转发请求（否则 `authenticated`
+        // 只是一个没人读的字段）。
+        let forwarded = stub.requests();
+        assert!(
+            forwarded
+                .iter()
+                .any(|head| head.contains("Cookie: dsh-auth-4173=stub-cookie")),
+            "转发请求没带 cookie: {forwarded:?}"
+        );
+
+        bridge.stop().await;
+    }
+
+    /// V2-5 的负例：把状态换成新建的一份，同一个会话令牌必然 401。
+    #[tokio::test]
+    async fn v2_5_a_fresh_state_rejects_the_session_bridge_state_accepts() {
+        let token = "v2-5-session";
+        let bridge = MobileBridge::new();
+        *bridge.state.session_token.lock().await = Some(token.to_string());
+        let accepted = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_ne!(
+            accepted.status(),
+            StatusCode::UNAUTHORIZED,
+            "会话就存在 bridge.state 里，用它鉴权却失败"
+        );
+
+        let fresh = MobileBridge::new();
+        let rejected = rpc_forward(
+            State(Arc::clone(&fresh.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // =================================================================
+    // V2-6 — 全链超时 / 响应体上限 / 并发上限
+    // =================================================================
+
+    /// 慢连接：上游接受连接但一个字节都不发。必须有上界地失败。
+    #[tokio::test]
+    async fn v2_6_slow_upstream_trips_the_read_idle_timeout() {
+        let stub = spawn_stub(|_| StubReply::Silent).await;
+        let limits = ForwardLimits {
+            connect: Duration::from_secs(2),
+            write: Duration::from_secs(1),
+            read: Duration::from_millis(150),
+            total: Duration::from_secs(1),
+            max_response_bytes: 1024,
+        };
+        let started = Instant::now();
+        let outcome = forward_request_with_limits(
+            &format!("{}/api/session/list", stub.base_url()),
+            &serde_json::json!({}),
+            None,
+            limits,
+        )
+        .await;
+        let error = match outcome {
+            Ok(_) => panic!("上游一个字节都没发，转发却成功了"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "超时没有生效，耗时 {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// 超大响应：必须在读的过程中被截断，而不是先缓冲完再比长度。
+    #[tokio::test]
+    async fn v2_6_oversized_response_is_rejected_instead_of_buffered() {
+        let stub = spawn_stub(|_| StubReply::Oversized(200_000)).await;
+        let limits = ForwardLimits {
+            max_response_bytes: 512,
+            ..ForwardLimits::default()
+        };
+        let outcome = forward_request_with_limits(
+            &format!("{}/api/session/list", stub.base_url()),
+            &serde_json::json!({}),
+            None,
+            limits,
+        )
+        .await;
+        let error = match outcome {
+            Ok(_) => panic!("200000 字节的响应在 512 字节上限下竟然成功"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        assert!(error.to_string().contains("exceeds"), "{error}");
+    }
+
+    /// 响应头上限独立于组合上限：恰好到上限可透传，多一个字节必须拒绝。
+    #[tokio::test]
+    async fn v2_6_response_head_cap_is_enforced_below_the_combined_cap() {
+        let head_cap = MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES;
+        let limits = ForwardLimits {
+            max_response_bytes: 512,
+            ..ForwardLimits::default()
+        };
+        for head_bytes in [head_cap, head_cap + 1] {
+            let mut response =
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\nX-Padding: "
+                    .to_vec();
+            response.resize(head_bytes, b'x');
+            response.extend_from_slice(b"\r\n\r\n{}");
+            assert!(
+                response.len() < head_cap + limits.max_response_bytes + 4,
+                "夹具总缓冲必须低于组合上限，才能证明是响应头上限生效"
+            );
+            let stub = spawn_stub(move |_| StubReply::Raw(response.clone())).await;
+            let outcome = forward_request_with_limits(
+                &format!("{}/api/session/list", stub.base_url()),
+                &serde_json::json!({}),
+                None,
+                limits,
+            )
+            .await;
+            if head_bytes == head_cap {
+                assert_eq!(
+                    outcome.expect("恰好达到响应头上限必须允许透传").status(),
+                    StatusCode::OK
+                );
+            } else {
+                let error = outcome.expect_err("响应头超限，即使总缓冲未达组合上限也必须拒绝");
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+                assert!(error.to_string().contains("upstream head"), "{error}");
+                assert!(error.to_string().contains("exceeds cap"), "{error}");
+            }
+        }
+    }
+
+    /// N+1 个并发：第 N+1 个必须 429，且释放一个许可后立刻恢复。
+    #[tokio::test]
+    async fn v2_6_the_n_plus_first_concurrent_forward_is_429() {
+        let bridge = MobileBridge::new();
+        let token = "v2-6-session";
+        *bridge.state.session_token.lock().await = Some(token.to_string());
+
+        let mut held = Vec::new();
+        for _ in 0..MOBILE_BRIDGE_MAX_CONCURRENT_FORWARDS {
+            let permit = Arc::clone(&bridge.state.forward_slots)
+                .try_acquire_owned()
+                .expect("许可数应当等于配置上限");
+            held.push(permit);
+        }
+
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // 负例：放掉一个许可后不再 429——证明 429 来自闸门本身。
+        held.pop();
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_ne!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // =================================================================
+    // V2-7 — 日志与 401 响应体不得含完整 token / cookie
+    // =================================================================
+
+    #[test]
+    fn v2_7_scrub_secrets_removes_token_and_cookie_values() {
+        let scrubbed = scrub_secrets(
+            "GET http://127.0.0.1:1/?token=deadbeef failed; Set-Cookie: dsh-auth-4173=cookieval; Path=/",
+        );
+        assert!(!scrubbed.contains("deadbeef"), "{scrubbed}");
+        assert!(!scrubbed.contains("cookieval"), "{scrubbed}");
+        assert!(scrubbed.contains("token=<redacted>"), "{scrubbed}");
+        assert!(scrubbed.contains("dsh-auth-4173=<redacted>"), "{scrubbed}");
+        // 反向对照：无密钥的部分必须保留，否则「擦除」等于「什么都看不见」。
+        assert!(scrubbed.contains("failed"), "{scrubbed}");
+    }
+
+    #[tokio::test]
+    async fn v2_7_logs_and_401_body_never_carry_the_secret() {
+        let lines = captured_log();
+        lines.lock().expect("日志缓冲未被毒化").clear();
+
+        let bridge = MobileBridge::new();
+        let secret = "v2-7-session-6f1c2b3a4d5e6f708192";
+        *bridge.state.session_token.lock().await = Some(secret.to_string());
+
+        // 用**真令牌**但错误的方案名：脱敏一旦失效，日志就会原样出现它。
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Token {secret}")).expect("合法 header 值"),
+        );
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            headers,
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("读取 401 响应体");
+        let body = String::from_utf8_lossy(&body).to_string();
+        assert!(!body.contains(secret), "401 响应体泄漏会话令牌: {body}");
+
+        let log = lines.lock().expect("日志缓冲未被毒化").join("\n");
+        assert!(
+            log.contains("<redacted"),
+            "日志里没有脱敏标记——这条路径没走 log 门面: {log}"
+        );
+        assert!(!log.contains(secret), "日志泄漏会话令牌: {log}");
+    }
+
+    // =================================================================
+    // V2-8 — 鉴权先于方法白名单：未鉴权 401，鉴权后才 403
+    // =================================================================
+
+    #[tokio::test]
+    async fn v2_8_401_before_403_and_403_only_after_auth() {
+        let bridge = MobileBridge::new();
+        let body = Bytes::from(serde_json::json!({"method": "admin.dropEverything"}).to_string());
+
+        // 未鉴权 → 401，而**不是** 403。旧测试在这里断言 403，等于把
+        // 「未授权者可以探测方法白名单」当成契约固定下来。
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            header::HeaderMap::new(),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let token = "v2-8-session";
+        *bridge.state.session_token.lock().await = Some(token.to_string());
+
+        // 鉴权之后，白名单外的方法才 403。
+        let response =
+            rpc_forward(State(Arc::clone(&bridge.state)), auth_headers(token), body).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // 反例：白名单内的方法不得 403（证明 403 真的来自白名单）。
+        let response = rpc_forward(
+            State(Arc::clone(&bridge.state)),
+            auth_headers(token),
+            Bytes::from_static(br#"{"method":"session.list"}"#),
+        )
+        .await;
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
     }
 }

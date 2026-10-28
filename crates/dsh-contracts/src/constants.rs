@@ -1,6 +1,6 @@
 //! # DSH 契约常量定义
 //!
-//! 包含全系统通用的常量契约 (CX-1 ~ CX-17)、默认配置与系统阈值。
+//! 包含全系统通用的常量契约 (CX-1 ~ CX-18)、默认配置与系统阈值。
 
 use std::time::Duration;
 
@@ -504,6 +504,59 @@ pub const PLUGIN_HEARTBEAT_INTERVAL_MS: u64 = 3000;
 pub const PLUGIN_HEARTBEAT_TIMEOUT_MS: u64 = 8000;
 pub const PLUGIN_RESTART_MAX_ATTEMPTS: usize = 3;
 pub const PLUGIN_RESTART_COOLING_PERIOD_MS: u64 = 10000;
+
+// ---------------------------------------------------------------------------
+// CX-18 — LAN 手机桥：转发链路的时间/体积上限（唯一产地）
+// ---------------------------------------------------------------------------
+//
+// 为什么这些数字进契约库而不是留在 `src-tauri/src/mobile_bridge.rs`：
+// AGENTS.md §3.2 要求超时与缓冲上限集中在同一处并带编号。转发链是一条
+// **面向局域网**的、可被外部输入的链路（上游是同一台机器上的 Harness，但
+// 请求体来自手机浏览器），因此它的每一个上限都是安全参数，不是内部调优项
+// ——散落在业务文件里，评审时没人能回答「现在到底允许多大的响应」。
+
+/// CX-18 — 配对令牌有效期（`POST /pair` 超过此刻即 401）。
+pub const MOBILE_BRIDGE_PAIRING_TTL_MS: u128 = 5 * 60 * 1000;
+
+/// CX-18 — `/api/rpc` 请求体上限，超过即 413。
+pub const MOBILE_BRIDGE_MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+/// CX-18 — 上游响应体上限，超过即按「转发失败」处理（502）。
+///
+/// 取值理由：Harness 的 `session/history` 在长会话下会返回整段历史，实测正常
+/// 响应在数百 KB 量级；4 MiB 给足 10 倍余量，同时把「上游吐出 1 GiB」这类
+/// 事故（比 Harness 自身的 bug 或中间人注入）挡在手机桥之外——桥是本机进程，
+/// 无上限的缓冲就是一次可被远程触发的 OOM。
+pub const MOBILE_BRIDGE_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+/// CX-18 — 响应头允许的最大字节数（体积上限之外的固定余量）。
+///
+/// 单独留余量是为了让「只发头不发体」的上游无法用超长头绕过响应体上限。
+pub const MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES: usize = 64 * 1024;
+
+/// CX-18 — 首航握手（换取 `dsh-auth-*` cookie）的建连/读写超时。
+pub const MOBILE_BRIDGE_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// CX-18 — 转发：TCP 建连超时。
+pub const MOBILE_BRIDGE_FORWARD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// CX-18 — 转发：请求（头 + 体）整体写出的超时。
+pub const MOBILE_BRIDGE_FORWARD_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// CX-18 — 转发：单次读的**空闲**超时（慢连接判据）。
+pub const MOBILE_BRIDGE_FORWARD_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// CX-18 — 转发：整条链（建连 + 写 + 读完）的总超时。
+///
+/// 空闲超时挡不住「每 9 秒吐 1 字节」的慢速攻击，总超时才是那条兜底。
+pub const MOBILE_BRIDGE_FORWARD_TOTAL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// CX-18 — 同时进行的转发上限，超出即 429。
+///
+/// 为什么是 4：上游 Harness 是单进程 JSON-RPC，真正并行有意义的并发只有个位数；
+/// 桥的消费者是「一到两台已配对手机」。4 既够手机侧并发拉列表 + 发消息，
+/// 又不至于让一台设备用并发把桥的 socket 与内存打满。
+pub const MOBILE_BRIDGE_MAX_CONCURRENT_FORWARDS: usize = 4;
 
 /// 返回当前平台的就绪总超时。
 pub fn startup_timeout() -> Duration {

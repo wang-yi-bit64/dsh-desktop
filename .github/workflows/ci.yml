@@ -5,7 +5,7 @@ name: CI
 # 职责（2026-09-11 收敛；2026-09-30 起分档——S4-1/S4-2）：**只跑静态门禁 + 单测**，
 # 不组装资源、不打包、不跑烟雾。
 #   · PR / dispatch → 三平台 `test`（静态门禁 + clippy + 单测 + 集成），**fast 档**：
-#     `cargo test --workspace --tests`，不含 doc-test（44 项 ≥258s 归入 full 档）
+#     `cargo test --workspace --tests --no-fail-fast`，不含 doc-test（44 项 ≥258s 归入 full 档）
 #   · 每日 schedule → 同上 **+ doc-test**（full 档；ADR-055 的「最后一道网」语义）
 #
 # 其余两件事已有各自唯一的产地，别在这里重复实现：
@@ -153,8 +153,43 @@ jobs:
       # **不含 doc-test**（44 项 doc-test 单轮 ≥258s，是快反馈的最大单项成本）。
       # doc-test 归入 full 档，由下面的 schedule-only 步骤承接（每日一次的
       # 「最后一道网」语义，与 ADR-055 一致）；发布前也可本地 `npm run verify:full`。
+      #
+      # 诊断通道（2026-10-28）：job 日志的下载接口要求 admin 权限，未认证的读者
+      # （含外部工具）只能看到「Process completed with exit code N」——**看不出
+      # 是哪条测试挂了**。下面两步把失败明细搬到 annotation 上：check-runs 的
+      # annotations 端点在公开仓库上未认证可读，这是唯一穿得过那道墙的通道。
+      # 判据不变（任何测试失败即红）；`--no-fail-fast` 只扩大**报告**范围，
+      # 让一次运行就能看到全部失败，而不是修一个再跑一轮。
       - name: "cargo test (fast tier: unit + integration, no doc-tests)"
-        run: cargo test --workspace --tests
+        id: cargo-test
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --tests --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+
+      # 触发条件是**两个条件的合取**。写这一行的理由分「实测」与「未观测」两档：
+      #
+      # 实测：裸 `if: failure()` 会误触发。run 40640715876（提交 9f8b808）就是这个写法，
+      #   ubuntu 腿在 `cargo-deny` 红、测试步 `skipped` 的情况下，本步仍然执行
+      #   （job 122658118561，step 15 `success`），annotation 原文是
+      #   「测试日志缺失——失败发生在 cargo test 之前」：话是真的，但会把读的人引向
+      #   错误的方向（真正红的是 cargo-deny）。
+      # 未观测：改用「只判测试步 outcome」之后，run 40642526948 三平台测试**全是绿的**，
+      #   因此本仓**没有**任何一次「测试真失败时它到底跑不跑」的观测。上游 review 提出
+      #   的机制是不含状态函数的 `if` 会被隐式加上 `success()`（若成立，纯 outcome 写法
+      #   会恒假，诊断通道写着却永不执行）——本仓无证据，故不赌其中任何一种语义。
+      #
+      # ⇒ `failure() && steps.cargo-test.outcome == 'failure'` 在两种语义下都只在
+      #   「测试步自身失败」时执行：有状态函数（不依赖隐式 `success()`），
+      #   又要求 outcome（避开 cargo-deny 那类误触发）。
+      - name: Publish failing-test digest as annotations
+        if: failure() && steps.cargo-test.outcome == 'failure'
+        shell: bash
+        run: |
+          grep -E '^test .+ \.\.\. FAILED$|panicked at |^failures:$|^---- .+ stdout ----$|^error(\[|:)' \
+            "$RUNNER_TEMP/cargo-test.log" | head -80 | while IFS= read -r line; do
+              echo "::error title=cargo-test::${line//'%'/[pct]}"
+            done
 
       - name: cargo doc-test (full tier, schedule only)
         if: github.event_name == 'schedule'

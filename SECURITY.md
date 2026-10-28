@@ -33,6 +33,7 @@
 1. **同进程插件崩溃可以带走 Harness**——插件运行在 Harness 进程内的官方 Cordis 体系，本壳够不着那个挂载点（ADR-051 登记的已知缺口；曾实现的进程外隔离已按 ADR-040 归档删除）。
 2. **Windows 产物未做 OS 级代码签名**——首次运行可能触发 SmartScreen / Gatekeeper 警告；这是零预算下的既定取舍（ADR-046/044），不是疏忽。用户应从本仓库的 Release 页自行校验下载来源。
 3. **LAN 桥开启后**，配对设备能在配对有效期内与 Harness 交互——不要在不受信任的局域网里开启它。
+4. **手机桥的对抗性结论不在本节**——八条判据（端口生命周期 / 精确 Bearer / 转发链超时·体积·并发 / 日志脱敏）、CORS 与 CSRF 边界、loopback 豁免理由、密钥轮换预案与**未核对项**（含 `glib` 受影响 API）逐条登记在 [`docs/incidents/mobile-bridge-audit.md`](docs/incidents/mobile-bridge-audit.md)；本节只给结论，不给证据。
 
 ## CI 密钥暴露面（Workflow → secrets）
 
