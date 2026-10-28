@@ -167,10 +167,21 @@ jobs:
           set -o pipefail
           cargo test --workspace --tests --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
 
-      # 触发条件钉在**测试步本身**的 outcome 上，不能用 `if: failure()`：
-      # 后者在「前面任何一步失败」时也为真，于是 Linux 上 cargo-deny 红的时候
-      # 这步会跑起来并宣称「失败发生在 cargo test 之前」——话是对的，但会把读的人
-      # 引向错误的方向（真正红的是 cargo-deny）。
+      # 触发条件是**两个条件的合取**。写这一行的理由分「实测」与「未观测」两档：
+      #
+      # 实测：裸 `if: failure()` 会误触发。run 40640715876（提交 9f8b808）就是这个写法，
+      #   ubuntu 腿在 `cargo-deny` 红、测试步 `skipped` 的情况下，本步仍然执行
+      #   （job 122658118561，step 15 `success`），annotation 原文是
+      #   「测试日志缺失——失败发生在 cargo test 之前」：话是真的，但会把读的人引向
+      #   错误的方向（真正红的是 cargo-deny）。
+      # 未观测：改用「只判测试步 outcome」之后，run 40642526948 三平台测试**全是绿的**，
+      #   因此本仓**没有**任何一次「测试真失败时它到底跑不跑」的观测。上游 review 提出
+      #   的机制是不含状态函数的 `if` 会被隐式加上 `success()`（若成立，纯 outcome 写法
+      #   会恒假，诊断通道写着却永不执行）——本仓无证据，故不赌其中任何一种语义。
+      #
+      # ⇒ `failure() && steps.cargo-test.outcome == 'failure'` 在两种语义下都只在
+      #   「测试步自身失败」时执行：有状态函数（不依赖隐式 `success()`），
+      #   又要求 outcome（避开 cargo-deny 那类误触发）。
       - name: Publish failing-test digest as annotations
         if: failure() && steps.cargo-test.outcome == 'failure'
         shell: bash

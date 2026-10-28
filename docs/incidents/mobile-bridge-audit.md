@@ -34,7 +34,7 @@
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/mobile_bridge.rs` | 鉴权、转发链、日志三处实现 + 15 条测试（含负例） |
+| `src-tauri/src/mobile_bridge.rs` | 鉴权、转发链、日志三处实现 + 16 条测试（含负例） |
 | `crates/dsh-contracts/src/constants.rs` | 新增 **CX-18**（转发链的时间/体积/并发上限） |
 | `docs/incidents/mobile-bridge-audit.md` | 本档 |
 | `SECURITY.md` | 「明示边界」加一行指针 |
@@ -45,8 +45,9 @@
 ## 2. 八项逐条结论
 
 > ⚠️ 读法：「✅ 已修」= **代码与测试已就位**，且已被 CI 的**三平台**（Windows / macOS /
-> Linux）验证通过——run [`40644014490`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40644014490)。
-> 在此之前的两轮只覆盖到 Windows + macOS，Linux 腿被既有的 `cargo-deny` 挡在测试之前；
+> Linux）验证通过——run [`40647480166`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40647480166)
+> （PR head `8a4cd1c`；其中 V2-6 的响应头上限判据由 `d812a1a` 引入，只有这一轮及前一轮覆盖到）。
+> 最早两轮只覆盖到 Windows + macOS，Linux 腿被既有的 `cargo-deny` 挡在测试之前；
 > 那条红已单独处置，过程见 §8.3 / §8.5。
 
 | 编号 | 判据 | 结论 | 代码证据 | 测试（含负例） |
@@ -56,7 +57,7 @@
 | V2-3 | 请求体上限 413 / 非 JSON 400 | ✅ 实现本已存在，本次补测试并统一常量 | `MOBILE_BRIDGE_MAX_REQUEST_BYTES`（CX-18）检查 + `serde_json::from_slice` | `v2_3_oversized_body_is_413_and_malformed_json_is_400`（负例：合法请求→503） |
 | V2-4 | 上游状态码透传；**不得**对死端口断言 200 | ✅ 测试写法已修 | `forward_request` | `v2_4_forward_returns_the_upstream_status_verbatim`、`v2_4_dead_upstream_is_502_never_200` |
 | V2-5 | 端到端必须操作 `bridge.state`，不得新建 state | ✅ 测试写法已修 | `rpc_forward(State<Arc<BridgeState>>)` | `v2_5_round_trip_through_the_bridge_state`、`v2_5_a_fresh_state_rejects_the_session_bridge_state_accepts` |
-| V2-6 | 全链超时 + 响应体上限 + 并发上限（429） | ✅ 已修 | `forward_request_with_limits`（建连/写/读空闲/总时长/体积）+ `forward_slots: Semaphore` | `v2_6_slow_upstream_trips_the_read_idle_timeout`、`v2_6_oversized_response_is_rejected_instead_of_buffered`、`v2_6_the_n_plus_first_concurrent_forward_is_429` |
+| V2-6 | 全链超时 + 响应体上限 + 响应头上限 + 并发上限（429） | ✅ 已修 | `forward_request_with_limits`（建连/写/读空闲/总时长/体积/响应头独立判据）+ `forward_slots: Semaphore` | `v2_6_slow_upstream_trips_the_read_idle_timeout`、`v2_6_oversized_response_is_rejected_instead_of_buffered`、`v2_6_response_head_cap_is_enforced_below_the_combined_cap`、`v2_6_the_n_plus_first_concurrent_forward_is_429` |
 | V2-7 | `eprintln!` → 可捕获日志门面；日志/401 不含完整 token/cookie | ✅ 已修 | `log::warn!` + `scrub_secrets` / `redact_secret` / `describe_authorization` | `v2_7_logs_and_401_body_never_carry_the_secret`、`v2_7_scrub_secrets_removes_token_and_cookie_values` |
 | V2-8 | 先鉴权，鉴权后才断言 403；无鉴权→401 | ✅ 代码顺序本就正确，缺的是**钉住顺序的测试** | `rpc_forward` 的检查顺序 | `v2_8_401_before_403_and_403_only_after_auth`（负例：白名单内方法不得 403） |
 
@@ -177,8 +178,10 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 
 **结论**：桥**不加任何 CORS 中间件**，这是刻意的，不是遗漏。判据：
 
-- `grep -rn -i "cors\|access-control" src-tauri/src/ src-tauri/frontend/` 只命中
-  注释文字（本文档与模块头），**零处中间件、零处响应头**；
+- `grep -rn -i -E "cors|access-control" src-tauri/src/ src-tauri/frontend/` 在
+  `8a4cd1c` 上**只命中 1 处**，即 `src-tauri/src/mobile_bridge.rs` 模块头里那句
+  「CORS/CSRF 边界」的索引文字；`docs/` 不在该命令的路径里（所以本档自身不会被命中）
+  ⇒ **零处中间件、零处响应头**；
 - 四个路由（`GET /`、`GET /health`、`POST /pair`、`POST /api/rpc`）都没有
   `Access-Control-Allow-Origin`，因此浏览器对跨源 `fetch` 会在预检阶段被拦下。
 
@@ -210,9 +213,13 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 1. **不是默认行为**：桥只在用户点菜单时绑定（静态守卫
    `v2_1_tcp_listener_bind_is_confined_to_start` 守着「绑定点只有一处且在 `start`」），
    应用启动不自动监听；
-2. **不把启动 token 发给局域网**：`0.0.0.0` 暴露的是配对页与 `/api/rpc`，首航
-   token 只经 `GET /?token=…` 交给**扫码的那台手机**；桥接层的 `/api/rpc` 使用
-   `Authorization: Bearer <session>` 验证会话，`dsh-auth-*` cookie 仅由桥接层转发给
+2. **不把启动 token 发给局域网，局域网里流通的是一枚 5 分钟短票**：`0.0.0.0`
+   暴露的是配对页与 `/api/rpc`；`GET /?token=…` 载的是**配对 token**
+   （`BridgeState.pairing`，24 字节随机、5 min TTL，见 `snapshot()` 拼 URL 与
+   `start()` 轮换），只交给**扫码的那台手机**；**启动 token 不出进程**——它只在
+   `fetch_auth_cookie` 里发往 loopback Harness，用来换 `dsh-auth-*` cookie，
+   从不进入任何面向局域网的 URL 或响应。桥接层的 `/api/rpc` 用
+   `Authorization: Bearer <session>` 验证会话，cookie 仅由桥接层转发给
    上游 Harness，用于上游 `/api/*` 鉴权（契约 C5）；
 3. **可随时收回**：菜单的停止项发出停止信号并吊销配对/会话凭据（`stop()` 清
    `pairing` 与 `session_token`），端口在后台 graceful shutdown 完成后释放；
@@ -326,14 +333,19 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   | [`40641551999`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40641551999) | `5239cc5` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（**既有问题**，见 §8.5） |
   | [`40642526948`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40642526948) | `8720cda` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（同上） |
   | [`40644014490`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40644014490) | `a5bb353` | ✅ | ✅ | **✅** | 无（Linux 腿首次跑完测试） |
+  | [`40646519053`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40646519053) | `fab06f6` | ✅ | ✅ | ✅ | 无（含 `d812a1a` 的响应头上限独立判据 + 新增 1 条测试） |
+  | [`40647480166`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40647480166) | `8a4cd1c` | ✅ | ✅ | ✅ | 无（**PR head**；含 `8a4cd1c` 对诊断步条件改为合取） |
 
-> 本节结论**绑定在被验证的提交上**（`a5bb353`），不绑在分支名上：此后任何仅文档的
-> 提交都会让 HEAD 前进，但不改变这里记录的代码状态。要复核就看 run/job 号。
+> 本节结论**绑定在被验证的提交上**（代码状态 = `8a4cd1c`，即本 PR 的 head），不绑在分支名上。
+> 从 `a5bb353` 前移到 `8a4cd1c` 是必须的：中间两个提交**不是**仅文档——`d812a1a` 改了生产代码
+> （响应头上限独立判据）并新增 1 条测试，`8a4cd1c` 改了 `ci.yml` 的触发条件。
+> 在此之后，本档与 `ci.yml` 注释的修订**不改变 Rust 代码状态**，因此代码结论仍然绑 `8a4cd1c`；
+> 复核看 `8a4cd1c` 的 run/job 号，文档改动本身看提交列表。
 
 - `40641551999` 的 Windows job（`122660621965`）逐 step 结论：`Static gates` ✅、
   `cargo fmt` ✅、**`cargo clippy --workspace --all-targets -- -D warnings` ✅**、
   `cargo test -p dsh-host -p dsh-host-cli` ✅、**`cargo test --workspace --tests` ✅**
-  （macOS job `122660621595` 同构）。⇒ 本文件新增的 15 条 `v2_*` 测试**在 MSVC 与
+  （macOS job `122660621595` 同构）。⇒ 本文件新增的 16 条 `v2_*` 测试**在 MSVC 与
   macOS 上全部通过**，`clippy`/`fmt` 两项验收拿到 CI 证据。
   `40642526948` 在同一组运行里再次确认（Windows job `122664012802`、
   macOS job `122664013143`），且这次包含了两处后续修正（响应头上限加固 + 端口探测改通配）。
@@ -342,10 +354,16 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   **`cargo test --workspace --tests` ✅**。这是 **Linux 腿第一次真正执行测试**
   ——在此之前它一直卡在 `cargo-deny`（见 §8.5 第 3 条）。Windows job `122668513808`、
   macOS job `122668513458` 同轮同构。⇒ 三平台证据齐全，§2 的条目不再有「仅两平台」的边界。
-- 诊断步本身也验证过：`40642526948` 的 ubuntu job（`122664013083`）里
-  `Publish failing-test digest` 是 **skipped**（step 15）——上一轮它会在 `cargo-deny`
-  红时误触发并输出误导性 annotation，现已锚定到测试步的 `outcome`。
-  三平台全绿后它同样保持 skipped（`40644014490` 三个 job 的第 14/15 步）。
+- 诊断步本身也验证过，但证据分三档，最后一档是「没有证据」，别混着读：
+  - **实测有误触发**：`40640715876` 当时是裸 `if: failure()`，其 ubuntu job
+    （`122658118561`）里测试步因 `cargo-deny` 红而 `skipped`，本步却照样执行并把
+    annotation 发成「测试日志缺失——失败发生在 cargo test 之前」。
+  - **实测不误触发**：`40642526948` 的 ubuntu job（`122664013083`）里它是 **skipped**
+    （step 15）；三平台全绿后同样保持 skipped（`40644014490` 三个 job 的第 14/15 步）。
+  - **未观测（本档不宣称）**：本仓没有任何一轮同时满足「测试步自身失败」与「条件是只判
+    `outcome` 的纯形式」，因此「纯 `outcome` 会不会因隐式 `success()` 而恒假」**无仓内证据**。
+    现取合取写法 `failure() && steps.cargo-test.outcome == 'failure'`——它在两种语义下都只在
+    测试步自身失败时执行。这段记录与 `ci.yml` 同一步骤上方的注释是同一条，改一处要改两处。
 
 - 凭据侧记录（2026-10-28 实测，保留是为了让下一个人不必重试一遍）：
 
@@ -415,6 +433,10 @@ checksum 与索引一致，`cargo metadata --locked` exit 0，本地 `cargo-lock
 > `test … FAILED` / `panicked at` 转成 `::error` annotation」，这才是外部读者
 > 能拿到失败明细的通道。只加 `--no-fail-fast` 不够——它只扩大报告范围，
 > 输出仍然待在读不到的日志里。
+>
+> 这条通道自身的能力边界见 §9 #8：它只带失败**位置**（`panicked at` 那行），
+> 不带断言消息（按文档还有每步 10 条的上限，本仓未实测）。所以它治的是
+> 「完全看不见」，不是「看得和日志一样清楚」。
 
 ## 9. 未解风险汇总
 
@@ -427,3 +449,5 @@ checksum 与索引一致，`cargo metadata --locked` exit 0，本地 `cargo-lock
 | 5 | glib 受影响 API 是否被上游调用 | 属上游代码，本轮未读 | §5 |
 | 6 | E2E 未执行 | 无安装包与第二台设备 | §7 给了逐条动作，未标「已验证」 |
 | 7 | `auth_cookie` 内存明文 | 与「单机单用户」威胁模型一致 | §6 |
+| 8 | 诊断 annotation 只能部分替代日志：`grep` 只取 `panicked at` 那一行，**丢掉紧随其后的断言消息**（`assert_eq!` 的 `left`/`right` 都在那里）；另外按 GitHub 文档每步最多发布 10 条 annotation，脚本却按 `head -80` 逐行发，多失败时后半截会被截掉（这一条**本仓未实测**，只有前一条有实证） | 本轮范围只到「有通道」；改法明确（`grep -A3` 取失败块、合并成 ≤10 条带换行的 annotation），留待单独提交以免把 PR 主体与 CI 改造混在一起 | 实证：`40640715876` 的 Windows job `122658118957` 共 6 条 annotation，断言失败那条只有 `panicked at src-tauri\src\mobile_bridge.rs:1701:9:`，**没有**紧随其后的断言消息 |
+| 9 | `POST /pair` 的配对令牌用 `==` 比较（`mobile_bridge.rs` 的 `pair` 处理器里 `p.token == supplied`），与 V2-2 给会话令牌引入 `ct_eq` 的论证不一致 | 配对令牌 24 字节随机 + 5 min TTL + 一次性，计时差在窗口内不可利用；改它只影响一致性，不影响强度 | `v2_2` 的注释给出了「`==` 短路可被计时差利用」的论证，本条是同一论证的未覆盖处；修法是一行 `ct_eq(p.token.as_bytes(), supplied.as_bytes())` |
