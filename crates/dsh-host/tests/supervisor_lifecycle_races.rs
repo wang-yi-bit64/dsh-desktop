@@ -10,9 +10,9 @@
 //!
 //! | 窗口 | 场景 | 本文件用例 | 断言对象 |
 //! |---|---|---|---|
-//! | V1-1 | 退避等待期间 `stop()` | [`stop_during_backoff_prevents_the_pending_restart`] | 停止后**不得**再有 `Spawned`；终态 `Stopped`；`is_running()` 为假 |
-//! | V1-2 | 关窗/退出与自动重启同时发生 | —（壳层，见 `state.rs` `bridge_state_generation_*`） | 代号失配 ⇒ 桥丢弃迟到状态 |
-//! | V1-3 | 崩溃后端口变化，前端仍访问旧端口 | —（壳层，见 `state.rs` `ready_endpoint_*`） | 新端点覆盖旧端点 |
+//! | V1-1 | 退避等待期间 `stop()` | [`stop_during_backoff_prevents_the_pending_restart`] | 停止后**不得**再有 `Spawned`；终态 `Stopped`；`is_running()` 为假；`stop()` 时延 < 上界（这条专门证伪 `abort()`） |
+//! | V1-2 | 关窗/退出与自动重启同时发生 | —（壳层，见 `state.rs` `bridge_state_generation_*` + `stale_generation_*`） | 代号失配 ⇒ 桥丢弃迟到状态，且壳层内部状态一字未动 |
+//! | V1-3 | 崩溃后端口变化，前端仍访问旧端口 | —（壳层，见 `state.rs` `ready_write_*`） | 新端点/新 token/新 URL 覆盖旧值（断言打在 `SupervisorInner` 真实字段上） |
 //! | V1-4 | 两个监管周期同时控制同一服务 | [`concurrent_start_does_not_spawn_a_second_cycle`]、[`start_after_terminal_failure_runs_a_fresh_cycle`] | 并发 `start()` 不叠加循环；终态后**可以**重启 |
 //! | V1-5 | 子进程退出但输出管道未结束 | [`child_exit_is_detected_despite_the_log_pipe`] | Ready 后退出**必须**被观测到（不得挂住） |
 //! | V1-6 | 启动成功但服务未真正就绪 | [`never_ready_ends_in_failed_instead_of_endless_wait`] | 不就绪 ⇒ `Failed` 终态，且耗时有界 |
@@ -20,6 +20,22 @@
 //! 矩阵本身可证伪：删掉任一用例，对应窗口即从「已钉住」退回「未覆盖」——
 //! 这一点由 `scripts/verify-plan-facts.mjs` 之外的**人工复核**保证（本表与
 //! 文件名一一对应，改名/删用例必须同步改表）。
+//!
+//! ## 守卫 × 可证伪性（哪些「双保险」是真能独立测出来的）
+//!
+//! V1-1 的实现用两条机制阻止「退避结束后悄悄重启」：`stop()` 里的
+//! `handle.abort()` 与协程循环头的 `while !is_stopping`。审阅发现**只有前者
+//! 有独立信号**，后者被 `abort()` 完全遮蔽：
+//!
+//! | 拆掉的守卫 | 会红的断言 | 不会红的断言 |
+//! |---|---|---|
+//! | `handle.abort()` | `stop()` 时延上界 | `spawned`（`while` 兜住了） |
+//! | `while !is_stopping` | 无 | 全部 |
+//! | 两者同拆 | `spawned` 计数 | — |
+//!
+//! 因此本文件**不为 `while` 的「有效性」背书**，只在文档里登记它是纵深防御
+//! （`abort()` 失效或 `supervision_task` 句柄已丢时，循环仍能自行收敛）。
+//! 想让它可独立证伪，需要暴露一个测试专用钩子——属生产代码改动，另案决策。
 //!
 //! ## 为什么这些断言值得写（不是「测试覆盖率凑数」）
 //!
@@ -146,14 +162,33 @@ async fn settle(
 /// `Crashed { will_restart: true }` 然后进入 `sleep(initial_backoff)`。
 /// 在**退避 sleep 期间**调用 `stop()`。
 ///
-/// 判据（三条，全部是否定式/终态式，不依赖毫秒常量）：
-/// 1. 停止后**不得**再出现 `Spawned`（退避期结束后悄悄重启 = 用户点了停止却看见
-///    服务又起来，这是本窗口唯一真实的产品后果）；
+/// 判据（四条，全部是否定式 / 上界式，不依赖机器快慢）：
+/// 1. 停止后**不得**再出现 `Spawned`——退避期结束后悄悄重启 = 用户点了停止却看见
+///    服务又起来，这是本窗口唯一真实的产品后果；
 /// 2. 必须观测到 `Stopped`（终态到位，不是悬空）；
-/// 3. `is_running()` 为假（活跃实例已释放）。
+/// 3. `is_running()` 为假（活跃实例已释放）；
+/// 4. `stop()` 必须在 [`STOP_UPPER_BOUND`] 内返回——**这一条专门证伪 `abort()`**。
 ///
-/// 可证伪性：见负例抽验记录——把 `start()` 循环头 `while !is_stopping` 改成
-/// `loop`（并去掉 `stop()` 里的 `abort()`）后本用例翻红。
+/// ## 两条守卫各自的可证伪性（审计结论，2026-10-12）
+///
+/// `stop()` 里有两条独立机制都能阻止退避结束后的重启：
+/// `handle.abort()`（`stop()` 内）与循环头的 `while !is_stopping`（协程内）。
+/// 它们的**作用不同**，因此信号也不同：
+///
+/// | 拆掉的守卫 | 哪个断言会红 | 为什么 |
+/// |---|---|---|
+/// | `handle.abort()` | **判据 4**（`stop()` 变慢） | 没有取消 ⇒ `stop()` 只能等 `sleep` 自然醒来，再靠 `while` 退出，耗时 ≈ 剩余退避（≈10s） |
+/// | `while !is_stopping` | **无** | `abort()` 已经把协程在 `sleep` 处取消，永远走不到第二次 spawn |
+/// | 两条同拆 | 判据 1（`spawned` 变 2） | 协程活到退避结束并重新 spawn |
+///
+/// 结论要如实说：**`while !is_stopping` 在当前实现下不是可独立证伪的守卫**，
+/// 它的价值是纵深防御——`abort()` 失效、或 `supervision_task` 句柄已丢失（此时
+/// `stop()` 根本拿不到 `handle` 去 abort）时，循环仍能在下一个检查点自行收敛。
+/// 本用例不把它当作「已验证有效」的证据。
+///
+/// 判据 4 能成立的前提是 `BACKOFF` 远大于 `STOP_UPPER_BOUND`（10s vs 2s，
+/// 差 5 倍），CI 抖动吃不掉这个差距；`stop()` 取上界而不是精确值，是为了
+/// 不把「调度偶发延迟」变成假红。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stop_during_backoff_prevents_the_pending_restart() {
     let Some(fx) = fixture() else {
@@ -161,9 +196,18 @@ async fn stop_during_backoff_prevents_the_pending_restart() {
         return;
     };
 
-    // 退避取 2s：足够长，保证 `Crashed` 上报与 `stop()` 之间稳定落在 sleep 里
-    // （若取 10ms，`stop()` 很可能在 sleep 之后才到达，测到的是另一条路径）。
-    const BACKOFF: Duration = Duration::from_secs(2);
+    // 退避取 10s：既要够长，保证 `Crashed` 上报与 `stop()` 之间稳定落在 sleep 里
+    // （取 10ms 时 `stop()` 很可能在 sleep 之后才到达，测到的是另一条路径）；
+    // 又要够长，让「没有 abort」这件事表现为**秒级**的 `stop()` 阻塞。
+    const BACKOFF: Duration = Duration::from_secs(10);
+
+    // `stop()` 的返回上界。只用于区分「abort 生效（毫秒级）」与
+    // 「等退避自然醒来（≈10s）」，两者差 5 倍以上，与机器快慢无关。
+    const STOP_UPPER_BOUND: Duration = Duration::from_secs(2);
+
+    // 停止之后继续观测的窗口：只为捕捉「`stop()` 返回后仍有迟到的 spawn」。
+    // 不需要覆盖整个退避——真发生了未取消的重启，判据 4 已经先红。
+    const SETTLE: Duration = Duration::from_secs(3);
 
     let config = SupervisorConfig {
         launcher_config: fx.config(Duration::from_secs(8)),
@@ -197,8 +241,8 @@ async fn stop_during_backoff_prevents_the_pending_restart() {
     // ← 关键动作：在退避 sleep **期间**停止。
     let stopped_at = Instant::now();
     supervisor.stop().await;
+    let stop_elapsed = stopped_at.elapsed();
 
-    // 观测窗口取得比退避更长：若重启没被取消，重启会在这里面发生。
     let mut after = Observed {
         spawned: first.spawned,
         attempts: first.attempts,
@@ -207,15 +251,14 @@ async fn stop_during_backoff_prevents_the_pending_restart() {
         failed: first.failed,
         stopped: first.stopped,
     };
-    settle(&mut rx, &mut after, BACKOFF + Duration::from_millis(1500)).await;
+    settle(&mut rx, &mut after, SETTLE).await;
 
     assert_eq!(
-        after.spawned,
-        1,
+        after.spawned, 1,
         "退避期 stop() 之后又派生了子进程（spawned={}，期望 1）——\
-         待执行的重启没有被取消，用户会看见「点了停止又自己起来」。耗时 {:?}",
-        after.spawned,
-        stopped_at.elapsed()
+         待执行的重启没有被取消，用户会看见「点了停止又自己起来」。\
+         stop() 耗时 {stop_elapsed:?}，累计观测 {after:?}",
+        after.spawned
     );
     assert!(
         after.stopped,
@@ -224,6 +267,16 @@ async fn stop_during_backoff_prevents_the_pending_restart() {
     assert!(
         !supervisor.is_running().await,
         "stop() 之后不得仍有活跃实例：{after:?}"
+    );
+    // 判据 4：`abort()` 的独立信号。
+    // 若 `handle.abort()` 被移除，协程只能等 `sleep(BACKOFF)` 自然醒来才读到
+    // `is_stopping` 并退出，`stop()` 会阻塞约一个完整退避（≈10s）。
+    assert!(
+        stop_elapsed < STOP_UPPER_BOUND,
+        "stop() 在退避期耗时 {stop_elapsed:?}，超过上界 {STOP_UPPER_BOUND:?}\
+         （退避为 {BACKOFF:?}）——说明监管协程没有被 abort，\
+         `stop()` 只能等退避 sleep 自然结束。用户点「停止」会卡住数秒，\
+         这期间界面停在「Stopping…」。"
     );
 }
 
