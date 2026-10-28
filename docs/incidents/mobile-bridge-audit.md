@@ -44,8 +44,10 @@
 
 ## 2. 八项逐条结论
 
-> ⚠️ 读法：「✅ 已修」= **代码与测试已就位**，不等于「CI 已验证」——本轮 CI 未被触发
-> （原因与凭据缺口见 §8.3）。CI 一旦给出颜色，本节与 §8.3 必须同步更新。
+> ⚠️ 读法：「✅ 已修」= **代码与测试已就位**，且已被 CI 的 **Windows + macOS** 两条腿
+> 验证通过（run [`40641551999`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40641551999)）。
+> **不包含 Linux**：Linux 腿红在既有的 `cargo-deny`，测试从未执行（证据与归因见 §8.3 / §8.5）。
+> 若只写「已修」而不写这条边界，就等于把两平台的结论冒充成三平台。
 
 | 编号 | 判据 | 结论 | 代码证据 | 测试（含负例） |
 |---|---|---|---|---|
@@ -310,17 +312,27 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 （缺 `api-ms-win-core-winrt-error-l1-1-0.dll`，加载期失败）。
 ⇒ 权威执行者是 CI 的 MSVC runner；本档不把「本地未跑」包装成「本地通过」。
 
-### 8.3 CI：已触发，**当前仍红**（PR #14）
+### 8.3 CI：Windows / macOS **已绿**，Linux 红在既有的 `cargo-deny`（PR #14）
 
 - 工作流定义：`.github/workflows/ci.yml` 的触发面是 `pull_request` / `workflow_dispatch` /
   `schedule`，**刻意不监听 `push`**（文件头有理由）。因此「推了分支」不会产生任何运行，
   必须走 PR。
 - 触发历史（这是本节唯一的事实来源，逐条可查）：
 
-  | run | 提交 | 结果 | 失败步 |
-  |---|---|---|---|
-  | [`40639578293`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40639578293) | `c081794` | ❌ 三平台全红 | win/mac：`cargo test --workspace --tests`；ubuntu：`cargo-deny` |
-  | [`40640715876`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40640715876) | `9f8b808` | ❌ 三平台全红 | 同上（+ 诊断步已就位，拿到了具体测试名） |
+  | run | 提交 | win | mac | ubuntu | 失败步 |
+  |---|---|---|---|---|---|
+  | [`40639578293`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40639578293) | `c081794` | ❌ | ❌ | ❌ | win/mac：`cargo test --workspace --tests`；ubuntu：`cargo-deny` |
+  | [`40640715876`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40640715876) | `9f8b808` | ❌ | ❌ | ❌ | 同上；诊断 annotation 就位，定位到具体测试名 |
+  | [`40641551999`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40641551999) | `5239cc5` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（**既有问题**，见 §8.5） |
+
+- `40641551999` 的 Windows job（`122660621965`）逐 step 结论：`Static gates` ✅、
+  `cargo fmt` ✅、**`cargo clippy --workspace --all-targets -- -D warnings` ✅**、
+  `cargo test -p dsh-host -p dsh-host-cli` ✅、**`cargo test --workspace --tests` ✅**
+  （macOS job `122660621595` 同构）。⇒ 本文件新增的 15 条 `v2_*` 测试**在 MSVC 与
+  macOS 上全部通过**，`clippy`/`fmt` 两项验收拿到 CI 证据。
+- **未拿到证据的一项**：Linux 腿的测试。`cargo-deny` 排在测试之前，它一红后面每一步
+  都是 skipped（症状见 §8.5 第 3 条）。因此 Linux 上的测试结论**目前为空**，
+  本档不把它推定为绿。
 
 - 凭据侧记录（2026-10-28 实测，保留是为了让下一个人不必重试一遍）：
 
@@ -333,17 +345,12 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   | 未认证 REST（公开仓库） | ✅ `api.github.com` 的 runs / jobs / annotations 可读 |
   | job **日志**下载（未认证） | ❌ `403 Must have admin rights to Repository` ⇒ 只能读 annotation，读不到原始日志 |
 
-- 推送时的快照：分支 `feat/v2-mobile-bridge-adversarial`，远端 SHA 与当时的本地 HEAD
-  一致（`2e49e48`，含 `8ebc748`/`d3ac36a`/`2e49e48` 三个提交）；其后的提交不在此
-  推送记录范围内。
-- 该快照与 `main` 的关系：落后 2 个 `chore(release)` 提交（`bfda0c2`、`f3efda2`），
-  但这 2 个提交只动 `CHANGELOG.md` / `Cargo.lock` / `Cargo.toml` /
-  `harness-locks/dsh-releases.json` / `package.json`，与本次改动的四个文件
-  **零重叠**（`comm -12` 空输出）⇒ GitHub 的 test-merge 不会冲突，**无需先 rebase**。
-- **待办**：本节的失败项已按 §8.5 修（两条测试断言）→ 需再跑一轮 CI 确认转绿后，
-  把上面的表格补上最终一行的结论，并把 §2 的结论按实际颜色同步
-  （红色就写成红色，**不得**只改代码不改结论）。
-  在转绿之前，本文档中的「✅ 已修」只表示**代码与测试已就位**，不表示「CI 验证通过」。
+- 分支：`feat/v2-mobile-bridge-adversarial`，远端 = 本地 HEAD。与 `main` 的 2 个
+  `chore(release)` 提交**零文件重叠**（那 2 个提交只动 `CHANGELOG.md` / `Cargo.lock` /
+  `Cargo.toml` / `harness-locks/dsh-releases.json` / `package.json`），test-merge 无冲突。
+- **待办**：Linux 腿的 `cargo-deny`（既有问题）修好之后，本节需补上 ubuntu 的测试结论；
+  在那一格填上之前，§2 里标 ✅ 的条目其证据面是「Windows + macOS」，不含 Linux。
+
 
 ### 8.4 复现单条判据
 
@@ -369,10 +376,15 @@ PR #14 首跑（run `40639578293`）三平台全红，其中**两条是本轮改
 Linux 上两者都冲突，所以只在 Linux 跑过的测试会给出一条平台相关的经验——
 这次是 Windows 与 macOS 同时把它揪出来的。
 
-第 3 条是既有问题，与本轮无关：**Linux 的 `cargo-deny` 从 2026-10-24 起就是红的**
-（`main` 上 `f3efda2` 的定时 CI 同样红，最后一次通过是 10-23 的 run `39920850383`），
+第 3 条是既有问题，与本轮无关：**Linux 的 `cargo-deny` 从 2026-10-24 起就是红的**，
 且在 `cargo-deny` 之后的每一步都是 skipped——包括所有测试。因此 **PR #14 的 Linux 腿
 从未执行过任何测试**，Linux 侧的测试证据目前仍为空。
+
+归因证据：`main` 的 HEAD 是 `f3efda2` 且 10-23 之后没有再变过，而定时 CI 在
+**同一个提交**上是 `10-23 绿（run 39920850383）→ 10-24 起红`。仓库内容没变
+⇒ 触发点在本仓之外（RustSec advisory 库新增条目，或 `cargo-deny` / toolchain 漂移）。
+**这是推断，不是已核实结论**——`cargo-deny` 的失败明细同样只在 job 日志里，
+而那份日志未认证读不到，本轮未取得具体 advisory 编号。
 
 > 方法学附注（可复用）：job 日志的下载接口要求 admin 权限（未认证请求返回
 > `403 Must have admin rights to Repository`），但 **check-run 的 annotations 端点

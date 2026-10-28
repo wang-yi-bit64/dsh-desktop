@@ -5,7 +5,7 @@ name: CI
 # 职责（2026-09-11 收敛；2026-09-30 起分档——S4-1/S4-2）：**只跑静态门禁 + 单测**，
 # 不组装资源、不打包、不跑烟雾。
 #   · PR / dispatch → 三平台 `test`（静态门禁 + clippy + 单测 + 集成），**fast 档**：
-#     `cargo test --workspace --tests`，不含 doc-test（44 项 ≥258s 归入 full 档）
+#     `cargo test --workspace --tests --no-fail-fast`，不含 doc-test（44 项 ≥258s 归入 full 档）
 #   · 每日 schedule → 同上 **+ doc-test**（full 档；ADR-055 的「最后一道网」语义）
 #
 # 其余两件事已有各自唯一的产地，别在这里重复实现：
@@ -161,19 +161,20 @@ jobs:
       # 判据不变（任何测试失败即红）；`--no-fail-fast` 只扩大**报告**范围，
       # 让一次运行就能看到全部失败，而不是修一个再跑一轮。
       - name: "cargo test (fast tier: unit + integration, no doc-tests)"
+        id: cargo-test
         shell: bash
         run: |
           set -o pipefail
           cargo test --workspace --tests --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
 
+      # 触发条件钉在**测试步本身**的 outcome 上，不能用 `if: failure()`：
+      # 后者在「前面任何一步失败」时也为真，于是 Linux 上 cargo-deny 红的时候
+      # 这步会跑起来并宣称「失败发生在 cargo test 之前」——话是对的，但会把读的人
+      # 引向错误的方向（真正红的是 cargo-deny）。
       - name: Publish failing-test digest as annotations
-        if: failure()
+        if: steps.cargo-test.outcome == 'failure'
         shell: bash
         run: |
-          if [ ! -f "$RUNNER_TEMP/cargo-test.log" ]; then
-            echo "::error title=cargo-test::测试日志缺失——失败发生在 cargo test 之前"
-            exit 0
-          fi
           grep -E '^test .+ \.\.\. FAILED$|panicked at |^failures:$|^---- .+ stdout ----$|^error(\[|:)' \
             "$RUNNER_TEMP/cargo-test.log" | head -80 | while IFS= read -r line; do
               echo "::error title=cargo-test::${line//'%'/[pct]}"
