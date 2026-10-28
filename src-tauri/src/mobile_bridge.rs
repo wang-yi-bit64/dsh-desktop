@@ -1020,6 +1020,13 @@ async fn forward_request_with_limits(
     // Split headers/body at the blank line.
     let header_end = find_header_end(&buffer);
     let (head, rest) = buffer.split_at(header_end);
+    if head.len() > head_cap {
+        return Err(protocol_error(format!(
+            "upstream head {} bytes exceeds cap {}",
+            head.len(),
+            head_cap
+        )));
+    }
     let head_text = String::from_utf8_lossy(head);
     let status = head_text
         .split_whitespace()
@@ -1232,6 +1239,8 @@ mod tests {
             set_cookie: Option<&'static str>,
             body: Vec<u8>,
         },
+        /// 原始 HTTP 响应（用于精确控制响应头字节数）。
+        Raw(Vec<u8>),
         /// 接受连接，但**一个字节都不发**（慢连接判据）。
         Silent,
         /// 先发头声明总长，再发 `size` 字节（体积上限判据）。
@@ -1304,6 +1313,9 @@ mod tests {
                     // 显式解引用：`Arc<F>` 本身不实现 `Fn`，`script(&path)` 这种写法
                     // 依赖自动解引用的调用规则，换编译器版本容易翻车。
                     match (*script)(&path) {
+                        StubReply::Raw(response) => {
+                            let _ = stream.write_all(&response).await;
+                        }
                         StubReply::Silent => {
                             // 连接保持打开、不发任何字节：被测方必须靠自己的
                             // 超时收场（这里用一次阻塞读把连接留住）。
@@ -2077,6 +2089,46 @@ mod tests {
         };
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
         assert!(error.to_string().contains("exceeds"), "{error}");
+    }
+
+    /// 响应头上限独立于组合上限：恰好到上限可透传，多一个字节必须拒绝。
+    #[tokio::test]
+    async fn v2_6_response_head_cap_is_enforced_below_the_combined_cap() {
+        let head_cap = MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES;
+        let limits = ForwardLimits {
+            max_response_bytes: 512,
+            ..ForwardLimits::default()
+        };
+        for head_bytes in [head_cap, head_cap + 1] {
+            let mut response =
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\nX-Padding: "
+                    .to_vec();
+            response.resize(head_bytes, b'x');
+            response.extend_from_slice(b"\r\n\r\n{}");
+            assert!(
+                response.len() < head_cap + limits.max_response_bytes + 4,
+                "夹具总缓冲必须低于组合上限，才能证明是响应头上限生效"
+            );
+            let stub = spawn_stub(move |_| StubReply::Raw(response.clone())).await;
+            let outcome = forward_request_with_limits(
+                &format!("{}/api/session/list", stub.base_url()),
+                &serde_json::json!({}),
+                None,
+                limits,
+            )
+            .await;
+            if head_bytes == head_cap {
+                assert_eq!(
+                    outcome.expect("恰好达到响应头上限必须允许透传").status(),
+                    StatusCode::OK
+                );
+            } else {
+                let error = outcome.expect_err("响应头超限，即使总缓冲未达组合上限也必须拒绝");
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+                assert!(error.to_string().contains("upstream head"), "{error}");
+                assert!(error.to_string().contains("exceeds cap"), "{error}");
+            }
+        }
     }
 
     /// N+1 个并发：第 N+1 个必须 429，且释放一个许可后立刻恢复。

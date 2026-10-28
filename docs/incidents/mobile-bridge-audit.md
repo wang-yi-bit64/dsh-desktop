@@ -130,8 +130,12 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 | 单次读（空闲） | 10 s | `MOBILE_BRIDGE_FORWARD_READ_TIMEOUT` |
 | 整链总时长 | 20 s | `MOBILE_BRIDGE_FORWARD_TOTAL_TIMEOUT` |
 | 响应体 | 4 MiB | `MOBILE_BRIDGE_MAX_RESPONSE_BYTES` |
-| 响应头余量 | 64 KiB | `MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES` |
+| 响应头（独立检查） | 64 KiB | `MOBILE_BRIDGE_MAX_RESPONSE_HEAD_BYTES` |
 | 并发 | 4，超出 429 | `MOBILE_BRIDGE_MAX_CONCURRENT_FORWARDS` |
+
+响应头与响应体拆分后分别检查各自上限；总缓冲未达组合上限也不能放过超限响应头。
+回归判据：`v2_6_response_head_cap_is_enforced_below_the_combined_cap`（响应头恰好
+64 KiB 允许透传，多一个字节则拒绝，两者总缓冲均低于组合上限）。
 
 为什么每一格都必要（都是被否掉过的缺口形态）：
 
@@ -205,10 +209,12 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
    `v2_1_tcp_listener_bind_is_confined_to_start` 守着「绑定点只有一处且在 `start`」），
    应用启动不自动监听；
 2. **不把启动 token 发给局域网**：`0.0.0.0` 暴露的是配对页与 `/api/rpc`，首航
-   token 只经 `GET /?token=…` 交给**扫码的那台手机**，之后所有 `/api/*` 靠
-   `dsh-auth-*` cookie（契约 C5）；
-3. **可随时收回**：菜单的停止项立即释放端口并吊销配对/会话凭据（`stop()` 清
-   `pairing` 与 `session_token`，`v2_1` 的运行时测试断言端口可被重新绑定）；
+   token 只经 `GET /?token=…` 交给**扫码的那台手机**；桥接层的 `/api/rpc` 使用
+   `Authorization: Bearer <session>` 验证会话，`dsh-auth-*` cookie 仅由桥接层转发给
+   上游 Harness，用于上游 `/api/*` 鉴权（契约 C5）；
+3. **可随时收回**：菜单的停止项发出停止信号并吊销配对/会话凭据（`stop()` 清
+   `pairing` 与 `session_token`），端口在后台 graceful shutdown 完成后释放；
+   `v2_1` 的运行时测试允许最多 5 秒的重新绑定等待，不保证停止操作返回即释放；
 4. **范围有限**：桥只放行 10 个方法（`harness_endpoint` 白名单），不是通用代理；
    未在白名单内的方法 403（`v2_8`）。
 
@@ -247,7 +253,7 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 
 **判定泄漏后的动作顺序**（写死，避免现场临时决定）：
 
-1. 菜单停止手机桥（端口释放 + 会话/配对吊销）；
+1. 菜单停止手机桥（发出停止信号并吊销会话/配对；端口在 graceful shutdown 完成后释放）；
 2. 重启应用（launch token 与 cookie 双双换新）；
 3. 若怀疑是**局域网内**他人配对：先改路由器/关闭该网络的 AP 隔离问题，再开桥——
    桥只在受信网络开启（`SECURITY.md` 明示边界第 3 条）。
@@ -268,7 +274,7 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 | 3 | 手机（**同一局域网**）扫码 | 打开 `http://<ip>:<port>/?token=…`，页面显示二维码与「配对」按钮 |
 | 4 | 手机点「配对」 | 页面显示「配对成功」；**桌面菜单状态行立刻变 `paired`**（这条就是 `on_connected_change` 的 E2E 证据） |
 | 5 | 手机上发一条消息 | 消息经 `/api/rpc` 到 Harness，正常返回（无 401/502/503） |
-| 6 | 桌面菜单 → `Stop Phone Bridge` | 端口立即关闭：手机刷新页面**连不上**；状态行回 `off` |
+| 6 | 桌面菜单 → `Stop Phone Bridge` | 发出停止信号并吊销会话/配对，状态行回 `off`；后台 graceful shutdown 完成后端口释放，手机刷新页面**连不上**（`v2_1` 测试允许最多 5 秒的重新绑定等待） |
 | 7 | 关掉应用再打开，不点配对 | 状态行仍是 `off`（桥不自动监听） |
 | 8 | 打开日志查看器搜 `mobile-bridge` | 只有 warn 级别的事件，且**不含**完整 token / cookie 串 |
 
@@ -322,8 +328,9 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   `cargo test --workspace --tests`，其中 `cargo test` 覆盖本文件新增的 15 条测试）
   **一条都没跑过**。
 
-- 已推送：分支 `feat/v2-mobile-bridge-adversarial`，远端 sha 与本地 HEAD 一致
-  （`2e49e48`，含 `8ebc748`/`d3ac36a`/`2e49e48` 三个提交）。
+- 推送时的快照：分支 `feat/v2-mobile-bridge-adversarial`，远端 SHA 与当时的本地 HEAD
+  一致（`2e49e48`，含 `8ebc748`/`d3ac36a`/`2e49e48` 三个提交）；其后的提交不在此
+  推送记录范围内。
 - 与 `main` 的关系：落后 2 个 `chore(release)` 提交（`bfda0c2`、`f3efda2`），
   但这 2 个提交只动 `CHANGELOG.md` / `Cargo.lock` / `Cargo.toml` /
   `harness-locks/dsh-releases.json` / `package.json`，与本次改动的四个文件
