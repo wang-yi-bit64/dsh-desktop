@@ -369,7 +369,7 @@ export const GATES = [
       '断言：基线之后不存在「目标目录未被 `.github/dependabot.yml` 声明」的 Dependabot 更新 job。' +
       '这是 D13 的**症状面**，与 dependabot-setting（前提面）互补：`dependabot.yml` 的 `directory` ' +
       '**只**约束版本更新，安全更新按**告警的 manifest_path** 开 job、不读该文件 ⇒ 目标目录超出声明范围' +
-      '就成了开关被打开的**直接函数**（本仓只声明 `/`，而历史全部 11 个 job 的目标都是 ' +
+      '就成了开关被打开的**直接函数**（本仓只声明 `/`，而历史全部 12 个 job 的目标都是 ' +
       '`/harness-locks/*` 或 `/src-tauri`，根目录一个都没有）。' +
       '⚠️ 为什么这台**不需要** PAT 而 dependabot-setting 需要：它读的是 Actions **运行记录**，' +
       '`GITHUB_TOKEN` 的 `actions: read` 就够（公开仓库连匿名都可读，实测 http=200）；' +

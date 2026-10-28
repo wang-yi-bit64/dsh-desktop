@@ -15,8 +15,8 @@
  *     —— 官方两处口径 + 2026-10-09 实测（job 1618552559）。
  *
  * 于是「job 的目标目录是否全在 `dependabot.yml` 声明范围内」就成了开关的**直接函数**：
- * 本仓 `dependabot.yml` 只声明了 `/`（npm 与 cargo），而历史**全部 11 个** job 的目标都是
- * `/harness-locks/alpha`（5）· `/harness-locks/next`（4）· `/src-tauri`（2），根目录一个都没有
+ * 本仓 `dependabot.yml` 只声明了 `/`（npm 与 cargo），而历史**全部 12 个** job 的目标都是
+ * `/harness-locks/alpha`（5）· `/harness-locks/next`（4）· `/src-tauri`（3），根目录一个都没有
  * ⇒ 这些 job **只可能由安全更新产生**。
  *
  * 与 `dependabot-setting`（直读开关）互补：
@@ -73,17 +73,37 @@ export const DEPENDABOT_WORKFLOW_PATH = 'dynamic/dependabot/dependabot-updates'
 /**
  * 基线：本仓**关闭**仓库级 Dependabot security updates 之后的时刻。
  *
- * 取 2026-10-09T04:00:00Z —— 严格晚于最后一条已知的 harness-locks job
- * （run 37877934027，`run_started_at` 2026-10-09T03:09:01Z；更早一条 37875039743 在 02:32:13Z），
- * 且实测该时刻之后该动态工作流的 run 数为 **0**。
+ * 取值 **2026-10-09T09:00:00Z**：严格晚于**最后一条已知的**未声明目录 job
+ * （run 37906095340，`cargo in /src-tauri for rustls`，`created_at` 2026-10-09T08:37:24Z）。
+ *
+ * ## 为什么从 04:00 前移到 09:00（2026-10-28 记账）
+ *
+ * 初值是 `2026-10-09T04:00:00Z`，理由是「严格晚于最后一条 harness-locks job
+ * （03:09:01Z），且实测该时刻之后 run 数为 0」。**那个观测后来被证伪**：08:37:24 又跑了
+ * 一条 `/src-tauri` 的 job ⇒ 04:00 时开关**并没有真的关上**，只是当时还没跑到下一条。
+ * 于是这台哨兵从 10-09 起一直红着（`dependabot-scope check`，run 40477617194 等），
+ * 而它红的内容是「补救当天残留的 job」，不是「开关被重新打开」——预警目标已经跑偏。
+ *
+ * 处置按本文件「为什么需要基线」一节的既定口径：把基线前移到**补救时刻之后**。
+ *
+ * ⚠️ 诚实边界：**开关的确切关闭时刻不可考**（仓库设置没有可读的审计流；本守卫能读到的
+ * 只有 job 的产生记录）。所以这里的基线是「最后一条已知坏 job 之后」这个**可验证下界**，
+ * 不是「开关那一刻」的精确刻画。若将来又冒出一条 09:00 之前的 job，本判据会再次变红——
+ * 那正是它该做的事。
  *
  * ⚠️ 补救动作的一部分：**重新关闭开关之后必须把它前移到补救时刻**，否则补救前的那些
  * job 仍落在窗口内、红灯永久留驻。
  */
-export const SCOPE_BASELINE_ISO = '2026-10-09T04:00:00Z'
+export const SCOPE_BASELINE_ISO = '2026-10-09T09:00:00Z'
 
-/** 最后一条已知的「未声明目录」job 的时刻。自检用它证明基线确实把历史噪声排除在外。 */
-export const LAST_KNOWN_BAD_JOB_ISO = '2026-10-09T03:09:01Z'
+/**
+ * 最后一条已知的「未声明目录」job 的时刻（run 37906095340，`/src-tauri`）。
+ *
+ * 自检用它证明基线确实把历史噪声排除在外；{@link SCOPE_BASELINE_ISO} 必须**严格晚于**它。
+ * 该 job 的 `conclusion` 是 failure —— 那是 D13 的现场证据（`/src-tauri` 不在
+ * `dependabot.yml` 的声明范围内），不是本仓的构建缺陷。
+ */
+export const LAST_KNOWN_BAD_JOB_ISO = '2026-10-09T08:37:24Z'
 
 /** 单次最多翻多少页（每页 100）。超标判红：那意味着开关已经开着很久了。 */
 const MAX_PAGES = 5
@@ -440,15 +460,17 @@ export function selfTest() {
   }
 
   const declaredRoot = [''] // dependabot.yml 只声明了 `/`
+  // 夹具用的就是 {@link LAST_KNOWN_BAD_JOB_ISO} 指的那一条真实 job（2026-10-09T08:37:24Z）：
+  // 它必须落在基线**之前**被忽略，把 created_at 换成窗口内则必须判红。
   const badRun = {
-    id: 37877934027,
-    name: 'npm_and_yarn in /harness-locks/alpha for @modelcontextprotocol/client - Update #1618552559',
+    id: 37906095340,
+    name: 'cargo in /src-tauri for rustls - Update #1619000741',
     created_at: LAST_KNOWN_BAD_JOB_ISO,
   }
   const goodRun = {
     id: 1,
     name: 'npm_and_yarn in / for lodash - Update #1',
-    created_at: '2026-10-09T05:00:00Z',
+    created_at: '2026-10-09T10:00:00Z',
   }
 
   // ── 成对夹具 1：同一条 harness-locks job，基线前必须被忽略、基线后必须判红 ──
@@ -457,11 +479,11 @@ export function selfTest() {
   check('被忽略的历史 job 必须计数上报（skippedBeforeBaseline）', before.skippedBeforeBaseline === 1 && before.checked === 0)
   const afterB = evaluateUpdateJobScope({
     declared: declaredRoot,
-    runs: [{ ...badRun, created_at: '2026-10-09T05:00:00Z' }],
+    runs: [{ ...badRun, created_at: '2026-10-09T10:00:00Z' }],
     baseline: SCOPE_BASELINE_ISO,
   })
   check('基线**后**的同一 job 必须判红（本守卫存在的理由）', afterB.verdict === 'fail')
-  check('判红时必须点名目录与 run（可追到具体 job）', /harness-locks\/alpha/.test(afterB.reason) && /37877934027/.test(afterB.reason))
+  check('判红时必须点名目录与 run（可追到具体 job）', /src-tauri/.test(afterB.reason) && /37906095340/.test(afterB.reason))
   check('判红时不得把历史计数算进 checked', afterB.checked === 1 && afterB.skippedBeforeBaseline === 0)
 
   // ── 声明范围内的 job ⇒ ok ──
@@ -485,7 +507,7 @@ export function selfTest() {
   // ── 名字解不出 ⇒ 判红（判据失效），不得判 ok / skip ──
   const weird = evaluateUpdateJobScope({
     declared: declaredRoot,
-    runs: [{ id: 9, name: 'some brand new job shape', created_at: '2026-10-09T05:00:00Z' }],
+    runs: [{ id: 9, name: 'some brand new job shape', created_at: '2026-10-09T10:00:00Z' }],
     baseline: SCOPE_BASELINE_ISO,
   })
   check('job 名解不出目录 ⇒ 判红（判据失效是可修的缺陷，不许静默）', weird.verdict === 'fail')
@@ -507,7 +529,10 @@ export function selfTest() {
   // ── 解析器自身的形状（两类实测样本都要认） ──
   check(
     '实测样本 1（npm_and_yarn + 作用域包名）必须解对',
-    JSON.stringify(parseUpdateJobName(badRun.name)) ===
+    // 刻意用**字面量**而不是 `badRun.name`：解析器样本描述的是「GitHub 的命名形态」，
+    // 与某个具体夹具是两件事。绑在一起时，换掉夹具（这里把 badRun 换成 08:37 那条
+    // `/src-tauri` 的真实 job）会顺手把这台解析器测试带绿——2026-10-28 实测踩中。
+    JSON.stringify(parseUpdateJobName('npm_and_yarn in /harness-locks/alpha for @modelcontextprotocol/client - Update #1618552559')) ===
       JSON.stringify({ ecosystem: 'npm_and_yarn', directory: '/harness-locks/alpha' }),
   )
   check(
