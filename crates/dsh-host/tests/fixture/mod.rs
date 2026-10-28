@@ -7,7 +7,25 @@
 //! `fixture()` 返回 `None` 表示前置条件不满足（找不到系统 node / 找不到仓库
 //! mock 脚本），测试应直接跳过而不是失败——这样无 Node 的沙箱也能跑其余纯逻辑
 //! 测试。
+//!
+//! ## V1-0 测试卫生三项（2026-10-28）
+//!
+//! 本文件曾在 `npm run gate -- --tier=fast` 的 cargo 步里间歇性让 ~26 个
+//! `dsh-host` lib 测试因 `%TEMP%` 写入 `PermissionDenied`（OS 错误 5）失败，
+//! 而单独跑 cargo 反复全绿（见 `docs/dev-plan-external-assessment-response.md`
+//! §3 V1-0）。判性是**本机 Windows 环境瞬态 × 测试卫生债务**的叠加，
+//! 因此这里把三处债务各自钉死，避免红灯红在环境上而不是缺陷上：
+//!
+//! | 项 | 旧写法 | 现写法 |
+//! |---|---|---|
+//! | 唯一名 | `{pid}-{墙钟秒}`（同进程内同秒必撞） | `{pid}-{墙钟秒}-{原子计数器}`，计数器单调 ⇒ 同进程内不可能撞 |
+//! | 目录 / 文件创建 | 硬 `unwrap` 或裸 `.ok()?`（瞬态错直接判「前置不满足」） | [`retry_transient`]：可识别为瞬态时重试一次 |
+//! | 清理 | `let _ = remove_dir_all(..)`（失败即无声） | 失败经 `eprintln!` 留痕（cargo test 捕获显示） |
+//!
+//! ⚠️ 清理留痕**不等于**清理失败要判红：`Drop` 里的失败无法阻止测试结论，
+//! 硬断言只会把「磁盘被占用」变成随机红灯。这里只保证**降级有记录**（AGENTS.md §7.1 规则 3）。
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,6 +36,59 @@ use dsh_host::readiness::ProbeConfig;
 
 /// 夹具内多个临时目录的后缀计数器（并行测试保证唯一）。
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// 把 `%TEMP%` 上的 IO 错误分成「瞬态」与「真失败」。
+///
+/// 瞬态判据只取**有实证**的两类：
+///
+/// * `PermissionDenied` —— 本机 Windows 上杀软 / 索引器短暂持有目录句柄时的表现
+///   （V1-0 记录的 `OS 错误 5`）；
+/// * `AlreadyExists` —— `create_dir_all` 在并发建树时的良性竞争。
+///
+/// ⚠️ **不要**把 `NotFound`、`InvalidInput` 之类也放进来：那类错误重试不会有任何
+/// 不同结果，只会把真正的配置问题拖慢成「两次都失败」。
+fn is_transient(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::PermissionDenied | ErrorKind::AlreadyExists
+    )
+}
+
+/// 执行一次可能撞上 Windows 瞬态错误的临时目录 IO，瞬态时**重试一次**。
+///
+/// 重试一次而非退避重试：V1-0 的判性是「环境瞬态」，不是「服务不可用」——
+/// 真失败应当在第二次立刻暴露，而不是被退避拖成几十秒的假停顿。
+fn retry_transient<T>(
+    what: &str,
+    mut op: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    match op() {
+        Ok(value) => Ok(value),
+        Err(error) if is_transient(&error) => {
+            // 留痕：瞬态命中次数是「本机到底有多脏」的唯一观测点，静默重试等于
+            // 把 V1-0 的现场证据丢掉（AGENTS.md §7.1 规则 3）。
+            eprintln!("[fixture] {what} 命中瞬态错误（{error}），重试一次");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            op()
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// 建目录（瞬态重试一次）。
+fn create_dir_all(path: &Path) -> std::io::Result<()> {
+    retry_transient("create_dir_all", || std::fs::create_dir_all(path))
+}
+
+/// 写小文件（瞬态重试一次）。
+fn write_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    retry_transient("write", || std::fs::write(path, contents))
+}
+
+/// 复制文件（瞬态重试一次）。
+fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    retry_transient("copy", || std::fs::copy(from, to).map(|_| ()))
+}
 
 /// 一次集成测试用到的临时布局 + 宿主环境构造器。
 ///
@@ -33,8 +104,17 @@ pub struct MockFixture {
 
 impl Drop for MockFixture {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.resource_dir);
-        let _ = std::fs::remove_dir_all(&self.data_dir);
+        // V1-0 第三项：清理失败**必须留痕**，不得再是 `let _ =`。
+        // 只留痕、不 panic——`Drop` 里 panic 会把「磁盘被占用」变成随机红灯，
+        // 那是另一种形式的噪声（判据见本文件头部表格）。
+        for dir in [&self.resource_dir, &self.data_dir] {
+            if let Err(error) = std::fs::remove_dir_all(dir) {
+                eprintln!(
+                    "[fixture] 清理临时目录失败（已忽略，不影响测试结论）：{} — {error}",
+                    dir.display()
+                );
+            }
+        }
     }
 }
 
@@ -89,16 +169,16 @@ pub fn fixture() -> Option<MockFixture> {
     let root = std::env::temp_dir().join(unique);
     let resource_dir = root.join("resource");
     let data_dir = root.join("data");
-    std::fs::create_dir_all(&resource_dir).ok()?;
+    create_dir_all(&resource_dir).ok()?;
 
     // patch 占位：mock 不读内容，missing_resources 只要求存在。
-    std::fs::write(
-        resource_dir.join("dsh-desktop.patch.yml"),
+    write_file(
+        &resource_dir.join("dsh-desktop.patch.yml"),
         "# dsh-host integration mock patch placeholder\n[]\n",
     )
     .ok()?;
     let mock_dest = resource_dir.join("mock-harness.mjs");
-    std::fs::copy(&mock_source, &mock_dest).ok()?;
+    copy_file(&mock_source, &mock_dest).ok()?;
 
     // 把布局指向「系统 node + mock 入口」：node_entry / dsh_entry 都落到
     // mock 脚本，node_executable 指向真实系统 node（不复制大体积二进制）。
