@@ -324,12 +324,21 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
   | [`40639578293`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40639578293) | `c081794` | ❌ | ❌ | ❌ | win/mac：`cargo test --workspace --tests`；ubuntu：`cargo-deny` |
   | [`40640715876`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40640715876) | `9f8b808` | ❌ | ❌ | ❌ | 同上；诊断 annotation 就位，定位到具体测试名 |
   | [`40641551999`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40641551999) | `5239cc5` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（**既有问题**，见 §8.5） |
+  | [`40642526948`](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/40642526948) | `8720cda` | ✅ | ✅ | ❌ | ubuntu：`cargo-deny`（同上） |
+
+> 本节结论**绑定在被验证的提交上**（`8720cda`），不绑在分支名上：此后任何仅文档的
+> 提交都会让 HEAD 前进，但不改变这里记录的代码状态。要复核就看那两个 run/job 号。
 
 - `40641551999` 的 Windows job（`122660621965`）逐 step 结论：`Static gates` ✅、
   `cargo fmt` ✅、**`cargo clippy --workspace --all-targets -- -D warnings` ✅**、
   `cargo test -p dsh-host -p dsh-host-cli` ✅、**`cargo test --workspace --tests` ✅**
   （macOS job `122660621595` 同构）。⇒ 本文件新增的 15 条 `v2_*` 测试**在 MSVC 与
   macOS 上全部通过**，`clippy`/`fmt` 两项验收拿到 CI 证据。
+  `40642526948` 在同一组运行里再次确认（Windows job `122664012802`、
+  macOS job `122664013143`），且这次包含了两处后续修正（响应头上限加固 + 端口探测改通配）。
+- 诊断步本身也验证过：`40642526948` 的 ubuntu job（`122664013083`）里
+  `Publish failing-test digest` 是 **skipped**（step 15）——上一轮它会在 `cargo-deny`
+  红时误触发并输出误导性 annotation，现已锚定到测试步的 `outcome`。
 - **未拿到证据的一项**：Linux 腿的测试。`cargo-deny` 排在测试之前，它一红后面每一步
   都是 skipped（症状见 §8.5 第 3 条）。因此 Linux 上的测试结论**目前为空**，
   本档不把它推定为绿。
