@@ -564,10 +564,7 @@ mod tests {
     /// 生成本次调用独有的临时目录名 `dsh-supervisor-<tag>-<pid>-<seq>`。
     fn unique_temp(tag: &str) -> std::path::PathBuf {
         let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "dsh-supervisor-{tag}-{}-{seq}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("dsh-supervisor-{tag}-{}-{seq}", std::process::id()))
     }
 
     #[tokio::test]

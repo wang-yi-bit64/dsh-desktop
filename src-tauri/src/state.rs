@@ -95,7 +95,8 @@ enum StateAction {
 }
 
 /// 把一条 L2 状态分类成 [`StateAction`]（纯函数，可单测）。
-fn classify_state(state: &SupervisorState) -> StateAction {    match state {
+fn classify_state(state: &SupervisorState) -> StateAction {
+    match state {
         SupervisorState::Starting { attempt } => {
             if *attempt <= 1 {
                 StateAction::Transition(

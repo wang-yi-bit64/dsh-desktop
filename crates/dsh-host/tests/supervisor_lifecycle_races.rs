@@ -210,7 +210,8 @@ async fn stop_during_backoff_prevents_the_pending_restart() {
     settle(&mut rx, &mut after, BACKOFF + Duration::from_millis(1500)).await;
 
     assert_eq!(
-        after.spawned, 1,
+        after.spawned,
+        1,
         "退避期 stop() 之后又派生了子进程（spawned={}，期望 1）——\
          待执行的重启没有被取消，用户会看见「点了停止又自己起来」。耗时 {:?}",
         after.spawned,
@@ -356,8 +357,10 @@ async fn start_after_terminal_failure_runs_a_fresh_cycle() {
 
     // 终态之后重启：必须真的开新循环。
     supervisor.start().await;
-    let mut observed =
-        poll_until_with(&mut rx, SCENARIO_BUDGET, observed, |o| o.spawned > spawned_before).await;
+    let mut observed = poll_until_with(&mut rx, SCENARIO_BUDGET, observed, |o| {
+        o.spawned > spawned_before
+    })
+    .await;
     settle(&mut rx, &mut observed, Duration::from_millis(300)).await;
     supervisor.stop().await;
 
