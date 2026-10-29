@@ -1,3 +1,13 @@
+> 🗄️ **已归档（2026-10-27，外部评估回应计划 V0）**。本文是 alpha 线一次性跨 minor
+> 升级的执行台账，Phase A~C 已全部执行完毕（截至上游 `0.2.1-alpha.1` / 桌面
+> `0.7.3-alpha.1`，逐阶段证据见 §7），无在役施工价值。按 AGENTS.md §7.3 文档预算
+> 纪律（S2-2：新增计划类文档必须同时归档或改写一份旧计划）为新计划
+> [`docs/dev-plan-external-assessment-response.md`](../dev-plan-external-assessment-response.md)
+> 平账而归档。**恢复前提**：无需恢复——alpha 线的后续推进走
+> [`docs/dsh-upgrade-checklist.md`](../dsh-upgrade-checklist.md) 标准流程，逐条裁定
+> 记入 [`patches/LAYERS.md`](../../patches/LAYERS.md)，不复活本文的批次结构。
+> 内容原样保留供追溯。
+
 # alpha 通道推进计划：DSH `0.1.7-alpha.2` → `0.2.1-alpha.1`
 
 > **状态**：✅ **已执行完毕**（Phase A~C 全部落地；Phase C 于 2026-10-07 随桌面

@@ -136,6 +136,7 @@ docs/                   # Architecture designs, contract definitions, and specif
   dev-plan-hardening-and-differentiation.md  # Near-term plan (roadmap H0 stage): risks R1~R9, batches H~N
   dev-plan-0.2-hardening.md         # Product & distribution supplement (batches 0.2-A~D): release channels, desktop baseline, feedback loop (OS code signing: NOT done — ADR-046)
   dev-plan-disconnected-points.md   # Previous main plan (closed): disconnected-point inventory (D1~D11) + batch A~G execution log
+  dev-plan-external-assessment-response.md  # External-assessment response plan (batches V0~V6, 2026-10-27): per-finding triage against the repo, only real gaps get batches
   version-policy.md                 # SOLE authority for the version-number policy: naming rules, per-change-type increment conditions, who owns the version, release flow & guards
   dsh-desktop-redesign-architecture-and-plan.md  # Comprehensive redesign architecture & execution plan
   system_design.md                  # Core system design & invariant specifications
