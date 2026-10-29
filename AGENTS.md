@@ -210,7 +210,7 @@
 
 | 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.2.1-rc.2` | `patches/next/`（条数以 `--list` 为准）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
+| `next`（默认） | npm `next` dist-tag | `0.2.1-rc.4` | `patches/next/`（条数以 `--list` 为准）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
 | `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.1-alpha.5` | `patches/alpha/`（12 个）、`packages/alpha/`（已清空） | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
 
 > 🔴 **桌面版本号 = 合成号**（[ADR-061](docs/adr/061-synthetic-version-model.md)），**不是上游版本号的副本**：
@@ -242,9 +242,18 @@
 > 两线补丁集在包名层面归一。逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的
 > 2026-10-07 记录。
 
+> ✅ **next 线于 2026-10-29 从 `0.2.1-rc.2` 推进到 `0.2.1-rc.4`**（alpha 线同日不动，仍锚
+> `0.2.1-alpha.5`）：上游 rc.3 给左侧栏 / 会话视图 / 右侧栏加「更多」菜单（浏览与创建插件）、
+> 修新会话草稿丢失、把 DeepSeek API Key 适配器的模型列表更新方式与账号登录对齐；rc.4 只修
+> ACP 模式下诊断输出混入 stdout。预检 clean 10 / conflict 2，**两处均为机械修复**
+> （`dsh` 主包按新家族版本串重生成、`ui-sidebar` 行号重算），**0 退役、0 语义重做**。
+> 真实组装 12/12 applied、L1 烟雾 5/5。逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md)
+> 的 2026-10-29 记录。
+
 > **两条线的补丁数可以不同，这是正常的**：2026-09-30 退役后 next 10 个 / alpha 11 个
 > （`ui-model-selection` 当时**仅 next 退役**——上游 0.2.0 自带搜索而 alpha 线尚无）；
-> 2026-10-07 alpha 线推进到 `0.2.1-alpha.1` 后该补丁在 alpha 线也退役，**两线各 10 个**。
+> 2026-10-07 alpha 线推进到 `0.2.1-alpha.1` 后该补丁在 alpha 线也退役，**两线补丁集在包名
+> 层面归一**（条数不在此写死——以 `node scripts/patch-layers.mjs --list` 为准）。
 > 补丁**净减少**是补丁退役机制想要的方向——不要为了「两条线一样多」而把退役的补丁加回去。
 
 > 📖 通道解耦（`upstreamDistTag` vs `publishChannel`；旧名 `channel` 已于 2026-10-09 按计划 2e 改名）、补丁行号重算与两条线的发布记录见 `docs/release-runbook.md` §8.6；字段归属（谁拥有哪个字段）见 `docs/version-policy.md` §3.3，`MANIFEST.json` v3 六块各回答什么问题见同文件 §3.4（计划 2g）。

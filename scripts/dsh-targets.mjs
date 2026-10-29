@@ -109,9 +109,9 @@ export const DSH_TARGETS = {
     upstreamDistTag: 'next',
     publishChannel: 'rc',
     status: 'active',
-    dshVersion: '0.2.1-rc.2',
+    dshVersion: '0.2.1-rc.4',
     summary:
-      '上游 rc 线（当前 0.2.1-rc.2，2026-10-18 从 0.2.0-rc.2 推进；补丁按 retireWhen 退役 1 个（settings-models，上游原生实现每模型推理等级）、typert-registry 随上游三文件拆分重定向、ui-chat/deliverables 重新锚定。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
+      '上游 rc 线（当前 0.2.1-rc.4，2026-10-29 从 0.2.1-rc.2 推进；rc.3 给三栏加「更多」菜单并把草稿保留修好，rc.4 修 ACP 诊断混入 stdout。本轮无补丁退役：dsh 主包补丁因上下文家族版本串重生成、ui-sidebar 仅行号重算。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
   },
   alpha: {
     upstreamDistTag: 'alpha',

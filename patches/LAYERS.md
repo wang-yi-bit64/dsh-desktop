@@ -16,7 +16,7 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.1-rc.2`**（2026-10-18 从 `0.2.0-rc.2` 推进，含上游 0.2.1 整段变更；预检 clean 5 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean；同轮退役 settings-models、typert-registry 随三文件拆分重定向） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.1-rc.4`**（2026-10-29 从 `0.2.1-rc.2` 推进；上游 rc.3 给三栏加「更多」菜单、修新会话草稿丢失，rc.4 修 ACP 诊断混入 stdout；本轮 **0 退役、0 语义重做**，预检 clean 10 / conflict 2，两处冲突均为机械修复——`dsh` 主包按新家族版本串重生成、`ui-sidebar` 行号重算） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
 | `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.5`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）；2026-10-18 推进到 `0.2.1-alpha.5`，**退役 1 个**（`settings-models`，上游 alpha.4 起原生提供每模型推理等级）、**重定向 1 个**（`typert-registry` 覆盖上游拆分出的三个文件）；预检 clean 7 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
@@ -68,7 +68,7 @@
 
 ---
 
-## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核；2026-10-14 新增 `dsh-typert-registry` 加固）
+## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核；2026-10-14 新增 `dsh-typert-registry` 加固；2026-10-29 next 线推进后复核）
 
 分类原则：**只有当缺失会导致「补丁体系失效」或「桌面插件挂不上 / 起不来」时才归 `functional`**；
 其余一律 `ui-behavior`（可降级）。产品功能增强（如会话永久删除）虽然影响功能，
@@ -460,6 +460,34 @@ clean 5 / conflict 6，其中 **2 个 functional**（`@deepseek-ai/dsh`、`dsh-t
 
 ⚠️ **可证伪性**：把守卫换回旧写法后，第一行从 `undefined` 变成 `"index.js"` —— 该断言
 **能**捕获这个缺陷，不是恒绿的摆设。
+
+---
+
+### next 线（0.2.1-rc.4）的移植裁定（2026-10-29；**补丁 12 → 12，0 退役**）
+
+上游 rc 线自 `0.2.1-rc.2` 连推两个补丁版（rc.3 于 10-23、rc.4 于 10-26），均属阶段内增量：
+rc.3 给左侧栏 / 会话视图 / 右侧栏加「更多」菜单（浏览与创建插件）、修新会话草稿丢失、
+把 DeepSeek API Key 适配器的模型列表更新方式与账号登录对齐；rc.4 只修 ACP 模式下诊断
+输出混入 stdout。
+
+预检 `clean 10 / conflict 2`，两处都是**机械冲突**，没有任何语义裁定：
+
+| 补丁 | 冲突性质 | 处理 |
+|---|---|---|
+| `dsh`（package.json） | hunk 上下文里带 `"@deepseek-ai/dsh-hmr": "0.2.1-rc.2"` | 只把该家族版本串改成 `0.2.1-rc.4`；hunk 行号未变（`@@ -20,6`） |
+| `dsh-client-ui-sidebar` | 3/3 hunk 内容匹配，行号漂 24 / 94 / 112 行（rc.3 的侧栏改动） | `relocate-patch-hunks.mjs --write` 重算行号，其余原文逐字节保真 |
+
+另 `llm-deepseek` 的 2 个 hunk 也被 relocate 顺带重算（预检判 clean 说明漂移仍在 ±20 窗口内，
+但 `patch-package` 只在该窗口内试探；重算后不再依赖余量）。**0 个补丁退役**——12 条补丁的
+`retireWhen` 在本轮上游改动里均未命中。
+
+⚠️ **`typert-registry` 的两个 hunk 保持原样**：`relocate` 报 `client.browser.js @@306` /
+`client.node.js @@300`「上下文 8 行与 @@ 声明的 7 行不符」并因此定位不到。核对结论：
+① `client.browser.js` / `client.node.js` / `index.js` 三个文件的 sha256 在 `0.2.1-rc.2` 与
+`0.2.1-rc.4` 上**完全相同**（上游没动这三个文件）；② 该 hunk 计数自洽（旧 6 context +
+1 removed = 7，新 6 context + 2 added = 8）。⇒ 这是 `relocate` 的解析口径差异，**不是本轮
+引入的补丁缺陷**，故不动——改它会引入与升级无关的补丁重写。最终裁据是真实组装
+（`patch-package`）结果，见本节末的组装记录。
 
 ---
 

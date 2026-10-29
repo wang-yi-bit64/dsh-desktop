@@ -2,8 +2,8 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-10-18 `next` 线与同日 `alpha` 线各自推进后，`next` 锚 `0.2.1-rc.2`、`alpha` 锚 `0.2.1-alpha.5`。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
-> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.1-rc.2`、alpha 线 `0.2.1-alpha.5`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
+> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-10-29 `next` 线单独推进后，`next` 锚 `0.2.1-rc.4`、`alpha` 锚 `0.2.1-alpha.5`。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
+> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.1-rc.4`、alpha 线 `0.2.1-alpha.5`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
 ---
