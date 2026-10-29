@@ -7,6 +7,51 @@
 
 <!-- changelog-entries -->
 
+## [0.2.1-rc.4.1] - 2026-10-29
+
+### ✨ 新功能
+
+- **patches**: 补丁退役可解性 + 回归测试指向 + drift 复核信息层（V6） ([f7619af](https://github.com/wang-yi-bit64/dsh-desktop/commit/f7619afabb3f024f83b37441c81dde94f368104e))
+
+### 🐛 修复
+
+- **manifest**: upstreamDsh 取组装运行时的台账键，修正 alpha 序号说明 ([2288052](https://github.com/wang-yi-bit64/dsh-desktop/commit/22880528c6b9571ee13726799e2ef2fcc3693ef5))
+- **deps**: tokio 1.53.1 → 1.53.3（RUSTSEC-2026-0386 unsound，修 Linux 腿的既有红） ([a5bb353](https://github.com/wang-yi-bit64/dsh-desktop/commit/a5bb353aba64edea05548d2723d6cf4777cf4c42))
+- **mobile-bridge**: enforce the upstream response header size limit ([d812a1a](https://github.com/wang-yi-bit64/dsh-desktop/commit/d812a1a311808f984123246ae38713c5bf0a68d2))
+- **test**: v2_1 端口占用判据改用通配探测 —— 具体地址探测在 Windows/BSD 上不冲突 ([5239cc5](https://github.com/wang-yi-bit64/dsh-desktop/commit/5239cc5746938e5da649472826d0d5db1aa0d07a))
+- **mobile-bridge**: stub 闭包显式解引用 + 审计档写入验证现状（CI 未触发） ([d3ac36a](https://github.com/wang-yi-bit64/dsh-desktop/commit/d3ac36a4b5b7de9b85f5338135b44b6a303502eb))
+- **mobile-bridge**: 落地 V2 对抗性审计八项（鉴权精确匹配 / 转发链上限 / 日志脱敏 / 端口释放） ([8ebc748](https://github.com/wang-yi-bit64/dsh-desktop/commit/8ebc74877886f7229b60324a31809ea92d924188))
+
+### 📝 文档
+
+- **v0**: 外部评估回应计划登记 + alpha 推进计划归档平账（V0） ([a34b1b7](https://github.com/wang-yi-bit64/dsh-desktop/commit/a34b1b7b94545f301147085909f16fcd3f28a84f))
+- **mobile-bridge**: 修审核发现的文档/CI 注释与代码不符项 ([dcdebe9](https://github.com/wang-yi-bit64/dsh-desktop/commit/dcdebe92c103e0f483dfc3f52c4eee3101fc8056))
+- **audit**: 三平台全绿落档（run 40644014490）；8.5 补 RUSTSEC-2026-0386 的归因与处置 ([fab06f6](https://github.com/wang-yi-bit64/dsh-desktop/commit/fab06f601cc5f20ce2867eab4f713c388180f12f))
+- **audit**: 8.3 补最终运行号 40642526948，并说明结论绑定被验证的提交而非分支名 ([8f20491](https://github.com/wang-yi-bit64/dsh-desktop/commit/8f2049194ad85084ec5d41b69ebbbd6c784e0b09))
+- **audit**: §8.3 补记连接器写权限实测（403）与分支零重叠确认 ([c081794](https://github.com/wang-yi-bit64/dsh-desktop/commit/c081794e915bc6795a85088809f1b70f50875a4c))
+- **contracts**: 常量库头部编号范围同步到 CX-18 ([2e49e48](https://github.com/wang-yi-bit64/dsh-desktop/commit/2e49e48b3c2a3a78a21ba23907caa5318555e271))
+
+### ✅ 测试
+
+- **host**: V1 生命周期竞态 8 例 + 测试临时目录卫生层（V1-0） ([096ae7f](https://github.com/wang-yi-bit64/dsh-desktop/commit/096ae7f4b6c6e3a7587f33cd6a3732f00a0a6ea8))
+
+### 📦 构建与打包
+
+- **next**: upgrade DSH to 0.2.1-rc.4 ([079dd90](https://github.com/wang-yi-bit64/dsh-desktop/commit/079dd900848895887cd331ce8b936bd3f68aa49a))
+
+### 🔧 CI
+
+- 测试失败时把明细转成 annotation（job 日志需 admin，annotation 未认证可读） ([f259a72](https://github.com/wang-yi-bit64/dsh-desktop/commit/f259a72233bd8dfbfa7e3f101c0e8b519281cb61))
+
+### 🧹 其他
+
+- Merge pull request #15 from wang-yi-bit64/feat/v6-patch-retirement ([cff7658](https://github.com/wang-yi-bit64/dsh-desktop/commit/cff76586d923886bf6b9cb9489aca8fcd2e8d0e0))
+- Merge pull request #14 from wang-yi-bit64/feat/v2-mobile-bridge-adversarial ([964a592](https://github.com/wang-yi-bit64/dsh-desktop/commit/964a5928715322bc6044df1597c4cde8cab62f30))
+- Update .github/workflows/ci.yml ([8a4cd1c](https://github.com/wang-yi-bit64/dsh-desktop/commit/8a4cd1c4c46b4d37ecfad8258ba96ea152f59ded))
+- ci+docs: 诊断步锚定到测试步 outcome；审计档记录 8.3 三平台真实结论与 Linux 证据缺口 ([8720cda](https://github.com/wang-yi-bit64/dsh-desktop/commit/8720cdac08b58e94e888e3514026a62c29470fd0))
+- **mobile-bridge**: merge remote audit and port probe updates ([508fcb4](https://github.com/wang-yi-bit64/dsh-desktop/commit/508fcb4d4704c72cd0b15b084bde1c9cbed3fe56))
+- Update src-tauri/src/mobile_bridge.rs ([9f8b808](https://github.com/wang-yi-bit64/dsh-desktop/commit/9f8b808f14960e391e6292a4d3bfc2ba6dc9b640))
+
 ## [0.2.1-rc.2.1] - 2026-10-19
 
 ### ✨ 新功能
