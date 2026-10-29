@@ -626,6 +626,10 @@ function releaseManifestFields(lockfileHash) {
   const { fields, problems } = composeReleaseManifestV3({
     // `package.json` 是桌面版本的唯一真源（ADR-028 决策 1 在合成号模型下继续有效）。
     compositeVersion: JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8')).version,
+    // 上游身份（`upstreamDsh`）答「这份产物**绑**的是哪个上游」⇒ 取本次组装锚点，不取合成号切分。
+    // 锚点已前移、版本号还没升时两者不同：此时序号落 null 并记因（未发布开发构建），
+    // 带 release tag 则 `composeReleaseManifestV3` 判红（见 manifest-v3.mjs 的输入说明）。
+    assembledUpstreamDsh: DSH_VERSION,
     ledger: readLedger(projectRoot),
     changelogText: existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : null,
     shellCommit: shellCommitOrNull(),

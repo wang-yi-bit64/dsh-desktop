@@ -151,6 +151,11 @@ function nonEmpty(value) {
  *
  * @param {object} input
  * @param {string} input.compositeVersion 本次构建的桌面版本号（`package.json` 是唯一真源）。
+ * @param {string|null} [input.assembledUpstreamDsh] **本次组装实际内置**的上游精确版本
+ *   （= 该目标的 `dshVersion`）。上游身份（`upstreamDsh`）由它在台账里的键回答；缺省时
+ *   退回旧口径（按 `compositeVersion` 切分）——那条口径只适合「合成号就是本次构建」的
+ *   已发布形态，组装写入点必须显式传入。两者指向不同上游时：`desktopVersion.seq` 落
+ *   `null` 并在 `unresolvedFields` 记因（未发布开发构建）；若同时带 `releaseTag`，进 `problems`。
  * @param {{releases: Record<string, {patchTarget?: string, status?: string,
  *   upstreamTag?: string, upstreamCommit?: string, builds?: object[]}>}} input.ledger 台账内容
  *   （`harness-locks/dsh-releases.json`）。缺省时按空台账处理（一切上游字段落 null）。
@@ -208,24 +213,39 @@ export function composeReleaseManifestV3(input = {}) {
   const split = splitRepoSequence(composite)
   const candidate = split.ok ? split.base : null
   const entry = candidate === null ? undefined : releases[candidate]
+
+  // `upstreamDsh` 回答「这份产物**绑**的是哪个上游」（§3.4），所以产地是组装锚点
+  // （`DSH_VERSION`，由写入点传入），不是合成号切出来的那一段。合成号只说明「对外版本号
+  // 长什么样」——锚点前移、版本号还没升时两者必然指向不同上游：旧实现只看合成号，于是
+  // 同一个 MANIFEST 会一边写 `versions.dsh = 新上游`、一边写 `upstreamDsh = 旧上游`。
+  // 不传 `assembledUpstreamDsh` 时退回旧口径，只为兼容自测夹具；写入点始终显式传入。
+  const assembled = nonEmpty(input.assembledUpstreamDsh)
+  const boundKey = assembled ?? candidate
+  const boundEntry = boundKey === null ? undefined : releases[boundKey]
+  /** 合成号与本次运行时指向不同上游 ⇒ 序号属于上一版构建，不属于本产物。 */
+  const compositeMismatch = assembled !== null && candidate !== null && assembled !== candidate
+
   let upstreamDsh
-  if (entry === undefined) {
+  if (boundEntry === undefined) {
     // ⚠️ 这一支**不是**「版本号坏了」。`splitRepoSequence` 明确写着「不得用于从 tag 反推上游」：
     //    `0.7.3-alpha.1` 会得到 `0.7.3-alpha`（实测），与真实上游同构而不可区分。
     //    因此这里的判据是**台账里有没有这个键**，而不是「拆出来的 base 像不像上游版本」。
     upstreamDsh = { version: null, tag: null, commit: null }
     note(
       'upstreamDsh',
-      candidate === null
-        ? `${composite} 里没有「上游精确版本 + 本仓序号」的切分点 ⇒ 连候选上游版本都提不出来`
-        : `台账 ${LEDGER_RELATIVE} 里没有键 ${JSON.stringify(candidate)} ⇒ 上游身份无从确认。` +
-          '上游版本必须由台账回答（桌面号与上游号**同构**，反推会得到假值）。',
+      assembled !== null
+        ? `台账 ${LEDGER_RELATIVE} 里没有键 ${JSON.stringify(assembled)}（本次组装的运行时）⇒ ` +
+          '上游身份无从确认；不得用合成号切出来的候选值冒充。'
+        : candidate === null
+          ? `${composite} 里没有「上游精确版本 + 本仓序号」的切分点 ⇒ 连候选上游版本都提不出来`
+          : `台账 ${LEDGER_RELATIVE} 里没有键 ${JSON.stringify(candidate)} ⇒ 上游身份无从确认。` +
+            '上游版本必须由台账回答（桌面号与上游号**同构**，反推会得到假值）。',
     )
   } else {
     upstreamDsh = {
-      version: candidate,
-      tag: nonEmpty(entry.upstreamTag),
-      commit: nonEmpty(entry.upstreamCommit),
+      version: boundKey,
+      tag: nonEmpty(boundEntry.upstreamTag),
+      commit: nonEmpty(boundEntry.upstreamCommit),
     }
     for (const [field, value] of [
       ['upstreamDsh.tag', upstreamDsh.tag],
@@ -234,7 +254,7 @@ export function composeReleaseManifestV3(input = {}) {
       if (value === null) {
         note(
           field,
-          `台账键 ${JSON.stringify(candidate)} 刻意不存 ${field.slice('upstreamDsh.'.length)}：` +
+          `台账键 ${JSON.stringify(boundKey)} 刻意不存 ${field.slice('upstreamDsh.'.length)}：` +
             '只有在 sync-upstream-release.mjs 核实「上游 Release 存在」+「npm 精确版本可安装」之后才写' +
             '（核实之前填猜测值 = 伪造成功）。',
         )
@@ -268,6 +288,13 @@ export function composeReleaseManifestV3(input = {}) {
           `预发布序号还是**本仓**序号（两者同构，反向推断会得到假值）`
         : `${composite} 的预发布段里没有「纯数字末标识符」⇒ 读不出本仓序号（${split.reason}）`,
     )
+  } else if (compositeMismatch) {
+    note(
+      'desktopVersion.seq',
+      `合成号 ${composite} 绑定的是上游 ${candidate}，而本次组装的运行时是 ${assembled} ⇒ ` +
+        '这个序号属于上一版构建、不属于本产物（本次是**未发布**的开发构建）。' +
+        '发布前必须由 release 流程派生并登记绑定新上游的合成号，再用它重新组装。',
+    )
   } else {
     seq = split.n
   }
@@ -297,6 +324,14 @@ export function composeReleaseManifestV3(input = {}) {
       `release tag ${JSON.stringify(releaseTag)} 与 desktopVersion.composite 要求的不一致：` +
         `应为 ${JSON.stringify(`v${composite}`)}。两者不一致意味着「打的是这个 tag、包里写的是另一个版本」，` +
         'updater 会据此判定更新方向 ⇒ 必须失败而不是照写。',
+    )
+  } else if (compositeMismatch) {
+    // 发布证明文件会声称「这版绑的是 candidate」，而包里装的是 assembled ⇒ 必须失败。
+    // 开发构建（无 tag）走上面 `unresolvedFields` 那条出口：如实标注未发布，不阻断本地组装。
+    problems.push(
+      `要发布 tag ${JSON.stringify(releaseTag)}，但合成号 ${composite} 绑定上游 ${candidate}，` +
+        `本次组装的运行时是 ${assembled} ⇒ 发布证明文件会与包里的运行时不符。` +
+        '先派生并登记绑定新上游的合成号（version-policy §3.1 第 3/4 步），不得照发。',
     )
   } else {
     releaseTagOut = releaseTag
@@ -538,6 +573,70 @@ export function selfTest() {
     })
     t(eq('无 tag（本地组装）：落 null', fields.release.tag, null))
     t(ok('无 tag：有原因记录', fields.unresolvedFields.some((u) => u.field === 'release.tag')))
+  }
+
+  // --- 7b. 合成号与组装运行时指向**不同上游** ⇒ 上游身份取运行时的键、序号落 null ---
+  //      这是 2026-10-29 的真实形态：锚点已前进到 rc.4，合成号仍是上一版 rc.2.1。
+  {
+    const ledger = {
+      releases: {
+        '0.2.1-rc.2': {
+          patchTarget: 'next',
+          status: 'dormant',
+          builds: [
+            { channel: 'rc', n: 1, desktopVersion: '0.2.1-rc.2.1', tag: 'v0.2.1-rc.2.1', date: '2026-10-19' }
+          ]
+        },
+        '0.2.1-rc.4': { patchTarget: 'next', status: 'active', builds: [] }
+      }
+    }
+    const { fields, problems } = composeReleaseManifestV3({
+      compositeVersion: '0.2.1-rc.2.1',
+      assembledUpstreamDsh: '0.2.1-rc.4',
+      ledger
+    })
+    t(eq('重锚：不判红（未发布开发构建是如实状态）', problems, []))
+    // 🔴 可证伪性：旧口径（只看合成号）会得到 `0.2.1-rc.2` —— 正是被审查抓到的混用。
+    t(eq('重锚：上游身份取组装运行时的台账键', fields.upstreamDsh.version, '0.2.1-rc.4'))
+    t(eq('重锚：序号落 null（那是上一版构建的序号）', fields.desktopVersion.seq, null))
+    const seqNote = fields.unresolvedFields.find((u) => u.field === 'desktopVersion.seq')
+    t(
+      ok(
+        '重锚：序号缺失有原因，且点名前后两个上游版本',
+        seqNote !== undefined && seqNote.reason.includes('0.2.1-rc.2') && seqNote.reason.includes('0.2.1-rc.4')
+      )
+    )
+    t(eq('重锚：composite 原样保留（版本串仍是那个）', fields.desktopVersion.composite, '0.2.1-rc.2.1'))
+  }
+
+  // --- 7c. 同一错配 + 带 release tag ⇒ **判红**（发布证明不得说谎） ----------------
+  {
+    const ledger = {
+      releases: {
+        '0.2.1-rc.2': { patchTarget: 'next', status: 'dormant', builds: [] },
+        '0.2.1-rc.4': { patchTarget: 'next', status: 'active', builds: [] }
+      }
+    }
+    const { problems } = composeReleaseManifestV3({
+      compositeVersion: '0.2.1-rc.2.1',
+      assembledUpstreamDsh: '0.2.1-rc.4',
+      ledger,
+      releaseTag: 'v0.2.1-rc.2.1'
+    })
+    t(ok('错配 + tag：判红', problems.length === 1))
+    t(ok('错配 + tag：原因点名「运行时不符」', /运行时不符/.test(problems[0])))
+  }
+
+  // --- 7d. 组装运行时在台账里没有键 ⇒ 上游身份落 null（不得用候选值冒充） --------
+  {
+    const { fields } = composeReleaseManifestV3({
+      compositeVersion: '0.2.1-rc.2.1',
+      assembledUpstreamDsh: '0.2.1-rc.9',
+      ledger: { releases: { '0.2.1-rc.2': { patchTarget: 'next', status: 'dormant', builds: [] } } }
+    })
+    t(eq('运行时未登记：上游身份 null', fields.upstreamDsh.version, null))
+    const up = fields.unresolvedFields.find((u) => u.field === 'upstreamDsh')
+    t(ok('运行时未登记：原因点名运行时版本', up !== undefined && up.reason.includes('0.2.1-rc.9')))
   }
 
   // --- 8. changelogPointers：上游股摘要 & 上一版基线 --------------------------
