@@ -224,7 +224,7 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 
 | 块 | 回答的问题 | 产地 |
 |---|---|---|
-| `upstreamDsh{version,tag,commit}` | 绑的是哪个上游**精确**版本 | **台账键**（`version`）；`tag` / `commit` 由 `sync-upstream-release.mjs` 核实后才写 ⇒ 未核实时为 `null` |
+| `upstreamDsh{version,tag,commit}` | 绑的是哪个上游**精确**版本 | **台账里与本次组装运行时同名的键**（`prepare-harness` 传 `assembledUpstreamDsh`）；**不得**用合成号切分冒充——它答的是「产物里装了什么」，不是「对外版本号叫什么」；`tag` / `commit` 由 `sync-upstream-release.mjs` 核实后才写 ⇒ 未核实时为 `null` |
 | `desktopVersion{composite,upstreamXyz,channel,seq,w}` | 对外那个版本号由什么组成 | `package.json`（`composite`）+ 版本号自身（其余四段）；**`seq` 需台账背书** |
 | `release{channel,tag}` | 这次发布属于哪条通道 / 哪个 tag | 通道由 `desktopChannelForVersion()`；tag 由 `release.yml` 经 `DSH_RELEASE_TAG` 注入 |
 | `desktop{shellCommit,desktopBuild}` | 指认是哪份壳层代码 | `git rev-parse HEAD`；`desktopBuild` 无产地 ⇒ 恒 `null` |
@@ -240,6 +240,12 @@ Version                package.json（唯一 SSOT，Cargo.toml/Cargo.lock 由脚
 2. **无产地字段一律 `null` + 逐条记进 `unresolvedFields[]`，不得编造**（`AGENTS.md` §7.1
    规则 2/3）。「字段缺失」（如实）与「字段自相矛盾」（例如注入的 tag 与版本号不符）是
    **两个出口**：前者照常产出，后者直接让组装失败——写出一个会说谎的 MANIFEST 比不写更糟。
+3. **合成号与组装运行时不同版时，不得让两个块各说各话**（2026-10-29，CodeRabbit 审查 #16）：
+   锚点前移而版本号尚未升（`package.json` 仍是上一版）时，`upstreamDsh` 必须取**运行时的**
+   台账键；`desktopVersion.seq` 落 `null` 并在 `unresolvedFields[]` 写明「合成号绑定的是
+   `<旧上游>`、本次组装是 `<新上游>`，属未发布开发构建」。若同时带 release tag ⇒ **判红**
+   （发布证明会声称绑旧上游而实际装新上游）。判据：`manifest-v3 --self-test` 的 7b/7c/7d
+   三组夹具——把输入口退回「只看合成号」，7b 的上游身份会变成旧值，立即变红。
 
 ⚠️ `desktopBuild` 与 `w` **都只进 MANIFEST，不进 SemVer 的排序位**。理由**不是**「不参与比较」
 （实测在 Rust 侧它**参与**），而是跨生态不一致 + Windows 资源静默丢弃非数字 + 规范不保证。

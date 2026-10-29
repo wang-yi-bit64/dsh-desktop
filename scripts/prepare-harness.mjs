@@ -95,7 +95,7 @@ const vendorDir = join(projectRoot, 'vendor')
 // ---------------------------------------------------------------------------
 // 构建目标：决定内置哪个上游 DSH 版本、用哪一套补丁与 vendored 覆盖包。
 // 双通道（next / alpha）并存，见 [`dsh-targets.mjs`](./dsh-targets.mjs)。
-//   next  → DSH 0.2.1-rc.2    （默认；桌面后缀 rc。2026-10-18 从 0.2.0-rc.2 推进，
+//   next  → DSH 0.2.1-rc.4    （默认；桌面后缀 rc。2026-10-29 从 0.2.1-rc.2 推进，
 //                               与上游 `next` dist-tag 实测一致）
 //   alpha → DSH 0.2.1-alpha.5 （桌面后缀 alpha；2026-10-18 从 0.2.1-alpha.2 推进）
 // ⚠️ 上面两行的版本号是**现状声明**，由 `verify:plan-facts` 的 C1 直接比对
@@ -626,6 +626,10 @@ function releaseManifestFields(lockfileHash) {
   const { fields, problems } = composeReleaseManifestV3({
     // `package.json` 是桌面版本的唯一真源（ADR-028 决策 1 在合成号模型下继续有效）。
     compositeVersion: JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8')).version,
+    // 上游身份（`upstreamDsh`）答「这份产物**绑**的是哪个上游」⇒ 取本次组装锚点，不取合成号切分。
+    // 锚点已前移、版本号还没升时两者不同：此时序号落 null 并记因（未发布开发构建），
+    // 带 release tag 则 `composeReleaseManifestV3` 判红（见 manifest-v3.mjs 的输入说明）。
+    assembledUpstreamDsh: DSH_VERSION,
     ledger: readLedger(projectRoot),
     changelogText: existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : null,
     shellCommit: shellCommitOrNull(),
