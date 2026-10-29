@@ -540,8 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_supervisor_config_and_state_channel() {
-        // 目录名带 PID：测试并行执行时固定路径会与其它用例共用同一目录树。
-        let temp = std::env::temp_dir().join(format!("dsh-supervisor-test-{}", std::process::id()));
+        let temp = crate::test_support::scratch_dir("supervisor-config");
         let layout = Layout::resolve(temp.join("res"), temp.join("user"));
 
         let supervisor = Supervisor::new(layout, SupervisorConfig::default());
@@ -552,6 +551,7 @@ mod tests {
 
         let received = rx.recv().await.unwrap();
         assert!(matches!(received, SupervisorState::Idle));
+        crate::test_support::cleanup(&temp);
     }
 
     // ---- 契约 C10 不变式（S6-4 /治 D11）----
@@ -679,8 +679,7 @@ mod tests {
     // 这一组锁定它真的被消费，并锁定向后兼容的那条分支。
 
     fn test_layout(tag: &str) -> Layout {
-        let base =
-            std::env::temp_dir().join(format!("dsh-supervisor-env-{tag}-{}", std::process::id()));
+        let base = crate::test_support::scratch_dir(&format!("supervisor-env-{tag}"));
         Layout::resolve(base.join("res"), base.join("user"))
     }
 

@@ -465,12 +465,7 @@ mod tests {
     /// `readFileSync` 抛 ENOENT、Harness 起不来），这里也会红。
     #[test]
     fn primary_runtime_requires_every_entry() {
-        let root = std::env::temp_dir().join(format!(
-            "dsh-payload-{}-{}",
-            std::process::id(),
-            crate::process::now_seconds()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = crate::test_support::scratch_dir("payload");
         let layout = layout(&root);
         let deps = layout.primary_runtime_root.join("dependencies");
         let office = layout
@@ -547,7 +542,7 @@ mod tests {
         std::fs::remove_file(&modules).unwrap();
         std::fs::rename(&stash, &modules).unwrap();
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
@@ -695,15 +690,7 @@ mod tests {
 
     #[test]
     fn ensure_dirs_creates_only_writable_tree() {
-        let unique = format!(
-            "dsh-host-paths-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|value| value.as_nanos())
-                .unwrap_or(0)
-        );
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("paths-ensure");
         let layout = layout(&root);
         layout.ensure_dirs().expect("目录应可创建");
         assert!(layout.dsh_home.is_dir());
@@ -715,7 +702,7 @@ mod tests {
             "ensure_dirs 不应创建资源目录"
         );
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[cfg(unix)]
@@ -723,10 +710,9 @@ mod tests {
     fn ensure_exec_bits_restores_missing_bits() {
         use std::os::unix::fs::PermissionsExt;
 
-        let unique = format!("dsh-host-exec-{}", std::process::id());
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("host-exec");
         let layout = layout(&root);
-        std::fs::create_dir_all(layout.node_executable.parent().unwrap()).unwrap();
+        crate::test_support::create_dir_all(layout.node_executable.parent().unwrap());
         std::fs::write(&layout.node_executable, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(
             &layout.node_executable,
@@ -741,20 +727,12 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o111, 0o111, "执行位应已补上");
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
     fn resolve_launch_target_auto_detects_sidecar_and_node() {
-        let unique = format!(
-            "dsh-host-target-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|value| value.as_nanos())
-                .unwrap_or(0)
-        );
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("host-target");
         let layout = layout(&root);
 
         // 默认情况下两者皆无，应报错缺失
@@ -762,7 +740,7 @@ mod tests {
         assert!(res.is_err());
 
         // 创建 sidecar 二进制
-        std::fs::create_dir_all(layout.sidecar_executable.parent().unwrap()).unwrap();
+        crate::test_support::create_dir_all(layout.sidecar_executable.parent().unwrap());
         std::fs::write(&layout.sidecar_executable, "mock sidecar").unwrap();
 
         // 探测出 Sidecar 模式
@@ -775,6 +753,6 @@ mod tests {
             _ => panic!("期望 Sidecar 目标"),
         }
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 }

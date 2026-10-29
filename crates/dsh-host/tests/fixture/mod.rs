@@ -33,8 +33,20 @@ pub struct MockFixture {
 
 impl Drop for MockFixture {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.resource_dir);
-        let _ = std::fs::remove_dir_all(&self.data_dir);
+        // V1-0：清理失败必须留痕。残留目录会让下一次运行撞上同名路径——
+        // unique 名由原子计数器 + pid 保证，但 pid 会被操作系统回收，
+        // 「回收的 pid + 重新从 0 开始的计数器」恰好复现上一次运行的路径。
+        // `NotFound` 是正常的（目录本来就没建），不视为失败。
+        for dir in [&self.resource_dir, &self.data_dir] {
+            if let Err(err) = std::fs::remove_dir_all(dir) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "[dsh-test] 清理夹具目录 {} 失败：{err}（残留可能让下次运行撞名）",
+                        dir.display()
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -89,7 +101,12 @@ pub fn fixture() -> Option<MockFixture> {
     let root = std::env::temp_dir().join(unique);
     let resource_dir = root.join("resource");
     let data_dir = root.join("data");
-    std::fs::create_dir_all(&resource_dir).ok()?;
+    // V1-0：Windows 上 `create_dir_all` 会因杀软/索引器/清理竞争瞬时返回
+    // `PermissionDenied`（OS 错误 5）；重试一次再放弃（放弃时走 `.ok()?`
+    // 的跳过语义，不让缺依赖伪装成通过）。
+    if create_dir_all_retry_transient(&resource_dir).is_err() {
+        return None;
+    }
 
     // patch 占位：mock 不读内容，missing_resources 只要求存在。
     std::fs::write(
@@ -113,6 +130,40 @@ pub fn fixture() -> Option<MockFixture> {
         resource_dir,
         data_dir,
     })
+}
+
+/// 创建目录；对 Windows 瞬态拒绝（`PermissionDenied` / OS 错误 5）重试一次。
+///
+/// 与 `src/test_support.rs` 的同类helper刻意保持两份：单元测试在 lib 的
+/// `#[cfg(test)]` 构建里，集成测试编译的是**不带** `cfg(test)` 的对外 lib，
+/// 够不到那个模块。判据相同、语义相同，改动必须同步。
+pub fn create_dir_all_retry_transient(path: &Path) -> std::io::Result<()> {
+    match std::fs::create_dir_all(path) {
+        Err(err) if cfg!(windows) && err.kind() == std::io::ErrorKind::PermissionDenied => {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::create_dir_all(path)
+        }
+        other => other,
+    }
+}
+
+/// 往粘性端口文件里写一个端口（CX-14 的测试入口）。
+///
+/// 文件格式与 `launch::remember_sticky_port` 逐字一致（纯文本端口号）；
+/// 那个函数是私有的，集成测试够不到，故在此复刻写入侧。
+///
+/// `allow(dead_code)`：本模块被 6 个 test binary 各自编译一遍，而它只被
+/// `supervisor_lifecycle_races` 引用——其余 5 个 binary 里它必然闲置，
+/// `cargo clippy --all-targets -- -D warnings` 会按「未使用」判红。
+#[allow(dead_code)]
+pub fn write_sticky_port(layout: &Layout, port: u16) {
+    let dir = &layout.launch_root;
+    create_dir_all_retry_transient(dir).expect("launch_root 应可创建");
+    std::fs::write(
+        dir.join(dsh_host::contracts::STICKY_PORT_FILE),
+        port.to_string(),
+    )
+    .expect("粘性端口文件应可写");
 }
 
 /// 仓库根（`<repo>/scripts/mock-harness.mjs` 所在目录）。

@@ -554,8 +554,7 @@ mod tests {
 
     #[test]
     fn pid_file_round_trip() {
-        let unique = format!("dsh-host-pid-{}", std::process::id());
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("pid-roundtrip");
         let layout = layout(&root);
         let record = PidRecord {
             pid: 4242,
@@ -568,13 +567,12 @@ mod tests {
 
         clear_pid_file(&layout);
         assert!(read_pid_file(&layout).is_none());
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
     fn sweep_ignores_absent_or_dead_records() {
-        let unique = format!("dsh-host-sweep-{}", std::process::id());
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("sweep-absent");
         let layout = layout(&root);
 
         // 无 pidfile。
@@ -594,13 +592,12 @@ mod tests {
         assert_eq!(sweep_stale_process(&layout).unwrap(), None);
         assert!(read_pid_file(&layout).is_none(), "死记录应被清理");
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
     fn sweep_ignores_foreign_processes() {
-        let unique = format!("dsh-host-sweep-foreign-{}", std::process::id());
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("sweep-foreign");
         let layout = layout(&root);
 
         write_pid_file(
@@ -617,7 +614,7 @@ mod tests {
         assert_eq!(sweep_stale_process(&layout).unwrap(), None);
         assert!(read_pid_file(&layout).is_none());
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]

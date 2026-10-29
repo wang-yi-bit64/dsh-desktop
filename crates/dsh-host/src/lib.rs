@@ -16,6 +16,7 @@
 //! | [`token`] | stdout 中 `dsh web:` URL 与 token 解析 | C3 |
 //! | [`readiness`] | HTTP/1.0 就绪探测（上游自报 + HTTP 双确认） | C4 |
 //! | [`process`] | 子进程派生、平台孤儿防护、陈旧进程清扫、控制台清洗 | C1、INV-3 |
+//! | [`session`] | Profile / Session 持久化 | — |
 //! | [`stop`] | SIGTERM → 4s → SIGKILL 停止语义 | C6 |
 //! | [`logs`] | 日志环形缓冲、滚动落盘、失败归因、级别前缀 | C7 |
 //! | [`logging`] | 宿主日志（`app.log`）落盘门面 + 级别过滤 | C7 |
@@ -47,6 +48,11 @@ pub mod stop;
 pub mod supervisor;
 pub mod token;
 pub mod transport;
+
+/// 单元测试专用：临时目录卫生层（V1-0，见 [`test_support`] 模块头）。
+/// 只进测试构建，不进发布产物。
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use args::{parse_env_overrides, ArgvSnapshot, HarnessArgs};
 pub use diagnostics::{

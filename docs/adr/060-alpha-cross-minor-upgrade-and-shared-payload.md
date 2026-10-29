@@ -5,7 +5,7 @@
 | 状态 | 已接受 |
 | 日期 | 2026-10-07 |
 | 唯一产地 | `scripts/dsh-targets.mjs` 的 `DSH_TARGETS.alpha.dshVersion`（DSH 版本）；`runtime-locks/primary-runtime.json` 的 `officeSkills.version`（载荷来源版本） |
-| 关联 | ADR-057（alpha 复役与双通道晋升/单调守卫）；`docs/dev-plan-alpha-0.2.1-upgrade.md`（本轮计划与执行台账，含 §7.5）；`docs/dev-plan-0.8-convergence.md` §6（切线放行条件）；`patches/LAYERS.md` §「alpha 线（0.2.1-alpha.1）的移植裁定（2026-10-07）」 |
+| 关联 | ADR-057（alpha 复役与双通道晋升/单调守卫）；`docs/archive/dev-plan-alpha-0.2.1-upgrade.md`（本轮计划与执行台账，2026-10-27 归档，含 §7.5）；`docs/dev-plan-0.8-convergence.md` §6（切线放行条件）；`patches/LAYERS.md` §「alpha 线（0.2.1-alpha.1）的移植裁定（2026-10-07）」 |
 
 ## 背景
 
@@ -129,7 +129,7 @@ alpha 线的 DSH 版本由 `0.1.7-alpha.2` 推进到 `0.2.1-alpha.1`。这与既
 3. **本轮的本地验证覆盖不完整**（环境限制，非本轮引入）：本机**无法为子进程建立 stdin 管道**，
    故 `cargo clippy --workspace --all-targets` 与 rustdoc doctest **在本机不可用**，
    这两项的权威判据只能由 CI（Linux runner）提供。完整根因与规避见
-   `docs/incidents/local-toolchain-limits.md` 末条与 `docs/dev-plan-alpha-0.2.1-upgrade.md` §7.5。
+   `docs/incidents/local-toolchain-limits.md` 末条与 `docs/archive/dev-plan-alpha-0.2.1-upgrade.md` §7.5。
    ⚠️ **不得因为本地 `--tier=fast` 全绿就顺手宣布 full 档也绿**——fast 档的 cargo 步骤只覆盖
    `-p dsh-contracts -p dsh-host -p dsh-host-cli`，其依赖图不含 `indexmap`/`schemars`。
 

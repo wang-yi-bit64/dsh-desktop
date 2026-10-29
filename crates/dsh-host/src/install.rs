@@ -127,27 +127,20 @@ fn is_macos_app_bundle(exe: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{create_dir_all, write};
+    use std::fs::write;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
-    /// 每次调用得到一个独立目录；不引入 `tempfile`（本 crate 没有该 dev-dependency）。
+    /// 每次调用得到一个独立目录。唯一名、瞬态重试与清理留痕统一走共享卫生层
+    /// （V1-0：`test_support`）；这里不再各自持一份计数器。
     fn scratch_dir(label: &str) -> PathBuf {
-        static SEQ: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "dsh-install-mode-{}-{}-{label}",
-            std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+        crate::test_support::scratch_dir(&format!("install-mode-{label}"))
     }
 
-    /// 清理夹具；失败不影响判定（临时目录由系统回收）。
+    /// 清理夹具；失败会由卫生层留痕（临时目录由系统回收）。
     fn cleanup(dir: &Path) {
-        let _ = std::fs::remove_dir_all(dir);
+        crate::test_support::cleanup(dir);
     }
 
     /// 安装形态只认**正向信号**，与安装目录叫什么无关。
@@ -169,7 +162,7 @@ mod tests {
         // 便携版：用户手动解压的目录
         let portable = root.join("Downloads").join("DSH-Desktop-portable");
         for dir in [&machine, &per_user, &portable] {
-            create_dir_all(dir).expect("create fixture dir");
+            crate::test_support::create_dir_all(dir);
         }
         for dir in [&machine, &per_user] {
             write(dir.join(UNINSTALLER_NAME), b"MZ").expect("write uninstaller");
@@ -196,12 +189,12 @@ mod tests {
     fn macos_app_bundle_counts_as_installed() {
         let root = scratch_dir("app-bundle");
         let macos = root.join("DSH Desktop.app").join("Contents").join("MacOS");
-        create_dir_all(&macos).expect("create bundle dir");
+        crate::test_support::create_dir_all(&macos);
         assert_eq!(classify(&macos.join("dsh-desktop")), InstallMode::Installed);
 
         // 负例：路径里含 `Contents/MacOS` 但外层不是 `.app` ⇒ 不得误判为安装版。
         let loose = root.join("Contents").join("MacOS");
-        create_dir_all(&loose).expect("create loose dir");
+        crate::test_support::create_dir_all(&loose);
         assert_eq!(classify(&loose.join("dsh-desktop")), InstallMode::Portable);
         cleanup(&root);
     }

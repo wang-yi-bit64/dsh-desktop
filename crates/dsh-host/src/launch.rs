@@ -1083,12 +1083,7 @@ mod tests {
     }
 
     fn sticky_dir(tag: &str) -> std::path::PathBuf {
-        let unique = format!(
-            "dsh-host-sticky-{tag}-{}-{}",
-            std::process::id(),
-            now_seconds()
-        );
-        std::env::temp_dir().join(unique)
+        crate::test_support::scratch_dir(&format!("sticky-{tag}"))
     }
 
     /// CX-14：记住的端口原样读回；缺失、非数字、低于下界的都不复用。
@@ -1104,7 +1099,7 @@ mod tests {
             std::fs::write(dir.join(STICKY_PORT_FILE), invalid).unwrap();
             assert_eq!(read_sticky_port(&dir), None, "非法值 {invalid:?} 不得复用");
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        crate::test_support::cleanup(&dir);
     }
 
     /// CX-14 可证伪性：端口被占用时**必须**放弃复用（否则首个尝试注定 EADDRINUSE）；
@@ -1123,7 +1118,7 @@ mod tests {
             Some(port),
             "空闲后应复用同一端口"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        crate::test_support::cleanup(&dir);
     }
 
     #[test]
@@ -1139,8 +1134,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_resources_fail_fast_without_spawning() {
-        let unique = format!("dsh-host-launch-{}-{}", std::process::id(), now_seconds());
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("launch-missing");
         let layout = Layout::resolve(root.join("res"), root.join("data"));
         let launcher = Launcher::new(layout, LauncherConfig::default());
 
@@ -1154,17 +1148,12 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event, LaunchEvent::Failed { cause } if cause.kind() == "missing_resource")));
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[tokio::test]
     async fn missing_resources_surface_as_err_in_run() {
-        let unique = format!(
-            "dsh-host-launch-run-{}-{}",
-            std::process::id(),
-            now_seconds()
-        );
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("launch-missing-run");
         let layout = Layout::resolve(root.join("res"), root.join("data"));
         let launcher = Launcher::new(layout, LauncherConfig::default());
 
@@ -1174,7 +1163,7 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(error.exit_code(), crate::contracts::EXIT_MISSING_RESOURCE);
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[tokio::test]
@@ -1191,15 +1180,14 @@ mod tests {
     async fn with_extra_passes_args_through_to_argv() {
         // 不派生进程：missing_resources 会先失败，但 argv 已经由
         // HarnessArgs 构造，这里验证 builder 的透传链路连通。
-        let unique = format!("dsh-host-extra-{}-{}", std::process::id(), now_seconds());
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir("launch-extra");
         let layout = Layout::resolve(root.join("res"), root.join("data"));
         let launcher = Launcher::new(layout, LauncherConfig::default())
             .with_extra(vec!["--fail".into(), "startup".into()]);
 
         let outcome = launcher.launch(None, |_| {}).await.unwrap();
         assert!(!outcome.is_ready());
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     /// 在临时目录里铺一份「资源齐备」的假资源树（不派生任何真实进程）。
@@ -1208,10 +1196,10 @@ mod tests {
     /// 这一层。返回的 `node_executable` 是假文件，因此**不能**真启动。
     fn fake_complete_layout(root: &std::path::Path) -> Layout {
         let layout = Layout::resolve(root.join("res"), root.join("data"));
-        std::fs::create_dir_all(layout.node_executable.parent().unwrap()).unwrap();
+        crate::test_support::create_dir_all(layout.node_executable.parent().unwrap());
         std::fs::write(&layout.node_executable, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::write(&layout.node_entry, "// wrapper\n").unwrap();
-        std::fs::create_dir_all(layout.dsh_entry.parent().unwrap()).unwrap();
+        crate::test_support::create_dir_all(layout.dsh_entry.parent().unwrap());
         std::fs::write(&layout.dsh_entry, "// bin\n").unwrap();
         std::fs::write(&layout.patch, "[]\n").unwrap();
         layout
@@ -1220,7 +1208,7 @@ mod tests {
     /// 启动器把 profile 带进 argv（安全模式的核心机制）。
     #[test]
     fn safe_mode_launcher_carries_profile_and_patch_into_args() {
-        let root = std::env::temp_dir().join(format!("dsh-safe-launcher-{}", std::process::id()));
+        let root = crate::test_support::scratch_dir("safe-launcher");
         let layout = fake_complete_layout(&root);
         let launcher = Launcher::new(layout.clone(), LauncherConfig::default()).with_safe_mode();
 
@@ -1248,7 +1236,7 @@ mod tests {
             "默认 profile 必须继续用普通 patch"
         );
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     /// 回归护栏：安全 patch 缺失时**必须快速失败**，不得静默回退到普通 patch。
@@ -1257,11 +1245,7 @@ mod tests {
     /// 进程——按钮等于说谎。上游在这里也是硬失败。
     #[tokio::test]
     async fn safe_mode_fails_fast_when_safe_patch_is_missing() {
-        let root = std::env::temp_dir().join(format!(
-            "dsh-safe-missing-{}-{}",
-            std::process::id(),
-            now_seconds()
-        ));
+        let root = crate::test_support::scratch_dir("safe-missing");
         let layout = fake_complete_layout(&root);
         assert!(!layout.has_safe_patch(), "前置：安全 patch 故意不存在");
 
@@ -1285,14 +1269,14 @@ mod tests {
         });
         assert!(failed, "必须以 safe_patch 缺失归因失败：{events:?}");
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     /// 安全模式的环境注入：`DSH_SAFE_MODE` / `DSH_DISABLE_PLUGINS` / `DSH_PROFILE`
     /// 三个 C10 承诺项必须真的落到子进程环境里；默认 profile 下不得出现。
     #[test]
     fn safe_mode_injects_isolation_env_only_when_requested() {
-        let root = std::env::temp_dir().join(format!("dsh-safe-env-{}", std::process::id()));
+        let root = crate::test_support::scratch_dir("safe-env");
         let layout = fake_complete_layout(&root);
         let shell = HarnessEnv::default();
 
@@ -1318,7 +1302,7 @@ mod tests {
         assert!(normal.get(crate::contracts::ENV_DSH_SAFE_MODE).is_none());
         assert!(normal.get("DSH_PROFILE").is_none());
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     /// 端到端护栏：经由有界通道的日志必须**逐行完整落盘**。
@@ -1328,8 +1312,8 @@ mod tests {
     /// 发送的行数刻意超过 [`LOG_WRITE_QUEUE`]，逼出背压路径。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn log_writer_drains_every_line_through_bounded_channel() {
-        let root = std::env::temp_dir().join(format!("dsh-writer-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::test_support::scratch_dir("writer-drain");
+        crate::test_support::create_dir_all(&root);
         let path = root.join("harness.log");
 
         let tx = spawn_log_writer(LogFile::open(&path).ok());
@@ -1400,14 +1384,14 @@ mod tests {
             }
         }
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     /// 写线程在无发送端时必须立刻退出，不得泄漏线程或阻塞 runtime。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn log_writer_exits_when_senders_drop() {
-        let root = std::env::temp_dir().join(format!("dsh-writer-exit-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::test_support::scratch_dir("writer-exit");
+        crate::test_support::create_dir_all(&root);
         let path = root.join("harness.log");
 
         let tx = spawn_log_writer(LogFile::open(&path).ok()).unwrap();
@@ -1430,6 +1414,6 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 }

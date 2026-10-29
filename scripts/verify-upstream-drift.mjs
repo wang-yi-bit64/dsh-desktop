@@ -96,6 +96,7 @@ import { argv, env, exit } from 'node:process'
 import { pathToFileURL } from 'node:url'
 
 import { listTargetNames, resolveTarget, targetForVersion } from './dsh-targets.mjs'
+import { PATCH_LAYERS } from './patch-layers.mjs'
 import {
   UPSTREAM_REPO,
   fetchUpstreamReleases,
@@ -187,6 +188,33 @@ function stageLabel(parsed) {
   if (parsed.stage === RELEASE_RANK) return '正式版'
   const head = String(parsed.preRaw).split('.')[0]
   return head === '' ? '未知阶段' : head
+}
+
+/**
+ * 上游前进时，列出「`retireWhen` 可能需要复核」的补丁清单（V6，**信息层，不参与判定**）。
+ *
+ * ## 为什么需要它
+ *
+ * `retireWhen` 写的是「上游做到 X 时退役」，但在此之前**没有任何东西盯着上游做没做 X**
+ * ——补丁只会在有人主动升级时被动复查。这一行把「上游动了」与「该复查哪些补丁」
+ * 放在同一条输出里，让退役复核从「靠记性」变成「每次哨兵运行都念一遍」。
+ *
+ * ## 为什么它**只打印、不判红**
+ *
+ * 退役与否是**人工裁决**（`patches/LAYERS.md` §4 规则 4）。上游前进一格并不意味着
+ * 每个补丁的 `retireWhen` 都已满足——大多数时候恰恰相反。把它判红会让哨兵长期
+ * 常驻红灯（ADR-030 明确要避免的形态），而人一旦习惯忽略红灯，真正的漂移也会被忽略。
+ *
+ * @param {Record<string, {retireWhen?: string}>} patches 分级表（`PATCH_LAYERS`）
+ * @param {{upstreamMoved: boolean}} input `upstreamMoved` 为 false（各线持平）时返回空清单
+ * @returns {{package: string, retireWhen: string}[]} 按包名排序；`retireWhen` 为空的条目被剔除
+ */
+export function retireReviewCandidates(patches, { upstreamMoved }) {
+  if (upstreamMoved !== true) return []
+  return Object.entries(patches ?? {})
+    .filter(([, entry]) => typeof entry?.retireWhen === 'string' && entry.retireWhen.trim() !== '')
+    .map(([pkg, entry]) => ({ package: pkg, retireWhen: entry.retireWhen.trim() }))
+    .sort((a, b) => (a.package < b.package ? -1 : a.package > b.package ? 1 : 0))
 }
 
 /**
@@ -586,6 +614,30 @@ async function selfTest() {
   check('判定基准：无网络 → skip', offline.status, 'skip')
   check('判定基准：skip 必须带理由', offline.reason.length > 0, true)
 
+  // ---- 信息层之二：退役复核清单（V6；只打印、不判红） ----
+  const patchTable = {
+    '@x/a': { retireWhen: '官方做 A 时。' },
+    '@x/b': { retireWhen: '官方做 B 时。' },
+    '@x/c': { retireWhen: '   ' }
+  }
+  check('退役复核：上游未前进 ⇒ 空清单（不动就是不动）', retireReviewCandidates(patchTable, { upstreamMoved: false }), [])
+  check(
+    '退役复核：未核对（null）⇒ 空清单，由调用方打印「未核对」',
+    retireReviewCandidates(patchTable, { upstreamMoved: null }),
+    []
+  )
+  check(
+    '退役复核：上游前进 ⇒ 列出有 retireWhen 的补丁，空白理由被剔除',
+    retireReviewCandidates(patchTable, { upstreamMoved: true }).map((row) => row.package),
+    ['@x/a', '@x/b']
+  )
+  check(
+    '退役复核：真实分级表条目全部可列（扫出数 = 表条数，E5-空）',
+    retireReviewCandidates(PATCH_LAYERS, { upstreamMoved: true }).length,
+    Object.keys(PATCH_LAYERS).length
+  )
+  check('退役复核：清单一律按包名排序（输出稳定）', retireReviewCandidates({ 'b/b': { retireWhen: 'x' }, 'a/a': { retireWhen: 'y' } }, { upstreamMoved: true }).map((row) => row.package), ['a/a', 'b/b'])
+
   if (failed > 0) {
     console.error(`verify-upstream-drift self-test: ${failed} 项失败`)
     exit(1)
@@ -627,6 +679,9 @@ async function main() {
 
   // ---------------- 判定层 ----------------
   let blocked = 0
+  // `upstreamMoved` 三态：null = 未核对（判定基准取不到）· false = 各线持平 · true = 有线上游已前进。
+  // 只喂给信息层的「退役复核」清单——不参与判定，也不影响退出码。
+  let upstreamMoved = null
   const tags = await fetchDistTags({ registry, timeoutMs })
   if (tags.status !== 'ok') {
     console.log(`[verify:drift] SKIP —— npm dist-tags 取不到（${tags.reason}）`)
@@ -641,6 +696,7 @@ async function main() {
     console.log('')
 
     let needsRework = 0
+    upstreamMoved = false
     // examined：实际被对照的**在役**目标数。休眠目标（ADR-056）显式跳过、不计入；
     // 全部休眠时哨兵无事可做，属配置矛盾（默认目标必须在役），必须报错而不是空转通过。
     let examined = 0
@@ -660,6 +716,7 @@ async function main() {
         continue
       }
       const drift = judgeDrift(target.current, line.version)
+      if (drift.level !== 'ok') upstreamMoved = true
       if (drift.level === 'patch-behind') {
         console.log(`${prefix} ⚠️  ${drift.message}`)
       } else if (drift.ok) {
@@ -705,6 +762,25 @@ async function main() {
       console.error('  ⇒ 404 是**配置缺陷**，不是「外部状态没准备好」，故判红。')
       exit(1)
     }
+  }
+
+  // ---------------- 信息层之二：退役复核（V6；只打印，绝不判红） ----------------
+  const candidates = retireReviewCandidates(PATCH_LAYERS, { upstreamMoved })
+  if (upstreamMoved === null) {
+    console.log('')
+    console.log('  [信息层·不参与判定] 退役复核：**未核对** —— 判定基准取不到 ⇒ 上游有没有前进未知，')
+    console.log('           因此「哪些补丁的 retireWhen 该复查」这一次答不出来（判不了 ≠ 没有候选）。')
+  } else if (candidates.length === 0) {
+    console.log('')
+    console.log('  [信息层·不参与判定] 退役复核：各线上游均未前进 ⇒ 本轮无需复查 retireWhen。')
+  } else {
+    console.log('')
+    console.log(
+      `  [信息层·不参与判定] 退役复核：上游已前进 ⇒ 以下 ${candidates.length} 个补丁的 retireWhen ` +
+        '**可能**需要复核（只打印，不判红——退役与否是人工裁决）：'
+    )
+    for (const candidate of candidates) console.log(`    · ${candidate.package}：${candidate.retireWhen}`)
+    console.log('    → 逐条核实判据是否已满足，然后退役或改写 retireWhen（patches/LAYERS.md §4 规则 4）。')
   }
 
   if (blocked > 0) {
