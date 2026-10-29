@@ -902,13 +902,8 @@ mod tests {
 
     #[test]
     fn log_file_rotates_by_size() {
-        let unique = format!(
-            "dsh-host-logs-{}-{}",
-            std::process::id(),
-            LOG_LINE_MAX_BYTES
-        );
-        let path = std::env::temp_dir().join(unique).join("harness.log");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let root = crate::test_support::scratch_dir("logs-rotate");
+        let path = root.join("harness.log");
 
         let mut log = LogFile::with_limits(path.clone(), 64, 3).unwrap();
         for index in 0..10 {
@@ -920,6 +915,6 @@ mod tests {
         assert!(backup_path(&path, 1).exists(), "应产生 .1 备份");
         assert!(std::fs::metadata(&path).unwrap().len() < 64);
 
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        crate::test_support::cleanup(&root);
     }
 }

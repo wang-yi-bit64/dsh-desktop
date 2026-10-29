@@ -606,12 +606,7 @@ mod tests {
     /// 若把实现改成"目录存在就设变量"，这条测试会红。
     #[test]
     fn bundled_primary_runtime_is_injected_only_when_complete() {
-        let root = std::env::temp_dir().join(format!(
-            "dsh-env-payload-{}-{}",
-            std::process::id(),
-            crate::process::now_seconds()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = crate::test_support::scratch_dir("env-payload");
         let res = root.join("res");
         let data = root.join("data");
 
@@ -619,15 +614,15 @@ mod tests {
         let payload = res.join("runtime").join("primary-runtime");
         let deps = payload.join("dependencies");
         let office = res.join("runtime").join("office-skills");
-        std::fs::create_dir_all(
-            deps.join("python")
-                .join(if cfg!(windows) { "." } else { "bin" }),
-        )
-        .unwrap();
-        std::fs::create_dir_all(deps.join("node").join("bin")).unwrap();
-        std::fs::create_dir_all(deps.join("node").join("node_modules")).unwrap();
-        std::fs::create_dir_all(deps.join("pnpm").join("bin")).unwrap();
-        std::fs::create_dir_all(office.join("scripts")).unwrap();
+        crate::test_support::create_dir_all(deps.join("python").join(if cfg!(windows) {
+            "."
+        } else {
+            "bin"
+        }));
+        crate::test_support::create_dir_all(deps.join("node").join("bin"));
+        crate::test_support::create_dir_all(deps.join("node").join("node_modules"));
+        crate::test_support::create_dir_all(deps.join("pnpm").join("bin"));
+        crate::test_support::create_dir_all(office.join("scripts"));
         let python_bin = if cfg!(windows) {
             deps.join("python").join("python.exe")
         } else {
@@ -645,7 +640,7 @@ mod tests {
         // 三份 SKILL.md 也是硬需求：缺一个会让 `dsh-skill-office` 在挂载期
         // `readFileSync` 抛 ENOENT，Harness 起不来。
         for skill in ["office-docx", "office-pptx", "office-xlsx"] {
-            std::fs::create_dir_all(office.join(skill)).unwrap();
+            crate::test_support::create_dir_all(office.join(skill));
             std::fs::write(office.join(skill).join("SKILL.md"), b"stub").unwrap();
         }
 
@@ -693,7 +688,7 @@ mod tests {
             std::fs::rename(&backup, &victim).unwrap();
         }
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]

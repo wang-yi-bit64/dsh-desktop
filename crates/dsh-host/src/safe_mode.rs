@@ -211,7 +211,7 @@ pub fn clear_safe_mode_request(dsh_home: &Path) -> std::io::Result<bool> {
 /// use std::path::Path;
 /// use dsh_host::safe_mode::{safe_mode_requested, persist_safe_mode_request, clear_safe_mode_request};
 ///
-/// let dir = std::env::temp_dir().join("dsh-safe-marker-doc");
+/// let dir = std::env::temp_dir().join(format!("dsh-safe-marker-doc-{}", std::process::id()));
 /// let _ = std::fs::remove_dir_all(&dir);
 /// std::fs::create_dir_all(&dir).unwrap();
 ///
@@ -243,12 +243,9 @@ mod tests {
 
     #[test]
     fn test_ensure_safe_mode_profile() {
-        // 目录名带 PID：测试并行执行时固定路径会与同文件其它用例互相
-        // `remove_dir_all`（实测概率性失败）。
-        let temp =
-            std::env::temp_dir().join(format!("dsh-safe-mode-host-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
-        std::fs::create_dir_all(&temp).unwrap();
+        // 唯一名与清理走共享卫生层（V1-0）。
+        let temp = crate::test_support::scratch_dir("safe-mode-host");
+        crate::test_support::create_dir_all(&temp);
 
         let directory = ensure_safe_mode_profile(&temp).unwrap();
         assert!(directory.join("package.json").exists());
@@ -273,14 +270,13 @@ mod tests {
         let cfg = generate_isolated_profile_config(&SafeModeOptions::default());
         assert!(cfg.get("dsh").is_some());
 
-        let _ = std::fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
     }
 
     /// 标记的唯一语义：存在 = 下次走安全模式。写 → 读 → 清 → 再读。
     #[test]
     fn safe_mode_marker_round_trips() {
-        let temp = std::env::temp_dir().join(format!("dsh-safe-marker-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
+        let temp = crate::test_support::scratch_dir("safe-marker");
 
         // 目录都不存在时「没有请求」——不能因为读不到就 panic（启动路径必经此处）。
         assert!(!safe_mode_requested(&temp), "目录不存在时应视为未请求");
@@ -302,7 +298,7 @@ mod tests {
             "幂等：本来就没有时返回 false 而不是 Err"
         );
 
-        let _ = std::fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
     }
 
     /// 判据是「文件是否存在」，因此**内容损坏不影响判定**。
@@ -312,9 +308,8 @@ mod tests {
     /// 应用退回普通模式——即「坏插件照旧加载」，正是本次要修的症状。
     #[test]
     fn safe_mode_marker_ignores_corrupt_content() {
-        let temp = std::env::temp_dir().join(format!("dsh-safe-corrupt-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
-        std::fs::create_dir_all(&temp).unwrap();
+        let temp = crate::test_support::scratch_dir("safe-corrupt");
+        crate::test_support::create_dir_all(&temp);
 
         std::fs::write(safe_mode_marker_path(&temp), b"\x00\xff not json at all").unwrap();
         assert!(
@@ -325,6 +320,6 @@ mod tests {
         std::fs::write(safe_mode_marker_path(&temp), b"").unwrap();
         assert!(safe_mode_requested(&temp), "空文件同样算请求过");
 
-        let _ = std::fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
     }
 }

@@ -171,16 +171,8 @@ mod tests {
     }
 
     fn temp_root(name: &str) -> PathBuf {
-        let unique = format!(
-            "dsh-logs-view-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|value| value.as_nanos())
-                .unwrap_or(0)
-        );
-        let root = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::test_support::scratch_dir(&format!("logs-view-{name}"));
+        crate::test_support::create_dir_all(&root);
         root
     }
 
@@ -190,7 +182,7 @@ mod tests {
         let layout = layout_at(&root);
         let error = read(&layout, "harnses", 10).expect_err("typo must not silently return empty");
         assert!(error.to_string().contains("unknown log source"), "{error}");
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
@@ -201,7 +193,7 @@ mod tests {
         assert!(slice.missing, "{slice:?}");
         assert!(slice.lines.is_empty(), "{slice:?}");
         assert!(!slice.truncated, "{slice:?}");
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
@@ -227,7 +219,7 @@ mod tests {
         );
         assert_eq!(slice.total_bytes, content.len() as u64);
         assert_eq!(slice.file, "harness.log");
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
@@ -248,6 +240,6 @@ mod tests {
             assert_eq!(slice.lines, vec![expected.to_string()], "{source}");
             assert_eq!(slice.file, file, "{source}");
         }
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 }

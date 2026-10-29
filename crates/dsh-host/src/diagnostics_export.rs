@@ -408,16 +408,8 @@ mod tests {
     }
 
     fn temp_root(name: &str) -> PathBuf {
-        let unique = format!(
-            "dsh-export-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|value| value.as_nanos())
-                .unwrap_or(0)
-        );
-        let root = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::test_support::scratch_dir(&format!("export-{name}"));
+        crate::test_support::create_dir_all(&root);
         root
     }
 
@@ -579,7 +571,7 @@ mod tests {
             format!("[desktop] ready\ncookie dsh-auth-session={cookie}\n"),
         )
         .unwrap();
-        std::fs::create_dir_all(layout.manifest.parent().unwrap()).unwrap();
+        crate::test_support::create_dir_all(layout.manifest.parent().unwrap());
         std::fs::write(
             &layout.manifest,
             format!("{{\"paths\":[\"C:\\\\Users\\\\{user}\\\\res\"],\"token\":\"{token}\"}}"),
@@ -636,7 +628,7 @@ mod tests {
             "缺 README：{names:?}"
         );
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     /// 空环境也必须产出可用包（不能因为「没有日志」就什么都不给）。
@@ -656,6 +648,6 @@ mod tests {
             "环境快照不依赖任何日志文件，必须始终存在：{summary:?}"
         );
 
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 }

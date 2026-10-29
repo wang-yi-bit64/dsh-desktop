@@ -159,13 +159,7 @@ mod tests {
     use super::*;
 
     fn temp_layout(name: &str) -> (std::path::PathBuf, Layout) {
-        let unique = format!("dsh-host-applog-{name}-{}-{}", std::process::id(), {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        });
-        let root = std::env::temp_dir().join(unique);
+        let root = crate::test_support::scratch_dir(&format!("applog-{name}"));
         (
             root.clone(),
             Layout::resolve(root.join("res"), root.join("data")),
@@ -187,7 +181,7 @@ mod tests {
             content.contains("[desktop] WARN  passthrough overrides contract arg: --port"),
             "实际内容：{content}"
         );
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]
@@ -206,7 +200,7 @@ mod tests {
             content.contains("DEBUG"),
             "落盘不应受级别过滤影响：{content}"
         );
-        let _ = std::fs::remove_dir_all(&root);
+        crate::test_support::cleanup(&root);
     }
 
     #[test]

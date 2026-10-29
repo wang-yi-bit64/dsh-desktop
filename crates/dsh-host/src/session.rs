@@ -286,19 +286,19 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env::temp_dir;
 
     /// 每个测试用例独占目录：测试默认并行执行，固定路径会让
     /// `test_profile_crud` 与 `test_session_crud` 互相 `remove_dir_all`
-    /// 对方的 store 根目录（实测概率性失败）。
+    /// 对方的 store 根目录（实测概率性失败）。唯一性与清理走共享卫生层
+    /// （V1-0：原子计数器 + 清理留痕）。
     fn unique_temp(name: &str) -> std::path::PathBuf {
-        temp_dir().join(format!("dsh-{name}-{}", std::process::id()))
+        crate::test_support::scratch_dir(&format!("session-{name}"))
     }
 
     #[test]
     fn test_profile_crud() {
         let temp = unique_temp("test_profile_store");
-        let _ = fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
         let store = SessionStore::new(&temp);
 
         let default_profile = store.get_or_create_default_profile().unwrap();
@@ -321,13 +321,13 @@ mod tests {
         assert!(!store.delete_profile("safe-1").unwrap());
         assert_eq!(store.list_profiles().unwrap().len(), 1);
 
-        let _ = fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
     }
 
     #[test]
     fn test_session_crud() {
         let temp = unique_temp("test_session_store");
-        let _ = fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
         let store = SessionStore::new(&temp);
 
         let mut session1 = SessionMetadata::new("sess-1", "default");
@@ -352,6 +352,6 @@ mod tests {
         let filtered2 = store.list_sessions_for_profile("default").unwrap();
         assert_eq!(filtered2.len(), 0);
 
-        let _ = fs::remove_dir_all(&temp);
+        crate::test_support::cleanup(&temp);
     }
 }
