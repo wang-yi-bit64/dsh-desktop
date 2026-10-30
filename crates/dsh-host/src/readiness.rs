@@ -14,6 +14,32 @@
 //!   却防不住「第 501ms 才崩」——真崩了由 Supervisor 与错误页兜底，不该让全体用户
 //!   为一个低频尾部风险买单（2026-09-30 启动耗时优化的实测结论）。
 //! * 轮询间隔 50ms；总超时 Windows 120s、其它平台 45s。
+//!
+//! ## 判据顺序：端口冲突 > 存亡（2026-10-12 修订）
+//!
+//! 「子进程因 `EADDRINUSE` 退出」与「子进程因别的原因退出」在**观测层面**几乎
+//! 无法区分，只能靠日志泵把 `port_in_use` 置位。而「置位」与「`child.wait()`
+//! 返回」是两个独立的异步事实，谁先被看到不确定：
+//!
+//! ```text
+//!   子进程：stderr 写 EADDRINUSE ──▶ exit()
+//!              │                      │
+//!        日志泵读管道            exit watcher 的 wait() 返回
+//!              │                      │
+//!        置位 port_in_use        置位 exit_flag        ← 两者竞速
+//! ```
+//!
+//! 若先看 `alive()`，一次**本可换端口重试**的冲突就被判成不可重试的
+//! [`ReadinessOutcome::ProcessExited`]——用户看到「启动失败」而不是「重试」（C1）。
+//! 因此本模块的判据顺序是：
+//!
+//! 1. `port_in_use()` 为真 ⇒ `PortInUse`（最先，且每轮都先查）；
+//! 2. `!alive()` ⇒ 先等一个**日志泵排空宽限**（[`LOG_PUMP_DRAIN_DELAY`]）再复查
+//!    `port_in_use()`，仍为假才返回 `ProcessExited`。
+//!
+//! 第 2 步的宽限是本修订的**关键**：只把 `port_in_use()` 提前到 `alive()` 之前
+//! 是无效的——两者读的是同一瞬间的同一个原子量，冲突行还在管道里时依然读不到。
+//! 宽限只在「就绪前退出」这条失败路径上付出（生产 50ms），换来归因正确。
 
 use std::future::Future;
 use std::time::Duration;
@@ -22,7 +48,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::contracts::{HEALTHY_STATUS_MAX, HEALTHY_STATUS_MIN, PROBE_TIMEOUT};
+use crate::contracts::{
+    HEALTHY_STATUS_MAX, HEALTHY_STATUS_MIN, LOG_PUMP_DRAIN_DELAY, PROBE_TIMEOUT,
+};
 
 /// 就绪探测参数。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +219,10 @@ pub fn parse_status_line(response: &[u8]) -> Option<u16> {
 /// 只会出现在上游自报的 URL 行上（见模块文档），所以健康本身已隐含「上游自报」
 /// ——首次双确认即刻就绪，不再叠加稳定窗。
 ///
+/// 失败判据的**顺序**有讲究：`port_in_use` 先于 `alive`，且判定 `ProcessExited`
+/// 之前有一次性排空宽限（见模块文档「判据顺序」）。这两点是 C1「换端口重试」
+/// 能真正生效的前提，不是可以随手调换的实现细节。
+///
 /// # 参数
 ///
 /// * `config` — 轮询参数。
@@ -234,12 +266,28 @@ where
     let started = tokio::time::Instant::now();
     let deadline = started + config.total_timeout;
 
+    // 就绪前退出后的宽限：让日志泵有机会把管道里剩余的 `EADDRINUSE` 行读出来
+    // 并置位。取 `max(interval, LOG_PUMP_DRAIN_DELAY)`：生产是 50ms；测试用的
+    // `ProbeConfig::fast` 间隔 1ms 时也不会退化成「几乎不宽限」。
+    let exit_grace = config.interval.max(LOG_PUMP_DRAIN_DELAY);
+
     while tokio::time::Instant::now() < deadline {
-        if !alive() {
-            return ReadinessOutcome::ProcessExited;
-        }
+        // ① 端口冲突优先（判据顺序见模块文档）。子进程因 EADDRINUSE 退出时，
+        // 「日志泵置位」与「exit watcher 观测到退出」在竞速，先看 alive() 会把
+        // 一次可重试的冲突判成不可重试的 ProcessExited。
         if port_in_use() {
             return ReadinessOutcome::PortInUse;
+        }
+        if !alive() {
+            // ② 进程已死，但那一行冲突可能还在管道里。给日志泵一个排空窗口
+            // 再复查一次——这一步只在失败路径上付出，最多 `exit_grace`。
+            // 单纯的「调换检查顺序」在这里无效：两者读的是同一瞬间的原子量。
+            tokio::time::sleep(exit_grace).await;
+            return if port_in_use() {
+                ReadinessOutcome::PortInUse
+            } else {
+                ReadinessOutcome::ProcessExited
+            };
         }
 
         let status = probe().await;
@@ -333,6 +381,10 @@ mod tests {
         assert_eq!(outcome, ReadinessOutcome::Timeout);
     }
 
+    /// 进程退出且**始终没有**冲突标志 ⇒ 才是 `ProcessExited`。
+    ///
+    /// 这是 [`dead_process_with_port_in_use_flag_is_port_in_use`] 的反方向：
+    /// 修「冲突被误判成退出」时不得把「退出」也一并误判成冲突。
     #[tokio::test]
     async fn process_exit_aborts_immediately() {
         let outcome = wait_for_ready(
@@ -344,6 +396,76 @@ mod tests {
         )
         .await;
         assert_eq!(outcome, ReadinessOutcome::ProcessExited);
+    }
+
+    /// **端口冲突优先于存亡判定**：进程已死 + 标志已置 ⇒ 必须报 `PortInUse`，
+    /// 且**不再**付出排空宽限（标志已在手，没有理由再等）。
+    ///
+    /// 钉住的是 C1 的真实后果：真实 harness 打印 `EADDRINUSE` 后**立刻**退出
+    /// （不像 mock 会保活 2s）。若此时先看 `alive()`，这次冲突会被归因成
+    /// `UnexpectedExit`——不可重试——于是本该「换端口再试 2 次」的启动直接失败。
+    #[tokio::test]
+    async fn dead_process_with_port_in_use_flag_is_port_in_use() {
+        let started = tokio::time::Instant::now();
+        let outcome = wait_for_ready(
+            &ProbeConfig::fast(Duration::from_secs(5)),
+            || async { None },
+            || false, // 进程已死
+            || false,
+            || true, // 但冲突标志已置
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            outcome,
+            ReadinessOutcome::PortInUse,
+            "进程已死但端口冲突标志已置 ⇒ 应报 PortInUse（可重试），\
+             而不是不可重试的 ProcessExited"
+        );
+        assert!(
+            elapsed < LOG_PUMP_DRAIN_DELAY,
+            "标志已置时不应再等排空宽限（耗时 {elapsed:?}）——\
+             说明 `port_in_use()` 没有排在 `alive()` 之前"
+        );
+    }
+
+    /// **排在管道里的冲突行不得丢失**：标志在「观测到退出之后」才置位，仍须报
+    /// `PortInUse`。
+    ///
+    /// 只调换 `port_in_use()` 与 `alive()` 的先后是**无效修复**——两者读同一瞬间
+    /// 的同一个原子量，冲突行还在管道里时照样读不到。真正的修复是给日志泵一个
+    /// 排空窗口。本用例用「第一次读到假、之后读到真」的假标志模拟该时间差：
+    ///
+    /// * 删掉宽限复查 ⇒ 第二次读永远不会发生 ⇒ 退回 `ProcessExited`；
+    /// * 删掉循环头的 `port_in_use()` ⇒ 宽限里那一次读拿到的是 `false` ⇒ 同上。
+    #[tokio::test]
+    async fn port_in_use_set_after_exit_is_not_lost() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let outcome = wait_for_ready(
+            &ProbeConfig::fast(Duration::from_secs(5)),
+            || async { None },
+            || false,
+            || false,
+            {
+                let reads = Arc::clone(&reads);
+                move || reads.fetch_add(1, Ordering::SeqCst) > 0
+            },
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            ReadinessOutcome::PortInUse,
+            "冲突行在观测到退出之后才被日志泵读到，仍必须归因为 PortInUse\
+             （实际读了 {} 次标志）",
+            reads.load(Ordering::SeqCst)
+        );
+        assert!(
+            reads.load(Ordering::SeqCst) >= 2,
+            "必须发生第二次读（宽限复查），实际只读了 {} 次",
+            reads.load(Ordering::SeqCst)
+        );
     }
 
     #[tokio::test]
