@@ -17,7 +17,16 @@ url.workspace = true
 tokio.workspace = true
 # 脱敏诊断包（D3）：only the zip writer is needed — no compression-specific
 # C dependency (deflate backend comes from the already-present flate2 tree).
-zip = { version = "4", default-features = false, features = ["deflate"] }
+#
+# 下界锁到 9.0.5 而非 `9`：`<= 9.0.4` 全系命中 CVE-2026-115905
+# （GHSA-m665-v7pm-7grj，critical）——`ZipArchive` 以中央目录文件头（CDFH）
+# 为准，而 `ZipStreamReader` 只用本地文件头（LFH）落盘，二者不一致即可让同一
+# 压缩包对「审计方」和「解压方」呈现不同的路径/内容（zip cloaking），进而
+# 任意文件覆写 → RCE。本仓只用 writer 侧**不受该解压路径影响**，但 4.x 线
+# 停在 4.6.1 且无回补，故一并升级；同时清掉 4.6.1 上的另外 3 条公告
+# （GHSA-8hxf-qr8p-62x4 / GHSA-q7v9-x93c-xqv3 / RUSTSEC-2026-0367~0369）。
+# 用精确下界而不是 `9`：否则 `cargo update` 可能解析回 9.0.0~9.0.4。
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true

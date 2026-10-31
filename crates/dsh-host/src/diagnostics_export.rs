@@ -595,21 +595,23 @@ mod tests {
         let mut names = Vec::new();
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).unwrap();
-            names.push(entry.name().to_string());
+            // zip 9 起 `name()` 返回 `Result<Cow<'_, str>, ZipError>`：文件名解码
+            // 失败不再静默回退。本仓自产包的名字都是自己写的 ASCII/UTF-8 字面量，
+            // 解码失败只能是产物损坏，故直接断言。
+            let name = entry
+                .name()
+                .expect("entry name must decode (archive produced by this crate)")
+                .to_string();
+            names.push(name.clone());
             let mut text = String::new();
             entry.read_to_string(&mut text).unwrap();
             for secret in [&token, &cookie, &key] {
                 assert!(
                     !text.contains(secret.as_str()),
-                    "条目 {} 残留敏感值 `{secret}`",
-                    entry.name()
+                    "条目 {name} 残留敏感值 `{secret}`"
                 );
             }
-            assert!(
-                !text.contains(user),
-                "条目 {} 残留用户名 `{user}`",
-                entry.name()
-            );
+            assert!(!text.contains(user), "条目 {name} 残留用户名 `{user}`");
         }
         for expected in [
             "report.txt",
