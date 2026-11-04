@@ -7,14 +7,10 @@ pub mod constants;
 pub mod diagnostics;
 pub mod errors;
 pub mod ipc;
-pub mod lifecycle;
-pub mod manifest;
 pub mod rpc;
 
 pub use constants::*;
 pub use diagnostics::*;
 pub use errors::*;
 pub use ipc::*;
-pub use lifecycle::*;
-pub use manifest::*;
 pub use rpc::*;

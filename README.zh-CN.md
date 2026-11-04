@@ -103,7 +103,7 @@ npm run tauri build
 
 ```text
 crates/
-  dsh-contracts/        # 纯 Rust 通用契约库（常量、错误码总表 E1xxx~E7xxx、IPC 封套、JSON-RPC、生命周期定义）
+  dsh-contracts/        # 纯 Rust 通用契约库（常量、错误码总表 E1xxx~E7xxx、IPC 封套、JSON-RPC）
   dsh-host/             # 无 GUI 核心宿主库（子进程管理、Supervisor 监督器、崩溃诊断、日志环形缓冲、脱敏诊断包导出、日志尾部读取）
   dsh-host-cli/         # dsh-host 命令行工具（支持 start / status / stop / tail / doctor 等）
 src-tauri/
