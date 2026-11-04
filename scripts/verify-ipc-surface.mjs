@@ -28,6 +28,7 @@
  * | E5 | 每个 `local_page("x.html")` 目标都真实存在于 `frontend/` | 错误 |
  * | E6 | 每处 `#[allow(dead_code)]` 都在登记表里写明理由与销账批次 | 错误 |
  * | E7 | 每个 `MENU_ID_*` 常量都在 `handle_menu_event` 里有分支（菜单项 ↔ 处理器） | **错误** |
+ * | E8 | `#[tauri::command]` 函数体内不得出现裸 `return Err(`（外层 `Result` 恒为 `Ok`） | **错误（捕获 CD02）** |
  * | W1 | 已注册但前端从未调用的命令（死 IPC 面） | 警告 |
  * | W2 | `frontend/` 下从未被任何 `local_page` 指向的页面（不可达页） | 警告 |
  *
@@ -198,6 +199,152 @@ function parseRegistered(text) {
   const block = text.match(/generate_handler!\[([\s\S]*?)\]/)
   if (!block) return []
   return collect(block[1], /commands::([a-z_][a-z0-9_]*)/g)
+}
+
+/**
+ * 从 `open` 处的 `(` 起配对，返回 `)` 的下标；不配对返回 -1。
+ * @param {string} text 全文
+ * @param {number} open `(` 的下标
+ * @returns {number} `)` 的下标或 -1
+ */
+function matchParen(text, open) {
+  let depth = 0
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === '(') depth += 1
+    else if (text[index] === ')') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+/**
+ * 下标 → 1 基行号。
+ * @param {string} text 全文
+ * @param {number} index 下标
+ * @returns {number} 行号
+ */
+function lineAt(text, index) {
+  let line = 1
+  for (let cursor = 0; cursor < index; cursor += 1) if (text[cursor] === '\n') line += 1
+  return line
+}
+
+/**
+ * 解析每个 `#[tauri::command]` 的函数体（E8 用）。
+ *
+ * 为什么不能退化成「文件里有没有 `return Err(`」：那不是判据。CD02 的形态是
+ * **命令体内部**返回到外层 `Result` 的 `Err`——它让 `invoke` reject 并丢掉
+ * `code` / `category`（见 `commands.rs` 模块文档 :15-18）。同一个文件里
+ * `ensure_local_origin` 合法地返回 `Result<(), Box<…>>` 的 `Err`，区别恰恰是
+ * 「在不在命令体内」。
+ *
+ * 参数表会跨行、泛型里带 `<` / `>`，所以先做圆括号配对定出参数表、再取其后的
+ * 第一个 `{`、最后做花括号配对取函数体（与 `parseInvoked` 取函数体同一段逻辑）。
+ * @param {string} text 单个 .rs 文件全文
+ * @returns {{name: string, body: string, line: number}[]} 命令名 → 函数体
+ */
+function parseCommandBodies(text) {
+  const out = []
+  for (const marker of text.matchAll(/#\[tauri::command\]/g)) {
+    // 文档注释里会**提到**这个属性（`commands.rs` 模块文档第 22 行就写着
+    // 「每个 `#[tauri::command]` 都是……攻击面」）。不排除它，紧跟着的 `pub fn`
+    // 会让一个纯说明段落变成「幽灵命令体」，E8 随即对着文档报红。
+    const lineStart = text.lastIndexOf('\n', marker.index) + 1
+    if (text.slice(lineStart, marker.index).trimStart().startsWith('//')) continue
+    const afterAttr = marker.index + marker[0].length
+    const signature = /^\s*pub\s+(?:async\s+)?fn\s+([a-z_][a-z0-9_]*)/.exec(text.slice(afterAttr))
+    if (!signature) continue
+    const openParen = text.indexOf('(', afterAttr + signature[0].length)
+    if (openParen < 0) continue
+    const paramsEnd = matchParen(text, openParen)
+    if (paramsEnd < 0) continue
+    const bodyOpen = text.indexOf('{', paramsEnd)
+    if (bodyOpen < 0) continue
+    const body = extractBracedBody(text, bodyOpen + 1)
+    if (body === null) continue
+    out.push({ name: signature[1], body, line: lineAt(text, bodyOpen) })
+  }
+  return out
+}
+
+/**
+ * 去掉 Rust 源码里的注释，**保留换行**（行号不漂移）。
+ *
+ * 两个方向都必须防：
+ * - 不去注释会**假阳性**：本仓的注释里真的在讨论这个缺陷（`commands.rs` 模块
+ *   文档第 16-18 行就在说「永远不要在这里返回 `Err`」）。
+ * - 字符串字面量必须整体跳过（替换成空串），否则 `"http://…"` 里的 `//` 会被
+ *   当注释吃掉，同一行后面真实的 `return Err(` 就被藏起来——**假阴性**。
+ *
+ * raw 字符串（`r#"…"#`）本仓命令体里没有出现；若将来出现，E8 可能误报，
+ * 那时应当补 `r#` 分支而不是放宽判据。
+ * @param {string} text 函数体
+ * @returns {string} 去注释后的文本
+ */
+function stripRustComments(text) {
+  let out = ''
+  let index = 0
+  while (index < text.length) {
+    const char = text[index]
+    const next = text[index + 1]
+    if (char === '"') {
+      let cursor = index + 1
+      while (cursor < text.length) {
+        if (text[cursor] === '\\') {
+          cursor += 2
+          continue
+        }
+        if (text[cursor] === '"') {
+          cursor += 1
+          break
+        }
+        cursor += 1
+      }
+      out += '""'
+      index = cursor
+      continue
+    }
+    if (char === '/' && next === '/') {
+      while (index < text.length && text[index] !== '\n') index += 1
+      continue
+    }
+    if (char === '/' && next === '*') {
+      index += 2
+      while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) {
+        if (text[index] === '\n') out += '\n'
+        index += 1
+      }
+      index += 2
+      continue
+    }
+    out += char
+    index += 1
+  }
+  return out
+}
+
+/**
+ * E8 的判定核心：在命令体内找裸 `return Err(`。
+ *
+ * 只认 `return Err(`（含 `return Err (...)`），不认尾表达式的 `Err(…)`——后者要
+ * 真的是尾部才违规，静态文本分不清「尾部」与「match 的某个臂里作为值返回」，
+ * 误报会让人关掉这条检查。这是已知的覆盖边界，写在文件头与 `commands.rs` 的
+ * 约定说明里，而不是假装覆盖了。
+ * @param {{name: string, body: string, line: number, file?: string}[]} bodies 命令体
+ * @returns {{name: string, line: number, file?: string}[]} 违规位置
+ */
+function findBareReturnErr(bodies) {
+  const hits = []
+  for (const { name, body, line, file } of bodies) {
+    const cleaned = stripRustComments(body)
+    for (const match of cleaned.matchAll(/(?:^|[^A-Za-z0-9_])return\s+Err\s*\(/g)) {
+      const offset = cleaned.slice(0, match.index).split('\n').length - 1
+      hits.push({ name, file, line: line + offset })
+    }
+  }
+  return hits
 }
 
 /**
@@ -602,6 +749,34 @@ function run() {
         `该菜单项点了不会有任何反应。要么补上分支，要么在 ALLOW_UNHANDLED_MENU_IDS 里写明理由`
     )
   }
+
+  // E8：命令体的外层 `Result` 恒为 `Ok`（`commands.rs` 模块文档 :15-18）。裸
+  // `return Err(` 会让 `invoke` 直接 reject，页面随即丢掉 `code` / `category`——
+  // 这正是 CD02 的形态。E1~E7 一条都看不见它：那是一段**编译得过、clippy 不报、
+  // 前端也不会崩**的返回形态错误，只在用户点按钮时表现为「提示里没有错误码」。
+  const bodies = []
+  for (const file of rustSources()) {
+    const text = read(file)
+    if (!text.includes('#[tauri::command]')) continue
+    const relative = file.slice(projectRoot.length + 1)
+    for (const body of parseCommandBodies(text)) bodies.push({ ...body, file: relative })
+  }
+  notes.push(`命令体：解析出 ${bodies.length} 个 #[tauri::command] 函数体`)
+  if (bodies.length === 0) {
+    error(
+      'E8',
+      '一个 #[tauri::command] 函数体都没解析出来——先怀疑解析器（属性写法 / 签名形态变了），' +
+        '再怀疑源文件。0 个函数体不得判绿（否则 E8 是空转的）'
+    )
+  }
+  for (const hit of findBareReturnErr(bodies)) {
+    error(
+      'E8',
+      `命令 \`${hit.name}\`（${hit.file}:${hit.line}）体内出现裸 \`return Err(\`——` +
+        '外层 Result 必须恒为 Ok，否则 invoke 直接 reject 并丢掉 code / category；' +
+        '请改用 failed(<内层失败封套>)'
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -708,11 +883,79 @@ function selfTest() {
   })()
   check('E7 夹具：注释里的 id 不得被当成已处理', !commentOnly.has('alpha'))
 
+  // --- E8：命令体内不得出现裸 return Err ---
+  //
+  // 为什么这条自检必须存在：E8 依赖「属性 → 签名 → 参数表 → 函数体」这段解析。
+  // 解析一旦写歪（例如参数表跨行就抓不到函数体），`bodies` 会空空如也，循环
+  // 自然一条都不报——那时它不是「没问题」，而是「不再回答问题」。因此夹具里
+  // 先钉「函数体被抓到」，再钉「抓到之后判得对」。
+  const commandFixture = (body) =>
+    [
+      '/// 示例命令（夹具）。',
+      '#[tauri::command]',
+      'pub async fn demo(webview: WebviewWindow) -> CommandResult<()> {',
+      body,
+      '}'
+    ].join('\n')
+
+  const bare = commandFixture('    if blocked {\n        return Err("quit blocked".to_string());\n    }\n    ok(())')
+  const bareBodies = parseCommandBodies(bare)
+  check('E8 夹具：命令体必须被解析出来（否则 E8 空转）', bareBodies.length === 1 && bareBodies[0].name === 'demo')
+  const bareHits = findBareReturnErr(bareBodies)
+  check('E8 夹具：体内裸 return Err → 必须判红', bareHits.length === 1)
+  check('E8 夹具：判红必须点名命令与行号', bareHits.length === 1 && bareHits[0].name === 'demo' && bareHits[0].line > 1)
+
+  // 干净样本：走内层封套（CD02 修复后的形状）⇒ 必须绿。
+  const cleanCommand = commandFixture(
+    '    if blocked {\n        return failed(quit_cancelled());\n    }\n    crate::shutdown(&app).await;\n    app.ok();\n    ok(())'
+  )
+  check('E8 夹具：干净实现（failed(…)) → 必须判绿', findBareReturnErr(parseCommandBodies(cleanCommand)).length === 0)
+
+  // 注释里的 `return Err(` 是说明文字（commands.rs 的模块文档就在讲这件事）⇒ 不得判红。
+  const commentOnlyCommand = commandFixture(
+    '    // 历史实现：return Err("quit blocked"); 那会让 invoke reject。\n    ok(())'
+  )
+  check('E8 夹具：注释里的 return Err 不得判红', findBareReturnErr(parseCommandBodies(commentOnlyCommand)).length === 0)
+
+  // 字符串字面量里的 `//` 不得把同一行后面真实的违规吃掉（假阴性）。
+  const stringThenBare = commandFixture(
+    '    let url = "http://127.0.0.1:9/x";\n    return Err("still bad".to_string());'
+  )
+  check(
+    'E8 夹具：字符串里的 // 不得掩盖后面的裸 return Err',
+    findBareReturnErr(parseCommandBodies(stringThenBare)).length === 1
+  )
+
+  // 参数表跨行 + 泛型（真实命令的签名都长这样）时函数体仍要能取到。
+  const multiline = [
+    '#[tauri::command]',
+    'pub async fn demo(',
+    '    webview: WebviewWindow,',
+    "    state: State<'_, Arc<AppState>>,",
+    ') -> CommandResult<()> {',
+    '    return Err("x".to_string());',
+    '}'
+  ].join('\n')
+  check('E8 夹具：跨行参数表的函数体也能被抓到并判红', findBareReturnErr(parseCommandBodies(multiline)).length === 1)
+
+  // 文档注释里提到 `#[tauri::command]` 且紧跟着一行 `pub fn`：不得造出幽灵命令体
+  // （本仓 `commands.rs` 的模块文档真的会提到这个属性）。
+  const docTrap = [
+    '//! 属性写法：#[tauri::command]',
+    'pub async fn demo() -> CommandResult<()> {',
+    '    return Err("x".to_string());',
+    '}'
+  ].join('\n')
+  check(
+    'E8 夹具：注释里的 #[tauri::command] 不得造出幽灵函数体',
+    parseCommandBodies(docTrap).length === 0
+  )
+
   if (failed > 0) {
     console.error(`verify-ipc-surface self-test: ${failed} 项失败`)
     process.exit(1)
   }
-  console.log('verify-ipc-surface self-test: 全部通过（含缺分支/守卫早退/注释三组夹具）')
+  console.log('verify-ipc-surface self-test: 全部通过（含缺分支/守卫早退/注释三组 E7 夹具 + E8 命令体夹具）')
 }
 
 // ---------------------------------------------------------------------------

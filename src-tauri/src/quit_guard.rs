@@ -55,18 +55,21 @@ impl QuitDecision {
 /// # 参数
 ///
 /// * `app` — 应用句柄（取状态、唤回窗口、弹框）。
-/// * `force` — 调用方已经自己确认过（例如崩溃恢复的退出路径），跳过检查直接放行。
 ///
 /// # 形态
 ///
-/// * `force` → 直接放行（不探测、不弹框）。
 /// * 拿不到应用状态 / Harness 没在跑 → 直接放行（语义 2）。
 /// * 探测到 `NoWork` → 直接放行。
 /// * 探测到 `Work` / `Unknown` → 弹模态框；"退出"放行，"取消"返回 [`QuitDecision::Cancelled`]。
-pub async fn decide<R: Runtime>(app: &AppHandle<R>, force: bool) -> QuitDecision {
-    if force {
-        return QuitDecision::Proceed;
-    }
+///
+/// # 为什么没有 `force` 参数
+///
+/// 早先这里有一个 `force: bool`，供「调用方已经自己确认过」的路径跳过检查。
+/// 上线原生模态框之后，两处调用点（`commands.rs` 的 `app_quit` 与 `menu.rs` 的菜单 Quit）
+/// **都传 `false`**，那个分支恒不可达——留着一个永假开关比没有更糟：它让读者以为
+/// 存在一条「已确认则放行」的旁路，而实际上放行与否只由当次模态框答复决定。
+/// 若将来真需要旁路，请连同新的调用方一起加回来，而不是复原这个死参数。
+pub async fn decide<R: Runtime>(app: &AppHandle<R>) -> QuitDecision {
     let Some(state) = app.try_state::<Arc<AppState>>() else {
         // 应用状态都还没就绪：此时不可能有用户会话在跑。
         return QuitDecision::Proceed;

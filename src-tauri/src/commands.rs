@@ -101,6 +101,19 @@ fn environment(code: &str, message: impl Into<String>) -> IpcEnvelope<()> {
     IpcEnvelope::failure(code, ErrorCategory::Environment, message)
 }
 
+/// `E3004`：退出被守卫拦下——有会话在跑，且用户没有在确认框里选择打断。
+///
+/// 这是**内层失败封套**（`success: false`），不是外层 `Err`：命令确实没完成请求
+/// 的动作，但它是「用户的选择 / 正常的拒绝」，前端要拿到稳定的 `code` 才能给出
+/// 可操作文案，而不是一个只能读字符串的 reject。
+fn quit_cancelled() -> IpcEnvelope<()> {
+    IpcEnvelope::failure(
+        codes::QUIT_CANCELLED,
+        ErrorCategory::ProcessLifecycle,
+        "quit cancelled: a session is still running in Harness and the interruption was not confirmed",
+    )
+}
+
 /// 守卫 + 早退。
 ///
 /// 每个命令的第一件事都是同一段守卫；手写十几遍既啰嗦又容易漏——漏一个就是
@@ -251,13 +264,18 @@ fn reveal_path(app: &tauri::AppHandle, path: &std::path::Path) -> CommandResult<
 /// 只能被 JobObject / PDEATHSIG 强杀——来不及落盘收尾。见 `lib.rs::shutdown`。
 ///
 /// 退出前还要过 [`crate::quit_guard`]：有会话在跑就**不**停机（错误页的 Quit 与
-/// 菜单 Quit 共用这一段）。第二次显式退出才会强制生效，因此这条路径不会把用户
-/// 锁在进程里。
+/// 菜单 Quit 共用这一段）。放行与否由**当次**的原生模态框答复决定——早先那个
+/// 「第二次显式退出才强制生效」的计数器已随模态框上线删除（见 `quit_guard` 模块
+/// 文档），因此这条路径不会把用户锁在进程里：想退就在框里选「退出」。
+///
+/// 被拦下时返回**内层**失败封套（`E3004` / `process_lifecycle`），不是外层 `Err`：
+/// 外层 `Err` 会让 `invoke` reject 并丢掉 `code` / `category`（见模块文档的
+/// 「外层 `Result` 恒为 `Ok`」）。
 #[tauri::command]
 pub async fn app_quit(webview: WebviewWindow, app: tauri::AppHandle) -> CommandResult<()> {
     guard!(webview);
-    if !crate::quit_guard::decide(&app, false).await.is_proceed() {
-        return Err("quit blocked: a session is still running".to_string());
+    if !crate::quit_guard::decide(&app).await.is_proceed() {
+        return failed(quit_cancelled());
     }
     crate::shutdown(&app).await;
     app.exit(0);
@@ -682,6 +700,26 @@ mod tests {
         assert_eq!(
             envelope.error.expect("must carry a cause").code,
             codes::UNKNOWN_ACTION
+        );
+    }
+
+    /// 退出被拦下时必须是**内层封套**里的失败，不是外层 `Err`（CD02）。
+    ///
+    /// 这条与 `verify-ipc-surface` 的 E8 互补：E8 只看得见「命令体内有没有裸
+    /// `return Err(`」，看不见「被拦下时给的是哪个码、哪个类别」。而产品要求是
+    /// 「`invoke` **resolve** 且带 `code`」——两者一起才覆盖得住。判据写反
+    /// （例如有人把它改回 `Err(String)`）会在这里断掉。
+    #[test]
+    fn quit_cancellation_is_an_inner_envelope_failure() {
+        let result: CommandResult<()> = failed(quit_cancelled());
+        let envelope = result.expect("外层 Result 恒为 Ok：被拦下不是 invoke 的 reject");
+        assert!(!envelope.success, "被拦下必须是失败封套");
+        let error = envelope.error.expect("被拦下必须带可归因的原因");
+        assert_eq!(error.code, codes::QUIT_CANCELLED);
+        assert_eq!(error.category, ErrorCategory::ProcessLifecycle);
+        assert!(
+            !error.message.is_empty(),
+            "失败封套必须带人类可读的原因，不能只有码"
         );
     }
 }
