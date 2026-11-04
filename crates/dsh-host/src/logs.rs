@@ -385,8 +385,9 @@ impl LineRedactor {
     ///    **与当前是否在块内无关**。这一条必须排最前：放在块内判定之后、或让
     ///    任何"分界判据"先跑，都可能把 `END` 行打回普通行，导致"头抹了、尾留着"
     ///    的不对称。
-    /// 2. 已在块内 ⇒ 本行若**像 PEM 正文**（纯 base64 字符或空白）则继续整行替换；
-    ///    否则视为块已截断，复位后按普通行处理（见下）。
+    /// 2. 已在块内 ⇒ 本行若**像 PEM 正文**（纯 base64 字符或空白）或**像 PEM 封装头**
+    ///    （`Proc-Type:` / `DEK-Info:`）则继续整行替换；否则视为块已截断，复位后按
+    ///    普通行处理（见下）。
     /// 3. 本行开启私钥块 ⇒ 整行替换并置位。
     /// 4. 其余 ⇒ 走规则表（与 [`sanitize_line`] 逐字节一致，不另写一份规则）。
     ///
@@ -401,6 +402,10 @@ impl LineRedactor {
     /// 空白（含 `\r`）不算"非 base64"：Windows 子进程输出是 CRLF，`read_until`
     /// 会把 `\r` 留在行尾；若把它当噪声，每行正文都会立刻复位。
     ///
+    /// 传统加密私钥的**封装头**（`Proc-Type:` / `DEK-Info:`）单独由
+    /// [`looks_like_pem_header`] 认：它们的 `:` / `,` 不在 base64 字符集里，只按
+    /// 字符集判就会在这里提前复位，把后面整段 base64 正文放过去。
+    ///
     /// **已知代价**：未闭合的块若后面紧跟纯 base64 形态的行（例如一串无分隔的
     /// 十六进制），会被多吞几行；而正常日志行会立刻复位，不会无限吞下去。
     pub fn scrub(&mut self, raw: &[u8]) -> String {
@@ -412,9 +417,10 @@ impl LineRedactor {
             return crate::diagnostics_export::REDACTED.to_string();
         }
 
-        // 规则 2：块内。像正文就继续吞；不像正文说明块已截断，复位后按普通行处理。
+        // 规则 2：块内。像正文（或像 PEM 头）就继续吞；两者都不像说明块已截断，
+        // 复位后按普通行处理。
         if self.in_pem {
-            if looks_like_private_key_body(&text) {
+            if looks_like_private_key_body(&text) || looks_like_pem_header(&text) {
                 return crate::diagnostics_export::REDACTED.to_string();
             }
             self.in_pem = false;
@@ -458,6 +464,30 @@ fn looks_like_private_key_body(text: &str) -> bool {
     text.chars().all(|c| {
         c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_') || c.is_whitespace()
     })
+}
+
+/// 本行是否是传统加密私钥的**封装头**（RFC 1421/1423）。
+///
+/// 传统加密 PEM 的正文前面夹着两行头：
+///
+/// ```text
+/// -----BEGIN RSA PRIVATE KEY-----
+/// Proc-Type: 4,ENCRYPTED
+/// DEK-Info: AES-128-CBC,9F8C3C1D…
+/// ```
+///
+/// 这两行的 `:` / `,` 不在 base64 字符集里，若按「只看字符集」判正文就会立刻
+/// 复位状态——后面整段 base64 正文于是按普通行过规则表，**没有一条规则匹配**，
+/// 私钥原样落盘。因此头行必须算作「块内内容」。
+///
+/// 只认这两个**已知**头名（大小写不敏感），不放开成任意 `Name: value`：块状态
+/// 一旦错开，多吞一条普通日志的代价是丢失排障线索，而漏掉私钥的代价是凭据泄漏，
+/// 但也**不该**为了安全侧就把任意 `INFO: …` 之类都吞掉——块内本来就只应出现
+/// 这两行头 + base64 正文。
+fn looks_like_pem_header(text: &str) -> bool {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    !trimmed.is_empty() && (lower.starts_with("proc-type:") || lower.starts_with("dek-info:"))
 }
 
 /// 把子进程的一行原始字节清洗成**可以记录**的文本（[`decode_line`] + 脱敏）。
@@ -1140,6 +1170,37 @@ mod tests {
             "块结束后的普通行不得被吞：{line}"
         );
         assert!(!line.contains("abcdefgh12345"), "{line}");
+    }
+
+    /// 传统加密私钥的封装头（`Proc-Type:` / `DEK-Info:`）不得打断块状态。
+    ///
+    /// 这两行的 `:` / `,` 不在 base64 字符集里：只按字符集判正文时，头行会被
+    /// 当成「块已截断」而**复位**，后面整段 base64 正文随后按普通行过规则表——
+    /// 没有任何规则匹配，私钥原样落盘。可证伪性：删掉 `looks_like_pem_header`
+    /// 这一支，本用例立刻转红（正文行不再是 `<redacted>`）。
+    #[test]
+    fn line_redactor_keeps_encrypted_pem_headers_inside_the_block() {
+        let mut redactor = LineRedactor::new();
+        let lines = [
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "Proc-Type: 4,ENCRYPTED",
+            "DEK-Info: AES-128-CBC,9F8C3C1D2A4B6E8F0A1C3E5D7B9F1A3C",
+            "",
+            "MIIEowIBAAKCAQEA7h1sT0QbW8kP2mZ4xV6yA1cE3fH5jL7nR9pS2uW4yB6dF8gH0i",
+            "J1kL3mN5oP7qR9sT1uV3wX5yZ7aB9cD1eF3gH5iJ7kL9mN1oP3qR5sT7uV9wX1",
+            "-----END RSA PRIVATE KEY-----",
+        ];
+        for (index, line) in lines.iter().enumerate() {
+            assert_eq!(
+                redactor.scrub(line.as_bytes()),
+                "<redacted>",
+                "第 {index} 行（{line}）必须整行抹掉"
+            );
+        }
+        assert!(
+            !redactor.in_private_key_block(),
+            "END 之后必须复位，否则会误吞后续日志"
+        );
     }
 
     /// 单行 PEM（BEGIN 与 END 同在一行）仍被整行抹掉，且不留跨行状态。
