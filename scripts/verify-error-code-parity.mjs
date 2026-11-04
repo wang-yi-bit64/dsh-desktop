@@ -261,7 +261,17 @@ export function parseFrontendTables(text) {
     }
     for (const entry of entries) {
       const code = entry[1]
-      const value = entry[2] ?? entry[3] ?? entry[4] ?? ''
+      const template = entry[4]
+      const value = entry[2] ?? entry[3] ?? template ?? ''
+      // 模板字面量带插值时，「源码非空」不等于「渲染后非空」：`${maybeEmpty}`
+      // 的源码有内容、渲染结果可以是空串，下游 P3（文案为空）就永远看不见。
+      // 这种形状必须按「无法解析」处理——判据读不懂它，就不能给它绿。
+      if (template !== undefined && template.includes('${')) {
+        problems.push(
+          '无法解析：' + lang + ' 的 ' + code + ' 是模板插值（`…${…}…`）——' +
+            '源码非空不等于渲染后非空，P3 在此形态下失效'
+        )
+      }
       if (tables[lang].has(code)) {
         problems.push(lang + ' 的 code 表重复键 ' + code + '——后一条会静默覆盖前一条')
         continue
@@ -574,7 +584,26 @@ function selfTest() {
   // P4-c：前端值改成表达式（不再是字符串字面量）⇒ 键位数 ≠ 认出数
   const p4Html = clean.html.replace("'E1008': 'Signature verification failed.'", "'E1008': makeText()")
   check('夹具 P4：前端码表值不是字符串字面量 → 判红', mentions(checkParity(clean.rust, p4Html).problems, '无法解析'))
-  // P4-d：前端只剩一张码表（另一门语言被删）
+  // P4-d：前端值改成**带插值的模板字面量** ⇒ 源码非空但渲染可为空，
+  // P3 在此形态下失效，必须按「无法解析」判红。
+  const p4Template = clean.html.replace(
+    "'E1008': 'Signature verification failed.'",
+    "'E1008': `${maybeEmpty}`"
+  )
+  check(
+    '夹具 P4：前端值是模板插值 → 判红（源码非空 ≠ 渲染后非空）',
+    mentions(checkParity(clean.rust, p4Template).problems, 'P3 在此形态下失效')
+  )
+  // P4-d'：**无插值**的模板字面量仍算合法文案（不得连同正确写法一起判红）。
+  const p4StaticTemplate = clean.html.replace(
+    "'E1008': 'Signature verification failed.'",
+    "'E1008': `Signature verification failed.`"
+  )
+  check(
+    '夹具 P4：无插值的模板字面量仍判绿（只针对插值这一形态）',
+    checkParity(clean.rust, p4StaticTemplate).problems.length === 0
+  )
+  // P4-e：前端只剩一张码表（另一门语言被删）
   const p4SingleTable = clean.html.replace(/zh: \{[\s\S]*?\n        \}/, 'zh: { }')
   check('夹具 P4：缺一门语言 / 只剩一张码表 → 判红', mentions(checkParity(clean.rust, p4SingleTable).problems, '无法解析'))
 
