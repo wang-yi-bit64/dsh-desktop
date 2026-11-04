@@ -626,15 +626,32 @@ impl HarnessSupervisor {
         }
 
         // 任务 1.5：导航前清掉陈旧的 dsh-auth-* cookie（HTTP 431 防护）。
+        //
+        // CD01：这里必须让**每个**结果状态都留痕。旧代码 `if removed.removed > 0`
+        // 因为 `removed` 恒为 0 而永假、`Err` 又直接被丢弃 ⇒ 这条 431 防线是否
+        // 生效从来没人知道。现在四种状态各有日志，且都已按类型穷举（不是靠
+        // 运行时「碰巧为真」）：
+        //   * `Some(0)`  —— 观测到确实没有陈旧 cookie；
+        //   * `Some(n)`  —— 观测到并清掉 n 条；
+        //   * `None`     —— 脚本已投递但结果不可观测（当前实现的常态，见 cookies 模块）；
+        //   * `Err`      —— 投递失败，清理没发生（431 风险原样保留）。
         if let Some(webview) = window::main_window(&self.app) {
-            let removed = crate::cookies::clear_auth_cookies(&webview, AUTH_COOKIE_PREFIX);
-            if let Ok(removed) = removed {
-                if removed.removed > 0 {
-                    self.lock_inner().push_desktop(format!(
-                        "cleared {} stale {AUTH_COOKIE_PREFIX}* cookies",
-                        removed.removed
-                    ));
-                }
+            match crate::cookies::clear_auth_cookies(&webview, AUTH_COOKIE_PREFIX) {
+                Ok(report) => match report.removed {
+                    Some(0) => self
+                        .lock_inner()
+                        .push_desktop(format!("no stale {AUTH_COOKIE_PREFIX}* cookies to clear")),
+                    Some(count) => self.lock_inner().push_desktop(format!(
+                        "cleared {count} stale {AUTH_COOKIE_PREFIX}* cookies"
+                    )),
+                    None => self.lock_inner().push_desktop(format!(
+                        "{AUTH_COOKIE_PREFIX}* cleanup dispatched but unobservable \
+                         (eval has no return channel; 431 guard unverified)"
+                    )),
+                },
+                Err(error) => self.lock_inner().push_desktop(format!(
+                    "{AUTH_COOKIE_PREFIX}* cleanup FAILED: {error} (431 guard not applied)"
+                )),
             }
             let _ = webview.navigate(url.clone());
         }
