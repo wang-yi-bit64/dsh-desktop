@@ -6,6 +6,11 @@
 //!    解码失败时回退系统本地代码页 GBK/CP936），再进入日志与 token 解析。
 //!    没有这一步，带颜色的输出会让 `\bdsh web:\s*(\S+)` 正则抓到带转义的脏
 //!    URL，中文路径在 GBK 控制台下则整行变豆腐块。
+//!
+//!    清洗拆成两步，顺序固定：[`decode_line`] 只解码不脱敏（供解析用），
+//!    [`LineRedactor::scrub`] 在解码之后再抹掉凭据（供记录用）。首航 token 与
+//!    `dsh-auth-*` cookie 因此**在生成阶段**就不会进入内存日志或落盘文件；
+//!    跨行形态（PEM 私钥块）靠 [`LineRedactor`] 持有的行间状态处理。
 //! 2. **日志环形缓冲**：内存保留最近 200 行（对齐原仓库），带
 //!    `[desktop]` / `[stdout]` / `[stderr]` 前缀；同时滚动落盘（5MB × 3 份）。
 //! 3. **失败归因**：把「本次尝试」的日志切片喂给模式表，产出结构化的
@@ -110,7 +115,7 @@ impl fmt::Display for LogSource {
 pub struct LogLine {
     /// 来源。
     pub source: LogSource,
-    /// 已清洗（去 ANSI、编码容错、截断）的文本。
+    /// 已清洗（去 ANSI、编码容错、截断）并**脱敏**的文本。
     pub text: String,
 }
 
@@ -292,7 +297,7 @@ fn ansi_escape_pattern() -> Option<&'static regex::Regex> {
         .as_ref()
 }
 
-/// 把子进程的一行原始字节清洗成可安全解析的文本。
+/// 把子进程的一行原始字节解码成**未经脱敏**的文本。
 ///
 /// 处理顺序：
 ///
@@ -302,13 +307,18 @@ fn ansi_escape_pattern() -> Option<&'static regex::Regex> {
 /// 3. 去掉 ANSI 转义序列；
 /// 4. 按 [`LOG_LINE_MAX_BYTES`] 截断（按字符边界，避免切出非法 UTF-8）。
 ///
+/// **本函数不脱敏，凭据原样保留**。它服务于「需要读原文」的调用方：
+/// 启动握手要从 `dsh web: <url>?token=<值>` 里提取端点与 token
+/// （`launch.rs::parse_launch_line`），脱敏后再解析就拿不到 token 了。
+/// 需要「可以拿出来看 / 落盘」的文本请用 [`sanitize_line`]。
+///
 /// # 示例
 ///
 /// ```
-/// use dsh_host::logs::sanitize_line;
-/// assert_eq!(sanitize_line(b"\x1b[32mdsh web: http://127.0.0.1:1/?token=a"), "dsh web: http://127.0.0.1:1/?token=a");
+/// use dsh_host::logs::decode_line;
+/// assert_eq!(decode_line(b"\x1b[32mdsh web: http://127.0.0.1:1/?token=abcdefgh12345"), "dsh web: http://127.0.0.1:1/?token=abcdefgh12345");
 /// ```
-pub fn sanitize_line(raw: &[u8]) -> String {
+pub fn decode_line(raw: &[u8]) -> String {
     let lossy = String::from_utf8_lossy(raw);
     let mut text = lossy.into_owned();
 
@@ -322,6 +332,164 @@ pub fn sanitize_line(raw: &[u8]) -> String {
 
     let cleaned = strip_ansi(&text);
     truncate_chars(&cleaned, LOG_LINE_MAX_BYTES)
+}
+
+/// 逐行脱敏器：在 [`sanitize_line`] 的单行脱敏之上，额外维护**跨行状态**
+/// ——当前是否正处在一个 PEM 私钥块的内部。
+///
+/// # 为什么需要它
+///
+/// 脱敏规则表里的 PEM 私钥块是**跨行**形态
+/// （`(?s)-----BEGIN … PRIVATE KEY-----.*?-----END … PRIVATE KEY-----`），
+/// 而日志泵是逐行喂入的：`-----BEGIN RSA PRIVATE KEY-----` 单独一行时看不到
+/// 对应的 `END`，规则不命中；随后的 base64 正文每行也都不匹配任何规则。
+/// 结果是**私钥整块原样落进 `harness.log`**——这不是"未命中形态"的留白，
+/// 而是"声明覆盖了 PEM 却没覆盖"。状态只能由调用方跨行持有，所以单行函数
+/// 解决不了它，必须由本类型承担。
+///
+/// # 为什么保持逐行一进一出
+///
+/// 每个输入行仍产出**恰好一个**结果，行数不被改写。内存环、落盘文件与子进程
+/// 输出的行号因此一一对应；若把整块折叠成一行，排障时行号全部错位，代价比
+/// 多吞几行更大。
+///
+/// # 示例
+///
+/// ```
+/// use dsh_host::logs::LineRedactor;
+///
+/// let mut redactor = LineRedactor::new();
+/// assert_eq!(redactor.scrub(b"-----BEGIN RSA PRIVATE KEY-----"), "<redacted>");
+/// assert_eq!(redactor.scrub(b"MIIEowIBAAKCAQEA7h1s"), "<redacted>");
+/// assert!(redactor.in_private_key_block());
+/// assert_eq!(redactor.scrub(b"-----END RSA PRIVATE KEY-----"), "<redacted>");
+/// assert!(!redactor.in_private_key_block());
+/// ```
+#[derive(Debug, Default)]
+pub struct LineRedactor {
+    /// 已看到 `-----BEGIN … PRIVATE KEY-----` 且还没看到对应的 `END`。
+    in_pem: bool,
+}
+
+impl LineRedactor {
+    /// 新建（初始不在私钥块内）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 清洗**一行**，并跨行维护 PEM 私钥块状态。返回值已是可记录文本。
+    ///
+    /// 规则（顺序即优先级，**不可调换**）：
+    ///
+    /// 1. 本行含 `-----END … PRIVATE KEY-----` ⇒ 整行替换为 `<redacted>` 并复位，
+    ///    **与当前是否在块内无关**。这一条必须排最前：放在块内判定之后、或让
+    ///    任何"分界判据"先跑，都可能把 `END` 行打回普通行，导致"头抹了、尾留着"
+    ///    的不对称。
+    /// 2. 已在块内 ⇒ 本行若**像 PEM 正文**（纯 base64 字符或空白）则继续整行替换；
+    ///    否则视为块已截断，复位后按普通行处理（见下）。
+    /// 3. 本行开启私钥块 ⇒ 整行替换并置位。
+    /// 4. 其余 ⇒ 走规则表（与 [`sanitize_line`] 逐字节一致，不另写一份规则）。
+    ///
+    /// # 块内的"像不像正文"判据：只看字符集，不看长度
+    ///
+    /// 判据是「含 base64 之外的可打印字符」。**不能用长度下限**：PEM 正文按 64
+    /// 字符折行，但末行常是余数（可能只有 4 个字符），长度阈值会把合法末行当成
+    /// 噪声、提前复位，正好在密钥块尾部开一个口子。字符集判据同时能挡住误吞：
+    /// 正常日志行几乎必然含空格以外的符号（`dsh web: http://…`、`[desktop] …`、
+    /// `2026-10-30 12:00:00 …`），必然触发复位。
+    ///
+    /// 空白（含 `\r`）不算"非 base64"：Windows 子进程输出是 CRLF，`read_until`
+    /// 会把 `\r` 留在行尾；若把它当噪声，每行正文都会立刻复位。
+    ///
+    /// **已知代价**：未闭合的块若后面紧跟纯 base64 形态的行（例如一串无分隔的
+    /// 十六进制），会被多吞几行；而正常日志行会立刻复位，不会无限吞下去。
+    pub fn scrub(&mut self, raw: &[u8]) -> String {
+        let text = decode_line(raw);
+
+        // 规则 1：END 行无条件抹掉——避免"头抹了、尾留着"的不对称。
+        if closes_private_key_block(&text) {
+            self.in_pem = false;
+            return crate::diagnostics_export::REDACTED.to_string();
+        }
+
+        // 规则 2：块内。像正文就继续吞；不像正文说明块已截断，复位后按普通行处理。
+        if self.in_pem {
+            if looks_like_private_key_body(&text) {
+                return crate::diagnostics_export::REDACTED.to_string();
+            }
+            self.in_pem = false;
+        }
+
+        // 规则 3：跨行的 BEGIN 行。
+        if opens_private_key_block(&text) {
+            self.in_pem = true;
+            return crate::diagnostics_export::REDACTED.to_string();
+        }
+
+        // 规则 4：普通行仍走同一份规则表。
+        crate::diagnostics_export::redact_stream(&text)
+    }
+
+    /// 是否正处在被吞掉的私钥块内（供测试断言与诊断用）。
+    pub fn in_private_key_block(&self) -> bool {
+        self.in_pem
+    }
+}
+
+/// 本行是否开启了 PEM 私钥块（`-----BEGIN … PRIVATE KEY-----`）。
+///
+/// 只认**私钥**：`-----BEGIN CERTIFICATE-----` / `PUBLIC KEY` 属可公开材料，
+/// 抹掉只会让排障失去上下文。
+fn opens_private_key_block(text: &str) -> bool {
+    text.contains("-----BEGIN ") && text.contains("PRIVATE KEY-----")
+}
+
+/// 本行是否结束了 PEM 私钥块（`-----END … PRIVATE KEY-----`）。
+fn closes_private_key_block(text: &str) -> bool {
+    text.contains("-----END ") && text.contains("PRIVATE KEY-----")
+}
+
+/// 本行是否**像** PEM 私钥正文：只有 base64 字符与空白。
+///
+/// 判据刻意不设长度下限（见 [`LineRedactor::scrub`] 的说明）。`-` 与 `_` 一并
+/// 放行是为了容忍 base64url 变体；放宽它们只会让"多吞"更容易发生，不会让正文
+/// 漏出，方向是安全侧。
+fn looks_like_private_key_body(text: &str) -> bool {
+    text.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_') || c.is_whitespace()
+    })
+}
+
+/// 把子进程的一行原始字节清洗成**可以记录**的文本（[`decode_line`] + 脱敏）。
+///
+/// **脱敏放在这里而不是放在落盘处**，因为本函数的调用方要的就是「可以拿出来
+/// 看 / 可以写文件」的文本：内存日志缓冲（`LogRing`）、`push_live` 的实时环
+/// 形缓冲、`harness.log` 的滚动落盘、诊断包导出的日志尾巴，全都直接消费它。
+/// 若脱敏放在最后一环（比如只在写文件前做），任何一个新增的消费者都会重新
+/// 把 token / cookie 原样泄漏出去——这是 CD09 在源头堵住的理由。
+///
+/// 脱敏规则由 [`crate::diagnostics_export::redact_stream`] 统一提供：token /
+/// cookie / API key（含 `x-api-key` 头）/ Bearer / `Authorization: Basic`
+/// 凭据段 / 代理口令 / PEM 私钥块 / JWT / 平台 token / 非常规 query key。
+/// 它**不**抹本地路径里的用户名：本地日志要保留真实路径才便于排障。
+///
+/// # 跨行形态必须用 [`LineRedactor`]
+///
+/// 本函数**无跨行状态**：一整块 PEM 私钥被逐行喂进来时，单行视角看不出块边界，
+/// 抹不掉（本函数只能抹掉「本行内自带 `BEGIN` 或 `END`」的行，正文行无从判断）。
+/// 处理日志流（如 [`crate::launch`] 的行泵）必须逐行调用
+/// [`LineRedactor::scrub`]，而不是对每行独立调用本函数。
+///
+/// 需要未脱敏原文（例如提取启动端点）的调用方必须改用 [`decode_line`]。
+///
+/// # 示例
+///
+/// ```
+/// use dsh_host::logs::sanitize_line;
+/// assert_eq!(sanitize_line(b"\x1b[32mdsh web: http://127.0.0.1:1/?token=abcdefgh12345"), "dsh web: http://127.0.0.1:1/?token=<redacted>");
+/// ```
+pub fn sanitize_line(raw: &[u8]) -> String {
+    LineRedactor::new().scrub(raw)
 }
 
 fn count_replacements(text: &str) -> usize {
@@ -791,12 +959,246 @@ mod tests {
         }
     }
 
+    /// 去 ANSI 必须发生在 token 解析之前；而**记录用的**文本必须已脱敏。
+    ///
+    /// 这是 CD09 的核心分界：解析走 [`decode_line`]（拿得到 token 原文），
+    /// 记录走 [`sanitize_line`]（token 已换成 `<redacted>`）。
     #[test]
     fn sanitize_line_strips_ansi_before_token_parsing() {
-        let raw = b"\x1b[36mdsh web:\x1b[0m http://127.0.0.1:4173/?token=abc";
+        let raw = b"\x1b[36mdsh web:\x1b[0m http://127.0.0.1:4173/?token=abcdefgh12345";
+        // 解析路径：去 ANSI 在先，token 仍可被提取。
+        let decoded = decode_line(raw);
         assert_eq!(
-            sanitize_line(raw),
-            "dsh web: http://127.0.0.1:4173/?token=abc"
+            decoded,
+            "dsh web: http://127.0.0.1:4173/?token=abcdefgh12345"
+        );
+        assert!(decoded.contains("token=abcdefgh12345"));
+        // 记录路径：同样的字节，token 必须已被替换。
+        let sanitized = sanitize_line(raw);
+        assert!(
+            sanitized.contains("token=<redacted>"),
+            "记录用的文本必须脱敏：{sanitized}"
+        );
+        assert!(
+            !sanitized.contains("abcdefgh12345"),
+            "token 原文不得出现在记录里：{sanitized}"
+        );
+    }
+
+    /// 源头脱敏：首航 token 与 `dsh-auth-*` cookie 都不得以原文进入日志。
+    #[test]
+    fn sanitize_line_redacts_token_and_auth_cookie() {
+        let token_line = sanitize_line(b"dsh web: http://127.0.0.1:4173/?token=abcdefgh12345");
+        assert!(token_line.contains("token=<redacted>"), "{token_line}");
+        assert!(!token_line.contains("abcdefgh12345"), "{token_line}");
+
+        let cookie_line = sanitize_line(b"Cookie: dsh-auth-session=supersecretvalue123");
+        assert!(
+            cookie_line.contains("dsh-auth-session=<redacted>"),
+            "{cookie_line}"
+        );
+        assert!(!cookie_line.contains("supersecretvalue123"), "{cookie_line}");
+    }
+
+    /// 解析路径必须拿得到原文：脱敏只能发生在写日志那一侧。
+    #[test]
+    fn decode_line_keeps_credentials_for_parsing() {
+        let decoded = decode_line(b"dsh web: http://127.0.0.1:4173/?token=abcdefgh12345");
+        assert!(
+            decoded.contains("token=abcdefgh12345"),
+            "解析路径必须能读到 token 原文：{decoded}"
+        );
+        assert!(!decoded.contains("<redacted>"), "{decoded}");
+
+        let cookie = decode_line(b"Cookie: dsh-auth-session=supersecretvalue123");
+        assert!(cookie.contains("dsh-auth-session=supersecretvalue123"), "{cookie}");
+        assert!(!cookie.contains("<redacted>"), "{cookie}");
+    }
+
+    /// 反例：普通诊断行不得被误伤（否则排障信息会被抹掉）。
+    #[test]
+    fn sanitize_line_leaves_ordinary_lines_intact() {
+        for line in [
+            "dsh harness 1.2.3 (build 4567)",
+            "listening on 127.0.0.1:4173",
+            "error code E1005: invalid profile name",
+        ] {
+            let sanitized = sanitize_line(line.as_bytes());
+            assert_eq!(sanitized, line, "普通行不该被改写：{line}");
+            assert!(!sanitized.contains("<redacted>"), "{sanitized}");
+        }
+    }
+
+    /// 跨行护栏（CD09-b 补丁）：整块 PEM 私钥逐行喂入时，**每一行**都必须被吞。
+    ///
+    /// 改前这条是红的：逐行调用 `sanitize_line` 时看不到 `END`，跨行规则不命中，
+    /// 头行 / base64 正文 / 尾行全部原样通过（改前实测输出见修复报告）。
+    #[test]
+    fn line_redactor_redacts_whole_private_key_block() {
+        const BODY: &str = "MIIEowIBAAKCAQEA7h1s2w3xY9z0aBcDeFgHiJkLmNoPqRsTuVwXyZ01";
+        let mut redactor = LineRedactor::new();
+
+        let header = redactor.scrub(b"-----BEGIN RSA PRIVATE KEY-----");
+        assert_eq!(header, "<redacted>");
+        assert!(redactor.in_private_key_block(), "BEGIN 之后必须置位");
+
+        let body = redactor.scrub(BODY.as_bytes());
+        assert_eq!(body, "<redacted>", "正文行必须被吞");
+        assert!(redactor.in_private_key_block());
+        assert!(!body.contains(BODY), "base64 正文不得出现在记录里");
+
+        // Windows 子进程输出是 CRLF，`read_until` 会在行尾留下 `\r`；
+        // 它属于空白，不得被当成"不像正文"而提前复位。
+        let crlf_body = redactor.scrub(b"MIIEowIBAAKCAQEA7h1s\r");
+        assert_eq!(crlf_body, "<redacted>", "行尾 \\r 不得导致复位");
+        assert!(redactor.in_private_key_block());
+
+        let footer = redactor.scrub(b"-----END RSA PRIVATE KEY-----");
+        assert_eq!(footer, "<redacted>");
+        assert!(!redactor.in_private_key_block(), "END 之后必须复位");
+
+        for out in [&header, &body, &crlf_body, &footer] {
+            assert!(!out.contains("PRIVATE KEY"), "块标记不得留下：{out}");
+        }
+    }
+
+    /// 尾部短行不得复位：PEM 正文按 64 字符折行，**末行常只有 4~8 个字符**。
+    ///
+    /// 用长度下限做"像不像正文"的判据会在这里提前复位，把随后的 `END` 行放出去
+    /// ——这正是本测试存在的理由：判据只能是字符集，不能是长度。
+    #[test]
+    fn line_redactor_keeps_short_tail_line_inside_block() {
+        let mut redactor = LineRedactor::new();
+        assert_eq!(
+            redactor.scrub(b"-----BEGIN RSA PRIVATE KEY-----"),
+            "<redacted>"
+        );
+        assert_eq!(
+            redactor.scrub(b"MIIEowIBAAKCAQEA7h1s2w3xY9z0aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789abcd"),
+            "<redacted>"
+        );
+        assert_eq!(
+            redactor.scrub(b"AbCd"),
+            "<redacted>",
+            "4 字符的合法末行不得触发复位"
+        );
+        assert!(
+            redactor.in_private_key_block(),
+            "短末行之后仍应处于块内，否则 END 行会漏出"
+        );
+        assert_eq!(
+            redactor.scrub(b"-----END RSA PRIVATE KEY-----"),
+            "<redacted>"
+        );
+        assert!(!redactor.in_private_key_block(), "复位必须发生在 END 之后");
+    }
+
+    /// `END` 行与状态无关：即便当前不在块内（块被截断、或只看到尾行），也必须抹掉。
+    ///
+    /// 否则会出现"头抹了、尾留着"的不对称，且 `redact_stream` 的跨行规则对孤立的
+    /// `END` 行并不命中。
+    #[test]
+    fn line_redactor_redacts_end_line_even_outside_block() {
+        let mut redactor = LineRedactor::new();
+        assert!(!redactor.in_private_key_block());
+
+        assert_eq!(
+            redactor.scrub(b"-----END RSA PRIVATE KEY-----"),
+            "<redacted>",
+            "孤立 END 行必须被抹掉"
+        );
+        assert!(!redactor.in_private_key_block());
+
+        // 即便前后夹着普通文本，也整行替换（保留片段只会留下尾行痕迹）。
+        let mixed = redactor.scrub(b"tail: -----END OPENSSH PRIVATE KEY----- done");
+        assert_eq!(mixed, "<redacted>");
+
+        // 无状态入口同样生效，证明这一点不依赖跨行上下文。
+        assert_eq!(sanitize_line(b"-----END EC PRIVATE KEY-----"), "<redacted>");
+    }
+
+    /// 复位有效性：块结束之后的普通行必须照常记录（别把后续日志一起吞掉）。
+    ///
+    /// 这条最容易漏——`in_pem` 只置不复位时，前面三条断言仍然全绿。
+    #[test]
+    fn line_redactor_resumes_after_private_key_block() {
+        let mut redactor = LineRedactor::new();
+        let _ = redactor.scrub(b"-----BEGIN OPENSSH PRIVATE KEY-----");
+        let _ = redactor.scrub(b"MIIEowIBAAKCAQEA7h1s");
+        let _ = redactor.scrub(b"-----END OPENSSH PRIVATE KEY-----");
+        assert!(!redactor.in_private_key_block());
+
+        let line = redactor.scrub(b"dsh web: http://127.0.0.1:4173/?token=abcdefgh12345");
+        assert!(line.contains("dsh web:"), "块结束后的普通行不得被吞：{line}");
+        assert!(!line.contains("abcdefgh12345"), "{line}");
+    }
+
+    /// 单行 PEM（BEGIN 与 END 同在一行）仍被整行抹掉，且不留跨行状态。
+    #[test]
+    fn line_redactor_redacts_single_line_private_key() {
+        let mut redactor = LineRedactor::new();
+        let out = redactor
+            .scrub(b"-----BEGIN RSA PRIVATE KEY-----MIIEowIBAAKCAQEA7h1s-----END RSA PRIVATE KEY-----");
+        assert_eq!(out, "<redacted>");
+        assert!(
+            !redactor.in_private_key_block(),
+            "单行 PEM 不应留下跨行状态，否则会误吞后续日志"
+        );
+    }
+
+    /// 增量护栏：不含 PEM 的行必须与 `sanitize_line` **逐字节一致**，
+    /// 证明引入跨行状态没有改变既有脱敏语义。
+    #[test]
+    fn line_redactor_matches_sanitize_line_outside_private_key_blocks() {
+        let lines: [&[u8]; 5] = [
+            b"dsh harness 1.2.3 (build 4567)",
+            b"listening on 127.0.0.1:4173",
+            b"error code E1005: invalid profile name",
+            b"dsh web: http://127.0.0.1:4173/?token=abcdefgh12345",
+            b"Cookie: dsh-auth-session=supersecretvalue123",
+        ];
+        let mut redactor = LineRedactor::new();
+        for raw in lines {
+            assert_eq!(
+                redactor.scrub(raw),
+                sanitize_line(raw),
+                "无 PEM 的行必须与 sanitize_line 逐字节一致"
+            );
+        }
+        assert!(!redactor.in_private_key_block());
+    }
+
+    /// 未闭合的块：正文继续被吞，但**碰到不像正文的普通行就复位**，不无限吞。
+    ///
+    /// 取舍：漏出的私钥不可撤销，所以块内宁可多吞；但日志被截断导致 `END` 缺失是
+    /// 常态，若一直吞到进程结束，失败归因（C7）会彻底失去证据。判据用字符集，
+    /// 正常日志行必然含 `:`、`.`、`[`、空格外的符号，能可靠地把状态放回来。
+    #[test]
+    fn line_redactor_unclosed_block_resets_on_ordinary_line() {
+        let mut redactor = LineRedactor::new();
+        assert_eq!(
+            redactor.scrub(b"-----BEGIN RSA PRIVATE KEY-----"),
+            "<redacted>"
+        );
+        for body in [
+            &b"MIIEowIBAAKCAQEA7h1s2w3xY9z0"[..],
+            // 纯十六进制/字母数字的行看起来就是正文，继续吞（宁可多吞）。
+            &b"aBcDeFgHiJkLmNoPqRsTuVwXyZ012"[..],
+        ] {
+            assert_eq!(redactor.scrub(body), "<redacted>", "块内正文必须继续吞");
+            assert!(redactor.in_private_key_block());
+        }
+
+        // 普通日志行（含 `:` 与 `.`）⇒ 判定块已截断，复位并照常记录。
+        let line = redactor.scrub(b"dsh web: http://127.0.0.1:4173/?token=abcdefgh12345");
+        assert!(
+            line.contains("dsh web:"),
+            "块截断后的普通行不得被吞：{line}"
+        );
+        assert!(!line.contains("abcdefgh12345"), "{line}");
+        assert!(
+            !redactor.in_private_key_block(),
+            "遇到不像正文的行必须复位，否则会吞掉整份日志"
         );
     }
 
