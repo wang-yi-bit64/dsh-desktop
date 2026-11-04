@@ -60,6 +60,8 @@
 - **Tauri 资源校验**：全新 checkout 在 `cargo check`/`cargo test` 前先跑 `node scripts/stub-tauri-resources.mjs`。
 - **Node 执行路径**：产物运行内置 `src-tauri/resources/node/` 下的 Node（Windows 带 `.exe`）。
 - **页面跳转**：Webview 先加载 `frontend/index.html` 启动屏并监听 `harness://status`；Token 就绪后由 Rust 导航到本地 Harness 页。
+- **编译产物清理**：**只允许 `cargo clean`**。禁止用文件删除工具（`rm -rf` / `Remove-Item` / `Directory.Delete` / 资源管理器）直接删 `target/`——删除会触发 WorkBuddy 的「删除前备份」，把整个 `target/` 复制一份进 C 盘会话目录（`.workbuddy/workspace/sessions/<id>/modify_backup/`）。2026-11-02 因此一次性吃掉 31GB C 盘空间：删除耗时 17 分钟，且空间**不降反升**（删掉 31GB、新会话又备份 31.5GB）。
+- **仓库检出位置**：禁止把仓库检出到 C 盘用户目录（如 `C:\Users\<user>\WorkBuddy\Worktrees\`）下编译。`target/` 已由本机 `.cargo/config.toml` 的 `[build] target-dir` 锁定在 D 盘，但检出到 C 盘仍会让 `node_modules/`、`harness-deps/` 等写入系统盘，且一旦误删 target 就是上一条事故的复现。
 
 > 🗂️ **「已修复，勿回归」事故档案已按主题外移到 `docs/incidents/`**（内容原样保留；新家含完整根因、修法与守卫）：
 > - Windows 打包与启动 → `win32-packaging.md`
