@@ -1,6 +1,11 @@
 {
   "schema": 1,
-  "_comment": "primary runtime 载荷的供应链锁定（CX-17）。所有产物按 URL + sha256 钉死：不在 Rust 业务逻辑里写任何外部地址（AGENTS.md §3.2），也便于审计与升级。",
+  "_comment": "primary runtime 载荷的供应链锁定（CX-17）。所有产物都按 URL + 摘要钉死：不在 Rust 业务逻辑里写任何外部地址（AGENTS.md §3.2），也便于审计与升级。摘要有两种格式、管两个不同的输入，见 _verification——**不可互相填充**（SRI 是 base64 sha512，sha256 是 hex）。",
+  "_verification": {
+    "sha256": "十六进制 sha256，覆盖**本地落盘的那份 tarball 的字节**。解释器在解压前校验；npm 包（pnpm / officeSkills）在 `npm pack` 落盘后校验、进缓存前再校验一次、每次命中缓存都重新校验——任一次不符即拒绝该文件（不解压、不复用），缓存里那份会被删除并让本次运行失败。",
+    "integrity": "npm registry 的 `dist.integrity` 原样抄录（SRI，sha512 base64），覆盖**上游自称分发的那份 tarball**。它与 sha256 是同一份字节的两种指纹：sha256 是本仓的锁定值（用来守本地缓存与离线复验），integrity 是上游的自述（用来证明「我们锁的字节就是 registry 公布的那份」）。integrity 只在新建产物的那一次与 sha256 并列复核；缓存命中时只复算 sha256（integrity 是远端声明，本地无从再取）。",
+    "enforcement": "`scripts/fetch-primary-runtime.mjs` 的 readLock() 缺 pnpm / officeSkills 的 version / sha256 / bytes / integrity 即 fail-closed 拒绝执行（不是跳过校验），self-test 同步判红。"
+  },
   "interpreter": {
     "_source": "python-build-standalone（astral-sh 的 GitHub Release，逐产物公布 sha256）；CPython 官方发行版不含可移植的 Linux 构建，故不用它。",
     "release": "20261003",
@@ -42,11 +47,17 @@
   "_removed_packages": "2026-10-07 拆除 8 库（numpy/pandas/python-docx/python-pptx/openpyxl/Pillow/lxml/XlsxWriter）与 wheel 交叉安装：它们唯一的读者是上游工具描述与 skill 的 SKILL.md，本仓代码零引用。需要时按 git 历史恢复 packages / wheelTags 两节。",
   "pnpm": {
     "version": "11.7.0",
-    "_note": "npm 包里 `bin/pnpm.mjs` —— 正是载荷 schema 要求的路径。"
+    "sha256": "deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee",
+    "bytes": 4590455,
+    "integrity": "sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==",
+    "_note": "npm 包里 `bin/pnpm.mjs` —— 正是载荷 schema 要求的路径。sha256 / bytes 是 `pnpm@11.7.0` 的 registry tarball（2026-10-30 下载后实算，并已与 registry 的 dist.integrity 逐字节对上），校验环节见 _verification。"
   },
   "officeSkills": {
     "package": "@deepseek-ai/dsh-skill-office",
     "version": "0.2.1-alpha.1",
-    "_note": "npm 包 assets/ 下带三份 SKILL.md 与 scripts/check_office.py —— office-skills 目录的正文来源。⚠️ 本文件不按通道分目录，两线共用；本字段于 2026-10-07 向 alpha 线对齐（ADR-060 决策 4），next 线会随之取同一版本。"
+    "sha256": "d89850c7dc355cc3de89a8edff04edc383172305c64addf35388ab0088cf4b1e",
+    "bytes": 19922,
+    "integrity": "sha512-4OPMRKZeRl3hldcXwY2vPqzhhGIhABk2WJv2372KSYHHcC9GQ0+7NlirNaXGXjD6faVGqxlT4Z2SY46cdbES5g==",
+    "_note": "npm 包 assets/ 下带三份 SKILL.md 与 scripts/check_office.py —— office-skills 目录的正文来源。⚠️ 本文件不按通道分目录，两线共用；本字段于 2026-10-07 向 alpha 线对齐（ADR-060 决策 4），next 线会随之取同一版本。sha256 / bytes 取 `@deepseek-ai/dsh-skill-office@0.2.1-alpha.1` 的 tarball（2026-10-30 实算，与 registry 的 dist.integrity 对上），校验环节见 _verification。"
   }
 }

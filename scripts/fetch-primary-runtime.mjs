@@ -22,9 +22,29 @@
  *
  * # 供应链纪律
  *
- * 所有 URL / 版本 / sha256 都在 `runtime-locks/primary-runtime.json`，**不进 Rust 代码**
- * （AGENTS.md §3.2：业务逻辑里严禁硬编码外部 URL）。sha256 不符即失败——宁可没有
+ * 所有 URL / 版本 / 摘要都在 `runtime-locks/primary-runtime.json`，**不进 Rust 代码**
+ * （AGENTS.md §3.2：业务逻辑里严禁硬编码外部 URL）。摘要不符即失败——宁可没有
  * 这个功能，也不放进一个来路不明的解释器。
+ *
+ * ## 两种摘要，别混填（锁里的 `_verification` 有同样一段）
+ *
+ * | 字段 | 格式 | 覆盖的输入 | 在哪一步生效 |
+ * |------|------|------------|--------------|
+ * | `sha256` | 十六进制 64 位 | **本地落盘的 tarball 字节** | 解释器：解压前；npm 包：`npm pack` 落盘后 → 进缓存前 → 每次命中缓存 |
+ * | `integrity` | SRI，`sha512-<base64>` | **上游自称分发的那份 tarball**（registry 的 `dist.integrity`） | 只在「新建产物」那一次与 sha256 并列复核 |
+ *
+ * 两者是同一份字节的两种指纹，**不是二选一**：sha256 是本仓的锁定值，负责守本地缓存
+ * 与离线复验；integrity 是上游自述，负责证明「我们锁的字节就是 registry 公布的那份」。
+ * 缓存命中时只复算 sha256——integrity 是远端声明，本地无从再取。
+ *
+ * ## fail-closed 的完整链路
+ *
+ *   下载 → 体积/sha256/integrity 校验 → 进缓存 → 解压
+ *
+ * 校验不过的字节**绝不进缓存、绝不解压**；缓存里那份每次命中都重新校验，不符就删掉
+ * 并让本次运行失败（不解压降级、不静默重下——篡改过的缓存是需要人看见的事件，
+ * 不是可以悄悄绕过的抖动）。锁里缺 sha256 / bytes / integrity 时 `readLock()` 直接
+ * 拒绝执行，**不会退化成「只比版本号」**。
  *
  * # 用法
  *
@@ -55,6 +75,12 @@ const TARGETS = Object.freeze({
   'linux-x64': { node: 'linux', arch: 'x64' },
   'linux-arm64': { node: 'linux', arch: 'arm64' },
 })
+
+/** 本仓的锁定值：tarball 的十六进制 sha256。 */
+const SHA256_HEX = /^[a-f0-9]{64}$/u
+
+/** 上游的自述值：npm registry `dist.integrity`（SRI，sha512 base64）。**不是** sha256 hex。 */
+const SRI_SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/u
 
 function log(line) { console.log(`[fetch-runtime] ${line}`) }
 
@@ -89,13 +115,30 @@ function readLock() {
       for (const key of ['artifact', 'sha256', 'bytes', 'layout']) {
         if (entry[key] === undefined) problems.push(`lock 的 ${target} 缺少 ${key}`)
       }
-      if (entry.sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(entry.sha256)) {
+      if (entry.sha256 !== undefined && !SHA256_HEX.test(entry.sha256)) {
         problems.push(`lock 的 ${target}.sha256 不是 64 位十六进制`)
       }
     }
   }
   for (const key of ['pnpm', 'officeSkills']) {
-    if (lock[key] === undefined) problems.push(`lock 缺少 ${key}`)
+    const entry = lock[key]
+    if (entry === undefined) {
+      problems.push(`lock 缺少 ${key}`)
+      continue
+    }
+    // 缺摘要不是「跳过校验」，是锁不完整：拒绝执行，别让版本号冒充钉死。
+    if (typeof entry.version !== 'string' || entry.version.length === 0) {
+      problems.push(`lock 的 ${key}.version 缺失`)
+    }
+    if (typeof entry.sha256 !== 'string' || !SHA256_HEX.test(entry.sha256)) {
+      problems.push(`lock 的 ${key}.sha256 缺失或不是 64 位十六进制（缺哈希即拒绝下载）`)
+    }
+    if (!Number.isInteger(entry.bytes) || entry.bytes <= 0) {
+      problems.push(`lock 的 ${key}.bytes 缺失或非正整数`)
+    }
+    if (typeof entry.integrity !== 'string' || !SRI_SHA512.test(entry.integrity)) {
+      problems.push(`lock 的 ${key}.integrity 缺失或不是 sha512 SRI（不是 sha256 hex，别混填）`)
+    }
   }
   if (problems.length > 0) {
     fail(`锁定文件不合法：\n  - ${problems.join('\n  - ')}`)
@@ -139,6 +182,38 @@ async function download(url, destination, attempts = 3) {
 
 function sha256of(file) {
   return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+/** 同一份字节的另一种指纹：SRI（sha512 base64），格式与 npm 的 `dist.integrity` 一致。 */
+function sriOf(file) {
+  return `sha512-${createHash('sha512').update(readFileSync(file)).digest('base64')}`
+}
+
+/**
+ * 校验一个已落盘的 tarball，返回 `{ ok, bytes, reason }`。**只判定，不写盘、不解压**，
+ * 这样「校验」与「使用」之间没有可乘之机。
+ *
+ * @param {string} file 待校验文件
+ * @param {{sha256: string, bytes: number, integrity?: string}} entry 锁里那一条
+ * @param {string} label 报错时的点名（「解释器下载」「pnpm 缓存」…）
+ */
+function verifyTarball(file, entry, label) {
+  if (!existsSync(file)) return { ok: false, bytes: 0, reason: `${label} 不存在：${file}` }
+  const bytes = statSync(file).size
+  if (bytes !== entry.bytes) {
+    return { ok: false, bytes, reason: `${label} 体积不符：期望 ${entry.bytes}，实得 ${bytes}` }
+  }
+  const digest = sha256of(file)
+  if (digest !== entry.sha256) {
+    return { ok: false, bytes, reason: `${label} sha256 不符：期望 ${entry.sha256}，实得 ${digest}` }
+  }
+  if (entry.integrity !== undefined) {
+    const sri = sriOf(file)
+    if (sri !== entry.integrity) {
+      return { ok: false, bytes, reason: `${label} 上游 integrity 不符：期望 ${entry.integrity}，实得 ${sri}` }
+    }
+  }
+  return { ok: true, bytes, reason: '' }
 }
 
 /** 解压 tar.gz / zip 到目标目录（用系统 tar/node 内置能力，避免引入依赖）。 */
@@ -188,7 +263,41 @@ function newestTgz(dir) {
 }
 
 /**
- * 用宿主 pip 交叉安装锁定 wheel 到 site-packages。
+ * 取得一个 npm 包的 tarball，**先校验再进缓存**，返回可直接解压的路径。
+ *
+ * 顺序被刻意写死成「缓存 → 校验 → 否则 npm pack → 校验 → 进缓存 → 解压」：
+ * 校验不过的分支一律 `throw`，因此既不会写进缓存，也走不到解压——这是计划点名的
+ * fail-closed 链路；缓存里那份每次命中都要重新算 sha256，篡改过的会被删除并让本次
+ * 运行失败（不降级成「重新下一份」——那会把篡改事件掩盖成一次普通的慢构建）。
+ *
+ * @param {{sha256: string, bytes: number, integrity?: string}} lockEntry 锁里那一条
+ * @param {string} label 缓存文件名与报错用的点名
+ * @param {string} spec `npm pack` 的包规格（`<name>@<version>`）
+ * @param {string} cacheDir 缓存目录（跨目标共享）
+ * @param {string} stageDir `npm pack` 的落盘目录
+ */
+function obtainNpmTarball(lockEntry, label, spec, cacheDir, stageDir) {
+  const cached = join(cacheDir, `npm-${lockEntry.sha256.slice(0, 16)}-${label}.tgz`)
+  if (existsSync(cached)) {
+    const verdict = verifyTarball(cached, lockEntry, `${label} 缓存`)
+    if (verdict.ok) {
+      log(`${label} 命中缓存并通过校验`)
+      return cached
+    }
+    rmSync(cached, { force: true })
+    throw new Error(`${verdict.reason}（缓存文件已删除，未解压；重跑会重新拉取）`)
+  }
+  execFileSync('npm', ['pack', spec, '--pack-destination', stageDir], { stdio: 'pipe' })
+  const packed = newestTgz(stageDir)
+  const verdict = verifyTarball(packed, lockEntry, `${label} 下载产物`)
+  if (!verdict.ok) throw new Error(`${verdict.reason}（未进缓存、未解压）`)
+  mkdirSync(cacheDir, { recursive: true })
+  copyFileSync(packed, cached)
+  log(`${label} 校验通过并已进缓存（${(verdict.bytes / 1e6).toFixed(2)} MB）`)
+  // 返回**刚被校验的那份**而不是缓存副本：解压的字节与算摘要的字节是同一份，中间没有 copy 这道缝。
+  return packed
+}
+
 /**
  * 拉取一个目标，产出源目录。
  * @returns {boolean} 是否成功
@@ -199,48 +308,56 @@ async function fetchTarget(lock, target, outRoot) {
   rmSync(out, { recursive: true, force: true })
   const work = mkdtempSync(join(tmpdir(), 'fetch-runtime-'))
   try {
-    // 1) 解释器：优先用缓存里的（按 sha256 校验），否则下载。
+    // 1) 解释器：优先用缓存里的（**每次命中都重新校验**），否则下载。
     const url = `${RELEASE_BASE}/${encodeURIComponent(lock.interpreter.release)}/${encodeURIComponent(entry.artifact)}`
     const archive = join(work, entry.artifact.endsWith('.zip') ? 'py.zip' : 'py.tar.gz')
     const cacheDir = join(outRoot, '.cache')
     const cached = join(cacheDir, `${entry.sha256.slice(0, 16)}-${entry.artifact}`)
-    let bytes
-    if (existsSync(cached) && sha256of(cached) === entry.sha256) {
-      bytes = statSync(cached).size
-      log(`解释器命中缓存：${entry.artifact}`)
-    } else {
-      bytes = await download(url, archive)
+    // 解压只认这个变量：它要么是刚校验过的缓存，要么是刚校验过的下载产物。
+    let verifiedArchive = null
+    let bytes = 0
+    if (existsSync(cached)) {
+      const verdict = verifyTarball(cached, entry, `解释器缓存 ${entry.artifact}`)
+      if (verdict.ok) {
+        verifiedArchive = cached
+        bytes = verdict.bytes
+        log(`解释器命中缓存并通过校验：${entry.artifact}`)
+      } else {
+        // 缓存里那份不可信：删掉并让本次运行失败。静默重下会把篡改掩盖成一次慢构建。
+        rmSync(cached, { force: true })
+        fail(`${verdict.reason}（缓存文件已删除，未解压；重跑会重新下载）`)
+        return false
+      }
+    }
+    if (verifiedArchive === null) {
+      await download(url, archive)
       // 先校验再进缓存：不能把来路不明的产物留在盘上供下次直接使用。
-      const digest = sha256of(archive)
-      if (digest !== entry.sha256) {
-        fail(`解释器 sha256 不符：期望 ${entry.sha256}，实得 ${digest}`)
+      const verdict = verifyTarball(archive, entry, `解释器下载 ${entry.artifact}`)
+      if (!verdict.ok) {
+        fail(`${verdict.reason}（未进缓存、未解压）`)
         return false
       }
       mkdirSync(cacheDir, { recursive: true })
       copyFileSync(archive, cached)
-    }
-    const digest = sha256of(archive)
-    if (digest !== entry.sha256) {
-      fail(`解释器 sha256 不符：期望 ${entry.sha256}，实得 ${digest}`)
-      return false
-    }
-    if (bytes !== entry.bytes) {
-      fail(`解释器体积不符：期望 ${entry.bytes}，实得 ${bytes}`)
-      return false
+      // 同上：解压用刚被校验的那份，不用缓存副本。
+      verifiedArchive = archive
+      bytes = verdict.bytes
     }
     log(`解释器校验通过：${entry.artifact}（${(bytes / 1e6).toFixed(1)} MB）`)
     const python = join(out, 'dependencies', 'python')
-    extract(existsSync(cached) && sha256of(cached) === entry.sha256 ? cached : archive, python)
+    extract(verifiedArchive, python)
 
-    // 2) office skills 与 pnpm：来自锁定版本的 npm 包。
+    // 2) office skills 与 pnpm：来自锁定版本的 npm 包，两份 tarball 各自先校验再进缓存。
     const npmStage = mkdtempSync(join(tmpdir(), 'fetch-npm-'))
     try {
       // skills：`npm pack` 的产物名是 `<scope>-<name>-<version>.tgz`，不能写死。
-      execFileSync('npm', [
-        'pack', `${lock.officeSkills.package}@${lock.officeSkills.version}`,
-        '--pack-destination', npmStage,
-      ], { stdio: 'pipe' })
-      const skillTarball = newestTgz(npmStage)
+      const skillTarball = obtainNpmTarball(
+        lock.officeSkills,
+        'dsh-skill-office',
+        `${lock.officeSkills.package}@${lock.officeSkills.version}`,
+        cacheDir,
+        npmStage,
+      )
       const skillsOut = join(out, 'office-skills')
       mkdirSync(skillsOut, { recursive: true })
       // `stdio: 'pipe'`：tar 逐文件打印会把几百 MB 的解释器解压日志淹掉，这里只需要
@@ -253,8 +370,7 @@ async function fetchTarget(lock, target, outRoot) {
       log(`office skills 就位：${skillsOut}`)
 
       // pnpm
-      execFileSync('npm', ['pack', `pnpm@${lock.pnpm.version}`, '--pack-destination', npmStage], { stdio: 'pipe' })
-      const pnpmTarball = newestTgz(npmStage)
+      const pnpmTarball = obtainNpmTarball(lock.pnpm, 'pnpm', `pnpm@${lock.pnpm.version}`, cacheDir, npmStage)
       const pnpmOut = join(out, 'dependencies', 'pnpm', 'bin')
       mkdirSync(pnpmOut, { recursive: true })
       // 剥两层后 `package/bin/pnpm.mjs` 只剩 `pnpm.mjs`，因此解到 bin/ 本身。
@@ -290,7 +406,7 @@ async function fetchTarget(lock, target, outRoot) {
   }
 }
 
-/** `--self-test`：不联网，验证锁定文件形状、sha256 判据与路径推导。 */
+/** `--self-test`：不联网，验证锁定文件形状、两种摘要判据与路径推导。 */
 function selfTest() {
   const lock = readLock()
   if (lock === null) {
@@ -302,27 +418,52 @@ function selfTest() {
   // 1) 五个目标都必须有锁定项，且 sha256 形如 64 hex、bytes 为正、layout 合法。
   for (const target of Object.keys(TARGETS)) {
     const entry = lock.interpreter.targets[target]
-    if (!/^[a-f0-9]{64}$/u.test(entry.sha256)) problems.push(`${target} 的 sha256 不是 64 hex`)
+    if (!SHA256_HEX.test(entry.sha256)) problems.push(`${target} 的 sha256 不是 64 hex`)
     if (entry.bytes <= 0) problems.push(`${target} 的 bytes 非正`)
     if (!['flat', 'posix'].includes(entry.layout)) problems.push(`${target} 的 layout 非法`)
   }
 
-  // 2) office skills 与 pnpm 的锁定包必须钉到具体版本。
+  // 2) office skills 与 pnpm 的锁定包必须钉到具体版本**且**钉死字节：缺 sha256 就是
+  //    「只钉了版本号」——那正是本项要消灭的缺陷形态，所以这里判红而不是放行。
   for (const [key, source] of [['officeSkills', lock.officeSkills], ['pnpm', lock.pnpm]]) {
     if (typeof source.version !== 'string' || source.version.length === 0) {
       problems.push(`lock 的 ${key} 缺 version`)
     }
+    if (!SHA256_HEX.test(String(source.sha256))) {
+      problems.push(`${key} 缺 sha256 或格式不对（缺哈希即允许来路不明的 tarball）`)
+    }
+    if (!Number.isInteger(source.bytes) || source.bytes <= 0) {
+      problems.push(`${key} 的 bytes 缺失或非正整数`)
+    }
+    if (!SRI_SHA512.test(String(source.integrity))) {
+      problems.push(`${key} 的 integrity 缺失或不是 sha512 SRI`)
+    }
   }
 
-  // 3) sha256 判据可证伪：改动一个字节必须被发现。
+  // 3) 判据可证伪：改动一个字节，sha256 与 integrity 两条都必须发现。
   const fixture = mkdtempSync(join(tmpdir(), 'fetch-selftest-'))
   try {
     const file = join(fixture, 'blob.bin')
     writeFileSync(file, Buffer.from([1, 2, 3, 4, 5]))
     const digest = sha256of(file)
+    const sri = sriOf(file)
+    const good = { sha256: digest, bytes: statSync(file).size, integrity: sri }
+    if (!verifyTarball(file, good, 'fixture').ok) {
+      problems.push('verifyTarball 判据失效：未改动的文件被判为不符')
+    }
     writeFileSync(file, Buffer.from([1, 2, 3, 4, 6]))
     if (sha256of(file) === digest) {
       problems.push('sha256 判据失效：改动一个字节后摘要未变')
+    }
+    if (sriOf(file) === sri) {
+      problems.push('integrity 判据失效：改动一个字节后 SRI 未变')
+    }
+    const tampered = verifyTarball(file, good, 'fixture')
+    if (tampered.ok) {
+      problems.push('verifyTarball 判据失效：改动一个字节后仍判为通过')
+    }
+    if (tampered.reason.length === 0) {
+      problems.push('verifyTarball 判据失效：判红却没说原因')
     }
   } finally {
     rmSync(fixture, { recursive: true, force: true })
@@ -337,7 +478,7 @@ function selfTest() {
     fail(`self-test 失败：\n  - ${problems.join('\n  - ')}`)
     return false
   }
-  log(`self-test 通过（${Object.keys(TARGETS).length} 个目标锁定 / skills 与 pnpm 版本钉死 / sha256 判据可证伪）`)
+  log(`self-test 通过（${Object.keys(TARGETS).length} 个目标锁定 / pnpm 与 officeSkills 的版本 + sha256 + bytes + integrity 齐全 / sha256 与 integrity 两条判据均可证伪）`)
   return true
 }
 

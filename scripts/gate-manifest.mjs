@@ -220,6 +220,17 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'fetch-runtime',
+    script: 'scripts/fetch-primary-runtime.mjs',
+    title: '载荷锁的摘要判据与 fail-closed 下载链路',
+    why: 'primary-runtime.json 的 `_comment` 曾宣称「所有产物按 URL + sha256 钉死」，而 pnpm 与 officeSkills 两项只有版本号——注释的覆盖范围大于实际的覆盖范围，等于把没钉死的东西说成钉死了（CD04）。这条守两件事：① 锁文件的 npm 项必须同时具备 sha256 + bytes + integrity，缺任一字段就拒绝执行（不退化成「只比版本号」）；② 校验失败时不得使用缓存里未验证的字节（缓存命中也要重算 sha256 与体积，不符则删缓存 + 本次失败，不静默重下）。注意两种摘要不可互填：sha256 是本地落盘字节的十六进制摘要，integrity 是上游 registry 自述的 SRI/sha512 base64。self-test 用夹具把 sha256、体积、SRI 各自改坏，三条判据必须都转红并给出原因。',
+    // 真检查不进任何分档：它会真的下载 22MB 解释器 tarball 并 `npm pack` 两个包，
+    // 属联网 + 重 IO，不适合放进 fast/ci。判据本身由离线 self-test 承载。
+    real: { tiers: [], args: [], needsAssembly: false },
+    manual: '真检查会联网下载解释器与 `npm pack` 各包，fast/ci 不跑。要校验锁文件与上游实际产物是否仍一致时手动跑：node scripts/fetch-primary-runtime.mjs。',
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'profile-names',
     script: 'scripts/verify-profile-names.mjs',
     title: 'DSH profile 保留名 + 两个契约锚点',
