@@ -175,6 +175,15 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'error-code-parity',
+    script: 'scripts/verify-error-code-parity.mjs',
+    title: '错误码三元一致（errors.rs 全量码唯一 × UPDATE_* ↔ updates.html en/zh 文案 × 前端引用闭合）',
+    why:
+      '`updates.html` 刻意按**稳定错误码**给更新失败选文案（不对上游 updater 的英文 message 做字符串匹配——那会随 locale / 版本漂移），代价是码表成了 `errors.rs` 里 `UPDATE_*` 常量的**手抄副本**，而且两份（en / zh）。三处手抄之间没有任何编译期联系：Rust 加细分码（例如把签名失败从 E1008 拆出来）⇒ 前端没有文案 ⇒ 页面静默退回「检查更新失败。」兜底句，分类信息消失；Rust 删码 / 改码 ⇒ 前端留下永不命中的文案；只改一门语言 ⇒ 一半用户看到的还是兜底句；文案被清空 ⇒ 错误页一片空白。四类都没有编译错误、没有运行时异常，只有跨文件比对能看见（本仓 §7.3「门禁替一段不存在的检查背书」的同型缺口：`verify-shell-pages` 只在注释里提到该文件，不校验码表）。被测集合由 Rust 自己的语义分组定义（常量名 `UPDATE_*` 前缀），**不是**把 E1005~E1008 抄进脚本——后者会让「Rust 新增码而前端没有」这条永远抓不到。五条失败条件（Rust 有前端无 / 前端有 Rust 无 / 文案为空 / 无法解析 / **解析结果为空集**）各有夹具；空集直接判红，不得 vacuous pass。另有两条判据**不需要豁免机制**，因此直接并入而不是外挂白名单：①**全量码唯一性**——在 `UPDATE_*` 前缀过滤**之前**就检查所有 `E1xxx` 码，因为撞码时 `AppError::exit_code()` 与前端分派都会取到「不确定的那一个」；若把这一步挪到过滤之后，两个非 `UPDATE_` 码撞车会被静默漏掉。②**前端引用闭合**——扫 `src-tauri/frontend/**/*.{html,js}` 里所有 `E` + 4 位数字字面量，逐个要求存在于全量码表（判据集是**全量码**而非 `UPDATE_*` 码：`error.html` 合法引用 `E3003` 这类非更新码），缺失时报出文件名 + 行号 + 最多 3 处样例；引用为空集时同样直接判红。这两条都不设白名单——一旦需要逐条豁免才能通过，说明码表已经真的漂了，此时豁免只会把漂移固化。⚠️ 长期方向是从 `errors.rs` 生成前端映射、`updates.html` 消费生成物，**本轮未实现**（生成物需要配套的「重新生成 + 漂移检查」流程），本门禁是那之前的手抄防线。',
+    real: { tiers: ['fast', 'ci', 'release'], args: [] },
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'install-mode',
     script: 'scripts/verify-install-mode.mjs',
     title: '安装形态判定（禁止用 executable_dir 猜身份）',
