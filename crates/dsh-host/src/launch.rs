@@ -884,6 +884,9 @@ where
             return;
         };
         let mut buffer = Vec::with_capacity(1024);
+        // 跨行脱敏状态（PEM 私钥块）。必须**在循环外**创建：它是行间状态，
+        // 每行新建一个就退化成单行清洗，私钥正文照旧漏盘。
+        let mut redactor = crate::logs::LineRedactor::new();
         loop {
             buffer.clear();
             match lines.read_until(b'\n', &mut buffer).await {
@@ -891,19 +894,28 @@ where
                 Ok(_) => {}
             }
 
-            let text = crate::logs::sanitize_line(&buffer);
-            if text.trim().is_empty() {
+            // 顺序**不可颠倒**：`parse_launch_line` 要从 `dsh web: <url>?token=<值>`
+            // 里取出启动端点，而脱敏会把 token 替换成 `<redacted>`
+            // （CD09）。因此先用 `decode_line` 拿原文做解析与端口判定，再单独
+            // 脱敏出一份 `text` 供记录。若改成「先 sanitize 再 parse」，端点永远
+            // 解析不出来，握手直接超时——这是本函数最容易被改坏的地方。
+            let raw = crate::logs::decode_line(&buffer);
+            if raw.trim().is_empty() {
                 continue;
             }
+            // 记录用的文本：脱敏后落内存与磁盘（CD09-b：源头不记敏感值）。
+            // 用 `LineRedactor::scrub` 而非 `sanitize_line`：PEM 私钥块是跨行形态，
+            // 需要行间状态。在拿锁之前算好，避免把脱敏的开销带进临界区。
+            let text = redactor.scrub(&buffer);
 
             let mut guard = shared.lock().await;
             if guard.endpoint.is_none() && look_for_token {
-                if let Some(endpoint) = parse_launch_line(&text) {
+                if let Some(endpoint) = parse_launch_line(&raw) {
                     guard.endpoint = Some(endpoint);
                     token_known.store(true, Ordering::SeqCst);
                 }
             }
-            if text.contains(PATTERN_PORT_IN_USE) {
+            if raw.contains(PATTERN_PORT_IN_USE) {
                 port_in_use.store(true, Ordering::SeqCst);
             }
             let line = LogLine::new(source, text);
@@ -1168,12 +1180,129 @@ mod tests {
 
     #[tokio::test]
     async fn token_survives_ansi_wrapped_output() {
-        // 端到端最小验证：ANSI 包裹的 URL 行经清洗后仍可被解析。
-        let raw = b"\x1b[36mdsh web:\x1b[0m http://127.0.0.1:4173/?token=abc\n";
-        let text = crate::logs::sanitize_line(raw);
+        // 端到端最小验证：ANSI 包裹的 URL 行经**解码**后仍可被解析。
+        //
+        // 必须用 `decode_line` 而不是 `sanitize_line`：后者会把 token 换成
+        // `<redacted>`（CD09），解析就再也拿不到值了。这正是日志泵里
+        // 「先 decode 解析、后 sanitize 记录」这一顺序的最小复现。
+        let raw = b"\x1b[36mdsh web:\x1b[0m http://127.0.0.1:4173/?token=abcdefgh12345\n";
+        let text = crate::logs::decode_line(raw);
         let endpoint = parse_launch_line(&text).unwrap();
-        assert_eq!(endpoint.token, "abc");
+        assert_eq!(endpoint.token, "abcdefgh12345");
         assert_eq!(endpoint.port, 4173);
+
+        // 记录侧的同一行必须已脱敏。
+        let recorded = crate::logs::sanitize_line(raw);
+        assert!(recorded.contains("token=<redacted>"), "{recorded}");
+        assert!(!recorded.contains("abcdefgh12345"), "{recorded}");
+    }
+
+    /// 端到端护栏（CD09-b）：泵**真正落盘的那些行**必须已脱敏，而同一批输入里
+    /// 的启动行仍能被解析出真实 token；跨行 PEM 私钥块必须整块被吞。
+    ///
+    /// 只测「`decode_line` 能解析 / `sanitize_line` 已脱敏」是不够的：那两条
+    /// 断言的是两个函数各自的输出，若有人把泵里的脱敏去掉，函数没坏、断言也
+    /// 全绿，泄漏却已经发生。必须看**文件字节**。
+    ///
+    /// 同理，`redactor` 若被误挪进循环（每次新建一个），`logs::` 里的单测仍
+    /// 全绿（它们自己持有状态），只有这里喂一整块 PEM 才能抓到。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn line_pump_writes_redacted_line_but_parses_real_token() {
+        // 顺序刻意如此：PEM 块在前，启动行在后——既能验「整块被吞」，
+        // 也能验「END 之后复位、后续行照常记录并解析」。
+        const STREAM: &[u8] = b"-----BEGIN RSA PRIVATE KEY-----\n\
+MIIEowIBAAKCAQEA7h1s2w3xY9z0aBcDeFgHiJkLmNoPqRsTuVwXyZ01\n\
+-----END RSA PRIVATE KEY-----\n\
+dsh web: http://127.0.0.1:4173/?token=abcdefgh12345\n";
+        const KEY_BODY: &str = "MIIEowIBAAKCAQEA7h1s2w3xY9z0aBcDeFgHiJkLmNoPqRsTuVwXyZ01";
+
+        let root = crate::test_support::scratch_dir("pump-redact");
+        crate::test_support::create_dir_all(&root);
+        let path = root.join("harness.log");
+
+        let tx = spawn_log_writer(LogFile::open(&path).ok());
+        assert!(tx.is_some(), "日志文件应能打开");
+
+        let shared = Arc::new(AsyncMutex::new(Shared {
+            logs: LogRing::new(),
+            endpoint: None,
+        }));
+        let token_known = Arc::new(AtomicBool::new(false));
+        let pump = spawn_line_pump(
+            Some(STREAM),
+            shared.clone(),
+            token_known.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(LogRing::new())),
+            LogSource::Stdout,
+            true,
+            tx.clone(),
+        );
+        pump.await.expect("泵任务不应 panic");
+        drop(tx);
+
+        // 解析侧：端点与 token 都是真的（否则启动握手就断了）。
+        let guard = shared.lock().await;
+        let endpoint = guard.endpoint.as_ref().expect("应解析出启动端点");
+        assert_eq!(endpoint.token, "abcdefgh12345");
+        assert_eq!(endpoint.port, 4173);
+        // 一进一出：4 个输入行必须产出 4 行记录（行号与子进程输出对得上）。
+        let texts: Vec<String> = guard
+            .logs
+            .lines()
+            .map(|line| line.text.trim_end().to_string())
+            .collect();
+        assert_eq!(texts.len(), 4, "行数不得被折叠或丢弃：{texts:?}");
+        assert_eq!(
+            &texts[..3],
+            ["<redacted>", "<redacted>", "<redacted>"],
+            "PEM 头 / 正文 / 尾三行都必须被吞"
+        );
+        assert_eq!(
+            texts[3], "dsh web: http://127.0.0.1:4173/?token=<redacted>",
+            "END 之后的启动行必须照常记录且已脱敏"
+        );
+        drop(guard);
+        assert!(
+            token_known.load(Ordering::SeqCst),
+            "解析成功后应置位 token_known"
+        );
+
+        // 落盘侧：等写线程排空，然后检查文件**字节**。
+        // 等最后一行（启动行）出现即可——`append_line` 每行都 flush，出现即代表前面已落盘。
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            if content.contains("token=<redacted>") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "落盘未在 10s 内出现脱敏行（若为 os error 5 / PermissionDenied，属 %TEMP% 写入受限的环境限制）"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let content = std::fs::read_to_string(&path)
+            .expect("读取落盘文件（失败可能是 %TEMP% 写入受限的环境限制）");
+        assert!(
+            content.contains("token=<redacted>"),
+            "落盘必须是脱敏后的文本：{content}"
+        );
+        assert!(
+            !content.contains("abcdefgh12345"),
+            "落盘文件不得含 token 原文：{content}"
+        );
+        // 跨行护栏：私钥整块（含标记与 base64 正文）都不得落盘。
+        assert!(
+            !content.contains("PRIVATE KEY"),
+            "私钥块标记不得落盘：{content}"
+        );
+        assert!(
+            !content.contains(KEY_BODY),
+            "私钥 base64 正文不得落盘：{content}"
+        );
+
+        crate::test_support::cleanup(&root);
     }
 
     #[tokio::test]

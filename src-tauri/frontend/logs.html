@@ -108,7 +108,7 @@
             missing: '这个日志文件还不存在（应用可能刚安装）。',
             lines: (n) => `${n} 行`,
             exported: (path, rules) =>
-              `诊断包已导出：${path}\n已按 ${rules} 类规则脱敏（token / cookie / 用户名 / API key）。`,
+              `诊断包已导出：${path}\n已按 ${rules} 类规则脱敏（token / cookie / 用户名 / API key）。\n请把诊断包发给别人，不要直接复制上面的原始日志——三个文件里只有 Harness 输出在写入时按认得出的凭据形态抹过一次，桌面壳层与宿主应用的日志完全不过这道处理，路径用户名等身份信息也仍会保留。`,
             noReturn: 'Harness 尚未就绪，暂时无处可返回。',
             failed: '操作失败',
           }
@@ -124,7 +124,7 @@
             missing: 'This log file does not exist yet (fresh install?).',
             lines: (n) => `${n} lines`,
             exported: (path, rules) =>
-              `Diagnostics bundle exported: ${path}\nRedacted with ${rules} rule class(es) (tokens, cookies, user names, API keys).`,
+              `Diagnostics bundle exported: ${path}\nRedacted with ${rules} rule class(es) (tokens, cookies, user names, API keys).\nShare this bundle rather than the raw log above — of the three files, only the Harness output is scrubbed on the way in, and only for recognised credential shapes; the desktop-shell and host-app logs get no scrubbing at all, and path user names stay in every one of them.`,
             noReturn: 'Harness is not ready yet, so there is nothing to return to.',
             failed: 'Action failed',
           }

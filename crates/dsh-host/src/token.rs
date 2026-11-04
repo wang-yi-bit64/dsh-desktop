@@ -67,8 +67,13 @@ impl fmt::Display for LaunchEndpoint {
 
 /// 从一行 stdout 文本中解析出 [`LaunchEndpoint`]。
 ///
-/// 输入应当是**已清洗**的行（见 [`crate::logs::sanitize_line`]）：带 ANSI 颜色
-/// 的 URL 会命中正则但解析失败。
+/// 输入应当是**已清洗但未脱敏**的行（见 [`crate::logs::decode_line`]）：带 ANSI
+/// 颜色的 URL 会命中正则但解析失败，而**脱敏过**的行里 token 已被替换成
+/// `<redacted>`，解析出来的端点会带着假 token。
+///
+/// ⚠️ 这条区分不是洁癖：`sanitize_line`（= `decode_line` + 脱敏）是**记录**用的
+/// 文本，`decode_line` 才是**解析**用的文本。日志泵里两者必须分开取，用错一个
+/// 就会让启动握手拿到 `<redacted>`，应用起不来。见 `launch.rs` 日志泵的注释。
 ///
 /// # 示例
 ///
