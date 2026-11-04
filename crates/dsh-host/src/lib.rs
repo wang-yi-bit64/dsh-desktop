@@ -25,6 +25,7 @@
 //! | [`runtime_manifest`] | 组装清单读取端（运行时自述：通道 / DSH 版本 / 补丁统计） | 任务 0.3 |
 //! | [`launch`] | 上述模块的编排（spawn → 日志泵 → 就绪等待） | C1–C7 |
 //! | [`error`] | 统一错误类型 + 退出码映射 + 归因降级 | — |
+//! | [`update_failure`] | 更新失败归因（阶段是主判据，错误文本只做阶段内细分） | CD05 / CD06 |
 
 pub mod args;
 pub mod contracts;
@@ -48,6 +49,7 @@ pub mod stop;
 pub mod supervisor;
 pub mod token;
 pub mod transport;
+pub mod update_failure;
 
 /// 单元测试专用：临时目录卫生层（V1-0，见 [`test_support`] 模块头）。
 /// 只进测试构建，不进发布产物。
@@ -78,3 +80,4 @@ pub use session::{
 pub use supervisor::{Supervisor, SupervisorConfig, SupervisorState};
 pub use token::LaunchEndpoint;
 pub use transport::{RpcError, RpcId, RpcMessage, RpcRequest, RpcResponse, TransportProtocol};
+pub use update_failure::{UpdateFailure, UpdateStage};

@@ -81,6 +81,7 @@
             checking: 'Checking for updates…',
             'up-to-date': 'You are on the latest version.',
             downloading: 'Downloading update…',
+            installing: 'Installing update — the app may close and reopen.',
             downloaded: 'Update downloaded. Restart to finish installing.',
             error: 'The update check failed.'
           },
@@ -117,6 +118,7 @@
             checking: '正在检查更新…',
             'up-to-date': '当前已是最新版本。',
             downloading: '正在下载更新…',
+            installing: '正在安装更新——应用可能会关闭并重新打开。',
             downloaded: '更新已下载，重启后完成安装。',
             error: '检查更新失败。'
           },
@@ -246,18 +248,22 @@
         }
 
         const downloading = phase === 'downloading';
+        // `installing` 是 2026-10-30 新增的相位（字节已到位、正在交接安装器）。
+        // 它和 `downloading` 一样要显示进度条：进度是 100，但**事情没做完**，
+        // 用户最需要知道的正是「卡在安装还是卡在下载」。
+        const installing = phase === 'installing';
         const available = phase === 'available';
         const downloaded = phase === 'downloaded';
 
-        barEl.hidden = !downloading && !downloaded;
+        barEl.hidden = !downloading && !installing && !downloaded;
         const percent = downloaded ? 100 : (typeof snapshot.percent === 'number' ? snapshot.percent : 0);
         barFillEl.style.width = `${Math.max(0, Math.min(100, percent))}%`;
 
         buttons.download.hidden = !available;
         buttons.skip.hidden = !available;
         buttons.install.hidden = !downloaded;
-        // 检查按钮在「有更新待下载」「下载中」「已下载」时没有意义。
-        buttons.check.hidden = available || downloading || downloaded;
+        // 检查按钮在「有更新待下载」「下载中」「安装中」「已下载」时没有意义。
+        buttons.check.hidden = available || downloading || installing || downloaded;
         buttons.check.disabled = phase === 'checking';
         if (phase === 'checking') buttons.check.textContent = t.phase.checking;
         else buttons.check.textContent = t.check;
