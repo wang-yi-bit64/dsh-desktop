@@ -27,7 +27,7 @@
 //! 6. **进度写回状态**：`updates_status` 命令读到的 `percent` 与 `updates://status`
 //!    事件同源，页面刷新一次不再把进度条打回 0。
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,6 +89,10 @@ pub struct UpdateManager {
     app: AppHandle,
     status: Arc<Mutex<UpdateStatus>>,
     skipped_version: Arc<Mutex<Option<String>>>,
+    /// 当前是第几次下载。进度任务带着投递时的轮次上来，落盘前与它比对——
+    /// 迟到的旧任务不得把页面改回「正在下载」或让百分比倒退
+    /// （判据本体在 `dsh_host::update_progress::accepts_progress`）。
+    progress_epoch: Arc<AtomicU64>,
     /// 观测设施：写不进去时整体降级为 `None`，更新链路照常继续。
     journal: Option<UpdateJournal>,
 }
@@ -116,6 +120,7 @@ impl UpdateManager {
                 code: None,
             })),
             skipped_version: Arc::new(Mutex::new(None)),
+            progress_epoch: Arc::new(AtomicU64::new(0)),
             journal,
         }
     }
@@ -363,6 +368,10 @@ impl UpdateManager {
 
         let app_for_progress = app.clone();
         let status_slot = Arc::clone(&self.status);
+        let epoch_slot = Arc::clone(&self.progress_epoch);
+        // 本轮下载的轮次：每次 `download()` 递增。迟到的进度任务带着旧轮次上来，
+        // 由 `accepts_progress` 挡掉——否则失败/安装之后它会把阶段改回 Downloading。
+        let epoch = self.progress_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let mut downloaded: u64 = 0;
 
         // 阶段账目：进入 `Downloading` 就是「字节还没走完」这个事实的唯一定义。
@@ -383,14 +392,31 @@ impl UpdateManager {
                     let percent = (downloaded as f64 / total as f64 * 100.0).min(100.0);
                     let app = app_for_progress.clone();
                     let status_slot = Arc::clone(&status_slot);
+                    let epoch_slot = Arc::clone(&epoch_slot);
                     tauri::async_runtime::spawn(async move {
                         // CD06 关键修复：旧实现只 `emit`，**从不写** `self.status`，
                         // 于是 `updates_status` 命令永远读到开头那个 `Some(0.0)`——
                         // 页面刷新一次进度条就归零，而 `percent >= 100` 的安装判定
                         // 也因此永假。现在事件与状态同源，同一把锁里取快照。
+                        //
+                        // 但「同源」不等于「无条件写」：进度回调是同步闭包，每次上报都
+                        // spawn 一个任务，任务池不保证顺序。若某任务在下一次下载、或
+                        // 失败 / `Installing` 之后才跑到，它会把阶段改回 `Downloading`
+                        // 并让百分比倒退——那正好抹掉 CD06 想给用户的信息。因此锁内
+                        // 先过一道接受判据（轮次 + 阶段 + 只许前进），判据本体在
+                        // `dsh_host::update_progress`，由无头 crate 的测试覆盖。
                         let snapshot = {
                             let mut guard = status_slot.lock().await;
-                            guard.phase = UpdatePhase::Downloading;
+                            let current_epoch = epoch_slot.load(Ordering::SeqCst);
+                            if !dsh_host::update_progress::accepts_progress(
+                                epoch,
+                                current_epoch,
+                                guard.phase == UpdatePhase::Downloading,
+                                guard.percent,
+                                percent,
+                            ) {
+                                return;
+                            }
                             guard.percent = Some(percent);
                             guard.clone()
                         };

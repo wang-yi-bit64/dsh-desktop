@@ -50,6 +50,7 @@ pub mod supervisor;
 pub mod token;
 pub mod transport;
 pub mod update_failure;
+pub mod update_progress;
 
 /// 单元测试专用：临时目录卫生层（V1-0，见 [`test_support`] 模块头）。
 /// 只进测试构建，不进发布产物。
