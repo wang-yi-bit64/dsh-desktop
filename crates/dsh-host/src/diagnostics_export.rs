@@ -171,20 +171,26 @@ fn rules() -> &'static [Rule] {
             //
             // URL query 形态单列一条、门槛降到 ≥4：`?token=` / `&token=` 出现在
             // query 位置上语义无歧义，短值也是凭据（见模块头部「两档 token 门槛」）。
+            //
+            // 值字符集**必须含 `%`**：query 里的值常是百分号编码的（`?token=%2B…`、
+            // `?token=a%2Fb…`）。不含 `%` 时正则会在第一个 `%` 处断开——整个值都
+            // 从 `%` 开头就一条也不匹配（凭据原样进包），从中间开始则只抹掉前半段、
+            // 把 `%2F` 之类的尾巴留在包里。两种都是泄漏，所以这里不允许「保守」。
             rule(
                 "launch_token",
                 Secret,
-                r"(?i)([?&]token=)([A-Za-z0-9._~+/=-]{4,})",
+                r"(?i)([?&]token=)([A-Za-z0-9._~+/=%-]{4,})",
                 "${1}<redacted>",
             ),
             // `token=abc` / `?token=abc&x=1` / `--token abc` / `"token": "abc"`
             //
             // 通用形态保持 ≥8：它同时会匹配 `token=off` 这类开关值，门槛低了会
             // 把配置项涂掉（`tests::keeps_short_config_values_that_only_look_secret`）。
+            // `%` 同上：编码过的值不得让正则提前收尾。
             rule(
                 "launch_token",
                 Secret,
-                r#"(?i)(token["']?\s*[:=]\s*["']?|--token\s+)([A-Za-z0-9._~+/=-]{8,})"#,
+                r#"(?i)(token["']?\s*[:=]\s*["']?|--token\s+)([A-Za-z0-9._~+/=%-]{8,})"#,
                 "${1}<redacted>",
             ),
             // Cookie：`dsh-auth-session=xxx`（含 Set-Cookie 头）。
@@ -1019,6 +1025,29 @@ mod tests {
         assert!(clean.contains("mode=desktop"), "{clean}");
 
         // 通用形态保持 ≥8：`token=off` 是开关值，不能当凭据涂掉。
+        assert_eq!(redact("token=off"), "token=off");
+    }
+
+    /// 百分号编码的值必须**整段**抹掉，否则凭据会以「抹了前半段」的形态进包。
+    ///
+    /// 可证伪性：把值字符集里的 `%` 去掉，本测试立刻转红（`?token=%2B…` 整条
+    /// 不匹配、`…/%2Ftail` 只抹到 `%` 之前）。
+    #[test]
+    fn percent_encoded_token_values_are_redacted_whole() {
+        // ① 值从 `%` 开头：旧字符集在这里**一条都不匹配**，凭据原样进包。
+        let leading = redact("http://127.0.0.1:4173/?token=%2BAb3xZ9&mode=desktop");
+        assert!(!leading.contains("Ab3xZ9"), "{leading}");
+        assert!(!leading.contains("%2B"), "{leading}");
+        assert!(leading.contains("mode=desktop"), "{leading}");
+
+        // ② `%` 在中间：旧正则只抹 `%` 之前那一段，尾巴留在包里。
+        let middle = redact("http://127.0.0.1:4173/?token=aB3xZ9q%2Fsecret-tail");
+        assert!(!middle.contains("secret-tail"), "{middle}");
+        assert!(!middle.contains("aB3xZ9q"), "{middle}");
+
+        // ③ 通用形态同理（≥8 门槛不变：`token=off` 仍不是凭据）。
+        let generic = redact("token=%2Babcdefgh1234");
+        assert!(!generic.contains("abcdefgh1234"), "{generic}");
         assert_eq!(redact("token=off"), "token=off");
     }
 
