@@ -27,7 +27,7 @@
 //! 6. **进度写回状态**：`updates_status` 命令读到的 `percent` 与 `updates://status`
 //!    事件同源，页面刷新一次不再把进度条打回 0。
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,6 +89,9 @@ pub struct UpdateStatus {
 pub struct UpdateManager {
     app: AppHandle,
     status: Arc<Mutex<UpdateStatus>>,
+    /// Identifies the active download so delayed progress from an earlier
+    /// request cannot overwrite a later request's state.
+    download_generation: Arc<AtomicU64>,
     skipped_version: Arc<Mutex<Option<String>>>,
     /// 观测设施：写不进去时整体降级为 `None`，更新链路照常继续。
     journal: Option<UpdateJournal>,
@@ -116,6 +119,7 @@ impl UpdateManager {
                 message: None,
                 code: None,
             })),
+            download_generation: Arc::new(AtomicU64::new(0)),
             skipped_version: Arc::new(Mutex::new(None)),
             journal,
         }
@@ -147,7 +151,11 @@ impl UpdateManager {
     }
 
     async fn set_status(&self, status: UpdateStatus) {
-        *self.status.lock().await = status.clone();
+        // Keep the state write and its event emission in the same critical
+        // section as progress updates. Otherwise a delayed progress task can
+        // publish an older phase after this transition.
+        let mut guard = self.status.lock().await;
+        *guard = status.clone();
         let _ = self.app.emit(STATUS_EVENT, &status);
     }
 
@@ -352,6 +360,8 @@ impl UpdateManager {
             "user consented",
         );
 
+        let download_generation = self.download_generation.fetch_add(1, Ordering::AcqRel) + 1;
+
         self.set_status(UpdateStatus {
             phase: UpdatePhase::Downloading,
             manual: false,
@@ -364,6 +374,7 @@ impl UpdateManager {
 
         let app_for_progress = app.clone();
         let status_slot = Arc::clone(&self.status);
+        let generation_slot = Arc::clone(&self.download_generation);
         let mut downloaded: u64 = 0;
 
         // 阶段账目：进入 `Downloading` 就是「字节还没走完」这个事实的唯一定义。
@@ -384,17 +395,25 @@ impl UpdateManager {
                     let percent = (downloaded as f64 / total as f64 * 100.0).min(100.0);
                     let app = app_for_progress.clone();
                     let status_slot = Arc::clone(&status_slot);
+                    let generation_slot = Arc::clone(&generation_slot);
                     tauri::async_runtime::spawn(async move {
                         // CD06 关键修复：旧实现只 `emit`，**从不写** `self.status`，
                         // 于是 `updates_status` 命令永远读到开头那个 `Some(0.0)`——
                         // 页面刷新一次进度条就归零，而 `percent >= 100` 的安装判定
                         // 也因此永假。现在事件与状态同源，同一把锁里取快照。
-                        let snapshot = {
-                            let mut guard = status_slot.lock().await;
-                            guard.phase = UpdatePhase::Downloading;
-                            guard.percent = Some(percent);
-                            guard.clone()
-                        };
+                        //
+                        // The callback is detached, so it may run after a failure,
+                        // phase transition, or a newer download has started. In all
+                        // those cases this update is no longer allowed to publish.
+                        let mut guard = status_slot.lock().await;
+                        if generation_slot.load(Ordering::Acquire) != download_generation
+                            || guard.phase != UpdatePhase::Downloading
+                            || guard.percent.map_or(false, |current| percent < current)
+                        {
+                            return;
+                        }
+                        guard.percent = Some(percent);
+                        let snapshot = guard.clone();
                         let _ = app.emit(STATUS_EVENT, &snapshot);
                     });
                 },
