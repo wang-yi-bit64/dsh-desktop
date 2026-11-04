@@ -103,7 +103,7 @@ Everything is driven through `npm run`. The table below is the **entry-point map
 
 ```text
 crates/
-  dsh-contracts/        # Pure Rust universal contracts (constants, error-code table E1xxx~E7xxx, IPC envelope, JSON-RPC, lifecycle)
+  dsh-contracts/        # Pure Rust universal contracts (constants, error-code table E1xxx~E7xxx, IPC envelope, JSON-RPC)
   dsh-host/             # Headless core host library (process management, supervisor, crash diagnostics, log ring buffer, redacted diagnostics export, log tail reader)
   dsh-host-cli/         # Command-line interface for dsh-host (start / status / stop / tail / doctor)
 src-tauri/
