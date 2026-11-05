@@ -232,6 +232,105 @@ function lineAt(text, index) {
 }
 
 /**
+ * 跳过 Rust 源码里会**吞掉括号 / 引号 / 斜杠**的词法单元：字符串字面量、
+ * 字符字面量、行注释、块注释（含嵌套）。返回该单元之后的下一个下标；
+ * 当前位置不是这些单元时返回 null。
+ *
+ * 字符字面量与生命周期的区分（这是本函数最容易被写错的地方）：
+ * - `'a'` / `'"'` / `'{'`——第三个字符是 `'` ⇒ 字符字面量，整体跳过；
+ * - `'a` / `'_` / `'static`——后面**不是** `'` ⇒ 生命周期，只跳过 `'` 本身
+ *   （后面的标识符字符不含任何会干扰配对的东西，原样流过）；
+ * - `'\n'` / `'\''` / `'\u{7FFF}'`——转义形态，`{` `}` `"` 都在字面量内部，
+ *   必须整体跳过，否则配对会在错误的位置重新开始。
+ *
+ * raw 字符串（`r"…"` / `r#"…"#`）仍未处理：本仓命令体没有出现（原有边界，
+ * 见 extractRustBracedBody）；出现时补 `r#` 分支，而不是放宽判据。
+ */
+function skipRustToken(text, index) {
+  const char = text[index]
+  const next = text[index + 1]
+  if (char === '"') {
+    let cursor = index + 1
+    while (cursor < text.length) {
+      if (text[cursor] === '\\') {
+        cursor += 2
+        continue
+      }
+      if (text[cursor] === '"') return cursor + 1
+      cursor += 1
+    }
+    return text.length
+  }
+  if (char === "'") {
+    if (next === '\\') {
+      // 转义形态：跳过转义引入符（`\n` / `\'` / `\u{…}` 的开头两个字符），
+      // 再找闭合 `'`。
+      let cursor = index + 3
+      while (cursor < text.length && text[cursor] !== "'") cursor += 1
+      return Math.min(cursor + 1, text.length)
+    }
+    if (text[index + 2] === "'") return index + 3
+    return index + 1
+  }
+  if (char === '/' && next === '/') {
+    let cursor = index
+    while (cursor < text.length && text[cursor] !== '\n') cursor += 1
+    return cursor
+  }
+  if (char === '/' && next === '*') {
+    // Rust 块注释**允许嵌套**，按深度配对。
+    let depth = 1
+    let cursor = index + 2
+    while (cursor < text.length && depth > 0) {
+      if (text[cursor] === '/' && text[cursor + 1] === '*') {
+        depth += 1
+        cursor += 2
+        continue
+      }
+      if (text[cursor] === '*' && text[cursor + 1] === '/') {
+        depth -= 1
+        cursor += 2
+        continue
+      }
+      cursor += 1
+    }
+    return cursor
+  }
+  return null
+}
+
+/**
+ * 从 `{` 之后的位置起，按花括号配对取出完整的 **Rust** 函数体。
+ *
+ * 与前端 JS 用的 [`extractBracedBody`] 的差别：Rust 的字符串 / 字符字面量 /
+ * 注释里都可能出现花括号（`format!("{{")`、`'\u{7FFF}'`、块注释里的 `{`）。
+ * 不跳过这些单元，一个 `"{"` 就会让深度错算——函数体取不出来，命令被
+ * **静默跳过**，E8 对它失明（评审实测形态：`let marker = "{"; return Err("x".into());`）。
+ * @param {string} text 全文
+ * @param {number} start 函数体第一个字符的下标（`{` 之后）
+ * @returns {string|null} 函数体文本；括号不配对时返回 null
+ */
+function extractRustBracedBody(text, start) {
+  let depth = 1
+  let index = start
+  while (index < text.length) {
+    const skipped = skipRustToken(text, index)
+    if (skipped !== null) {
+      index = skipped
+      continue
+    }
+    const char = text[index]
+    if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, index)
+    }
+    index += 1
+  }
+  return null
+}
+
+/**
  * 解析每个 `#[tauri::command]` 的函数体（E8 用）。
  *
  * 为什么不能退化成「文件里有没有 `return Err(`」：那不是判据。CD02 的形态是
@@ -242,8 +341,12 @@ function lineAt(text, index) {
  *
  * 参数表会跨行、泛型里带 `<` / `>`，所以先做圆括号配对定出参数表、再取其后的
  * 第一个 `{`、最后做花括号配对取函数体（与 `parseInvoked` 取函数体同一段逻辑）。
+ *
+ * 解析不出函数体的命令**不会**被静默跳过：以 `unparsed` 标记返回，由调用方
+ * 报错——「跳过不报」会让 E8 替一段不存在的检查背书（本仓 §7.3 的「扫出数
+ * 为 0 先怀疑扫描器」同型）。
  * @param {string} text 单个 .rs 文件全文
- * @returns {{name: string, body: string, line: number}[]} 命令名 → 函数体
+ * @returns {{name: string, body: string|null, line: number, unparsed?: string}[]} 命令名 → 函数体
  */
 function parseCommandBodies(text) {
   const out = []
@@ -256,14 +359,27 @@ function parseCommandBodies(text) {
     const afterAttr = marker.index + marker[0].length
     const signature = /^\s*pub\s+(?:async\s+)?fn\s+([a-z_][a-z0-9_]*)/.exec(text.slice(afterAttr))
     if (!signature) continue
+    const fnLine = lineAt(text, afterAttr)
     const openParen = text.indexOf('(', afterAttr + signature[0].length)
-    if (openParen < 0) continue
+    if (openParen < 0) {
+      out.push({ name: signature[1], body: null, line: fnLine, unparsed: '找不到参数表左括号' })
+      continue
+    }
     const paramsEnd = matchParen(text, openParen)
-    if (paramsEnd < 0) continue
+    if (paramsEnd < 0) {
+      out.push({ name: signature[1], body: null, line: fnLine, unparsed: '参数表括号不配对' })
+      continue
+    }
     const bodyOpen = text.indexOf('{', paramsEnd)
-    if (bodyOpen < 0) continue
-    const body = extractBracedBody(text, bodyOpen + 1)
-    if (body === null) continue
+    if (bodyOpen < 0) {
+      out.push({ name: signature[1], body: null, line: fnLine, unparsed: '找不到函数体左花括号' })
+      continue
+    }
+    const body = extractRustBracedBody(text, bodyOpen + 1)
+    if (body === null) {
+      out.push({ name: signature[1], body: null, line: lineAt(text, bodyOpen), unparsed: '函数体花括号不配对' })
+      continue
+    }
     out.push({ name: signature[1], body, line: lineAt(text, bodyOpen) })
   }
   return out
@@ -272,12 +388,17 @@ function parseCommandBodies(text) {
 /**
  * 去掉 Rust 源码里的注释，**保留换行**（行号不漂移）。
  *
- * 两个方向都必须防：
+ * 三个方向都必须防：
  * - 不去注释会**假阳性**：本仓的注释里真的在讨论这个缺陷（`commands.rs` 模块
  *   文档第 16-18 行就在说「永远不要在这里返回 `Err`」）。
  * - 字符串字面量必须整体跳过（替换成空串），否则 `"http://…"` 里的 `//` 会被
  *   当注释吃掉，同一行后面真实的 `return Err(` 就被藏起来——**假阴性**。
+ * - **字符字面量必须先于字符串判定**：`let quote = '"';` 里的 `"` 若被当成
+ *   字符串起点，扫描会一路吃到 `Err(` 后面的 `"`，中间的违规全部被吞——
+ *   同样是假阴性（评审实测形态）。生命周期（`'a` / `'_`）不是字符字面量，
+ *   只放行那个 `'` 本身。
  *
+ * 词法判定与 [`skipRustToken`] 共用一份，不另抄一套。
  * raw 字符串（`r#"…"#`）本仓命令体里没有出现；若将来出现，E8 可能误报，
  * 那时应当补 `r#` 分支而不是放宽判据。
  * @param {string} text 函数体
@@ -287,39 +408,24 @@ function stripRustComments(text) {
   let out = ''
   let index = 0
   while (index < text.length) {
-    const char = text[index]
-    const next = text[index + 1]
-    if (char === '"') {
-      let cursor = index + 1
-      while (cursor < text.length) {
-        if (text[cursor] === '\\') {
-          cursor += 2
-          continue
-        }
-        if (text[cursor] === '"') {
-          cursor += 1
-          break
-        }
-        cursor += 1
+    const skipped = skipRustToken(text, index)
+    if (skipped !== null) {
+      const token = text.slice(index, skipped)
+      if (token.startsWith('//')) {
+        // 行注释：换行符不在 token 里，下一轮原样保留。
+      } else if (token.startsWith('/*')) {
+        // 块注释：保留其中的换行，行号不漂移。
+        for (const char of token) if (char === '\n') out += '\n'
+      } else if (token.length > 1) {
+        // 字符串 / 字符字面量整体清空。生命周期（token 只有一个 `'`）原样保留。
+        out += token.startsWith('"') ? '""' : "''"
+      } else {
+        out += token
       }
-      out += '""'
-      index = cursor
+      index = skipped
       continue
     }
-    if (char === '/' && next === '/') {
-      while (index < text.length && text[index] !== '\n') index += 1
-      continue
-    }
-    if (char === '/' && next === '*') {
-      index += 2
-      while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) {
-        if (text[index] === '\n') out += '\n'
-        index += 1
-      }
-      index += 2
-      continue
-    }
-    out += char
+    out += text[index]
     index += 1
   }
   return out
@@ -338,6 +444,8 @@ function stripRustComments(text) {
 function findBareReturnErr(bodies) {
   const hits = []
   for (const { name, body, line, file } of bodies) {
+    // 解析失败的命令体（unparsed 标记）没有文本可扫；它们由调用方单独报错。
+    if (typeof body !== 'string') continue
     const cleaned = stripRustComments(body)
     for (const match of cleaned.matchAll(/(?:^|[^A-Za-z0-9_])return\s+Err\s*\(/g)) {
       const offset = cleaned.slice(0, match.index).split('\n').length - 1
@@ -761,12 +869,22 @@ function run() {
     const relative = file.slice(projectRoot.length + 1)
     for (const body of parseCommandBodies(text)) bodies.push({ ...body, file: relative })
   }
-  notes.push(`命令体：解析出 ${bodies.length} 个 #[tauri::command] 函数体`)
-  if (bodies.length === 0) {
+  const parsed = bodies.filter((entry) => !entry.unparsed)
+  const unparsed = bodies.filter((entry) => entry.unparsed)
+  notes.push(`命令体：解析出 ${parsed.length} 个 #[tauri::command] 函数体`)
+  if (parsed.length === 0) {
     error(
       'E8',
       '一个 #[tauri::command] 函数体都没解析出来——先怀疑解析器（属性写法 / 签名形态变了），' +
         '再怀疑源文件。0 个函数体不得判绿（否则 E8 是空转的）'
+    )
+  }
+  for (const entry of unparsed) {
+    error(
+      'E8',
+      `命令 \`${entry.name}\`（${entry.file}:${entry.line}）的函数体没解析出来（${entry.unparsed}）——` +
+        'E8 对它失明。先怀疑解析器（raw 字符串？新的签名形态？），再怀疑源文件；' +
+        '静默跳过等于替一段不存在的检查背书'
     )
   }
   for (const hit of findBareReturnErr(bodies)) {
@@ -949,6 +1067,53 @@ function selfTest() {
   check(
     'E8 夹具：注释里的 #[tauri::command] 不得造出幽灵函数体',
     parseCommandBodies(docTrap).length === 0
+  )
+
+  // 字符串里的 `{` 不得破坏花括号配对：`let marker = "{"` 曾让函数体取不出来、
+  // 命令被静默跳过——E8 对它失明，红不了也绿不了。
+  const stringBrace = commandFixture('    let marker = "{";\n    let _ = marker;\n    return Err("x".to_string());')
+  const stringBraceBodies = parseCommandBodies(stringBrace)
+  check(
+    'E8 夹具：字符串里的 { 不破坏函数体配对（必须解析出函数体）',
+    stringBraceBodies.length === 1 && typeof stringBraceBodies[0].body === 'string'
+  )
+  check(
+    'E8 夹具：其后的裸 return Err 必须判红（曾因配对失败被静默跳过）',
+    findBareReturnErr(stringBraceBodies).length === 1
+  )
+
+  // 字符字面量 `'"'` 不得偷走字符串起点：曾把扫描器一路带到 `Err(` 的引号，
+  // 中间的违规全部被吞。生命周期 `'a` 不是字符字面量，不得被并吞。
+  const charQuote = [
+    '#[tauri::command]',
+    `pub fn demo<'a>(text: &'a str) -> CommandResult<()> {`,
+    `    let quote = '"';`,
+    '    let _ = (quote, text);',
+    '    return Err("x".to_string());',
+    '}'
+  ].join('\n')
+  const charQuoteBodies = parseCommandBodies(charQuote)
+  check(
+    "E8 夹具：'\"' 字符字面量与生命周期 'a 不破坏解析",
+    charQuoteBodies.length === 1 && typeof charQuoteBodies[0].body === 'string'
+  )
+  check(
+    'E8 夹具：字符字面量之后的裸 return Err 必须判红（曾因引号错位被藏住）',
+    findBareReturnErr(charQuoteBodies).length === 1
+  )
+
+  // 真正解析不出来的命令体必须显式标记「未解析」，由调用方报错——不许静默跳过。
+  const brokenBrace = [
+    '#[tauri::command]',
+    'pub fn demo() -> CommandResult<()> {',
+    '    let marker = "{";',
+    '    let _ = marker;',
+    '// 缺少闭合花括号'
+  ].join('\n')
+  const brokenBodies = parseCommandBodies(brokenBrace)
+  check(
+    'E8 夹具：花括号不配对 → 标记未解析而不是静默跳过（0 条等于失明）',
+    brokenBodies.length === 1 && brokenBodies[0].unparsed === '函数体花括号不配对'
   )
 
   if (failed > 0) {
