@@ -1,6 +1,6 @@
 # DSH Desktop 缺陷修复计划 V2：可靠性优先与工程治理执行方案
 
-> **状态**：计划已成立，**代码未动**。阶段 1 待开工。
+> **状态**：计划成立（2026-10-30）。**阶段 0~2 已落地并交付 [PR #19](https://github.com/wang-yi-bit64/dsh-desktop/pull/19)**（阶段 1 全部 7 项 + 阶段 2 的 CD05/06/09，含两轮评审修复），验收以该 PR 的提交与三平台 CI 为准；本档正文保持立项时的**修复前快照**——各 CD 的取证与「预期验证结果」均以 `c718537` 为基线，不随实施改写。**阶段 3~6 未开工**（CD07/10/12、CD13、CD15~19、CD20~23）。
 > **定位**：**子计划**。批次/决策状态的**唯一账本主体仍是** [`dev-plan-defect-remediation.md`](dev-plan-defect-remediation.md)（`verify-plan-facts.mjs` 的 `PLAN_DOC` 常量指向它）。本档只登记「宣称纪律 + 可靠性」这一簇缺陷的执行细节，**不另立账本**。
 > **编号前缀 `CD`** = Claim Discipline。**刻意不用 `D`**：`dev-plan-defect-remediation.md` 已占用 **D1~D13**。本档与 `D1~D13`、`V0~V6`、`S0~S7`、`H~N`、`0.2-A~D` 均无重叠。
 > **版本**：V2（2026-10-30）。V1 为同日初版，存档于 `.workbuddy/output/dev-plan-claim-discipline-defects-v1-backup.md`（不随仓库分发）。
@@ -182,7 +182,7 @@ OS 签名/公证（ADR-046/044）、插件分级隔离（ADR-040）、多模型�
 | 执行阶段 | 阶段 1×7、阶段 2×3、阶段 3×3、阶段 4×1、阶段 5×5、阶段 6×4 |
 
 > 阶段 1 含 7 项（CD01/02/03/04/08/11/14），其中 CD14 若不在阶段 1 完成则回落阶段 4。
-> **23 项均经亲自取证**（含排除 `.delta/` 后的零消费者复验）。唯一判断性内容是 CD17 的拆分边界。
+> **23 项均经亲自取证**（含排除 `.delta/` 后的零消费者复验）。判断性内容有两处：CD16 的拆分粒度与 CD17 的拆分边界。
 
 ---
 
@@ -461,7 +461,15 @@ OS 签名/公证（ADR-046/044）、插件分级隔离（ADR-040）、多模型�
 - 测试对应哪个 commit；
 - Smoke 对应哪个 commit；
 - Runtime 对应哪个版本；
-- 最终产物对应哪个 commit。
+- 最终产物对应哪个 commit；
+- CI 与 Smoke run 的 workflow 名称、run 标识、成功状态与 `head_sha`——以及
+  `CI.head_sha`、`Smoke.head_sha`、待发布 tag 的 commit SHA 与最终产物的 commit
+  SHA **四者一致**。
+
+**硬失败条件**（落到 `release.yml` 的 preflight，由其执行而不是靠流程约定）：
+CI / Smoke run 缺失、run 失败、workflow 名称不匹配、任一 `head_sha` 与待发布
+tag 的 commit SHA 不一致时，preflight **必须失败**；发布证据里必须记录这些 run
+的标识及最终产物的 commit SHA。
 
 **核心目的**：消除「测了 A 提交、发布 B 提交」这一形态。此项应落到 `release.yml` 的 preflight，作为硬前置而非流程约定。
 
