@@ -14,7 +14,20 @@
 //!    到底停在哪一步。只写事实与版本号，不写 URL / Token。
 //! 3. **就绪提醒**：更新就绪后窗口可能已藏进托盘（关窗即隐藏），用户看不见
 //!    页面。此时经托盘状态行 + 系统通知告知「版本已就绪，重启即装」。
+//!
+//! # 2026-10-30 阶段状态机（CD05 / CD06）
+//!
+//! 4. **失败归因不再猜百分比**：`download()` 曾用 `percent >= 100` 推断「失败
+//!    发生在安装还是下载」，而 `self.status.percent` 从未被进度回调写回（它只
+//!    `emit` 事件）⇒ 那个判定永假、`E1007` 成了死码。现在由 [`UpdateStage`]
+//!    显式记录「现在在哪一步」，失败归因读阶段；`percent` 退回只画进度条。
+//! 5. **`check()` 不再硬编码网络失败**：检查阶段的任何 `Err` 曾一律报
+//!    `CheckNetwork`（`E1005`），连签名/配置问题都被说成「检查网络」。
+//!    现在统一走 [`UpdateFailure::classify_at`]，由阶段 + 错误文本共同归类。
+//! 6. **进度写回状态**：`updates_status` 命令读到的 `percent` 与 `updates://status`
+//!    事件同源，页面刷新一次不再把进度条打回 0。
 
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,78 +51,12 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// 这里 re-export 只为让命令面（`commands::install_mode`）不必写跨 crate 路径。
 pub use dsh_host::install::InstallMode;
 
-/// 稳定错误码 + 类别：让页面**分派**而不是匹配字符串。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UpdateFailure {
-    /// 检查失败且可归因到网络。
-    CheckNetwork,
-    /// 下载失败且可归因到网络。
-    DownloadNetwork,
-    /// 安装（重启交接）失败。
-    Install,
-    /// 签名 / 校验和被拒：不可重试。
-    SignatureRejected,
-    /// 未细分（分类尽力而为，失败不至丢失原消息）。
-    Other,
-}
-
-impl UpdateFailure {
-    /// 由上游错误文本推断失败类别。
-    ///
-    /// 只做**保守**匹配：命中的关键词都是网络/传输层的确定性信号。推断不出就归
-    /// `Other`——宁可少分类，也不要把「证书不匹配」说成「网络问题」。
-    pub fn classify(error: impl std::fmt::Display) -> Self {
-        let text = error.to_string().to_ascii_lowercase();
-        if text.contains("signature")
-            || text.contains("checksum")
-            || text.contains("invalid key")
-            || text.contains("pubkey")
-        {
-            return Self::SignatureRejected;
-        }
-        let network = [
-            "timed out",
-            "timeout",
-            "refused",
-            "unreachable",
-            "connection",
-            "dns",
-            "resolve",
-            "network",
-            "tls",
-            "certificate",
-            "proxy",
-            "could not connect",
-            "error sending request",
-        ]
-        .iter()
-        .any(|hint| text.contains(hint));
-        if network {
-            Self::CheckNetwork
-        } else {
-            Self::Other
-        }
-    }
-
-    /// 对应的稳定错误码。
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::CheckNetwork => codes::UPDATE_CHECK_NETWORK,
-            Self::DownloadNetwork => codes::UPDATE_DOWNLOAD_NETWORK,
-            Self::Install => codes::UPDATE_INSTALL_FAILED,
-            Self::SignatureRejected => codes::UPDATE_SIGNATURE_REJECTED,
-            Self::Other => codes::UPDATER_UNAVAILABLE,
-        }
-    }
-
-    /// 对应错误族（与 `codes` 模块的族号↔类别测试一致）。
-    pub fn category(self) -> ErrorCategory {
-        match self {
-            Self::CheckNetwork | Self::DownloadNetwork => ErrorCategory::Network,
-            Self::Install | Self::SignatureRejected | Self::Other => ErrorCategory::Environment,
-        }
-    }
-}
+/// 失败归因判据住在**无头 crate**（`dsh_host::update_failure`）——与 `InstallMode`
+/// 同一条分流理由：判据是纯逻辑，留在壳层就**本地无法证伪**（本机壳层测试二进制
+/// 加载即 `STATUS_ENTRYPOINT_NOT_FOUND`），而这张表正是 CD05 / CD06 的全部内容。
+///
+/// 这里 re-export 只为让本模块与命令面不必写跨 crate 路径。
+pub use dsh_host::update_failure::{UpdateFailure, UpdateStage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -118,6 +65,9 @@ pub enum UpdatePhase {
     Checking,
     Available,
     Downloading,
+    /// 字节已到位、正在交给安装器。新增于 2026-10-30（CD06）：
+    /// 这一段可能持续可见数秒，旧实现把它显示成「下载中 100%」。
+    Installing,
     Downloaded,
     UpToDate,
     Error,
@@ -139,6 +89,10 @@ pub struct UpdateManager {
     app: AppHandle,
     status: Arc<Mutex<UpdateStatus>>,
     skipped_version: Arc<Mutex<Option<String>>>,
+    /// 当前是第几次下载。进度任务带着投递时的轮次上来，落盘前与它比对——
+    /// 迟到的旧任务不得把页面改回「正在下载」或让百分比倒退
+    /// （判据本体在 `dsh_host::update_progress::accepts_progress`）。
+    progress_epoch: Arc<AtomicU64>,
     /// 观测设施：写不进去时整体降级为 `None`，更新链路照常继续。
     journal: Option<UpdateJournal>,
 }
@@ -166,6 +120,7 @@ impl UpdateManager {
                 code: None,
             })),
             skipped_version: Arc::new(Mutex::new(None)),
+            progress_epoch: Arc::new(AtomicU64::new(0)),
             journal,
         }
     }
@@ -196,8 +151,15 @@ impl UpdateManager {
     }
 
     async fn set_status(&self, status: UpdateStatus) {
-        *self.status.lock().await = status.clone();
-        let _ = self.app.emit(STATUS_EVENT, &status);
+        // emit 必须在锁内完成：这是「事件顺序 == 状态变更顺序」的唯一保证。
+        // 若在锁外 emit，另一个发布者（进度任务 / 下一次 set_status）可以在
+        // 「我释放锁」与「我 emit」之间完成新的变更并 emit 它的事件——页面
+        // 最后收到的是过期快照，失败状态会被迟到的 Downloading 事件盖掉。
+        // emit 是同步调用，锁内调用不经过 await 点；`updates_status` 命令也是
+        // 这把锁的持有者，它只会排队，不会死锁。
+        let mut guard = self.status.lock().await;
+        *guard = status;
+        let _ = self.app.emit(STATUS_EVENT, &*guard);
     }
 
     /// 记一条 journal 并同时落日志——两处的受众不同（日志给人肉眼看，
@@ -271,8 +233,9 @@ impl UpdateManager {
         let updater = match self.app.updater_builder().build() {
             Ok(updater) => updater,
             Err(error) => {
-                let failure = UpdateFailure::classify(&error);
-                self.fail(&error, failure, manual, None, "check").await;
+                let failure = UpdateFailure::classify_at(UpdateStage::Checking, &error);
+                self.fail(UpdateStage::Checking, &error, failure, manual, None)
+                    .await;
                 return;
             }
         };
@@ -328,7 +291,12 @@ impl UpdateManager {
                 .await;
             }
             Err(error) => {
-                self.fail(&error, UpdateFailure::CheckNetwork, manual, None, "check")
+                // CD05：这里曾经硬编码 `UpdateFailure::CheckNetwork`，等于绕过
+                // `classify()`——检查阶段的签名/配置类失败一律被说成「网络问题」，
+                // 用户于是反复重试一个不可能成功的检查。改走 `classify_at()`：
+                // 阶段给出主判据，错误文本只做阶段内细分。
+                let failure = UpdateFailure::classify_at(UpdateStage::Checking, &error);
+                self.fail(UpdateStage::Checking, &error, failure, manual, None)
                     .await;
             }
         }
@@ -337,13 +305,13 @@ impl UpdateManager {
     /// 统一的失败落点：封套错误码 + 失败分类 + journal。
     async fn fail(
         &self,
+        stage: UpdateStage,
         error: impl std::fmt::Display,
         failure: UpdateFailure,
         manual: bool,
         version: Option<String>,
-        stage: &str,
     ) {
-        let summary = format!("{stage} failed: {error}");
+        let summary = format!("{} failed: {error}", stage.as_str());
         self.journal(
             JournalAction::Failed,
             version.clone(),
@@ -370,7 +338,8 @@ impl UpdateManager {
     pub async fn download(&self) -> IpcEnvelope<()> {
         let updater = match self.app.updater_builder().build() {
             Ok(updater) => updater,
-            Err(error) => return Self::failure(error),
+            // 还没开始传输 ⇒ 阶段是 `Checking`（下面那次 `check()` 复查同理）。
+            Err(error) => return Self::failure(UpdateStage::Checking, error),
         };
         let update = match updater.check().await {
             Ok(Some(update)) => update,
@@ -382,7 +351,7 @@ impl UpdateManager {
                 )
                 .with_action("Run a check first; the release may have been withdrawn.")
             }
-            Err(error) => return Self::failure(error),
+            Err(error) => return Self::failure(UpdateStage::Checking, error),
         };
 
         let version = update.version.clone();
@@ -394,6 +363,16 @@ impl UpdateManager {
             "user consented",
         );
 
+        let app_for_progress = app.clone();
+        let status_slot = Arc::clone(&self.status);
+        let epoch_slot = Arc::clone(&self.progress_epoch);
+        // 本轮下载的轮次：每次 `download()` 递增。**必须先于下面的 set_status**——
+        // 若状态先回到 `Downloading/0%` 而轮次还没换，这个窗口里上一轮的迟到任务
+        // 能通过轮次比对并把高百分比写进去；随后新一轮的低百分比又被单调判据
+        // 拒收，进度条就卡在旧值上直到追平。先换轮次再发布状态，窗口不存在。
+        let epoch = self.progress_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut downloaded: u64 = 0;
+
         self.set_status(UpdateStatus {
             phase: UpdatePhase::Downloading,
             manual: false,
@@ -404,47 +383,123 @@ impl UpdateManager {
         })
         .await;
 
-        let app_for_progress = app.clone();
-        let version_for_progress = version.clone();
-        let mut downloaded: u64 = 0;
+        // 阶段账目：进入 `Downloading` 就是「字节还没走完」这个事实的唯一定义。
+        // 验签与安装由下面两个分支显式推进，不再靠百分比猜。
+        let stage = Arc::new(AtomicU8::new(UpdateStage::Downloading as u8));
+        let stage_for_finish = Arc::clone(&stage);
+
         let result = update
-            .download_and_install(
+            .download(
                 move |chunk_length, content_length| {
                     downloaded += chunk_length as u64;
-                    if let Some(total) = content_length {
-                        if total > 0 {
-                            let percent = (downloaded as f64 / total as f64 * 100.0).min(100.0);
-                            let app = app_for_progress.clone();
-                            let version = version_for_progress.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let _ = app.emit(
-                                    STATUS_EVENT,
-                                    &UpdateStatus {
-                                        phase: UpdatePhase::Downloading,
-                                        manual: false,
-                                        available_version: Some(version),
-                                        percent: Some(percent),
-                                        message: None,
-                                        code: None,
-                                    },
-                                );
-                            });
-                        }
+                    let Some(total) = content_length else {
+                        return;
+                    };
+                    if total == 0 {
+                        return;
                     }
+                    let percent = (downloaded as f64 / total as f64 * 100.0).min(100.0);
+                    let app = app_for_progress.clone();
+                    let status_slot = Arc::clone(&status_slot);
+                    let epoch_slot = Arc::clone(&epoch_slot);
+                    tauri::async_runtime::spawn(async move {
+                        // CD06 关键修复：旧实现只 `emit`，**从不写** `self.status`，
+                        // 于是 `updates_status` 命令永远读到开头那个 `Some(0.0)`——
+                        // 页面刷新一次进度条就归零，而 `percent >= 100` 的安装判定
+                        // 也因此永假。现在事件与状态同源，同一把锁里取快照。
+                        //
+                        // 但「同源」不等于「无条件写」：进度回调是同步闭包，每次上报都
+                        // spawn 一个任务，任务池不保证顺序。若某任务在下一次下载、或
+                        // 失败 / `Installing` 之后才跑到，它会把阶段改回 `Downloading`
+                        // 并让百分比倒退——那正好抹掉 CD06 想给用户的信息。因此锁内
+                        // 先过一道接受判据（轮次 + 阶段 + 只许前进），判据本体在
+                        // `dsh_host::update_progress`，由无头 crate 的测试覆盖。
+                        //
+                        // emit 也在锁内（与 `set_status` 同一条不变量）：状态变更与
+                        // 事件发布共享同一把锁，页面收到事件的顺序才会与状态变更的
+                        // 顺序一致；在锁外 emit 的话，「验证通过→释放锁→emit」之间
+                        // 失败流程可以先发布 Error 事件，过期的 Downloading 快照随后
+                        // 才到，页面就停在错误的阶段上。
+                        {
+                            let mut guard = status_slot.lock().await;
+                            let current_epoch = epoch_slot.load(Ordering::SeqCst);
+                            if !dsh_host::update_progress::accepts_progress(
+                                epoch,
+                                current_epoch,
+                                guard.phase == UpdatePhase::Downloading,
+                                guard.percent,
+                                percent,
+                            ) {
+                                return;
+                            }
+                            guard.percent = Some(percent);
+                            let _ = app.emit(STATUS_EVENT, &*guard);
+                        }
+                    });
                 },
                 move || {
-                    // Download finished; restart & install handled by install().
+                    // 上游在这里**刚收完字节、还没验签**（插件 2.13.0
+                    // `updater.rs:835` 调用本回调，紧接着 `:837` 才 `verify_signature`）。
+                    // 这是唯一能如实标记「验签进行中」的时点，再往后就没有回调了。
+                    stage_for_finish.store(UpdateStage::Verifying as u8, Ordering::SeqCst);
                 },
             )
             .await;
 
-        match result {
+        let bytes = match result {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                // 失败归因读**当前阶段**：`on_download_finish` 没触发 ⇒ 传输中途失败
+                // （`E1006`）；已触发 ⇒ 字节完整、失败在验签（`E1008`）。
+                // 这里不再问 `percent`——它当时记的是进度条，不是流程位置。
+                let current = UpdateStage::from_u8(stage.load(Ordering::SeqCst));
+                let failure = UpdateFailure::classify_at(current, &error);
+                self.fail(current, &error, failure, false, Some(version))
+                    .await;
+                return IpcEnvelope::failure(failure.code(), failure.category(), error.to_string());
+            }
+        };
+
+        // `download()` 返回意味着字节已到位**且已通过签名校验**（插件在同一函数
+        // 内完成验签）。先如实记一条「下载完成」——这条不该等到安装成功才写，
+        // 否则「下载成功了但装不上」这种最需要诊断的现场反而没有下载记录。
+        self.journal(
+            JournalAction::Downloaded,
+            Some(version.clone()),
+            None,
+            format!(
+                "{} stage: download finished, signature accepted",
+                UpdateStage::Verifying.as_str()
+            ),
+        );
+
+        // 接下来是安装：显式推进阶段，页面据此显示「正在安装」。
+        stage.store(UpdateStage::Installing as u8, Ordering::SeqCst);
+        self.set_status(UpdateStatus {
+            phase: UpdatePhase::Installing,
+            manual: false,
+            available_version: Some(version.clone()),
+            percent: Some(100.0),
+            message: None,
+            code: None,
+        })
+        .await;
+
+        match update.install(bytes) {
             Ok(()) => {
+                // ⚠️ Windows 上这个分支**通常不可达**：`install_inner` 启动安装器后
+                // 直接 `std::process::exit(0)`（插件 `updater.rs:972`）。macOS / Linux
+                // 会正常返回，由用户重启后才生效。改动前走 `download_and_install`，
+                // 行为完全相同——这里只是把两步拆开以便标记阶段。
+                stage.store(UpdateStage::Completed as u8, Ordering::SeqCst);
                 self.journal(
-                    JournalAction::Downloaded,
+                    JournalAction::Install,
                     Some(version.clone()),
                     None,
-                    "download finished",
+                    format!(
+                        "{} stage: bytes handed to the installer",
+                        UpdateStage::Installing.as_str()
+                    ),
                 );
                 self.set_status(UpdateStatus {
                     phase: UpdatePhase::Downloaded,
@@ -460,19 +515,15 @@ impl UpdateManager {
                 IpcEnvelope::ok(())
             }
             Err(error) => {
-                // `download_and_install` 涵盖下载与安装两段。失败发生在「已下载
-                // 100% 之后」才可能是安装问题，其余按下载处理——安装本身的失败
-                // 由下一次重启前的交接体现（那里没有可上报的错误面）。
-                let failure = if matches!(
-                    self.status.lock().await.percent,
-                    Some(p) if p >= 100.0
-                ) {
-                    UpdateFailure::Install
-                } else {
-                    UpdateFailure::DownloadNetwork
-                };
-                self.fail(&error, failure, false, Some(version), "download")
-                    .await;
+                let failure = UpdateFailure::classify_at(UpdateStage::Installing, &error);
+                self.fail(
+                    UpdateStage::Installing,
+                    &error,
+                    failure,
+                    false,
+                    Some(version),
+                )
+                .await;
                 IpcEnvelope::failure(failure.code(), failure.category(), error.to_string())
             }
         }
@@ -481,8 +532,10 @@ impl UpdateManager {
     /// Restart the app and install the downloaded update.
     ///
     /// 始终成功：`restart()` 不返回失败信息，而进程随之退出——没有可上报的
-    /// 失败面。若将来出现「下载了但装不上」的路径，改成真实判定，不要在这里
-    /// 补一个恒真的成功（`AGENTS.md` §7.1 规则 2）。
+    /// 失败面。**「下载了但装不上」的失败面不在这里**：它在 [`Self::download`]
+    /// 的 `install(bytes)` 调用点，由 `UpdateStage::Installing` 归类为 `E1007`
+    /// （该处改动前是 `E1007` 的死码，见 [`UpdateStage`] 文档）。不要在这里
+    /// 补一个恒真的成功来假装覆盖了那条路径（`AGENTS.md` §7.1 规则 2）。
     pub async fn install(&self) -> IpcEnvelope<()> {
         // `restart()` 在返回前不会真的返回（进程即将被替换），因此后面的语句
         // 在编译期就是不可达的——留着是为了让返回类型显式。
@@ -491,7 +544,10 @@ impl UpdateManager {
             JournalAction::Install,
             version,
             None,
-            "restart requested by the user",
+            format!(
+                "{} stage: restart requested by the user",
+                UpdateStage::Restarting.as_str()
+            ),
         );
         self.app.restart();
         #[allow(unreachable_code)]
@@ -504,8 +560,8 @@ impl UpdateManager {
     /// 更新源 / 签名公钥不匹配**（配置问题），而 `check()` 的网络失败也常由代理
     /// 或证书引起——两者都不该让页面只建议用户「检查网络」了事。类别只表达
     /// 归因族，具体原因在 `message` 里。
-    fn failure(error: impl std::fmt::Display) -> IpcEnvelope<()> {
-        let failure = UpdateFailure::classify(error.to_string());
+    fn failure(stage: UpdateStage, error: impl std::fmt::Display) -> IpcEnvelope<()> {
+        let failure = UpdateFailure::classify_at(stage, error.to_string());
         IpcEnvelope::failure(failure.code(), failure.category(), error.to_string())
     }
 
@@ -549,65 +605,6 @@ async fn self_journal_start(manager: &Arc<UpdateManager>) {
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 分类必须**保守**：网络信号命中、签名问题不得说成网络、未知归 Other。
-    #[test]
-    fn failure_classification_is_conservative() {
-        assert_eq!(
-            UpdateFailure::classify("request timed out after 30s"),
-            UpdateFailure::CheckNetwork
-        );
-        assert_eq!(
-            UpdateFailure::classify("error sending request for url"),
-            UpdateFailure::CheckNetwork
-        );
-        assert_eq!(
-            UpdateFailure::classify("Could not connect to the server"),
-            UpdateFailure::CheckNetwork
-        );
-        assert_eq!(
-            UpdateFailure::classify("signature verification failed"),
-            UpdateFailure::SignatureRejected
-        );
-        assert_eq!(
-            UpdateFailure::classify("minisign checksum mismatch"),
-            UpdateFailure::SignatureRejected
-        );
-        // 归 Other 不得声称网络问题（判据：页面不能因此误导用户「检查网络」）。
-        assert_eq!(
-            UpdateFailure::classify("updater not configured"),
-            UpdateFailure::Other
-        );
-    }
-
-    /// 错误码与类别必须与 `codes` 的族号↔类别约定一致（否则 `gate -- ipc-surface`
-    /// 的族号测试会红）。
-    #[test]
-    fn failure_codes_stay_in_family() {
-        for failure in [
-            UpdateFailure::CheckNetwork,
-            UpdateFailure::DownloadNetwork,
-            UpdateFailure::Install,
-            UpdateFailure::SignatureRejected,
-            UpdateFailure::Other,
-        ] {
-            let code = failure.code();
-            assert!(
-                code.starts_with("E1"),
-                "{failure:?} 的码 {code} 必须是 E1 族"
-            );
-            assert_eq!(&code[1..2], "1");
-        }
-        assert_eq!(
-            UpdateFailure::CheckNetwork.category(),
-            ErrorCategory::Network
-        );
-        assert_eq!(
-            UpdateFailure::SignatureRejected.category(),
-            ErrorCategory::Environment
-        );
-    }
-}
+// 本模块的失败归因判据（`UpdateFailure` / `UpdateStage`）连同其单测住在
+// `crates/dsh-host/src/update_failure.rs`：壳层测试二进制在本机 GNU 工具链下
+// 加载即 `STATUS_ENTRYPOINT_NOT_FOUND`，留在这里的断言跑不起来等于没有。

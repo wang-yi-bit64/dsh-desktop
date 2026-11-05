@@ -81,12 +81,16 @@
             checking: 'Checking for updates…',
             'up-to-date': 'You are on the latest version.',
             downloading: 'Downloading update…',
+            installing: 'Installing update — the app may close and reopen.',
             downloaded: 'Update downloaded. Restart to finish installing.',
             error: 'The update check failed.'
           },
           available: (v) => `Version ${v} is available.`,
           actions: { check: 'Update check', download: 'Download', install: 'Install', skip: 'Skip', back: 'Back' },
           // 按稳定错误码分派，而不是匹配英文 message（与封套纪律同一取向）。
+          // ⚠️ 这张表是 `crates/dsh-contracts/src/errors.rs` 里 `UPDATE_*` 常量的
+          // **手抄副本**（两份语言各一份）。`scripts/verify-error-code-parity.mjs`
+          // 双向核验：Rust 新增码而这里没有、这里多出码、文案为空，都会判红。
           /* eslint-disable key-spacing */
           codes: {
             'E1005': 'Cannot reach the update server. Check your network or proxy, then try again.',
@@ -114,12 +118,15 @@
             checking: '正在检查更新…',
             'up-to-date': '当前已是最新版本。',
             downloading: '正在下载更新…',
+            installing: '正在安装更新——应用可能会关闭并重新打开。',
             downloaded: '更新已下载，重启后完成安装。',
             error: '检查更新失败。'
           },
           available: (v) => `发现新版本 ${v}。`,
           actions: { check: '检查更新', download: '下载', install: '安装', skip: '跳过', back: '返回' },
           // 按稳定错误码分派，而不是匹配英文 message（与封套纪律同一取向）。
+          // ⚠️ 与上面的 EN 表同源（Rust `UPDATE_*` 常量），同样由
+          // `scripts/verify-error-code-parity.mjs` 核验——两份手抄之间漂移也判红。
           /* eslint-disable key-spacing */
           codes: {
             'E1005': '连不上更新服务器。请检查网络或代理设置后重试。',
@@ -224,7 +231,8 @@
         const phase = snapshot.phase;
         const version = snapshot.available_version || '';
         availableVersion = version;
-        // 错误相位的文案按稳定错误码分派（E1005~E1008），拿不到已知码才退回
+        // 错误相位的文案按稳定错误码分派（码表见 TEXT.*.codes，与 errors.rs 的
+        // `UPDATE_*` 常量由 verify-error-code-parity 双向核验），拿不到已知码才退回
         // 相位兜底文案 + 原始 message。判据：message 是上游 updater 的原文，
         // 会随 locale / 版本漂移，不能对它做字符串匹配。
         let text = phase === 'available' ? t.available(version) : (t.phase[phase] || '');
@@ -240,18 +248,22 @@
         }
 
         const downloading = phase === 'downloading';
+        // `installing` 是 2026-10-30 新增的相位（字节已到位、正在交接安装器）。
+        // 它和 `downloading` 一样要显示进度条：进度是 100，但**事情没做完**，
+        // 用户最需要知道的正是「卡在安装还是卡在下载」。
+        const installing = phase === 'installing';
         const available = phase === 'available';
         const downloaded = phase === 'downloaded';
 
-        barEl.hidden = !downloading && !downloaded;
+        barEl.hidden = !downloading && !installing && !downloaded;
         const percent = downloaded ? 100 : (typeof snapshot.percent === 'number' ? snapshot.percent : 0);
         barFillEl.style.width = `${Math.max(0, Math.min(100, percent))}%`;
 
         buttons.download.hidden = !available;
         buttons.skip.hidden = !available;
         buttons.install.hidden = !downloaded;
-        // 检查按钮在「有更新待下载」「下载中」「已下载」时没有意义。
-        buttons.check.hidden = available || downloading || downloaded;
+        // 检查按钮在「有更新待下载」「下载中」「安装中」「已下载」时没有意义。
+        buttons.check.hidden = available || downloading || installing || downloaded;
         buttons.check.disabled = phase === 'checking';
         if (phase === 'checking') buttons.check.textContent = t.phase.checking;
         else buttons.check.textContent = t.check;

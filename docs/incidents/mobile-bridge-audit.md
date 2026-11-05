@@ -174,6 +174,34 @@ stub 用 `tokio::net::TcpListener` 起在 `127.0.0.1:0`，不依赖外网、不�
 把白名单检查提到鉴权之前，那条测试仍然绿，而未授权者从此可以靠 401/403 的差异
 枚举「桥放行了哪些方法」。
 
+## 2A. CD08 配对页注入面（2026-10-30 补审；**不在** V2-1~V2-8 这八项内）
+
+配对页 `GET /` 此前有三处独立缺陷，**分属两种性质**，修复也刻意分成两组。本项是
+`docs/dev-plan-claim-discipline-defects.md` 的 CD08，补审时确认它**不属于**上一节的八项判据，
+因此单列，不改「八项」的口径。
+
+| # | 缺陷 | 性质 | 修法与判据 |
+|---|---|---|---|
+| a | `var token = {token_json}`：`serde_json::to_string` 转义 `"` `\` 与控制字符，但**不转义** `<` `>` `&` `/`，token 里的 `</script>` 可提前闭合 script | 注入（XSS） | 改走 `<body data-token>` + `getAttribute`，由 `escape_html` 负责属性上下文转义。判据 `cd08_a_token_cannot_break_out_of_the_script_block`：恶意 token 下页面里 `<script>` / `</script>` 各只允许出现一次、禁止出现 `<img`、且 token 必须以转义形式仍在 `data-token` 上（否则「删掉 token」也能让前两条变绿）+ 脚本必须走 `getAttribute`（否则属性转了义、脚本仍读内联字面量） |
+| b | `format!("http://{host}/?token={token}")` 直接吃 `Host` 头 | 注入 / 反射 | 新增 `canonical_origin`：只放行**回环 ∪ 本机 `lan_ipv4()`**，且端口必须等于 `state.port`；`parse_host_header` 只认 IP 字面量（`1.2.3.4[:port]`、`[::1][:port]`，无端口按 80），拒裸 IPv6 / 主机名 / `@` / 路径。判据 `cd08_b_host_header_parsing_*`（4 正 9 负）、`cd08_b_canonical_origin_allows_loopback_and_lan_only`（3 正 8 负，含「桥未监听」「探测不到 LAN 地址」两条拿不到可信信息的分支）、`cd08_b_foreign_host_gets_no_qr_and_is_never_echoed`（恶意 Host 既不生成二维码也一个字符都不回显，同一 token 换合法 Host 必须出二维码） |
+| c | 二维码 URL 由原始 Host 字符串拼接 | 与 b 同源 | 改为 `pairing_target_url`：吃**已验证的规范化 Origin**，token 经 `query_pairs_mut()` 编码。判据 `cd08_c_pairing_url_is_canonical_and_percent_encodes_the_token`：`abc&x=y#z` → `?token=abc%26x%3Dy%23z`，且解析后 query **恰好一对**（直接拼接时 `&` 会拆出额外参数、`#` 会把后面全变 fragment） |
+| d | `render_qr_block` 失败返回空串、零日志 | **错误可见性**（与上面三条不同等级） | 改返回 `QrResult`；配对页 `log::warn!("[mobile-bridge] qr render failed: …")` + 页面可见错误；`snapshot()` 侧同样 `warn`。判据 `cd08_d_qr_failure_is_logged_and_visible_on_the_page`：4000 字节 token 触发 `DataTooLong`，断言页面**没有** `<pre>`、含「二维码渲染失败」、且捕获日志里存在 `WARN: [mobile-bridge] qr render failed` |
+
+三条注入防线**独立**，不可互相替代：转义只管「字符串留在属性里」，挡不住「Host 被当可信来源」；
+Host 白名单只管「能不能生成二维码」，管不到字符串怎么落到 HTML 里。夹具也据此拆开，
+每组都把另一维度固定在合法/无害值上。
+
+**接线证据**：`cd08_pair_page_is_wired_through_the_real_router` 走真实监听端口，断言合法 Host
+出二维码、并断言**伪造 `X-Forwarded-Host`**（axum 的 `Host` 提取器优先级是
+`Forwarded` → `X-Forwarded-Host` → `Host`）同样被拒——白名单必须作用在提取器的**值**上，
+只校验 `Host` 头可以被另一个头绕过。
+
+**未解风险**：`lan_ipv4()` 只探默认路由那一张网卡，多网卡 / 无默认路由的机器上，
+手机用另一张网卡的地址打开配对页会被判「地址校验失败」（二维码隐去，但「配对」按钮仍可用）。
+端口强校验也会让「反代把 443 映射到 8765」的部署失去二维码（按钮仍可用）。
+Host 被拒时页面仍返回 200（不是 403），这是刻意的：令牌照常落在 `data-token`，
+合法的配对动作不该被一起掐死。
+
 ## 3. CORS / CSRF 边界
 
 **结论**：桥**不加任何 CORS 中间件**，这是刻意的，不是遗漏。判据：

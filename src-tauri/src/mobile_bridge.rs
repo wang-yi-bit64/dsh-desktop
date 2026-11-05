@@ -281,7 +281,15 @@ impl MobileBridge {
                 // 当链接打开只会得到 405，令牌由页面自行提交。
                 let host = lan_ipv4().unwrap_or_else(|| "127.0.0.1".to_string());
                 let url = format!("http://{host}:{}/?token={}", port.unwrap_or(0), p.token);
-                let qr = render_qr_block(&url);
+                // 渲染失败不再静默成空块：记一条 warn，否则「配对页没有二维码」
+                // 在桌面端完全没有痕迹（快照字段本身只给菜单用，不展示空串）。
+                let qr = match render_qr_block(&url) {
+                    Ok(block) => block,
+                    Err(error) => {
+                        log::warn!("[mobile-bridge] qr render failed for pairing url: {error}");
+                        String::new()
+                    }
+                };
                 (Some(url), Some(qr), Some(p.expires_at))
             }
             _ => (None, None, None),
@@ -509,19 +517,171 @@ fn random_token(bytes: usize) -> String {
         .collect()
 }
 
+// ---------------------------------------------------------------------
+// 配对页的注入面（V2 / CD08）
+//
+// 三道关卡**故意分开实现**，因为它们防的不是同一件事，失效方式也不同：
+//
+// | 关卡 | 防的是 | 实现 |
+// |---|---|---|
+// | token 转义 | JSON→HTML 注入（`</script>` 提前闭合） | [`escape_html`] + `data-token` 属性 |
+// | Host 白名单 | 任意 Host 头被拼进 URL / HTML（反射面、钓鱼跳板） | [`canonical_origin`] |
+// | Origin 规范化 | 二维码内容必须来自已验证来源，而不是原始 Host 头 | [`pairing_target_url`] |
+//
+// 三者不可互相替代：转义只能让**字符串**留在属性里，挡不住「Host 被原样
+// 当作可信来源」；Host 白名单决定**能不能生成**二维码，管不到已经生成的
+// 字符串怎么落到 HTML 里。二维码**渲染失败**又是另一种性质的问题（错误
+// 可见性，不是注入），单独走 `log::warn!` + 页面提示，不与上面三条混写。
+// ---------------------------------------------------------------------
+
+/// 把外部输入转义成可安全嵌进 HTML 文本或双引号属性值的片段。
+///
+/// 只覆盖 `& < > " '`：这五个足以让任意输入留在「文本 / 属性值」的位置上，
+/// 无法闭合标签、也无法闭合属性。**它不负责 URL 编码**——URL 里的 token
+/// 走 [`pairing_target_url`] 的 `query_pairs_mut()`（两套编码规则不同，
+/// 混用等于把「已转义」当成「到处都安全」）。
+fn escape_html(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// 把 `Host` 头解析成 `(IP 字面量, 端口)`；不可解析时返回 `None`。
+///
+/// # 为什么不用 `str::split(':')`
+///
+/// `[::1]:8765` 里有三个冒号，按冒号切会把 IPv6 地址切碎；而裸 IPv6
+/// （`::1:8765`）在 HTTP 里本来就不合法（RFC 7230 要求带方括号），
+/// 所以这里**只认两种括号形态 + 纯 IPv4**，其余一律 `None`：
+///
+/// | 输入 | 结果 |
+/// |---|---|
+/// | `127.0.0.1:8765` | `(127.0.0.1, 8765)` |
+/// | `127.0.0.1` | `(127.0.0.1, 80)` — 无端口即 http 默认端口 |
+/// | `[::1]:8765` | `(::1, 8765)` |
+/// | `[::1]` | `(::1, 80)` |
+/// | `evil"><script>` / `a@b:1` / `::1:8765` / `127.0.0.1:99999` | `None` |
+///
+/// 只接受 **IP 字面量**、不接受主机名：配对页只会被 IP 访问，DNS 名进不了
+/// 白名单语义（否则 `localhost` / `attacker.example` 又要在白名单外多一层
+/// 解析歧义）。
+fn parse_host_header(raw: &str) -> Option<(std::net::IpAddr, u16)> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > 128 {
+        return None;
+    }
+    // 用户信息、路径、空白、控制字符：合法的 authority 里不会出现，
+    // 出现即说明这段输入是构造出来的。
+    if raw
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '/' | '\\' | '@' | '?' | '#'))
+    {
+        return None;
+    }
+
+    let (host, port) = if let Some(rest) = raw.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        let port = match tail {
+            "" => 80,
+            _ => tail.strip_prefix(':')?.parse::<u16>().ok()?,
+        };
+        (host, port)
+    } else {
+        match raw.split_once(':') {
+            Some((host, port)) => (host, port.parse::<u16>().ok()?),
+            None => (raw, 80),
+        }
+    };
+
+    let ip = host.parse::<std::net::IpAddr>().ok()?;
+    Some((ip, port))
+}
+
+/// 从 `Host` 头得出**已验证的规范化 Origin**（`http://<addr>:<port>`）。
+///
+/// # 白名单语义
+///
+/// 1. 地址必须是**回环**（`127.0.0.0/8`、`::1`），或
+/// 2. 必须是本机当前**这张网卡**的局域网地址（调用方经 [`lan_ipv4`] 探测传入）。
+///
+/// 端口必须**等于桥自己正在监听的端口**。只校验地址不校验端口是不够的：
+/// 同一个 token 可以用任意端口拼出一条指向别处的链接（钓鱼跳板），而那条
+/// 链接里的 host 恰恰是「可信地址」。
+///
+/// # 为什么保留 Host 头这条路（而不是改成猜局域网 IP）
+///
+/// 原实现的意图是对的：手机能到达的 `host:port` **就在它自己的请求里**，
+/// 探测到的出口网卡未必是手机能到的那张。因此这里不删掉这条路，只把它
+/// 从「信任任意输入」收紧成「只信任白名单内的输入」。
+///
+/// # 参数
+///
+/// * `raw_host` — `Host` 提取器给出的值。注意它**可能来自 `Forwarded` /
+///   `X-Forwarded-Host`**（axum 的 `Host` 提取器按此顺序回退），所以这
+///   三处的值都必须过同一张白名单，不能只信 `Host`。
+/// * `bound_port` — 桥当前监听的端口；`None` 表示没在监听（无可信端口）。
+/// * `lan_ip` — [`lan_ipv4`] 的探测结果；`None` 时**只允许回环**。
+fn canonical_origin(
+    raw_host: &str,
+    bound_port: Option<u16>,
+    lan_ip: Option<&str>,
+) -> Result<String, &'static str> {
+    let bound_port = bound_port.ok_or("bridge is not listening")?;
+    let (ip, port) =
+        parse_host_header(raw_host).ok_or("host header is not an ip literal with port")?;
+    if port != bound_port {
+        return Err("host port does not match the bridge listener");
+    }
+    let lan_ip = lan_ip.and_then(|value| value.parse::<std::net::IpAddr>().ok());
+    if !ip.is_loopback() && lan_ip != Some(ip) {
+        return Err("host is neither loopback nor this machine's lan address");
+    }
+    Ok(match ip {
+        std::net::IpAddr::V6(_) => format!("http://[{ip}]:{port}"),
+        std::net::IpAddr::V4(_) => format!("http://{ip}:{port}"),
+    })
+}
+
+/// 用**已验证的 Origin** 与 token 构造配对链接（token 走 URL 查询编码）。
+///
+/// 不再用 `format!("http://{host}/?token={token}")`：那样 token 里的 `&` / `#`
+/// 会被当成查询分隔符，一条带 `&whatever=1` 的 token 能改写链接语义；同时
+/// 拼接的字符串也不保证是规范化 Origin（大小写、IPv6 方括号、尾斜杠）。
+fn pairing_target_url(origin: &str, token: &str) -> Result<String, String> {
+    let mut url = url::Url::parse(origin).map_err(|e| format!("invalid origin: {e}"))?;
+    url.query_pairs_mut().append_pair("token", token);
+    Ok(url.to_string())
+}
+
 /// 把文本渲染成二维码**文本块**（Unicode 半块字符，包裹 `<pre>`）。
 ///
 /// 命名如实：这不是 SVG，而是等宽字体下的半块字符矩阵——在 `<pre>` 中
 /// 按 1:1 宽高比呈现时同样可被手机相机识别，且不需要图像编码依赖。
-fn render_qr_block(text: &str) -> String {
+///
+/// # 失败
+///
+/// 返回 `Err` 而**不是空串**。旧实现失败时返回 `""`，后果是配对页少一个
+/// 二维码、手机端只看到一片空白、日志里一条记录都没有——用户无法区分
+/// 「桥没启动」「token 过期」和「二维码没渲染出来」（§7.1 规则 3 的无声
+/// 降级）。可见化方式由调用方决定：配对页给出替代提示，快照只记日志。
+///
+/// 返回类型用 crate 根导出的 `QrResult`（`qrcode` 只重导出 `QrResult`，
+/// 没有重导出 `QrError`；`qrcode::types::QrError` 也行，但那样等于把内部
+/// 模块路径写进本模块的签名）。
+fn render_qr_block(text: &str) -> qrcode::QrResult<String> {
     use qrcode::QrCode;
-    match QrCode::new(text.as_bytes()) {
-        Ok(code) => {
-            let image = code.render::<qrcode::render::unicode::Dense1x2>().build();
-            format!("<pre>{image}</pre>")
-        }
-        Err(_) => String::new(),
-    }
+    let code = QrCode::new(text.as_bytes())?;
+    let image = code.render::<qrcode::render::unicode::Dense1x2>().build();
+    Ok(format!("<pre>{image}</pre>"))
 }
 
 /// 从响应头文本中提取 `dsh-auth-*` cookie 的 `name=value` 对。
@@ -630,25 +790,30 @@ async fn fetch_auth_cookie(base_url: &str, token: &str) -> Result<String, String
 /// 令牌只从 query 读取并回填进页面，不做任何服务端校验——真正的校验发生在
 /// `POST /pair`（比对 `PendingPairing` 与有效期）。页面因此可以安全地被
 /// 重新加载（token 过期后 `POST /pair` 会明确返回 401）。
+///
+/// # 令牌怎么进页面（CD08-(a)）
+///
+/// 走 `data-token` 属性 + `getAttribute`，**不再**把 JSON 字面量插进
+/// `<script>`。理由：`serde_json::to_string` 转义 `"`、`\` 与控制字符，
+/// 但**不转义** `<` `>` `&` `/`——token 里一个 `</script>` 就能提前闭合
+/// script 元素，其后的 `<img src=x onerror=…>` 会被当成真标签执行。
+/// 属性方案只需要一套转义规则（HTML 属性上下文，见 [`escape_html`]），
+/// 不必再维护「JS 字符串字面量里还有哪些字符危险」这张随浏览器实现漂移的
+/// 清单；代价是脚本必须经 `getAttribute` 取值。
+///
+/// 令牌本身仍然出现在页面上（页面本来就要拿它换 cookie）——这是**语境**
+/// 问题，不是**保密**问题。
 async fn pair_page(
+    State(state): State<Arc<BridgeState>>,
     axum::extract::Host(host): axum::extract::Host,
     axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
 ) -> Response {
     let token = query.get("token").cloned().unwrap_or_default();
-    let (url_block, notice) = if token.is_empty() {
-        (
-            String::new(),
-            "缺少配对令牌：请在桌面端菜单重新打开配对页。",
-        )
-    } else {
-        // 用请求自身的 Host 头拼绝对地址：这正是手机可达的那个 host:port，
-        // 无需再猜局域网 IP（探测到的出口网卡未必是手机能到的那张）。
-        let target = format!("http://{host}/?token={token}");
-        (
-            render_qr_block(&target),
-            "用手机相机扫描，或在已打开的本页点击「配对」。",
-        )
-    };
+    let (url_block, notice) = pairing_page_contents(&state, &host, &token).await;
+
+    // 页面里**唯一**由外部输入决定的字符串。二维码块与提示语都来自本模块的
+    // 字面量 / 纯函数（错误文本另行转义），不得把外部输入再拼进它们。
+    let token_attr = escape_html(&token);
 
     let html = format!(
         r#"<!doctype html>
@@ -669,14 +834,14 @@ async fn pair_page(
   .status {{ font-size: 14px; min-height: 1.4em; }}
 </style>
 </head>
-<body>
+<body data-token="{token_attr}">
   <h1>DSH Desktop 手机配对</h1>
   {url_block}
   <p class="notice">{notice}</p>
   <button id="pair">配对</button>
   <p class="status" id="status"></p>
 <script>
-  var token = {token_json};
+  var token = document.body.getAttribute('data-token') || '';
   document.getElementById('pair').addEventListener('click', function () {{
     var status = document.getElementById('status');
     if (!token) {{ status.textContent = '缺少令牌'; return; }}
@@ -698,7 +863,6 @@ async fn pair_page(
 </script>
 </body>
 </html>"#,
-        token_json = serde_json::to_string(&token).unwrap_or_else(|_| "\"\"".to_string()),
     );
 
     (
@@ -707,6 +871,75 @@ async fn pair_page(
         html,
     )
         .into_response()
+}
+
+/// 配对页的两块内容：二维码块与提示语。
+///
+/// 单独抽出来是为了让三条判据各自可被独立打进夹具——它们防的不是同一件事，
+/// 任何一条失效都不该把另一条连带判绿：
+///
+/// | 分支 | 判据 |
+/// |---|---|
+/// | Host 不在白名单 / 端口不符 | 不生成二维码，页面给出地址校验提示（CD08-(b)） |
+/// | 通过白名单 | 二维码内容只由**规范化 Origin** 构造（CD08-(c)） |
+/// | 二维码渲染失败 | `warn` 日志 + 页面可见错误，不退化成空白（CD08-(d)） |
+async fn pairing_page_contents(state: &BridgeState, host: &str, token: &str) -> (String, String) {
+    if token.is_empty() {
+        return (
+            String::new(),
+            "缺少配对令牌：请在桌面端菜单重新打开配对页。".to_string(),
+        );
+    }
+
+    // `lan_ipv4()` 只做一次路由表查询、不产生流量，配对页加载频率极低，
+    // 不必为它引入缓存。
+    let bound_port = *state.port.lock().await;
+    let origin = match canonical_origin(host, bound_port, lan_ipv4().as_deref()) {
+        Ok(origin) => origin,
+        Err(reason) => {
+            // 只记原因码，**不回显原始 Host**：它完全由请求方控制，原样写进
+            // 日志等于把日志内容交给对端（换行/控制字符可以伪造日志行）。
+            log::warn!("[mobile-bridge] pairing page rejected host header: {reason}");
+            return (
+                String::new(),
+                concat!(
+                    "配对页地址校验失败：无法确认本页地址，二维码已隐去。",
+                    "如由桌面端菜单打开本页，可直接点击下方「配对」。"
+                )
+                .to_string(),
+            );
+        }
+    };
+
+    let target = match pairing_target_url(&origin, token) {
+        Ok(target) => target,
+        Err(error) => {
+            log::warn!("[mobile-bridge] pairing url build failed: {error}");
+            return (
+                String::new(),
+                "配对链接构造失败：请在桌面端菜单重新打开配对页。".to_string(),
+            );
+        }
+    };
+
+    match render_qr_block(&target) {
+        Ok(block) => (
+            block,
+            "用手机相机扫描，或在已打开的本页点击「配对」。".to_string(),
+        ),
+        Err(error) => {
+            // 二维码失败是**错误可见性**问题，与上面的注入防线不同等级：
+            // 这里不让页面显示一片空白，而是把原因说出来（并落到日志）。
+            log::warn!("[mobile-bridge] qr render failed: {error}");
+            (
+                String::new(),
+                format!(
+                    "二维码渲染失败（{}）：可直接点击下方「配对」，或在桌面端重新生成。",
+                    escape_html(&error.to_string())
+                ),
+            )
+        }
+    }
 }
 
 async fn health() -> &'static str {
@@ -1465,7 +1698,10 @@ mod tests {
 
     #[test]
     fn qr_block_is_preformatted_text_not_svg() {
-        let block = render_qr_block("http://192.168.1.5:4173/?token=abc");
+        // 渲染失败现在返回 `Err`（CD08-(d)），本判据只对成功路径成立，
+        // 因此这里必须显式要求成功，而不是把 `Err` 当成「空块」蒙过去。
+        let block =
+            render_qr_block("http://192.168.1.5:4173/?token=abc").expect("短链接必须渲染成功");
         assert!(block.starts_with("<pre>"), "{block}");
         assert!(!block.contains("<svg"), "字段名含 _svg 但内容是文本块");
     }
@@ -2265,5 +2501,286 @@ mod tests {
         )
         .await;
         assert_ne!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    // =================================================================
+    // CD08 — 配对页注入面：转义 / Host 白名单 / 规范化 Origin / 失败可见性
+    //
+    // 四组夹具刻意分开：它们防的不是同一件事，任何一条失效都不该把另一条
+    // 连带判绿。共同前提（`bridge_listening_on` + `page_with_host`）见下。
+    // =================================================================
+
+    /// 读取页面响应体（判 HTML 内容用，不能只看状态码）。
+    async fn body_of(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .expect("读取配对页响应体");
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    /// 造一个「正在监听 `<port>`」的桥状态：**只写 `port` 字段，不真的绑定**。
+    ///
+    /// 判据对象是页面生成（白名单要读监听端口），不是监听器本身；真绑端口会
+    /// 把夹具绑到「这个端口在 CI 上能不能用」上（可能已被占用），与判据无关。
+    async fn bridge_listening_on(port: u16) -> Arc<BridgeState> {
+        let bridge = MobileBridge::new();
+        *bridge.state.port.lock().await = Some(port);
+        Arc::clone(&bridge.state)
+    }
+
+    /// 直接调 `pair_page` 处理器（与 `rpc_forward` 的测法一致：真实处理器与
+    /// 提取器，但不经 TCP——Host 与端口由夹具完全控制）。
+    async fn page_with_host(state: Arc<BridgeState>, host: &str, token: &str) -> String {
+        let query = axum::extract::Query(HashMap::from([("token".to_string(), token.to_string())]));
+        let response = pair_page(State(state), axum::extract::Host(host.to_string()), query).await;
+        assert_eq!(response.status(), StatusCode::OK, "配对页必须是 200");
+        body_of(response).await
+    }
+
+    // -----------------------------------------------------------------
+    // CD08-(a) JSON→HTML 注入
+    // -----------------------------------------------------------------
+
+    /// 转义函数本身：五个字符各自有替代形式（漏掉 `"` 就等于属性可闭合）。
+    #[test]
+    fn cd08_a_escape_html_covers_the_five_context_breaking_characters() {
+        assert_eq!(
+            escape_html(r#"<a href="x">&'</a>"#),
+            "&lt;a href=&quot;x&quot;&gt;&amp;&#x27;&lt;/a&gt;"
+        );
+        // 反向对照：普通字符不得被改写（否则「转义」变成「打碎」）。
+        assert_eq!(escape_html("token-0123_ab.c"), "token-0123_ab.c");
+    }
+
+    /// 核心夹具：token 里的 `</script>` 不得提前闭合脚本、不得变成真标签。
+    #[tokio::test]
+    async fn cd08_a_token_cannot_break_out_of_the_script_block() {
+        let state = bridge_listening_on(8765).await;
+        let token = "</script><img src=x onerror=1>";
+        let body = page_with_host(state, "127.0.0.1:8765", token).await;
+
+        // 判据 1：注入串一个字符都不许原样出现。
+        assert!(!body.contains("<img"), "token 被写成了真标签: {body}");
+        assert!(
+            !body.contains("</script><img"),
+            "token 提前闭合了 script: {body}"
+        );
+        // 判据 2：`<script>` 开闭各只允许模板自带的那一次——多出来的闭合
+        // 意味着其后的内容被当成 HTML 解析（XSS 的形态）。
+        assert_eq!(body.matches("<script>").count(), 1, "{body}");
+        assert_eq!(body.matches("</script>").count(), 1, "{body}");
+        // 判据 3：token 必须**仍在**（转义后）。否则「把 token 删掉」也能让
+        // 上面两条全绿。
+        assert!(
+            body.contains(r#"data-token="&lt;/script&gt;&lt;img src=x onerror=1&gt;""#),
+            "token 没有以转义形式落到 data-token 上: {body}"
+        );
+        // 判据 4：脚本确实从属性取值。属性转了义、脚本却仍读内联字面量，等于
+        // 把同一条通路重新打开。
+        assert!(body.contains("getAttribute('data-token')"), "{body}");
+    }
+
+    // -----------------------------------------------------------------
+    // CD08-(b) Host 白名单
+    // -----------------------------------------------------------------
+
+    /// 前置：三种合法形态（纯 IPv4 / IPv4:port / `[::1]:port`）都要被正确拆开。
+    ///
+    /// 单独立这条，是因为「白名单全拒」也能让下面所有负例变绿——必须先证明
+    /// 解析器认得合法输入，通过/拒绝才有分辨力。
+    #[test]
+    fn cd08_b_host_header_parsing_handles_ipv4_ipv6_and_default_port() {
+        let ip = |text: &str| text.parse::<std::net::IpAddr>().expect("夹具 IP 合法");
+        assert_eq!(
+            parse_host_header("127.0.0.1:8765"),
+            Some((ip("127.0.0.1"), 8765))
+        );
+        assert_eq!(
+            parse_host_header("127.0.0.1"),
+            Some((ip("127.0.0.1"), 80)),
+            "无端口即 http 默认端口"
+        );
+        assert_eq!(parse_host_header("[::1]:8765"), Some((ip("::1"), 8765)));
+        assert_eq!(parse_host_header("[::1]"), Some((ip("::1"), 80)));
+        assert_eq!(
+            parse_host_header("192.168.1.5:8765"),
+            Some((ip("192.168.1.5"), 8765))
+        );
+
+        for rejected in [
+            "",
+            "evil\"><script>",
+            "::1:8765",            // 裸 IPv6：RFC 7230 要求方括号
+            "127.0.0.1:99999",     // 端口越界
+            "127.0.0.1:8765:1",    // 多余冒号
+            "user@127.0.0.1:8765", // 带用户信息
+            "127.0.0.1:8765/x",    // 带路径
+            "[::1",                // 括号未闭合
+            "localhost:8765",      // 主机名不进白名单
+        ] {
+            assert_eq!(
+                parse_host_header(rejected),
+                None,
+                "`{rejected}` 被当成合法 Host"
+            );
+        }
+    }
+
+    /// 白名单：只放行「回环 + 本机 LAN 地址」，且端口必须等于监听端口。
+    #[test]
+    fn cd08_b_canonical_origin_allows_loopback_and_lan_only() {
+        let lan = Some("192.168.1.5");
+        assert_eq!(
+            canonical_origin("127.0.0.1:8765", Some(8765), lan),
+            Ok("http://127.0.0.1:8765".to_string())
+        );
+        assert_eq!(
+            canonical_origin("192.168.1.5:8765", Some(8765), lan),
+            Ok("http://192.168.1.5:8765".to_string())
+        );
+        // IPv6 回环在 Origin 里必须带方括号，否则拼出的 URL 不可解析。
+        assert_eq!(
+            canonical_origin("[::1]:8765", Some(8765), lan),
+            Ok("http://[::1]:8765".to_string())
+        );
+
+        // 每一条只打破一个条件：地址、端口、形态、以及「拿不到可信信息」。
+        for (label, raw, bound, lan) in [
+            ("非本机 LAN 地址", "192.168.1.6:8765", Some(8765), lan),
+            ("公网地址", "8.8.8.8:8765", Some(8765), lan),
+            ("Host 注入", "evil\"><script>:8765", Some(8765), lan),
+            ("端口不是监听端口", "127.0.0.1:8766", Some(8765), lan),
+            ("缺端口（折算成 80）", "127.0.0.1", Some(8765), lan),
+            ("主机名", "example.com:8765", Some(8765), lan),
+            ("桥未监听", "127.0.0.1:8765", None, lan),
+            (
+                "探测不到 LAN 地址时 LAN 地址也必须拒",
+                "192.168.1.5:8765",
+                Some(8765),
+                None,
+            ),
+        ] {
+            assert!(
+                canonical_origin(raw, bound, lan).is_err(),
+                "{label}: `{raw}` 被放行了"
+            );
+        }
+    }
+
+    /// 端到端：非白名单 Host 不生成二维码，且一个字符都不回显。
+    #[tokio::test]
+    async fn cd08_b_foreign_host_gets_no_qr_and_is_never_echoed() {
+        let state = bridge_listening_on(8765).await;
+        let hostile = "evil\"><script>alert(1)</script>:8765";
+        let body = page_with_host(state, hostile, "deadbeef").await;
+
+        assert!(!body.contains("alert(1)"), "Host 被回显进了页面: {body}");
+        assert!(!body.contains("<pre>"), "被拒的 Host 仍然生成了二维码");
+        assert!(
+            body.contains("配对页地址校验失败"),
+            "页面没有说明为什么没有二维码: {body}"
+        );
+        // 配对按钮仍可用（令牌照常落到 data-token）：拒绝生成二维码不该把
+        // 合法的配对动作一起掐死。
+        assert!(body.contains(r#"data-token="deadbeef""#), "{body}");
+
+        // 反例：同一个 token 换合法 Host 必须给出二维码——证明上面的「没有
+        // 二维码」来自白名单，而不是「二维码这条路本来就坏了」。
+        let state = bridge_listening_on(8765).await;
+        let body = page_with_host(state, "127.0.0.1:8765", "deadbeef").await;
+        assert!(body.contains("<pre>"), "合法 Host 没有生成二维码: {body}");
+    }
+
+    // -----------------------------------------------------------------
+    // CD08-(c) 二维码 URL 只由规范化 Origin 构造
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn cd08_c_pairing_url_is_canonical_and_percent_encodes_the_token() {
+        let origin = canonical_origin("127.0.0.1:8765", Some(8765), None).expect("回环必须通过");
+        let url = pairing_target_url(&origin, "abc&x=y#z").expect("构造配对链接");
+        assert_eq!(url, "http://127.0.0.1:8765/?token=abc%26x%3Dy%23z");
+
+        let parsed = url::Url::parse(&url).expect("配对链接必须可解析");
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(8765));
+        assert_eq!(parsed.path(), "/");
+
+        // token 必须整段落回**一个** query 值：直接字符串拼接时，token 里的
+        // `&` 会被当成参数分隔符，`#` 会把后面全部变成 fragment。
+        let pairs: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(pairs, vec![("token".to_string(), "abc&x=y#z".to_string())]);
+    }
+
+    // -----------------------------------------------------------------
+    // CD08-(d) 二维码渲染失败的可见性（**不是**注入判据，单独成组）
+    // -----------------------------------------------------------------
+
+    /// 失败必须同时满足两条：`warn` 级日志 + 页面可见错误。
+    ///
+    /// 判据来自「旧实现返回空串」：手机端只看到一片空白，日志一条没有，
+    /// 用户无法区分「桥没开」「token 过期」「二维码没渲染出来」。
+    #[tokio::test]
+    async fn cd08_d_qr_failure_is_logged_and_visible_on_the_page() {
+        let lines = captured_log();
+        lines.lock().expect("日志缓冲未被毒化").clear();
+
+        // QR 版本 40 的容量上限是 2953 字节（L 级；M 级更小），4000 字节必然
+        // 走到 `QrError::DataTooLong`。
+        let token = "a".repeat(4000);
+        let state = bridge_listening_on(8765).await;
+        let body = page_with_host(state, "127.0.0.1:8765", &token).await;
+
+        assert!(!body.contains("<pre>"), "渲染失败却仍给出了二维码块");
+        assert!(
+            body.contains("二维码渲染失败"),
+            "失败在页面上不可见: {body}"
+        );
+
+        // 并行测试会往同一个缓冲里写，因此只断言「存在这条日志」，
+        // 不断言「只有这条」（断言唯一性会是脆的，且与本判据无关）。
+        let log = lines.lock().expect("日志缓冲未被毒化").join("\n");
+        assert!(
+            log.contains("WARN: [mobile-bridge] qr render failed"),
+            "失败路径没有 warn 级日志——观察点没接上: {log}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // CD08 接线：新增的 `State` 提取器必须真的挂在路由上
+    // -----------------------------------------------------------------
+
+    /// 直接调处理器的夹具绕过了 axum 路由；这一条走真实监听端口，钉住
+    /// 「`pair_page` 拿到了正确的 `state`（监听端口）」这件事。
+    #[tokio::test]
+    async fn cd08_pair_page_is_wired_through_the_real_router() {
+        let bridge = MobileBridge::new();
+        let snapshot = bridge.start(None).await.expect("绑定临时端口");
+        let port = snapshot.port.expect("监听后必须拿到端口");
+        let token = pairing_token(&snapshot);
+
+        let path = format!("/?token={token}");
+        let (status, body) = http_call(port, "GET", &path, &[], b"").await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("<pre>"), "配对页没有二维码: {body}");
+        assert!(
+            body.contains(&format!(r#"data-token="{token}""#)),
+            "token 没有落到 data-token 上: {body}"
+        );
+
+        // `Host` 提取器会先看 `X-Forwarded-Host`（axum 行为），所以校验必须
+        // 作用在**提取器的值**上：这一条换了个头，同样不得生成二维码。
+        let forwarded = [("X-Forwarded-Host", format!("evil.example:{port}"))];
+        let (status, body) = http_call(port, "GET", &path, &forwarded, b"").await;
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            !body.contains("<pre>"),
+            "伪造 X-Forwarded-Host 仍生成了二维码: {body}"
+        );
+
+        bridge.stop().await;
     }
 }

@@ -444,8 +444,8 @@ pub fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, id: &str) {
             }
             MENU_ID_APP_QUIT => {
                 // 退出前问一次「有没有会话在跑」：拦下时守卫负责唤回窗口 + 通知。
-                // 第二次显式退出强制生效，因此这里不会把用户永久卡住。
-                if !crate::quit_guard::decide(&app, false).await.is_proceed() {
+                // 放行与否由当次模态框答复决定（早先「第二次显式退出强制生效」的计数器已删除）。
+                if !crate::quit_guard::decide(&app).await.is_proceed() {
                     return;
                 }
                 // 先优雅停机再退出：`app.exit(0)` 不经过 `CloseRequested`，

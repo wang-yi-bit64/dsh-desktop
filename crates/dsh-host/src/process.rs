@@ -263,14 +263,51 @@ fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
     unsafe {
         command.pre_exec(|| {
             // 父进程死亡时内核直接投递 SIGTERM。
+            // prctl 本身**可能失败**（内核拒绝该 option、参数非法），失败了必须
+            // 让派生直接报错——静默忽略等于宣称一条根本没装上的守护。这里的
+            // `io::Result` 由 `pre_exec` 的契约原样回传给父进程，`Command::spawn()`
+            // 会返回它，最终映射成 `HostError::Spawn`。
+            install_pdeathsig()?;
             // 已知 race（计划中如实记录）：若父进程在 prctl 之前就死了，
             // 这里兜不住，由启动时 pidfile 清扫补位。
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
             Ok(())
         });
     }
     Ok(())
 }
+
+/// `prctl(PR_SET_PDEATHSIG, SIGTERM)` 的唯一出口（也是测试注入点）。
+#[cfg(target_os = "linux")]
+fn install_pdeathsig() -> std::io::Result<()> {
+    // 测试注入：不碰真实 syscall，直接给出 EPERM，模拟「内核拒绝」。
+    // 真实的 prctl 失败无法在 CI 里稳定复现（可控性为零），所以只能注入。
+    if pdeathsig_failure_injected() {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+
+    // SAFETY: 两个参数都是整数字面量，不涉及指针与生命周期。
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// 故障注入判据（单测版）：读注入开关。
+#[cfg(all(test, target_os = "linux"))]
+fn pdeathsig_failure_injected() -> bool {
+    FAULT_INJECT_PDEATHSIG_FAILURE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// 故障注入判据（生产版）：恒 `false`，不引入任何状态。
+#[cfg(all(not(test), target_os = "linux"))]
+fn pdeathsig_failure_injected() -> bool {
+    false
+}
+
+/// 测试专用故障注入开关：只在 `cfg(test)` 下存在，不进生产二进制。
+#[cfg(all(test, target_os = "linux"))]
+static FAULT_INJECT_PDEATHSIG_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(target_os = "macos")]
 fn apply_platform_guards(command: &mut Command) -> HostResult<()> {
@@ -635,5 +672,63 @@ mod tests {
             std::process::id(),
             Path::new("/nonexistent-resource-dir-xyz")
         ));
+    }
+}
+
+/// CD11 —— Linux 专用：`prctl` 的返回值不允许被丢弃。
+///
+/// 本机（Windows）上 `apply_platform_guards` 与整个模块都在 `cfg` 之外，
+/// **既不编译也不运行**，只能等 CI 的 Linux job 给结论。
+#[cfg(all(test, target_os = "linux"))]
+mod linux_pdeathsig_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// 故障注入：让 `install_pdeathsig` 直接返回 EPERM。
+    /// 真实的 prctl 失败不可控、不可复现，只能注入。
+    struct InjectedFailure;
+
+    impl InjectedFailure {
+        fn engage() -> Self {
+            FAULT_INJECT_PDEATHSIG_FAILURE.store(true, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for InjectedFailure {
+        fn drop(&mut self) {
+            FAULT_INJECT_PDEATHSIG_FAILURE.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// 正常路径与失败路径合并在**同一个** `#[test]` 里：注入开关是进程级
+    /// 全局量，拆成两个测试并行跑会出现「失败测试刚置位、正常测试就踩上」的
+    /// 假红。`/bin/true` 在这里只是 pre_exec 的载体，不会真的跑业务。
+    ///
+    /// 用 `#[tokio::test]` 是因为 tokio 的 `Command::spawn` 会注册子进程收割器
+    /// （pidfd / SIGCHLD），放在 runtime 上下文里最稳，避免在无 reactor 的
+    /// 线程上试探 tokio 的边界行为。
+    #[tokio::test]
+    async fn pdeathsig_result_is_not_discarded() {
+        // 1) 未注入：守护照常装上，派生成功。
+        let mut ok_command = Command::new("/bin/true");
+        apply_platform_guards(&mut ok_command).expect("装配守护本身不发起 syscall");
+        let child = ok_command.spawn().expect("未注入失败时派生必须照常成功");
+        drop(child);
+
+        // 2) 注入 prctl 失败：spawn 必须报错，而不是静默继续。
+        let _failure = InjectedFailure::engage();
+        let mut failing_command = Command::new("/bin/true");
+        apply_platform_guards(&mut failing_command).expect("装配守护本身不发起 syscall");
+
+        let error = failing_command
+            .spawn()
+            .expect_err("prctl 失败必须让 spawn 报错，而不是静默继续");
+
+        assert_eq!(
+            error.raw_os_error(),
+            Some(libc::EPERM),
+            "错误必须来自 pre_exec 里的 prctl，而不是 exec 阶段：{error:?}"
+        );
     }
 }

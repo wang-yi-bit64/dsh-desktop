@@ -60,6 +60,8 @@
 - **Tauri 资源校验**：全新 checkout 在 `cargo check`/`cargo test` 前先跑 `node scripts/stub-tauri-resources.mjs`。
 - **Node 执行路径**：产物运行内置 `src-tauri/resources/node/` 下的 Node（Windows 带 `.exe`）。
 - **页面跳转**：Webview 先加载 `frontend/index.html` 启动屏并监听 `harness://status`；Token 就绪后由 Rust 导航到本地 Harness 页。
+- **编译产物清理**：**只允许 `cargo clean`**。禁止用文件删除工具（`rm -rf` / `Remove-Item` / `Directory.Delete` / 资源管理器）直接删 `target/`——删除会触发 WorkBuddy 的「删除前备份」，把整个 `target/` 复制一份进 C 盘会话目录（`.workbuddy/workspace/sessions/<id>/modify_backup/`）。2026-11-02 因此一次性吃掉 31GB C 盘空间：删除耗时 17 分钟，且空间**不降反升**（删掉 31GB、新会话又备份 31.5GB）。
+- **仓库检出位置**：禁止把仓库检出到 C 盘用户目录（如 `C:\Users\<user>\WorkBuddy\Worktrees\`）下编译。`target/` 已由本机 `.cargo/config.toml` 的 `[build] target-dir` 锁定在 D 盘，但检出到 C 盘仍会让 `node_modules/`、`harness-deps/` 等写入系统盘，且一旦误删 target 就是上一条事故的复现。
 
 > 🗂️ **「已修复，勿回归」事故档案已按主题外移到 `docs/incidents/`**（内容原样保留；新家含完整根因、修法与守卫）：
 > - Windows 打包与启动 → `win32-packaging.md`
@@ -89,6 +91,7 @@
 - `docs/dev-plan-disconnected-points.md`：上一阶段主计划（批次 A~G 已闭环）——断线点 D1~D11 与裁决记录；「插件禁用语义」证据链在此。
 - `docs/dev-plan-cli-distribution.md`：CLI / runtime 可引用产物分期；**动 CLI 发布形态前先读它**（§5 退役评估）。
 - `docs/dev-plan-defect-remediation.md`：**缺陷治理专项**（批次 S0~S7，2026-09-30 起）——D1~D12 缺陷清单、可证伪判据、C1~C8 裁决与执行台账；动 S 批次任何条目前先读它。
+- `docs/dev-plan-claim-discipline-defects.md`：**缺陷修复计划 V2：可靠性优先与工程治理执行方案**（CD01~CD23，2026-10-30 立项，V2 同日重排）——§7.1 三条硬规则各自的违反点与证据链；执行顺序按**阶段 0~6**（阶段 0 审计准备 → 阶段 1 安全与核心契约 → … → 阶段 6 低优先级），总分表为**双维度**（审计严重性 P0~P3 + 执行阶段），每项含**修复前证据**与**修复后验收**；另含兼容性矩阵、发布证据闭环、性能基线与「技术债红线」。含「CI 不监听 push 已由 ADR-030 裁定」等 4 条**已撤回/已证伪**结论，避免重提。**本档是 `dev-plan-defect-remediation.md` 的子计划，不占批次账本主体**（`verify-plan-facts.mjs` 的 `PLAN_DOC` 仍指向后者）；编号**刻意用 `CD` 前缀**而非 `D`——后者已被 `D1~D13` 占用。**动 cookies / 更新链错误分类 / 移动桥配对页 / 契约层类型 / 门禁补强前先读它。**
 - `docs/dev-plan-external-assessment-response.md`：**外部评估回应计划**（批次 V0~V6，2026-10-27 起）——把 2026-10-27 外部架构评估的每条结论映射到仓库现状（已闭环/部分闭环/真缺口/边界外/误判五裁定），只对真缺口立批次：生命周期竞态故障注入、移动桥接对抗性测试与审计留痕、错误码 Rust↔前端漂移守卫、Safe Mode 可见性（条件触发）、性能基线、补丁退役条件。**动 Supervisor / 移动桥接 / 错误码 / 补丁层前先读它**——它登记了这些面上「哪些已闭环、别再重做」。
 - `docs/dev-plan-supervisor-shell-wiring.md`：**Supervisor 接入桌面壳（L1→L2 接线）的设计与阻塞项**——集成点、`SupervisorState`↔`HarnessPhase` 映射表、启动/停止/安全模式生命周期、异常与边界清单（E1~E11），以及**接线前必须先在 `dsh-host` 补齐的三个 API 缺口**（`HarnessEnv` 传递 / 安全模式 profile / `extra_envs` 死字段）。**动 `HarnessSupervisor` 或 `Supervisor` 前先读它。**
 - `docs/recover-demo.md`：`recover` 子命令的一页式无 GUI 复现步骤（启动 → 注入崩溃 → 退避递增 → 断路器开路）——**改 Supervisor / 退避 / 断路器后必跑**，它同时是 §7.2「Supervisor 自愈与退避」的证据链之一。

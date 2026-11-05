@@ -51,3 +51,8 @@ Thumbs.db
 
 # 三路合并移植脚本（merge-migrate-patches.mjs）的临时工作目录
 .merge-migrate-tmp/
+
+# 取证工作树的整仓副本（`.delta/worktrees/` 曾被当作第二份源码树扫描，
+# 造成「零消费者」类断言假阴性）。此前只写在 .git/info/exclude:7，
+# 那是本地文件、克隆不生效，必须先落 .gitignore 才能约束所有检出。
+/.delta/

@@ -9,13 +9,47 @@
 //!
 //! # 脱敏规则（每条都有正反用例，见 `tests`）
 //!
-//! | 规则 | 命中形态 | 替换为 |
-//! |------|---------|--------|
-//! | `launch_token` | `token=<值>`（含 URL query）、`--token <值>` | `token=<redacted>` |
-//! | `auth_cookie` | `dsh-auth-*=值`（含 `Cookie:` / `Set-Cookie:` 头） | `dsh-auth-*=<redacted>` |
-//! | `path_username` | `C:\Users\<名>\`、`/Users/<名>/`、`/home/<名>/` | 用户名段换成 `<user>` |
-//! | `api_key` | `sk-…` / `sk-ant-…` / `Bearer …` / `api_key=…` | `<redacted>` |
-//! | `proxy_password` | URL 里的 `user:pass@host` | 口令段换成 `<redacted>` |
+//! 规则表 `rules()` 是**唯一产地**，每条规则带一个 `RuleKind`，决定它属于
+//! 「凭据」还是「身份信息」。两条入口按 kind 取用：导出诊断包用全部规则
+//! （[`redact`] / [`redact_reporting`]），日志落盘前只抹凭据（[`redact_stream`]）。
+//!
+//! | 规则 | kind | 命中形态 | 替换为 |
+//! |------|------|---------|--------|
+//! | `launch_token` | Secret | URL query `?token=` / `&token=`（值 ≥4） | 保留键名，值换 `<redacted>` |
+//! | `launch_token` | Secret | `token:` / `token=` / `--token `（值 ≥8） | 保留键名，值换 `<redacted>` |
+//! | `auth_cookie` | Secret | `dsh-auth-*=值`（含 `Cookie:` / `Set-Cookie:` 头） | `dsh-auth-*=<redacted>` |
+//! | `private_key` | Secret | `-----BEGIN … PRIVATE KEY-----` … `-----END … PRIVATE KEY-----`（跨行，RSA / EC / OPENSSH / 无后缀） | `<redacted>` |
+//! | `jwt` | Secret | 裸 JWT `eyJ….eyJ….…`（三段 base64url） | `<redacted>` |
+//! | `platform_token` | Secret | `ghp_` / `github_pat_` / `gho_` / `ghs_` / `glpat-`（后跟 ≥16 位） | 保留前缀，值换 `<redacted>` |
+//! | `authorization_basic` | Secret | `Authorization: Basic <base64>` | 保留 `Basic `，凭据段换 `<redacted>` |
+//! | `x_api_key` | Secret | `x-api-key:` / `x_api_key:`（大小写不敏感，值 ≥8） | 保留头名，值换 `<redacted>` |
+//! | `api_key` | Secret | `sk-…` / `sk-ant-…` / `Bearer …` / `api_key=…` | `<redacted>` |
+//! | `query_secret` | Secret | `?access_token=` `?refresh_token=` `?api_key=` `?apikey=` `?key=` `?secret=` `?sig=` `?signature=` `?auth=` `?password=`（值 ≥8） | 保留键名，值换 `<redacted>` |
+//! | `proxy_password` | Secret | URL 里的 `user:pass@host` | 口令段换成 `<redacted>` |
+//! | `path_username` | Identity | `C:\Users\<名>\`、`/Users/<名>/`、`/home/<名>/` | 用户名段换成 `<user>` |
+//! | `unc_host` | Identity | `\\server\share\…`（Windows UNC；首段是 `Users`/`home` 或占位符时不替换） | server 段换成 `<host>` |
+//!
+//! ## 两档 token 门槛（`launch_token` 为什么是两条正则）
+//!
+//! URL query 的 `?token=` **语义无歧义**——出现在 query 位置上的 `token` 就是
+//! 首航凭据，没有第二种解释，因此值门槛压到 ≥4：短 token（例如手改过的
+//! `?token=aB3x`）同样是凭据，漏掉就等于把凭据写进包里。而通用形态
+//! （`token:` / `token= ` / `--token `）会和配置项撞车——`token=off`、
+//! `token=disabled` 是开关值，不是密钥，所以那条保持 ≥8 的保守门槛。
+//! 门槛不同是因为**歧义程度不同**，不是为了少写一条正则。
+//!
+//! ## ingest 与 export 的适用面差异（[`redact_stream`] vs [`redact`]）
+//!
+//! | 场景 | 入口 | 施加的规则 |
+//! |------|------|-----------|
+//! | 日志 ingest（写入 `harness.log` 之前） | [`redact_stream`] | 只施加 `Secret` |
+//! | 导出诊断包（`export`） | `redact_reporting` | 全部（`Secret` + `Identity`） |
+//!
+//! 理由是两种文件的生命周期不同：日志**留在本机**，是排障的一手材料，真实路径
+//! （`C:\Users\某人\…`）与 UNC 主机名恰恰是定位「装在哪台机器、哪个目录」的
+//! 关键线索，进日志时就抹掉等于自断线索；而诊断包**会被发出去**，一旦离开本机，
+//! 路径里的用户名与主机名就是不该外流的身份信息。所以身份信息只在出关口
+//! 统一抹掉——两个入口共用同一张规则表，只是按 kind 过滤，不存在两份正则。
 //!
 //! **反向要求同样重要**：产品版本号（`0.1.0`、`v22.22.2`）、端口、错误码
 //! （`E1001`）、`dsh.profile.bundles` 里的包名都**不能**被误伤——一份把版本号
@@ -72,38 +106,221 @@ pub struct ExportSummary {
 // 脱敏
 // ---------------------------------------------------------------------------
 
-struct Rule {
-    name: &'static str,
-    pattern: Regex,
-    replacement: &'static str,
+/// 规则所属的类别，决定它在哪条入口生效。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuleKind {
+    /// 凭据：拿到值就能冒充身份或访问资源（token / cookie / 私钥 / key）。
+    /// 日志落盘前就要抹掉——日志文件本身也不该长期保存可用凭据。
+    Secret,
+    /// 身份信息：值本身不能用来登录，但指向一个具体的人或机器（用户名、主机名）。
+    /// 只在**导出诊断包**时抹掉，本地日志保留原文以便排障。
+    Identity,
 }
 
-/// 脱敏规则表（编译一次，全进程复用）。
+/// 正则命中之后的附加判定：返回 `true` 才允许替换。
+///
+/// regex crate 不支持 lookahead，凡是「要看捕获组内容才知道该不该抹」的规则
+/// 只能靠它补判定（目前只有 `unc_host` 用）。
+type MarkGuard = fn(&regex::Captures<'_>) -> bool;
+
+struct Rule {
+    name: &'static str,
+    kind: RuleKind,
+    pattern: Regex,
+    replacement: &'static str,
+    guard: Option<MarkGuard>,
+}
+
+/// 造一条规则。正则与替换词都取自常量表，编译失败属于编码错误，
+/// 构建时就会由测试暴露。
+fn rule(name: &'static str, kind: RuleKind, pattern: &str, replacement: &'static str) -> Rule {
+    Rule {
+        name,
+        kind,
+        pattern: Regex::new(pattern).expect("redaction rule must compile"),
+        replacement,
+        guard: None,
+    }
+}
+
+/// 造一条带后置判定的规则（正则算不出来的条件写进 `guard`）。
+fn guarded_rule(
+    name: &'static str,
+    kind: RuleKind,
+    pattern: &str,
+    replacement: &'static str,
+    guard: MarkGuard,
+) -> Rule {
+    Rule {
+        guard: Some(guard),
+        ..rule(name, kind, pattern, replacement)
+    }
+}
+
+/// 值恰是占位符 `<redacted>` 的匹配是**上一轮脱敏的残影**：替换它不会改变
+/// 一个字符，却会让命中计数 +1。两条路径都会产生残影：
+///
+/// 1. 同一遍规则表内：前面的规则先把值抹成 `<redacted>`，后面的规则
+///    （如 `query_secret` 跟在通用 `api_key` 之后）又匹配到同一位置；
+/// 2. ingest → export：写日志时 `redact_stream` 已按 Secret 规则抹过一遍，
+///    导出诊断包时 `redact_reporting` 再过全表。
+///
+/// 残影被否决后原样保留且**不计入**命中数——`apply_rules` 的 guard 分支
+/// 保证「统计只记录真的替换过的次数」。不拦的话，导出包 `README.txt` 报告
+/// 的替换次数会大于实际发生数，「命中计数可核对」（§7.1 规则 3）就是空话。
+///
+/// 用守卫而不是从值字符集里排除 `<`：排除会改变首次匹配的边界——一个
+/// 真含 `<` 的密码会被只抹前半段（部分泄漏）；守卫保持完整值匹配，只在
+/// 值**恰好等于**占位符时放弃这次替换。
+fn value_is_not_placeholder(caps: &regex::Captures<'_>) -> bool {
+    caps.get(2).is_none_or(|value| value.as_str() != REDACTED)
+}
+
+/// 脱敏规则表（编译一次，全进程复用）。**唯一产地**：两个入口都从这里取规则，
+/// 只是按 `RuleKind` 过滤，不允许在调用侧另抄一份正则。
 ///
 /// 正则刻意保持**保守**：宁可漏掉一个不像密钥的长串，也不要吞掉正常日志。
 /// 例如 `api_key` 要求值至少 12 个字符，避免把 `api_key=auto` 这类配置项涂掉。
 fn rules() -> &'static [Rule] {
     static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
     RULES.get_or_init(|| {
-        let compile = |name: &'static str, pattern: &str, replacement: &'static str| Rule {
-            name,
-            // 规则表是常量，编译失败属于编码错误，构建时就会由测试暴露。
-            pattern: Regex::new(pattern).expect("redaction rule must compile"),
-            replacement,
-        };
+        use RuleKind::{Identity, Secret};
         vec![
-            // `token=abc` / `?token=abc&x=1` / `--token abc` / `"token": "abc"`
-            compile(
+            // --- 凭据类 ---
+            //
+            // URL query 形态单列一条、门槛降到 ≥4：`?token=` / `&token=` 出现在
+            // query 位置上语义无歧义，短值也是凭据（见模块头部「两档 token 门槛」）。
+            //
+            // 值字符集**必须含 `%`**：query 里的值常是百分号编码的（`?token=%2B…`、
+            // `?token=a%2Fb…`）。不含 `%` 时正则会在第一个 `%` 处断开——整个值都
+            // 从 `%` 开头就一条也不匹配（凭据原样进包），从中间开始则只抹掉前半段、
+            // 把 `%2F` 之类的尾巴留在包里。两种都是泄漏，所以这里不允许「保守」。
+            rule(
                 "launch_token",
-                r#"(?i)(token["']?\s*[:=]\s*["']?|--token\s+)([A-Za-z0-9._~+/=-]{8,})"#,
+                Secret,
+                r"(?i)([?&]token=)([A-Za-z0-9._~+/=%-]{4,})",
                 "${1}<redacted>",
             ),
-            // Cookie：`dsh-auth-session=xxx`（含 Set-Cookie 头）。
-            compile(
+            // `token=abc` / `?token=abc&x=1` / `--token abc` / `"token": "abc"`
+            //
+            // 通用形态保持 ≥8：它同时会匹配 `token=off` 这类开关值，门槛低了会
+            // 把配置项涂掉（`tests::keeps_short_config_values_that_only_look_secret`）。
+            // `%` 同上：编码过的值不得让正则提前收尾。
+            rule(
+                "launch_token",
+                Secret,
+                r#"(?i)(token["']?\s*[:=]\s*["']?|--token\s+)([A-Za-z0-9._~+/=%-]{8,})"#,
+                "${1}<redacted>",
+            ),
+            // Cookie：`dsh-auth-session=xxx`（含 Set-Cookie 头）。值为占位符时由
+            // [`value_is_not_placeholder`] 守卫跳过——ingest 抹过的 cookie 行在
+            // export 再过表时不重计。
+            guarded_rule(
                 "auth_cookie",
+                Secret,
                 r"(?i)(dsh-auth-[a-z0-9-]*=)([^;\s,]+)",
                 "${1}<redacted>",
+                value_is_not_placeholder,
             ),
+            // PEM 私钥块：RSA / EC / OPENSSH / 无后缀都要覆盖，且必须**跨行**匹配
+            // （`(?s)` 让 `.` 吃掉换行）。整块替换，连头部标记一起抹掉——留下
+            // `BEGIN … PRIVATE KEY` 只会让读者以为包里还有密钥。
+            //
+            // 跨行形态只在**整块**输入时命中：诊断包导出是整文件一次传入，所以
+            // 这条路本来就该命中（`redacts_private_key_blocks_across_lines` 钉住）。
+            //
+            // 逐行调用方（`launch.rs` 的日志泵）由 `crate::logs::LineRedactor`
+            // 维护 PEM 跨行状态；`redact_stream` 本身保持纯函数、每次只处理一行，
+            // 单行输入里只有 `BEGIN` 没有 `END` 时这条规则不会命中。
+            //
+            // ⚠️ 别据此认为「规则表里有 `private_key` 就等于 ingest 已覆盖」：
+            // 覆盖来自那个**有状态**的调用方，不是来自这条正则。删掉 `LineRedactor`
+            // 而留着这条规则，私钥正文就会整块落盘——拦住它的是泵级测试
+            // `launch::tests::line_pump_writes_redacted_line_but_parses_real_token`
+            // （注入「每行新建」实测会红）与 `logs::tests::line_redactor_*`。
+            rule(
+                "private_key",
+                Secret,
+                r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+                "<redacted>",
+            ),
+            // 裸 JWT：三段 base64url，前两段都以 `eyJ`（`{"` 的 base64）开头。
+            rule(
+                "jwt",
+                Secret,
+                r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+                "<redacted>",
+            ),
+            // 代码托管平台的访问令牌。保留前缀（`ghp_` 等）便于在诊断包里看出
+            // 「泄漏的是哪一类凭据」，值本身一律抹掉。
+            rule(
+                "platform_token",
+                Secret,
+                r"\b(ghp_|github_pat_|gho_|ghs_|glpat-)[A-Za-z0-9_]{16,}",
+                "${1}<redacted>",
+            ),
+            // `Authorization: Basic <base64>`：保留 scheme，凭据段换成占位。
+            //
+            // 阈值 ≥4 而不是 ≥8：base64 的短凭据（`dTpw` 就是 `u:p`）是合法且
+            // 常见的，header 形态本身足够消除歧义。
+            rule(
+                "authorization_basic",
+                Secret,
+                r"(?i)(\bAuthorization\s*:\s*Basic\s+)([A-Za-z0-9+/=]{4,})",
+                "${1}<redacted>",
+            ),
+            // `x-api-key` 头，`-` 与 `_` 两种写法都要认。
+            //
+            // 必须排在下面那条通用 `api[_-]?key` 之前：否则通用规则先把值吃掉，
+            // 头名只剩 `x-<redacted>`，读日志的人就看不出这是哪个头了。
+            // 值为占位符时由 [`value_is_not_placeholder`] 守卫跳过（不重写、
+            // 不计数），避免同一凭据被计两次命中。
+            guarded_rule(
+                "x_api_key",
+                Secret,
+                r#"(?i)(\bx[_-]api[_-]key\s*[:=]\s*)([^\s,;"']{8,})"#,
+                "${1}<redacted>",
+                value_is_not_placeholder,
+            ),
+            // 常见 API key 形态。
+            rule("api_key", Secret, r"\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}\b", "<redacted>"),
+            rule(
+                "api_key",
+                Secret,
+                r"(?i)(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})",
+                "${1}<redacted>",
+            ),
+            rule(
+                "api_key",
+                Secret,
+                r#"(?i)(\b(?:api[_-]?key|access[_-]?token|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-\.]{12,})"#,
+                "${1}<redacted>",
+            ),
+            // 非常规 query key。上面那条通用规则只认 `api_key` / `access_token`
+            // 等几个名字且要 ≥12，这里补齐 `key` / `sig` / `auth` 这类短名，
+            // 门槛降到 ≥8（`?key=auto` 这种开关值仍然不会被吞）。值为占位符
+            // 时由 [`value_is_not_placeholder`] 守卫跳过：上面那条通用规则先
+            // 替换、本条随后在同一遍里看到 `<redacted>`，不拦会双计。
+            guarded_rule(
+                "query_secret",
+                Secret,
+                r"(?i)([?&](?:access_token|refresh_token|api_key|apikey|key|secret|sig|signature|auth|password)=)([^&\s#]{8,})",
+                "${1}<redacted>",
+                value_is_not_placeholder,
+            ),
+            // URL 里的 `user:password@host`。值为占位符时由 [`value_is_not_placeholder`]
+            // 守卫跳过（ingest 抹过的代理口令在 export 不重计）。**刻意不用**从值
+            // 字符集排除 `<` 的写法：密码可以含任意字符，排除会让含 `<` 的密码
+            // 只被抹前半段；守卫保持完整值匹配。
+            guarded_rule(
+                "proxy_password",
+                Secret,
+                r"(?i)(https?://[^:/\s@]+:)([^@/\s]+)(@)",
+                "${1}<redacted>${3}",
+                value_is_not_placeholder,
+            ),
+            // --- 身份信息类（只在导出诊断包时施加） ---
+            //
             // 路径里的用户名段：Windows / macOS / Linux 三种形态。
             //
             // 分隔符用 `[\\/]+`（不是单个 `[\\/]`）：诊断包里既有原始日志的
@@ -111,36 +328,141 @@ fn rules() -> &'static [Rule] {
             // （`environment.json` / `MANIFEST.json` 就是这么写的）。单字符
             // 匹配会漏掉后者，把用户名原样放进包里——这个漏洞是测试
             // `bundle_contains_no_plaintext_secret` 实际抓到的。
-            compile(
+            //
+            // 必须排在 `unc_host` 之前：JSON 转义过的本地路径 `C:\\Users\\me`
+            // 长得就像 `\\server\share`，先抹用户名才不会让主机名规则把
+            // `Users` 当成服务器名吃掉（顺序反了虽不漏值，但产物会难读）。
+            rule(
                 "path_username",
+                Identity,
                 r"(?i)((?:[A-Za-z]:[\\/]+|/)(?:Users|home)[\\/]+)([^\\/\s:;,'\x22]+)",
                 "${1}<user>",
             ),
-            // 常见 API key 形态。
-            compile("api_key", r"\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}\b", "<redacted>"),
-            compile(
-                "api_key",
-                r"(?i)(\bBearer\s+)([A-Za-z0-9._~+/=-]{12,})",
-                "${1}<redacted>",
-            ),
-            compile(
-                "api_key",
-                r#"(?i)(\b(?:api[_-]?key|access[_-]?token|secret|password)["']?\s*[:=]\s*["']?)([A-Za-z0-9_\-\.]{12,})"#,
-                "${1}<redacted>",
-            ),
-            // URL 里的 `user:password@host`。
-            compile(
-                "proxy_password",
-                r"(?i)(https?://[^:/\s@]+:)([^@/\s]+)(@)",
-                "${1}<redacted>${3}",
+            // Windows UNC：`\\server\share\…`。server 段是主机名，属身份信息。
+            //
+            // 两处约束都是为了同一件事：**别把 JSON 转义过的本地路径当成共享**。
+            // `C:\\Users\\me\\AppData` 里每个 `\\` 都长得像 UNC 前缀，只按形状
+            // 匹配会把 `Users` / `AppData` / `Roaming` 一个个换成 `<host>`，
+            // 把一条真实路径毁成 `C:\\<host>\\me\\<host>\\…`——包看着「脱敏了」，
+            // 实际丢了全部排障信息，用户名也可能因为没被 `path_username` 处理
+            // 而留下（见 `tests::unc_rule_does_not_rewrite_local_paths_as_shares`）。
+            //
+            // 1）前缀锚定：`\\` 前面必须是行首/空白/引号/括号/等号/分号/反斜杠，
+            //    **不能是盘符冒号或路径段**。`C:\\Users` 的 `\\` 前面是 `:`，
+            //    因此不匹配；4 个反斜杠的 JSON UNC（`"\\\\srv\\share"`）仍能命中，
+            //    因为它的 `\\` 前面是 `\` 或引号。
+            // 2）后置判定：共享名首段若是 `Users` / `home`（用户目录容器）或已是
+            //    `<user>` / `<host>` 占位符，就不替换——这里宁可漏掉一个真叫
+            //    `\\Users\share` 的共享，也不能改写真实本地路径。
+            //
+            // 第 2 条对 **ingest** 尤其关键：`redact_stream` 不施加 `path_username`，
+            // 若这里也误判，本地日志里的真实路径会被改写成假共享名，而「保留
+            // 真实路径便于排障」正是把 Identity 规则排除出 ingest 的全部理由。
+            guarded_rule(
+                "unc_host",
+                Identity,
+                r#"(^|[\s"'(\[{=;,\\])\\{2}([A-Za-z0-9][A-Za-z0-9._-]*)(\\)"#,
+                r"${1}\\<host>${3}",
+                unc_segment_is_a_share,
             ),
         ]
     })
 }
 
-/// 对一段文本脱敏，返回脱敏后的文本。
+/// `unc_host` 的后置判定：共享名首段不得是「用户目录容器段」。
+///
+/// `Users` / `home` 出现在 `\\` 之后，绝大多数情况是 JSON 转义过的本地路径
+/// （`C:\\Users\\…`）而不是真共享；`<user>` / `<host>` 是本模块自己写下的
+/// 占位符，不该被二次改写。判据写成「不区分 ASCII 大小写」，因为 Windows
+/// 路径大小写本就等价（`C:\\USERS\\` 一样常见）。
+fn unc_segment_is_a_share(caps: &regex::Captures<'_>) -> bool {
+    const NOT_A_SHARE: [&str; 4] = ["users", "home", "<user>", "<host>"];
+    match caps.get(2) {
+        Some(segment) => !NOT_A_SHARE
+            .iter()
+            .any(|known| segment.as_str().eq_ignore_ascii_case(known)),
+        // 捕获组缺失属于正则写错，交给替换照常进行（不要静默吞掉凭据）。
+        None => true,
+    }
+}
+
+/// 对一段文本施加规则表；`only` 为 `None` 时施加全部规则。
+fn apply_rules(text: &str, only: Option<RuleKind>) -> (String, Vec<RedactionHit>) {
+    let mut current = text.to_string();
+    let mut hits = Vec::new();
+    for rule in rules() {
+        if let Some(kind) = only {
+            if rule.kind != kind {
+                continue;
+            }
+        }
+        match rule.guard {
+            // 无后置判定：先数命中，再整体替换。
+            None => {
+                let count = rule.pattern.find_iter(&current).count();
+                if count == 0 {
+                    continue;
+                }
+                // 正则与替换词都取自常量表；`NoExpand` 不适用（模板里要保留捕获组）。
+                current = rule
+                    .pattern
+                    .replace_all(&current, rule.replacement)
+                    .into_owned();
+                hits.push(RedactionHit {
+                    rule: rule.name,
+                    count,
+                });
+            }
+            // 有后置判定：逐次匹配决定要不要替换；被否决的匹配原样保留，
+            // 且**不计入**命中数（统计只记录真的替换过的次数）。
+            Some(accept) => {
+                let mut count = 0usize;
+                let replaced = rule
+                    .pattern
+                    .replace_all(&current, |caps: &regex::Captures<'_>| {
+                        if !accept(caps) {
+                            return caps
+                                .get(0)
+                                .map_or_else(String::new, |whole| whole.as_str().to_string());
+                        }
+                        count += 1;
+                        let mut out = String::new();
+                        caps.expand(rule.replacement, &mut out);
+                        out
+                    })
+                    .into_owned();
+                if count == 0 {
+                    continue;
+                }
+                current = replaced;
+                hits.push(RedactionHit {
+                    rule: rule.name,
+                    count,
+                });
+            }
+        }
+    }
+    (current, hits)
+}
+
+/// 对一段文本脱敏（**全部**规则，含身份信息），返回脱敏后的文本。
+///
+/// 用于导出诊断包：产物会离开本机，用户名与主机名也要抹掉。
 pub fn redact(text: &str) -> String {
     redact_reporting(text).0
+}
+
+/// 日志 ingest 专用脱敏：**只**施加 `Secret` 类规则，保留身份信息。
+///
+/// 日志要留在本机做排障，真实路径（`C:\Users\某人\…`）与 UNC 主机名是最有用
+/// 的定位线索；而 token / cookie / 私钥这类能直接冒充身份的值，不该在日志里
+/// 长期躺着一个可用的原文。身份信息统一由导出关口（[`redact`]）抹掉，
+/// 规则仍然只在 [`rules()`] 里定义一份。
+///
+/// 返回值形态与 [`redact`] 一致（`String`），但不带命中统计：ingest 在写日志的
+/// 热路径上，统计无处可去（日志行里塞统计反而会污染日志本身）。
+pub fn redact_stream(text: &str) -> String {
+    apply_rules(text, Some(RuleKind::Secret)).0
 }
 
 /// 对一段文本脱敏，并返回逐规则的命中统计。
@@ -148,24 +470,7 @@ pub fn redact(text: &str) -> String {
 /// 命中统计是「禁止无声降级」的载体：调用方必须把它带出去（写进包里、
 /// 返回给界面），否则脱敏就成了一个不可核对的黑盒。
 pub fn redact_reporting(text: &str) -> (String, Vec<RedactionHit>) {
-    let mut current = text.to_string();
-    let mut hits = Vec::new();
-    for rule in rules() {
-        let count = rule.pattern.find_iter(&current).count();
-        if count == 0 {
-            continue;
-        }
-        // 正则与替换词都取自常量表；`NoExpand` 不适用（模板里要保留捕获组）。
-        current = rule
-            .pattern
-            .replace_all(&current, rule.replacement)
-            .into_owned();
-        hits.push(RedactionHit {
-            rule: rule.name,
-            count,
-        });
-    }
-    (current, hits)
+    apply_rules(text, None)
 }
 
 /// 合并多条规则命中（按名字累加，保持首次出现顺序）。
@@ -360,9 +665,10 @@ fn readme_text(redactions: &[RedactionHit], entries: &[String]) -> String {
     out.push_str(
         "\nEvery text entry above was passed through the redaction rules documented in\n\
          crates/dsh-host/src/diagnostics_export.rs before being written: launch tokens,\n\
-         dsh-auth-* cookies, user-name path segments and API-key shaped values are\n\
-         replaced with placeholders. Nothing in this archive is uploaded anywhere;\n\
-         it stays on this machine until you choose to send it.\n",
+         dsh-auth-* cookies, private-key blocks, JWTs, platform tokens (ghp_/glpat-…),\n\
+         Basic-auth credentials, API-key shaped values, user-name path segments and\n\
+         UNC host names are replaced with placeholders. Nothing in this archive is\n\
+         uploaded anywhere; it stays on this machine until you choose to send it.\n",
     );
     out
 }
@@ -537,6 +843,330 @@ mod tests {
         // 两次命中必须计到 2：统计值低了就等于「有替换没留证」。
         assert_eq!(token, 2, "hits={hits:?}");
         assert!(hits.iter().any(|hit| hit.rule == "auth_cookie"), "{hits:?}");
+    }
+
+    /// 占位符残影**不得**计入命中：一个凭据一次替换，计数恰好是 1。
+    ///
+    /// 可证伪性：去掉 `value_is_not_placeholder` 守卫（改回无守卫 `rule`），
+    /// 本用例的双计断言立刻转红。
+    #[test]
+    fn placeholder_residues_are_not_recounted() {
+        // ① 同一遍规则表内：通用 `api_key` 先替换，`query_secret` 随后看到
+        //    `api_key=<redacted>`——不拦就是同一个凭据计两次。
+        let (clean, hits) = redact_reporting("https://h/?api_key=secretvalue123456");
+        assert!(!clean.contains("secretvalue123456"), "{clean}");
+        assert!(
+            !hits.iter().any(|hit| hit.rule == "query_secret"),
+            "残影被 query_secret 重计：{hits:?}"
+        );
+        let api_key_total: usize = hits
+            .iter()
+            .filter(|hit| hit.rule == "api_key" || hit.rule == "query_secret")
+            .map(|hit| hit.count)
+            .sum();
+        assert_eq!(api_key_total, 1, "一个凭据只许计一次：{hits:?}");
+
+        // ② ingest → export：已脱敏文本再过一遍全表，必须零命中且逐字节不变。
+        let (once, first_hits) = redact_reporting(
+            "dsh-auth-session=z9Y8x7w6v5u4 http://user:p4ssw0rd@proxy:8080 ?key=shortsecret9",
+        );
+        assert!(!first_hits.is_empty());
+        let (twice, second_hits) = redact_reporting(&once);
+        assert_eq!(twice, once, "第二遍不得改写任何字符（幂等）：{twice}");
+        assert!(
+            second_hits.is_empty(),
+            "残影不得计入命中（README.txt 的数字必须只反映实际替换）：{second_hits:?}"
+        );
+
+        // ③ 真实值含 `<` 的密码仍被**完整**替换——守卫不改变匹配边界，
+        //    这是从值字符集排除 `<` 的写法做不到的。
+        let (clean, hits) = redact_reporting("http://user:p4ss<w0rd@proxy:8080");
+        assert!(
+            !clean.contains("p4ss") && !clean.contains("w0rd"),
+            "{clean}"
+        );
+        assert!(clean.contains("<redacted>@proxy"), "{clean}");
+        assert!(
+            hits.iter().any(|hit| hit.rule == "proxy_password"),
+            "{hits:?}"
+        );
+    }
+
+    // ---- 补充形态：每类都是「正例必须命中 + 反例必须不误伤」成对 ----
+
+    /// `Authorization: Basic <base64>`：凭据段替换，`Basic ` 前缀保留。
+    #[test]
+    fn redacts_basic_authorization_header() {
+        let credential = fake_credential("", 'Q', 20);
+        let line = format!("Authorization: Basic {credential}");
+        let clean = redact(&line);
+        assert!(!clean.contains(&credential), "{clean}");
+        assert!(
+            clean.contains("Authorization: Basic <redacted>"),
+            "scheme 要留着，才知道是哪种认证：{clean}"
+        );
+
+        // 反例：只是正文里提到 Basic 认证（不是头部形态），一个字都不该动。
+        let keep = "note: this endpoint wants Basic auth, Bearer is rejected";
+        assert_eq!(redact(keep), keep);
+    }
+
+    /// PEM 私钥块：必须**跨行**整块命中，RSA / EC / OPENSSH / 无后缀四种都覆盖。
+    #[test]
+    fn redacts_private_key_blocks_across_lines() {
+        let body = fake_credential("", 'M', 40);
+        for label in ["RSA ", "EC ", "OPENSSH ", ""] {
+            let pem = format!(
+                "loaded key:\n-----BEGIN {label}PRIVATE KEY-----\n{body}\n-----END {label}PRIVATE KEY-----\ndone"
+            );
+            let clean = redact(&pem);
+            assert!(!clean.contains(&body), "{label}私钥正文残留：{clean}");
+            assert!(
+                !clean.contains("PRIVATE KEY-----"),
+                "{label}私钥标记不该留下（会让人以为包里还有密钥）：{clean}"
+            );
+            assert!(
+                clean.contains("loaded key:") && clean.contains("done"),
+                "块外的上下文要留着：{clean}"
+            );
+        }
+
+        // 反例：证书是公钥材料，抹掉反而妨碍排障。
+        let cert = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----");
+        assert_eq!(redact(&cert), cert);
+    }
+
+    /// Windows UNC 路径：server 段是主机名（身份信息），换成 `<host>`；
+    /// share 与后面的路径段必须留着，否则日志就没法用来定位问题。
+    #[test]
+    fn redacts_unc_host_and_keeps_the_rest_of_the_path() {
+        let path = r"\\fileserver01\share\logs\harness.log";
+        let clean = redact(path);
+        assert!(!clean.contains("fileserver01"), "{clean}");
+        assert!(clean.contains("<host>"), "{clean}");
+        assert!(clean.contains(r"\share\logs\harness.log"), "{clean}");
+
+        // JSON 转义过的**真** UNC（`environment.json` 里的形态，四个反斜杠）
+        // 也必须抹主机名——前缀锚定不能把这条一起关掉。
+        let json_share = r#"{"share":"\\\\srv01\\share\\logs"}"#;
+        let json_clean = redact(json_share);
+        assert!(!json_clean.contains("srv01"), "{json_clean}");
+        assert!(json_clean.contains("<host>"), "{json_clean}");
+
+        // 反例：本地盘符路径与 URL 都不是 UNC，不能出现主机名占位。
+        for keep in [
+            r"C:\Users\exampleuser\AppData\Roaming\dsh",
+            "https://example.com/share/logs",
+        ] {
+            let cleaned = redact(keep);
+            assert!(!cleaned.contains("<host>"), "{keep} → {cleaned}");
+        }
+    }
+
+    /// UNC 规则的后置判定：JSON 转义过的**本地**路径 `C:\\Users\\me\\…` 长得
+    /// 就像 `\\server\share`，绝不能被改写成假共享名。
+    ///
+    /// 这条在 ingest 阶段尤其关键：`redact_stream` 不施加 `path_username`，
+    /// 一旦 UNC 规则误判，一条普通本地路径就会变成 `C:\\<host>\me\…`——
+    /// 既没脱敏（用户名还在），又毁了排障线索。
+    #[test]
+    fn unc_rule_does_not_rewrite_local_paths_as_shares() {
+        // 1) ingest：一字不变（回归判据）。
+        let local = r"C:\\Users\\me\\AppData\\Roaming\\dsh\\harness.log";
+        assert_eq!(redact_stream(local), local, "ingest 不得改写本地路径");
+
+        // 2) export：用户名要抹、且**不许**出现 `<host>`。
+        let exported = redact(local);
+        assert!(
+            exported.contains(r"C:\\Users\\<user>\\AppData"),
+            "用户名段要换成 <user>：{exported}"
+        );
+        assert!(!exported.contains("<host>"), "本地路径不是共享：{exported}");
+        assert!(!exported.contains(r"\me\"), "用户名残留：{exported}");
+
+        // 3) 真 UNC 仍然要抹（别把功能一起关掉）。
+        //
+        // 注意这里用 `redact` 而不是 `redact_stream`：UNC 主机名是 **Identity**，
+        // 按 kind 契约 ingest 阶段本来就不施加它（本地日志保留真实主机名便于
+        // 排障），只有出关口才抹。用 `redact_stream` 断言会被抹掉，等于要求把
+        // unc_host 降级成 Secret，与任务 2 的分工相反。
+        let share = r"\\fileserver01\share\logs\harness.log";
+        assert_eq!(
+            redact(share),
+            r"\\<host>\share\logs\harness.log",
+            "真共享的主机名必须抹掉"
+        );
+        // 4) ingest 阶段对主机名的保留是**设计使然**，不是漏脱敏。
+        assert_eq!(
+            redact_stream(share),
+            share,
+            "Identity 规则不进 ingest：本地日志保留真实主机名"
+        );
+    }
+
+    /// 裸 JWT（三段 base64url，前两段以 `eyJ` 开头）。
+    #[test]
+    fn redacts_bare_jwt() {
+        let jwt = format!(
+            "{}.{}.{}",
+            fake_credential("eyJ", 'h', 10),
+            fake_credential("eyJ", 'p', 10),
+            fake_credential("sig", 's', 10)
+        );
+        let clean = redact(&format!("Authorization: {jwt}"));
+        assert!(!clean.contains(&jwt), "{clean}");
+        assert!(clean.contains("<redacted>"), "{clean}");
+
+        // 反例：只有一段 `eyJ` 前缀（不是三段点分结构）不算 JWT。
+        let keep = "base64 of a JSON object starts with eyJhbGciOi, but that is not a token";
+        assert_eq!(redact(keep), keep);
+    }
+
+    /// 代码托管平台令牌：`ghp_` / `github_pat_` / `gho_` / `ghs_` / `glpat-`。
+    #[test]
+    fn redacts_platform_tokens() {
+        for prefix in ["ghp_", "github_pat_", "gho_", "ghs_", "glpat-"] {
+            let token = fake_credential(prefix, 'k', 20);
+            let clean = redact(&format!("clone failed for {token} (retrying)"));
+            assert!(!clean.contains(&token), "{prefix}：{clean}");
+            assert!(
+                clean.contains(&format!("{prefix}<redacted>")),
+                "前缀留着便于判断泄漏的是哪类凭据：{clean}"
+            );
+            assert!(clean.contains("clone failed"), "{clean}");
+        }
+
+        // 反例：只提到前缀本身（后面没跟足够长的值）不是凭据。
+        let keep = "tokens look like ghp_ followed by 36 characters";
+        assert_eq!(redact(keep), keep);
+    }
+
+    /// `x-api-key` 头：`-` 与 `_` 两种写法、大小写都要认。
+    #[test]
+    fn redacts_x_api_key_header_both_spellings() {
+        let value = fake_credential("", 'v', 20);
+        for header in ["x-api-key", "X-API-KEY", "x_api_key", "X_API_KEY"] {
+            let clean = redact(&format!("{header}: {value}"));
+            assert!(!clean.contains(&value), "{header}：{clean}");
+            assert!(
+                clean.contains(&format!("{header}: <redacted>")),
+                "头名原样留着：{clean}"
+            );
+        }
+
+        // 反例：短值是开关类配置，不是密钥。
+        for keep in ["x-api-key: none", "x-api-key: inherit"] {
+            assert_eq!(redact(keep), keep);
+        }
+    }
+
+    /// 非常规 query key（`key` / `sig` / `auth` 这类短名）。
+    #[test]
+    fn redacts_unconventional_query_secret_params() {
+        let value = fake_credential("", 'z', 12);
+        for key in [
+            "access_token",
+            "refresh_token",
+            "api_key",
+            "apikey",
+            "key",
+            "secret",
+            "sig",
+            "signature",
+            "auth",
+            "password",
+        ] {
+            let url = format!("https://api.example.com/v1/x?{key}={value}&page=2");
+            let clean = redact(&url);
+            assert!(!clean.contains(&value), "?{key}= 未命中：{clean}");
+            assert!(clean.contains(key), "键名留着便于排障：{clean}");
+            assert!(clean.contains("page=2"), "正常参数不能误伤：{clean}");
+        }
+
+        // 反例：门槛以下的短值、以及不在名单里的 key 都不动。
+        for keep in [
+            "https://x.example.com/?key=abc",
+            "https://x.example.com/?sort=desc&limit=50",
+        ] {
+            assert_eq!(redact(keep), keep);
+        }
+    }
+
+    /// `?token=` 与通用 `token=` 是两档门槛：query 位置语义无歧义，短值也是凭据。
+    #[test]
+    fn url_query_token_has_a_lower_floor_than_the_generic_form() {
+        let short = "http://127.0.0.1:4173/?token=aB3x&mode=desktop";
+        let clean = redact(short);
+        assert!(
+            !clean.contains("aB3x"),
+            "query 里的短 token 也必须抹：{clean}"
+        );
+        assert!(clean.contains("mode=desktop"), "{clean}");
+
+        // 通用形态保持 ≥8：`token=off` 是开关值，不能当凭据涂掉。
+        assert_eq!(redact("token=off"), "token=off");
+    }
+
+    /// 百分号编码的值必须**整段**抹掉，否则凭据会以「抹了前半段」的形态进包。
+    ///
+    /// 可证伪性：把值字符集里的 `%` 去掉，本测试立刻转红（`?token=%2B…` 整条
+    /// 不匹配、`…/%2Ftail` 只抹到 `%` 之前）。
+    #[test]
+    fn percent_encoded_token_values_are_redacted_whole() {
+        // ① 值从 `%` 开头：旧字符集在这里**一条都不匹配**，凭据原样进包。
+        let leading = redact("http://127.0.0.1:4173/?token=%2BAb3xZ9&mode=desktop");
+        assert!(!leading.contains("Ab3xZ9"), "{leading}");
+        assert!(!leading.contains("%2B"), "{leading}");
+        assert!(leading.contains("mode=desktop"), "{leading}");
+
+        // ② `%` 在中间：旧正则只抹 `%` 之前那一段，尾巴留在包里。
+        let middle = redact("http://127.0.0.1:4173/?token=aB3xZ9q%2Fsecret-tail");
+        assert!(!middle.contains("secret-tail"), "{middle}");
+        assert!(!middle.contains("aB3xZ9q"), "{middle}");
+
+        // ③ 通用形态同理（≥8 门槛不变：`token=off` 仍不是凭据）。
+        let generic = redact("token=%2Babcdefgh1234");
+        assert!(!generic.contains("abcdefgh1234"), "{generic}");
+        assert_eq!(redact("token=off"), "token=off");
+    }
+
+    // ---- ingest 与 export 的适用面 ----
+
+    /// 只有身份信息类规则会在 ingest 时被跳过；这条钉住 kind 分类本身。
+    #[test]
+    fn only_identity_rules_are_skipped_by_the_stream_entry() {
+        let identities: Vec<&str> = rules()
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Identity)
+            .map(|rule| rule.name)
+            .collect();
+        assert_eq!(identities, vec!["path_username", "unc_host"]);
+    }
+
+    /// `redact_stream`：凭据照抹，路径与主机名保留（本地日志要能排障）。
+    #[test]
+    fn redact_stream_keeps_identity_but_removes_secrets() {
+        let token = fake_credential("Tok", 'x', 12);
+        let line = format!(
+            r"[app] cwd C:\Users\exampleuser\dsh ?token={token} share \\fileserver01\share\logs"
+        );
+
+        let streamed = redact_stream(&line);
+        assert!(!streamed.contains(&token), "凭据必须抹掉：{streamed}");
+        assert!(
+            streamed.contains(r"C:\Users\exampleuser\dsh"),
+            "本地日志保留真实路径才便于排障：{streamed}"
+        );
+        assert!(
+            streamed.contains("fileserver01"),
+            "主机名同属身份信息，ingest 不抹：{streamed}"
+        );
+
+        // 对照：出关口（导出诊断包）用全部规则，身份信息一并抹掉。
+        let exported = redact(&line);
+        assert!(!exported.contains("exampleuser"), "{exported}");
+        assert!(!exported.contains("fileserver01"), "{exported}");
+        assert!(!exported.contains(&token), "{exported}");
     }
 
     // ---- 端到端：产物里不能有原文（批次 D 的验收判据） ----

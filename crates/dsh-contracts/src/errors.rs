@@ -96,6 +96,12 @@ pub mod codes {
     pub const PROCESS_EXITED: &str = "E3002";
     /// Harness 尚未就绪（请求的动作此刻无处落地，属正常状态而非故障）。
     pub const NOT_READY: &str = "E3003";
+    /// 退出被守卫拦下：有会话在跑，且用户没有确认打断（应用继续运行）。
+    ///
+    /// 归属 E3 族而不是 E7（内部错误）：这不是「未归类」，而是进程生命周期上一次
+    /// **正常的拒绝**——拒绝本身是产品语义（用户选了「取消」），前端据此显示
+    /// 「退出已取消」而不是「内部异常」。
+    pub const QUIT_CANCELLED: &str = "E3004";
 
     // ---- E4xxx 鉴权与安全 ----
     /// launch token 缺失或无效。
@@ -198,7 +204,7 @@ mod tests {
     /// 错误码族号与类别必须一一对应，否则前端按 `category` 分派会错族。
     #[test]
     fn every_code_family_maps_to_its_category() {
-        let pairs: [(&str, ErrorCategory); 15] = [
+        let pairs: [(&str, ErrorCategory); 16] = [
             (codes::RESOURCE_MISSING, ErrorCategory::Environment),
             (codes::RESOURCE_UNREADABLE, ErrorCategory::Environment),
             (codes::UPDATER_UNAVAILABLE, ErrorCategory::Environment),
@@ -211,6 +217,9 @@ mod tests {
             (codes::SPAWN_FAILED, ErrorCategory::ProcessLifecycle),
             (codes::PROCESS_EXITED, ErrorCategory::ProcessLifecycle),
             (codes::NOT_READY, ErrorCategory::ProcessLifecycle),
+            // 退出被守卫拦下（有会话在跑 + 用户没确认打断）：属进程生命周期，
+            // 不是「内部异常」——命令确实拒绝执行，但拒绝是产品语义。
+            (codes::QUIT_CANCELLED, ErrorCategory::ProcessLifecycle),
             (codes::TOKEN_MISSING, ErrorCategory::Authentication),
             (codes::PERMISSION_DENIED, ErrorCategory::Authentication),
             (codes::PLUGIN_FAULT, ErrorCategory::PluginSandbox),
