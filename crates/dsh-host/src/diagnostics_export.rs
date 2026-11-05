@@ -157,6 +157,25 @@ fn guarded_rule(
     }
 }
 
+/// 值恰是占位符 `<redacted>` 的匹配是**上一轮脱敏的残影**：替换它不会改变
+/// 一个字符，却会让命中计数 +1。两条路径都会产生残影：
+///
+/// 1. 同一遍规则表内：前面的规则先把值抹成 `<redacted>`，后面的规则
+///    （如 `query_secret` 跟在通用 `api_key` 之后）又匹配到同一位置；
+/// 2. ingest → export：写日志时 `redact_stream` 已按 Secret 规则抹过一遍，
+///    导出诊断包时 `redact_reporting` 再过全表。
+///
+/// 残影被否决后原样保留且**不计入**命中数——`apply_rules` 的 guard 分支
+/// 保证「统计只记录真的替换过的次数」。不拦的话，导出包 `README.txt` 报告
+/// 的替换次数会大于实际发生数，「命中计数可核对」（§7.1 规则 3）就是空话。
+///
+/// 用守卫而不是从值字符集里排除 `<`：排除会改变首次匹配的边界——一个
+/// 真含 `<` 的密码会被只抹前半段（部分泄漏）；守卫保持完整值匹配，只在
+/// 值**恰好等于**占位符时放弃这次替换。
+fn value_is_not_placeholder(caps: &regex::Captures<'_>) -> bool {
+    caps.get(2).map_or(true, |value| value.as_str() != REDACTED)
+}
+
 /// 脱敏规则表（编译一次，全进程复用）。**唯一产地**：两个入口都从这里取规则，
 /// 只是按 `RuleKind` 过滤，不允许在调用侧另抄一份正则。
 ///
@@ -193,12 +212,15 @@ fn rules() -> &'static [Rule] {
                 r#"(?i)(token["']?\s*[:=]\s*["']?|--token\s+)([A-Za-z0-9._~+/=%-]{8,})"#,
                 "${1}<redacted>",
             ),
-            // Cookie：`dsh-auth-session=xxx`（含 Set-Cookie 头）。
-            rule(
+            // Cookie：`dsh-auth-session=xxx`（含 Set-Cookie 头）。值为占位符时由
+            // [`value_is_not_placeholder`] 守卫跳过——ingest 抹过的 cookie 行在
+            // export 再过表时不重计。
+            guarded_rule(
                 "auth_cookie",
                 Secret,
                 r"(?i)(dsh-auth-[a-z0-9-]*=)([^;\s,]+)",
                 "${1}<redacted>",
+                value_is_not_placeholder,
             ),
             // PEM 私钥块：RSA / EC / OPENSSH / 无后缀都要覆盖，且必须**跨行**匹配
             // （`(?s)` 让 `.` 吃掉换行）。整块替换，连头部标记一起抹掉——留下
@@ -251,11 +273,14 @@ fn rules() -> &'static [Rule] {
             //
             // 必须排在下面那条通用 `api[_-]?key` 之前：否则通用规则先把值吃掉，
             // 头名只剩 `x-<redacted>`，读日志的人就看不出这是哪个头了。
-            rule(
+            // 值为占位符时由 [`value_is_not_placeholder`] 守卫跳过（不重写、
+            // 不计数），避免同一凭据被计两次命中。
+            guarded_rule(
                 "x_api_key",
                 Secret,
                 r#"(?i)(\bx[_-]api[_-]key\s*[:=]\s*)([^\s,;"']{8,})"#,
                 "${1}<redacted>",
+                value_is_not_placeholder,
             ),
             // 常见 API key 形态。
             rule("api_key", Secret, r"\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}\b", "<redacted>"),
@@ -273,19 +298,26 @@ fn rules() -> &'static [Rule] {
             ),
             // 非常规 query key。上面那条通用规则只认 `api_key` / `access_token`
             // 等几个名字且要 ≥12，这里补齐 `key` / `sig` / `auth` 这类短名，
-            // 门槛降到 ≥8（`?key=auto` 这种开关值仍然不会被吞）。
-            rule(
+            // 门槛降到 ≥8（`?key=auto` 这种开关值仍然不会被吞）。值为占位符
+            // 时由 [`value_is_not_placeholder`] 守卫跳过：上面那条通用规则先
+            // 替换、本条随后在同一遍里看到 `<redacted>`，不拦会双计。
+            guarded_rule(
                 "query_secret",
                 Secret,
                 r"(?i)([?&](?:access_token|refresh_token|api_key|apikey|key|secret|sig|signature|auth|password)=)([^&\s#]{8,})",
                 "${1}<redacted>",
+                value_is_not_placeholder,
             ),
-            // URL 里的 `user:password@host`。
-            rule(
+            // URL 里的 `user:password@host`。值为占位符时由 [`value_is_not_placeholder`]
+            // 守卫跳过（ingest 抹过的代理口令在 export 不重计）。**刻意不用**从值
+            // 字符集排除 `<` 的写法：密码可以含任意字符，排除会让含 `<` 的密码
+            // 只被抹前半段；守卫保持完整值匹配。
+            guarded_rule(
                 "proxy_password",
                 Secret,
                 r"(?i)(https?://[^:/\s@]+:)([^@/\s]+)(@)",
                 "${1}<redacted>${3}",
+                value_is_not_placeholder,
             ),
             // --- 身份信息类（只在导出诊断包时施加） ---
             //
@@ -811,6 +843,53 @@ mod tests {
         // 两次命中必须计到 2：统计值低了就等于「有替换没留证」。
         assert_eq!(token, 2, "hits={hits:?}");
         assert!(hits.iter().any(|hit| hit.rule == "auth_cookie"), "{hits:?}");
+    }
+
+    /// 占位符残影**不得**计入命中：一个凭据一次替换，计数恰好是 1。
+    ///
+    /// 可证伪性：去掉 `value_is_not_placeholder` 守卫（改回无守卫 `rule`），
+    /// 本用例的双计断言立刻转红。
+    #[test]
+    fn placeholder_residues_are_not_recounted() {
+        // ① 同一遍规则表内：通用 `api_key` 先替换，`query_secret` 随后看到
+        //    `api_key=<redacted>`——不拦就是同一个凭据计两次。
+        let (clean, hits) = redact_reporting("https://h/?api_key=secretvalue123456");
+        assert!(!clean.contains("secretvalue123456"), "{clean}");
+        assert!(
+            !hits.iter().any(|hit| hit.rule == "query_secret"),
+            "残影被 query_secret 重计：{hits:?}"
+        );
+        let api_key_total: usize = hits
+            .iter()
+            .filter(|hit| hit.rule == "api_key" || hit.rule == "query_secret")
+            .map(|hit| hit.count)
+            .sum();
+        assert_eq!(api_key_total, 1, "一个凭据只许计一次：{hits:?}");
+
+        // ② ingest → export：已脱敏文本再过一遍全表，必须零命中且逐字节不变。
+        let (once, first_hits) = redact_reporting(
+            "dsh-auth-session=z9Y8x7w6v5u4 http://user:p4ssw0rd@proxy:8080 ?key=shortsecret9",
+        );
+        assert!(!first_hits.is_empty());
+        let (twice, second_hits) = redact_reporting(&once);
+        assert_eq!(twice, once, "第二遍不得改写任何字符（幂等）：{twice}");
+        assert!(
+            second_hits.is_empty(),
+            "残影不得计入命中（README.txt 的数字必须只反映实际替换）：{second_hits:?}"
+        );
+
+        // ③ 真实值含 `<` 的密码仍被**完整**替换——守卫不改变匹配边界，
+        //    这是从值字符集排除 `<` 的写法做不到的。
+        let (clean, hits) = redact_reporting("http://user:p4ss<w0rd@proxy:8080");
+        assert!(
+            !clean.contains("p4ss") && !clean.contains("w0rd"),
+            "{clean}"
+        );
+        assert!(clean.contains("<redacted>@proxy"), "{clean}");
+        assert!(
+            hits.iter().any(|hit| hit.rule == "proxy_password"),
+            "{hits:?}"
+        );
     }
 
     // ---- 补充形态：每类都是「正例必须命中 + 反例必须不误伤」成对 ----
