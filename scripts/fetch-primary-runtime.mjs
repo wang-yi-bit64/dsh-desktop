@@ -56,8 +56,8 @@
 
 import { createHash } from 'node:crypto'
 import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
-  writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync,
+  statSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -263,6 +263,28 @@ function newestTgz(dir) {
 }
 
 /**
+ * 原子地把文件写进缓存目标位：先写**同目录**临时文件，再 `renameSync` 改名。
+ *
+ * 为什么不能用 `copyFileSync` 直写目标：写入中途中断（Ctrl-C、磁盘写满、进程被
+ * 杀）会留下残缺 tarball；本脚本的缓存命中路径会**重新校验**并把校验失败报告成
+ * 「缓存被篡改」——一次普通的打断被定性成篡改事件，下一次运行必然失败。多个
+ * 目标共享同一个 cacheDir，并行构建时另一个进程也可能读到半成品并把它删掉。
+ *
+ * rename 的原子性以「临时文件与目标在同一目录」为前提（同一文件系统）；
+ * 临时文件名带 pid 避免并发冲突，失败路径上尽力清理。
+ */
+function copyAtomically(from, to) {
+  const staging = `${to}.tmp-${process.pid}`
+  try {
+    copyFileSync(from, staging)
+    renameSync(staging, to)
+  } catch (error) {
+    rmSync(staging, { force: true })
+    throw error
+  }
+}
+
+/**
  * 取得一个 npm 包的 tarball，**先校验再进缓存**，返回可直接解压的路径。
  *
  * 顺序被刻意写死成「缓存 → 校验 → 否则 npm pack → 校验 → 进缓存 → 解压」：
@@ -292,7 +314,7 @@ function obtainNpmTarball(lockEntry, label, spec, cacheDir, stageDir) {
   const verdict = verifyTarball(packed, lockEntry, `${label} 下载产物`)
   if (!verdict.ok) throw new Error(`${verdict.reason}（未进缓存、未解压）`)
   mkdirSync(cacheDir, { recursive: true })
-  copyFileSync(packed, cached)
+  copyAtomically(packed, cached)
   log(`${label} 校验通过并已进缓存（${(verdict.bytes / 1e6).toFixed(2)} MB）`)
   // 返回**刚被校验的那份**而不是缓存副本：解压的字节与算摘要的字节是同一份，中间没有 copy 这道缝。
   return packed
@@ -338,7 +360,7 @@ async function fetchTarget(lock, target, outRoot) {
         return false
       }
       mkdirSync(cacheDir, { recursive: true })
-      copyFileSync(archive, cached)
+      copyAtomically(archive, cached)
       // 同上：解压用刚被校验的那份，不用缓存副本。
       verifiedArchive = archive
       bytes = verdict.bytes
