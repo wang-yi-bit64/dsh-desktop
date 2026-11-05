@@ -151,8 +151,15 @@ impl UpdateManager {
     }
 
     async fn set_status(&self, status: UpdateStatus) {
-        *self.status.lock().await = status.clone();
-        let _ = self.app.emit(STATUS_EVENT, &status);
+        // emit 必须在锁内完成：这是「事件顺序 == 状态变更顺序」的唯一保证。
+        // 若在锁外 emit，另一个发布者（进度任务 / 下一次 set_status）可以在
+        // 「我释放锁」与「我 emit」之间完成新的变更并 emit 它的事件——页面
+        // 最后收到的是过期快照，失败状态会被迟到的 Downloading 事件盖掉。
+        // emit 是同步调用，锁内调用不经过 await 点；`updates_status` 命令也是
+        // 这把锁的持有者，它只会排队，不会死锁。
+        let mut guard = self.status.lock().await;
+        *guard = status;
+        let _ = self.app.emit(STATUS_EVENT, &*guard);
     }
 
     /// 记一条 journal 并同时落日志——两处的受众不同（日志给人肉眼看，
@@ -356,6 +363,16 @@ impl UpdateManager {
             "user consented",
         );
 
+        let app_for_progress = app.clone();
+        let status_slot = Arc::clone(&self.status);
+        let epoch_slot = Arc::clone(&self.progress_epoch);
+        // 本轮下载的轮次：每次 `download()` 递增。**必须先于下面的 set_status**——
+        // 若状态先回到 `Downloading/0%` 而轮次还没换，这个窗口里上一轮的迟到任务
+        // 能通过轮次比对并把高百分比写进去；随后新一轮的低百分比又被单调判据
+        // 拒收，进度条就卡在旧值上直到追平。先换轮次再发布状态，窗口不存在。
+        let epoch = self.progress_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut downloaded: u64 = 0;
+
         self.set_status(UpdateStatus {
             phase: UpdatePhase::Downloading,
             manual: false,
@@ -365,14 +382,6 @@ impl UpdateManager {
             code: None,
         })
         .await;
-
-        let app_for_progress = app.clone();
-        let status_slot = Arc::clone(&self.status);
-        let epoch_slot = Arc::clone(&self.progress_epoch);
-        // 本轮下载的轮次：每次 `download()` 递增。迟到的进度任务带着旧轮次上来，
-        // 由 `accepts_progress` 挡掉——否则失败/安装之后它会把阶段改回 Downloading。
-        let epoch = self.progress_epoch.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut downloaded: u64 = 0;
 
         // 阶段账目：进入 `Downloading` 就是「字节还没走完」这个事实的唯一定义。
         // 验签与安装由下面两个分支显式推进，不再靠百分比猜。
@@ -405,7 +414,13 @@ impl UpdateManager {
                         // 并让百分比倒退——那正好抹掉 CD06 想给用户的信息。因此锁内
                         // 先过一道接受判据（轮次 + 阶段 + 只许前进），判据本体在
                         // `dsh_host::update_progress`，由无头 crate 的测试覆盖。
-                        let snapshot = {
+                        //
+                        // emit 也在锁内（与 `set_status` 同一条不变量）：状态变更与
+                        // 事件发布共享同一把锁，页面收到事件的顺序才会与状态变更的
+                        // 顺序一致；在锁外 emit 的话，「验证通过→释放锁→emit」之间
+                        // 失败流程可以先发布 Error 事件，过期的 Downloading 快照随后
+                        // 才到，页面就停在错误的阶段上。
+                        {
                             let mut guard = status_slot.lock().await;
                             let current_epoch = epoch_slot.load(Ordering::SeqCst);
                             if !dsh_host::update_progress::accepts_progress(
@@ -418,9 +433,8 @@ impl UpdateManager {
                                 return;
                             }
                             guard.percent = Some(percent);
-                            guard.clone()
-                        };
-                        let _ = app.emit(STATUS_EVENT, &snapshot);
+                            let _ = app.emit(STATUS_EVENT, &*guard);
+                        }
                     });
                 },
                 move || {
