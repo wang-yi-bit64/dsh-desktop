@@ -173,7 +173,7 @@ fn guarded_rule(
 /// 真含 `<` 的密码会被只抹前半段（部分泄漏）；守卫保持完整值匹配，只在
 /// 值**恰好等于**占位符时放弃这次替换。
 fn value_is_not_placeholder(caps: &regex::Captures<'_>) -> bool {
-    caps.get(2).map_or(true, |value| value.as_str() != REDACTED)
+    caps.get(2).is_none_or(|value| value.as_str() != REDACTED)
 }
 
 /// 脱敏规则表（编译一次，全进程复用）。**唯一产地**：两个入口都从这里取规则，
