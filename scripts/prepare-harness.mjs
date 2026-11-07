@@ -97,7 +97,8 @@ const vendorDir = join(projectRoot, 'vendor')
 // 双通道（next / alpha）并存，见 [`dsh-targets.mjs`](./dsh-targets.mjs)。
 //   next  → DSH 0.2.2-rc.1   （默认；桌面后缀 rc。2026-11-07 从 0.2.1-rc.4 推进，
 //                               与上游 `next` dist-tag 实测一致）
-//   alpha → DSH 0.2.1-alpha.5 （桌面后缀 alpha；2026-10-18 从 0.2.1-alpha.2 推进）
+//   alpha → DSH 0.2.2-alpha.3 （桌面后缀 alpha；2026-11-08 从 0.2.1-alpha.5 推进，
+//                               与上游 `alpha` dist-tag 实测一致）
 // ⚠️ 上面两行的版本号是**现状声明**，由 `verify:plan-facts` 的 C1 直接比对
 //    `dsh-targets.mjs`（2026-10-08 起纳入；此前靠人工同步，已漂移过一次）。
 // ⚠️ 目标键（`next`）是**上游 npm dist-tag 名**，与桌面 tag 的后缀（`publishChannel`，

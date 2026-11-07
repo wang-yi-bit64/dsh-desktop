@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 --- a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js
-@@ -1270,6 +1270,21 @@ window.__ModuleLoader__.load({
+@@ -1261,6 +1261,21 @@ window.__ModuleLoader__.load({
  			return [...files.values()];
  		}
  		/**
@@ -23,7 +23,7 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
  		* Resolves inline-code references against one turn's produced or delivered
  		* paths and explicit mutation arguments. A reference resolves only when every
  		* exact or basename match identifies one target. Ambiguous and unknown tokens stay inert.
-@@ -1284,7 +1299,11 @@ window.__ModuleLoader__.load({
+@@ -1276,7 +1291,11 @@ window.__ModuleLoader__.load({
  			return { resolve(value) {
  				const matches = new Set(paths.filter((path) => path === value || basename(path) === value));
  				for (const operation of operations) if (operation.argumentPath === value) matches.add(operation.path);
@@ -34,13 +34,14 @@ diff --git a/node_modules/@deepseek-ai/dsh-client-ui-deliverables/lib/client.js 
 +					if (local !== void 0 && matches.size === 0) path = local;
 +				}
  				if (path === void 0) return void 0;
+ 				const contextMenuProps = getFileTriggerProps?.(path);
  				return {
- 					open: () => {
-@@ -2328,7 +2347,6 @@ window.__ModuleLoader__.load({
- 			ctx.provide("chatFileMentions", { forClosing(owner) {
+@@ -2684,7 +2703,7 @@ window.__ModuleLoader__.load({
+ 			ctx.provide("chatFileMentions", { forClosing(owner, _sessionId, getFileTriggerProps) {
  				const paths = selectProducedFiles(owner);
  				const presented = presentedForClosing(owner);
 -				if (paths === null && presented.length === 0) return void 0;
- 				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }), owner.turn.data.get("deliverables")?.produced.filter((operation) => operation.seq <= owner.seq));
++
+ 				return producedFileMentions([...new Set([...paths ?? [], ...presented.map((file) => file.path)])], owner.openFile, (path) => t("presented.previewButton", { name: path }), owner.turn.data.get("deliverables")?.produced, getFileTriggerProps);
  			} });
  		}

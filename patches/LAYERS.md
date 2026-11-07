@@ -17,7 +17,7 @@
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
 | `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.2-rc.1`**（2026-11-07 从 `0.2.1-rc.4` 推进；上游 rc.1 汇总自 v0.2.1-rc.5 以来的变更，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口；本轮 **0 退役**，12 个补丁经三路合并移植、4 处冲突人工裁定——`dsh` 主包依赖串随上游、`file-upload` 接管语义映射新字段名 `agentResolution.resolver`、`deliverables` 删 `paths===null` 早退保留上游新参数表、`ui-sidebar` 锚点属性与上游 a11y 演进并存；预检 clean 5 / conflict 7，合并后复检 clean 12 / conflict 0） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.5`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）；2026-10-18 推进到 `0.2.1-alpha.5`，**退役 1 个**（`settings-models`，上游 alpha.4 起原生提供每模型推理等级）、**重定向 1 个**（`typert-registry` 覆盖上游拆分出的三个文件）；预检 clean 7 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.2-alpha.3`），2026-11-08 从 `0.2.1-alpha.5` 推进；上游 alpha.3 与 rc 线同代，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口；本轮 **0 退役**，12 个补丁经三路合并移植、4 处冲突人工裁定——`dsh` 主包依赖串随上游、`file-upload` 接管语义映射新字段名 `agentResolution.resolver`、`deliverables` 删 `paths===null` 早退保留上游新参数表、`ui-sidebar` 锚点属性与上游 a11y 演进并存；另 `cordis-plugin-loader` 补丁按**独立版本号 `1.0.7-alpha.2`** 重做，旧文件名 `1.0.3` 会把 loader 钉回 1.0.3 与上游 `~1.0.7-alpha.2` 不符） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -565,6 +565,71 @@ L1 烟雾启动即崩（`Cannot read properties of null (reading 'entry')`，
 
 **最终裁据是真实组装**（`patch-package` 12/12 applied + 逐行读 `MANIFEST.json` 补丁表），
 不是预检结论——预检 clean ≠ 组装成功，这轮 4 处冲突正是预检报 conflict 的那几条。
+
+---
+
+### alpha 线（0.2.2-alpha.3）的移植裁定（2026-11-08；**补丁 12 → 12，0 退役**）
+
+alpha 线从 `0.2.1-alpha.5` 跨 minor 推进到 `0.2.2-alpha.3`（与 rc 线同一上游代次，见上一节）：
+统一右键 / 键盘菜单、自动化任务的宿主级管理、Git 工作树入口。**两线由此重新站在同一个上游
+minor（`0.2.2`）上**——这是自 2026-09-30 分叉（next 走 `0.2.0` / alpha 停 `0.1.7`）以来第一次。
+
+**预检基线**：`clean 5 / conflict 7 / skip 0`（12 个补丁），其中 **3 个 functional 层冲突**
+（`dsh` / `dsh-client-file-upload` / `dsh-client-modules`）——按预检口径属「缺失会阻断启动」，
+必须先解决。预检按内容搜索判定，比 `patch-package` 的「`@@ -N` 行号起探 + ±20 行窗口」宽松，
+因此 7 处 conflict 里只有 4 处是真冲突——其余 3 个（`dsh-client-modules` / `dsh-client-ui-chat` /
+`dsh-client-ui-trajectory`）经三路合并**自动合并干净**。
+
+**迁移路径**：与 rc 线同批统一走 [`merge-migrate-patches.mjs`](../scripts/merge-migrate-patches.mjs)
+（`merge` → 人工裁定 → `regen --write`），未混用 `recount-patches.mjs` / `relocate-patch-hunks.mjs`。
+纯净树与取证目录放仓库外（`D:\works\pristine\merge-alpha\`）。逐包取证记录
+`report.json`：`0.2.1-alpha.5 → 0.2.2-alpha.3`，**12 个包 / 4 CONFLICT ×1 / 2 upstream-unchanged /
+6 merged-clean**（文件级计数为 8 merged-clean，`typert-registry` 一个包覆盖
+`client.browser.js` / `client.node.js` / `index.js` 三个文件）。
+
+**4 处冲突的逐个裁定**：
+
+| 补丁 | 冲突性质 | 裁定 |
+|---|---|---|
+| `dsh`（`package.json`） | 上游整段重写 `dependencies` 的家族版本串（`@deepseek-ai/cordis` → `~4.0.6-alpha.2`、`cordis-plugin-include` → `~1.0.11-alpha.2`），与我们在 `dependencies` 顶部插入的 3 个桌面包冲突 | **只保留桌面插入行，其余取上游**——补丁意图是「声明桌面包依赖」，不是钉上游版本串 |
+| `dsh-client-file-upload`（`lib/index.js`） | `retireWhen` 未命中（上游仍抛「已注册」错误），但上游把 `agentResolution` 收进了新字段名 | **保留「接管 + warn」语义，映射到 `this.agentResolution.resolver`**，并保留 `resolver !== resolve` 的**身份比较**（旧 disposer 因此不会清掉新注册者）；`resolve` 形参名随上游 |
+| `dsh-client-ui-deliverables`（`lib/client.js`） | 我们删掉的 `paths === null` 早退，正好落在上游新增的参数表上 | **保留删除早退的意图，参数表取上游新形态**；实现用 `let path` + `if` 块而非三元链（三元里 `matches.size === 0` 与 `path === void 0` 两个条件读起来像一个条件，块形式把「先取唯一匹配，取不到才试本地路径，且仅在无匹配时」三步分开） |
+| `dsh-client-ui-sidebar`（`lib/client.js`） | 我们的 `data-dsh-sidebar-*` 锚点属性与上游新增的 a11y 属性 / `className` / `style` 同行冲突 | **锚点属性必留（注入挂载点），a11y 演进取上游**——两侧都要，不是二选一 |
+
+**0 个补丁退役**——12 条补丁的 `retireWhen` 在本轮上游改动里均未命中（与 rc 线同批复核结论一致：
+「统一右键 / 键盘菜单」是**新的**菜单入口，不是我们补丁在做的那件事）。
+
+**`cordis-plugin-loader` 补丁按 `1.0.7-alpha.2` 重做并改名（本轮唯一的非机械改动）**：
+预检阶段它报 `clean`，因为 `targetPackageVersion()` 对独立版本号的包**以文件名版本段为基准**
+（`1.0.3` 对 `1.0.3`，自洽）——**该判据是循环的，测不出「装错版本」**。真正的因果链与 rc 线
+同形：`prepare-harness.mjs` 由补丁文件名推导 `overrides`，文件名把 loader **钉回 `1.0.3`**，
+而 alpha 上游 `0.2.2-alpha.3` 已把解析范围推到 `~1.0.7-alpha.2`（cordis `~4.0.6-alpha.2`、
+`cordis-plugin-include` `~1.0.11-alpha.2`）⇒ 1.0.3 的 `internal/config` 在 cordis 4.x 的
+`Proxy.waterfall` 下取到 null `this`，L1 烟雾启动即崩
+（`Cannot read properties of null (reading 'entry')`，`cordis-plugin-loader/lib/index.js:730:14`）。
+
+- **补丁内容按 1.0.7-alpha.2 的结构重做，不是照抄 1.0.3 的内容**：单 hunk 从
+  `@@ -271,15 +271,58 @@` 变为 `@@ -339,18 +339,64 @@`；裸名回退（原 `createRequire` 救援）**降为
+  `catch` 兜底**（1.0.7 自带 `createResolve(baseUrl)`），失效 `file://` URL 修成裸名那半**原样保留**。
+  改完后与 rc 线的 `+1.1.0.patch` **逐字节一致**（`md5 7a5223574b0e39d75195b4854e3ec4aa`）——
+  两条线的 loader 代码同源，补丁自然同源，只有文件名版本段各自跟随本线上游。
+- **文件名版本段 `1.0.3` → `1.0.7-alpha.2` 是修复的一部分**：`overrides` 由文件名推导，
+  文件名写 `1.0.3` 就等于在 alpha 线上把 loader 钉回 1.0.3。
+
+**两线补丁同源性审计（本轮新做的对照，结论留档）**：12 个包里 **8 个与 rc 线逐字节一致**
+（loader / file-upload / modules / trajectory / llm-deepseek / llm-pi-ai / typert-loader /
+typert-registry），**4 个不同**——`dsh`（家族版本串按线不同，预期）、`ui-chat`（hunk 起点差 1 行
+`@@ -6037` vs `@@ -6038`，且 `FORBIDDEN` 那行相对 `ACCOUNT_SIGN_IN_REQUIRED` / `QUOTA` 的
+插入位置不同）、`ui-deliverables`（alpha 用 `let` + `if` 块，rc 用三元链 + 2 行中文注释）、
+`ui-sidebar`（**alpha 早在 2026-09-16 就退役了自定义 padding，本补丁只插一条说明注释、
+`tag.textContent = css;` 原样不动；rc 线在本轮才退役，因此那一 hunk 是「替换 `tag.textContent`」**）。
+两侧上游树本身不同（`lib/client.js` 行号与上下文各异），所以这 4 处差异是**真实的线间差异，
+不是漂移**——12 个补丁全部 apply 成功即为证。
+
+**最终裁据是真实组装**（`patch-package` 12/12 applied + 逐行读 `MANIFEST.json` 补丁表）：
+`target=alpha`、`versions.dsh=0.2.2-alpha.3`、`patchFilesPresent=12`、12 条全 `applied`、
+lockfile `86126a09dd46…`。组装侧的同批适配（brand assets 的 PWA 三件套匹配链）已在 rc 线提交里
+落地，alpha 线复用同一脚本，无需再改。
 
 ---
 
