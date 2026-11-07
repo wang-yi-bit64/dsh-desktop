@@ -104,10 +104,18 @@ export const PATCH_LAYERS = {
   },
   '@deepseek-ai/cordis-plugin-loader': {
     layer: 'functional',
-    why: '插件 loader 的裸 specifier import 失败时回退到 createRequire 解析（基于 ctx.baseUrl）。桌面插件包位于 node_modules 而非相对路径，缺失则插件 import 失败。**2026-10-10（B4）同一补丁还修掉「入口被交成绝对 `file://` URL、且该文件并不存在」**：那是一条死路——`require.resolve` 不收 URL，URL 也从不走包解析，于是热挂载无声失败并回落重启（用户看到的是「点了插件没反应」）。补丁在解析前把失效的 `file://` URL 修成其 owning package 的裸名（按 `/node_modules/` 取**最内层**，覆盖作用域包与 pnpm 虚拟 store 形态），并留一条 warn 使这次替换可见。',
+    why: '插件 loader 的裸 specifier import 失败时回退到 createRequire 解析（基于 ctx.baseUrl）。桌面插件包位于 node_modules 而非相对路径，缺失则插件 import 失败。**2026-10-10（B4）同一补丁还修掉「入口被交成绝对 `file://` URL、且该文件并不存在」**：那是一条死路——`require.resolve` 不收 URL，URL 也从不走包解析，于是热挂载无声失败并回落重启（用户看到的是「点了插件没反应」）。补丁在解析前把失效的 `file://` URL 修成其 owning package 的裸名（按 `/node_modules/` 取**最内层**，覆盖作用域包与 pnpm 虚拟 store 形态），并留一条 warn 使这次替换可见。**2026-11-07 起前半段（裸名回退）退居 `catch` 兜底**：1.1.0 自己有 `createResolve(baseUrl)`，它只在「baseUrl 够不到 package.json 作用域」或「`<scope>/.cordis` 写不进去」时返回 undefined 并降级为裸 `import(name)`（看不见只声明 CJS `main` 的包）——那正是我们这段兜底要覆盖的形状，故保留而非删除。',
     retireWhen: '官方 loader 支持从 baseUrl 解析裸包名，**且**上游解析器不再把绝对入口 URL 交给 loader 时。',
     regressionTest:
       'none: 行为在 `EntryTree.import` 内部（需真实上游模块 + stub ctx 才能构造 `file://` 失效入口）；本机只有 gitignored 的 `harness-deps/`，CI 无组装树 ⇒ 离线没有诚实载体（B4 的夹具留在工作区外、未入仓）。销账批次：V6-B。'
+    // 2026-11-07 复核（锚点 next 0.2.2-rc.1）：**不退役**，两半各自判据如下——
+    //   · 前半（从 baseUrl 解析裸包名）**已满足**：1.1.0 的 `import()` 走
+    //     `createResolve(this.ctx.baseUrl)`（`resolve.mjs` = `import.meta.resolve`）。
+    //   · 后半（不再交绝对入口 URL）**未满足**：`dsh-app-boot` 仍 `pathToFileURL(...)`；
+    //     真正的产地 `resolveProfileEntry()` 在 `dshmarket@1.52.0`（仓外）。
+    //   ⇒ 保留补丁。同时**补丁文件名必须随上游前进到 1.1.0**：`prepare-harness.mjs` 由文件名
+    //     推导 overrides，留在 1.0.3 会把 loader 反向钉回旧版（1.0.3 的 `internal/config`
+    //     在 cordis 4.1 的 `Proxy.waterfall` 下取到 null `this` ⇒ 启动即崩）。
   },
   '@deepseek-ai/dsh-client-modules': {
     layer: 'functional',
@@ -463,6 +471,9 @@ export function auditPatchLayers(target = DEFAULT_TARGET, readText = readRepoTex
     }
     problems.push(...checkRegressionTest(entry, readText, file))
     // DSH 家族的包版本必须等于目标版本；独立版本号的包（cordis-plugin-loader）跳过。
+    // ⚠️ 独立包这一跳**不是**「随便填都能过」：`prepare-harness.mjs` 由文件名推导 overrides，
+    //    版本段直接决定装哪一版。1.0.3 曾在 2026-11-07 造成 L1 烟雾启动崩溃（上游 0.2.2 要求
+    //    ~1.1.0，而文件名把 loader 钉回 1.0.3，其 `internal/config` 在 cordis 4.1 下取 null `this`）。
     const version = versionFromPatchFile(file)
     if (version !== null && version.includes('-') && /^\d+\.\d+\.\d+-/.test(version) && version !== targetB.dshVersion) {
       const isDshFamily = pkg.startsWith('@deepseek-ai/dsh')

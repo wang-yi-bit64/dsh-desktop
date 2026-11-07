@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 --- a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 +++ b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
-@@ -271,15 +271,58 @@ var EntryTree = class EntryTree {
+@@ -339,18 +339,64 @@ var EntryTree = class EntryTree {
  		if (name.startsWith("cordis:")) return this.ctx.loader.builtins[name.slice(7)];
  		return composeError(async (info) => {
  			info.offset += 3;
@@ -38,17 +38,26 @@ diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_
  				/* @vite-ignore */
  				new URL(name, this.ctx.baseUrl).href
  			));
--			else return await import(__rewriteRelativeImportExtension(
--				/* @vite-ignore */
--				name
--			));
+-			else {
+-				const resolve = await createResolve(this.ctx.baseUrl);
+-				return await import(__rewriteRelativeImportExtension(
+-					/* @vite-ignore */
+-					resolve ? resolve(name) : name
+-				));
+-			}
 +			else {
 +				try {
++					const resolve = await createResolve(this.ctx.baseUrl);
 +					return await import(__rewriteRelativeImportExtension(
 +						/* @vite-ignore */
-+						name
++						resolve ? resolve(name) : name
 +					));
 +				} catch (error) {
++					// `createResolve` returns undefined when no `package.json` scope is
++					// reachable from baseUrl, or when `<scope>/.cordis` cannot be
++					// written — and it degrades to a bare `import(name)` in that case,
++					// which cannot see a package that only declares a CJS `main`.
++					// Keep the require-based rescue as the last resort.
 +					if (this.ctx.baseUrl) {
 +						try {
 +							const { createRequire } = await import("node:module");
