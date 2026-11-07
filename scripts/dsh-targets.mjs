@@ -109,17 +109,17 @@ export const DSH_TARGETS = {
     upstreamDistTag: 'next',
     publishChannel: 'rc',
     status: 'active',
-    dshVersion: '0.2.1-rc.4',
+    dshVersion: '0.2.2-rc.1',
     summary:
-      '上游 rc 线（当前 0.2.1-rc.4，2026-10-29 从 0.2.1-rc.2 推进；rc.3 给三栏加「更多」菜单并把草稿保留修好，rc.4 修 ACP 诊断混入 stdout。本轮无补丁退役：dsh 主包补丁因上下文家族版本串重生成、ui-sidebar 仅行号重算。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
+      '上游 rc 线（当前 0.2.2-rc.1，2026-11-07 从 0.2.1-rc.4 推进；上游 rc.1 汇总自 v0.2.1-rc.5 以来的变更，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口。本轮 0 退役：12 个补丁经三路合并移植，4 处冲突人工裁定——dsh 主包依赖串随上游、file-upload 接管语义映射新字段名 agentResolution.resolver、deliverables 删 paths===null 早退保留上游新参数表、sidebar 锚点属性与上游 a11y 演进并存。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
   },
   alpha: {
     upstreamDistTag: 'alpha',
     publishChannel: 'alpha',
     status: 'active',
-    dshVersion: '0.2.1-alpha.5',
+    dshVersion: '0.2.2-alpha.3',
     summary:
-      '上游 alpha 线（2026-10-07 从 0.1.7-alpha.2 跨 minor 推进到 0.2.1-alpha.1；2026-10-10 另加 2 个 functional 补丁修启动缺陷。2026-10-14 推进到 0.2.1-alpha.2；2026-10-18 推进到 0.2.1-alpha.5，同轮退役 settings-models 补丁——上游 alpha.4 起原生提供每模型推理等级，命中 retireWhen。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
+      '上游 alpha 线（当前 0.2.2-alpha.3，2026-11-08 从 0.2.1-alpha.5 推进；上游 alpha.3 与 rc 线同代，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口。本轮 0 退役：12 个补丁经三路合并移植，4 处冲突人工裁定——dsh 主包依赖串随上游、file-upload 接管语义映射新字段名 agentResolution.resolver、deliverables 删 paths===null 早退保留上游新参数表、sidebar 锚点属性与上游 a11y 演进并存。另：cordis-plugin-loader 补丁按独立版本号 1.0.7-alpha.2 重做（旧文件名 1.0.3 会把 loader 钉回 1.0.3，与上游 ~1.0.7-alpha.2 不符）。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
   }
 }
 

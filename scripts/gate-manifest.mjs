@@ -425,6 +425,26 @@ export const GATES = [
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
   },
   {
+    name: 'brand-assets',
+    script: 'scripts/install-brand-assets.mjs',
+    title: '品牌图标注入判据自检（manifest icons[] / index.html icon link）',
+    why:
+      '它改的是**已组装树里的上游文件**，匹配不到就抛错——这是刻意的（§7.1 规则 2）：' +
+      '静默放过时打包/签名/安装全绿，只有应用里显示的还是上游图标，没有任何信号。' +
+      '上游每动一次图标声明就会打断一次匹配链，已踩三次：0.1.2-alpha.1 把 href 从 ' +
+      '`/favicon.svg` 改成 `./favicon.svg`；0.2.0 把单个 icon link 拆成两个 scheme-gated link；' +
+      '0.2.2 把 manifest 的单个 `favicon.svg` 换成 PWA 位图三件套（`icon-192.png` / `icon-512.png` / ' +
+      '`icon-maskable-512.png`）并改 `display`，旧链只认 `favicon.svg` ⇒ 组装直接报 ' +
+      '`no icon entry to replace`。自检的可证伪项钉住「那条 PWA 分支是必需的」：把匹配链打回旧形态，' +
+      '新夹具必须匹配失败。⚠️ 三件套里 `icon-maskable-512.png` 的 `maskable-` 夹在 `icon-` 与数字之间，' +
+      '正则写成 `/icon-\\d+\\.png$/` 会静默漏掉它——只有「只剩 maskable」的兜底用例能抓到。',
+    real: null,
+    manual:
+      '真检查需组装树（它就地改 `node_modules/@deepseek-ai/dsh-web-frontend/dist/` 的两个文件），' +
+      '由 prepare:harness 第 4 步在本地与 release.yml 的 build job 里跑；自检进 fast/ci/release。',
+    selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
+  },
+  {
     name: 'harness-lockfile',
     script: 'scripts/harness-lockfile.mjs',
     title: '提交式 lockfile 校验规则自检',
