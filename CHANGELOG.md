@@ -7,6 +7,22 @@
 
 <!-- changelog-entries -->
 
+## [0.2.2-rc.1.1] - 2026-11-08
+
+### 🐛 修复
+
+- **deps**: zip 4.6.1 → 9.2.0 退役 Dependabot #38/#39（CVE-2026-115905 critical） (#18) ([86b1245](https://github.com/wang-yi-bit64/dsh-desktop/commit/86b12451d52b725eddd6b3cb9527f758441d5ba1))
+- **dependabot-scope**: 基线前移到 2026-10-09T09:00Z，修复 Drift 自 10-09 起的常驻红 ([aa0c4fc](https://github.com/wang-yi-bit64/dsh-desktop/commit/aa0c4fc66a0554a8cb90a930865f7ec1c8c58193))
+
+### 📦 构建与打包
+
+- 双线上游锚点推进 next→0.2.2-rc.1 / alpha→0.2.2-alpha.3（12 补丁三路合并移植，两线重回同一上游 minor） (#21) ([24a58dc](https://github.com/wang-yi-bit64/dsh-desktop/commit/24a58dc3f723eca29a6add4a3ccbe7686a609b74))
+
+### 🧹 其他
+
+- CD 批次交付：宣称纪律缺陷修复 CD01~CD14（cookie 三态 / E3004 封套 / 更新阶段状态机 / 配对页防线 / 日志脱敏 / 契约清理 / 错误码门禁） (#19) ([16ed343](https://github.com/wang-yi-bit64/dsh-desktop/commit/16ed343756ad54c64fd5da2302583b5d51e7f716))
+- Merge pull request #17 from wang-yi-bit64/fix/dependabot-scope-baseline ([39b6fa1](https://github.com/wang-yi-bit64/dsh-desktop/commit/39b6fa15229e1995da5ee6fc553a792330e7dbb5))
+
 ## [0.2.1-rc.4.1] - 2026-10-29
 
 ### ✨ 新功能
