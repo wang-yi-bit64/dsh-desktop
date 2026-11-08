@@ -2,8 +2,8 @@
 
 > **适用对象**：把内置的 `@deepseek-ai/dsh` 从当前版本升到上游新版本的人。
 > **双通道前提（2026-09-15 起）**：本仓同时维护两条上游运行时通道——`next`（默认，追 npm `next` dist-tag）与 `alpha`（追 npm `alpha` dist-tag）。每条通道各有独立的目标定义（`scripts/dsh-targets.mjs` 的 `DSH_TARGETS`）、补丁目录（`patches/<target>/`）与 vendored 覆盖包（`packages/<target>/`）。**升级按目标逐个进行**：涉及组装与补丁的命令都接受 `--dsh-target=<next|alpha>` 指定目标（`prepare:harness` 缺省 `next`；`verify:patches` 缺省检查**全部**目标），动手前先明确你要升的是哪条线。
-> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-10-29 `next` 线单独推进后，`next` 锚 `0.2.1-rc.4`、`alpha` 锚 `0.2.1-alpha.5`。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
-> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.1-rc.4`、alpha 线 `0.2.1-alpha.5`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
+> ⚠️ **通道名 ≠ 当前锚定的上游版本**：`upstreamDistTag` 字段是**上游 npm dist-tag 名**（通道定义；2026-10-09 由 `channel` 改名，旧名会被读成「本仓发布通道」），而 `dshVersion` 是**组装锚点**——答「用哪套补丁目录」。「**本仓钉的是哪个上游版本**」的 SSOT 是**台账** `harness-locks/dsh-releases.json` 的**在役键**（每个目标恰好一条；`docs/version-policy.md` §4），目标表的 `dshVersion` 与它必须**同批一致**（`npm run gate -- plan-facts` 的 C1 直接断言这一条）。二者**历史上**可以不一致。2026-11-08 双线推进后，`next` 锚 `0.2.2-rc.1`、`alpha` 锚 `0.2.2-alpha.3`。升级前先读台账与目标表的**实际值**，不要按通道名推断版本。
+> **核心风险**：`patches/<target>/` 下的补丁是**行级 diff**，锁定在 `scripts/dsh-targets.mjs` 的 `DSH_TARGETS[<target>].dshVersion`（当前：next 线 `0.2.2-rc.1`、alpha 线 `0.2.2-alpha.3`）。上游任一被补丁包改动一行，对应补丁即冲突；文件名里的版本号也必须同步重命名，否则 `patch-package` 在全新组装时根本找不到目标包。
 > **原则**：升级是**一次完整流程**，不是改一个常量。中断在任一步都必须回滚到已知良好状态，不允许「先合上、后面再补」。
 
 ---
@@ -322,8 +322,10 @@ boot / config-dump / 插件管理。
 
 对 `patches/<target>/` 下每个补丁，逐个处理：
 
-- [ ] **2.1 重命名文件名**：把版本段改为该目标的新版本（`DSH_TARGETS[<target>].dshVersion`；仅 DSH 家族包跟随，`cordis-plugin-loader` 这类独立版本号的包不改）。
+- [ ] **2.1 重命名文件名**：把版本段改为该目标的新版本（`DSH_TARGETS[<target>].dshVersion`；DSH 家族包一律跟随）。
       > 漏改的后果是 `patch-package` 在全新 `npm install` 后找不到目标包，该补丁静默不生效——而它的 `status` 会显示什么取决于失败模式，恰好是最难发现的一类事故。`npm run gate -- patches` 会逐目标校验版本段是否与该目标的 `dshVersion` 一致。
+      >
+      > ⚠️ **独立版本号的包（如 `cordis-plugin-loader`）不是「一律不改」**：判据是**上游是否改了该包代码**，不是「DSH 版本号变没变」。`prepare-harness.mjs` 由补丁文件名推导 `overrides`，文件名**决定装哪一版**。2026-11-07 实测：`dsh@0.2.2-rc.1` 把 loader 范围推到 `~1.1.0`，而文件名还钉在 `1.0.3` ⇒ 强行装回 1.0.3 ⇒ 其 `internal/config` 在 cordis 4.1 下取 null `this`，L1 烟雾启动即崩（`Cannot read properties of null (reading 'entry')`）。做法：先查新上游对该包的依赖范围，范围没动才保留原版本段；动了就按新版重做补丁**并**改名。**预检对这类包是自洽的**（期望值来自文件名自身），报 clean 只证明补丁与自己的基线一致，不证明版本正确。
 - [ ] **2.2 重算行号**（移植补丁的必需步骤，从另一条上游线复制补丁时尤其关键）：
       ```bash
       node scripts/recount-patches.mjs --dsh-target=<target> --pristine=<未打补丁的包根>

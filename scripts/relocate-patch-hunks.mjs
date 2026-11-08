@@ -403,11 +403,11 @@ function selfTest() {
     crossVerdict.includes('0.1.7-rc.1') && crossVerdict.includes('0.1.5-rc.3'),
     true
   )
-  // 独立版本号的包：`cordis-plugin-loader+1.0.3.patch`。判据以「文件名里的版本段」为基准，
+  // 独立版本号的包：`cordis-plugin-loader+1.1.0.patch`。判据以「文件名里的版本段」为基准，
   // 因此不必知道 DSH 版本；用 dshVersion 当基准的实现会在这里判红 ⇒ 可伪证。
   eq(
-    '夹具11：独立版本号的包（1.0.3）同版 → 通过',
-    pristineVersionProblem({ pkgName: '@deepseek-ai/cordis-plugin-loader', patchVersion: '1.0.3', pristineVersion: '1.0.3' }),
+    '夹具11：独立版本号的包（1.1.0）同版 → 通过',
+    pristineVersionProblem({ pkgName: '@deepseek-ai/cordis-plugin-loader', patchVersion: '1.1.0', pristineVersion: '1.1.0' }),
     null
   )
   // 读不到 version 必须判红：放行等于让「纯净树不完整」静默退回「不校验版本」。

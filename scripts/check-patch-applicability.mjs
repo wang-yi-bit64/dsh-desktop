@@ -256,7 +256,7 @@ export function patchApplies(parsed, readLines, maxFuzz = DEFAULT_FUZZ) {
 /**
  * 把补丁文件名里的版本段替换成目标版本（仅替换「DSH 家族」版本）。
  *
- * 独立版本号的包（如 `@deepseek-ai+cordis-plugin-loader+1.0.3.patch`）不能跟着
+ * 独立版本号的包（如 `@deepseek-ai+cordis-plugin-loader+1.1.0.patch`）不能跟着
  * DSH 版本走——它们的版本段就是它自己的版本。判据：只有当文件名里的版本段
  * **等于当前 `DSH_VERSION`** 时才替换。
  *
@@ -481,7 +481,7 @@ function selfTest() {
 
   // targetPackageVersion：DSH 家族跟随目标，独立版本号保持
   check('DSH 家族版本跟随', targetPackageVersion('@deepseek-ai+dsh+0.1.2-alpha.4.patch', '0.1.2-alpha.4', '0.1.2-rc.1'), '0.1.2-rc.1')
-  check('独立版本号保持', targetPackageVersion('@deepseek-ai+cordis-plugin-loader+1.0.3.patch', '0.1.2-alpha.4', '0.1.2-rc.1'), '1.0.3')
+  check('独立版本号保持', targetPackageVersion('@deepseek-ai+cordis-plugin-loader+1.1.0.patch', '0.1.2-alpha.4', '0.1.2-rc.1'), '1.1.0')
 
   if (failed > 0) {
     console.error(`check-patch-applicability self-test: ${failed} 项失败`)

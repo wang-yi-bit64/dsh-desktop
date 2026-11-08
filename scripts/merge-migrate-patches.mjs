@@ -192,7 +192,7 @@ async function modeRegen(args) {
 
   // merge 模式的 report.json 记录每个包的**旧补丁文件名**与合并时的 from 版本——
   // 「文件名版本段是否跟随 DSH」的判据只能来自那里：段 == report.from ⇒ 跟随
-  // （新段取 --to）；否则是独立版本号的包（如 cordis-plugin-loader，段 1.0.3），
+  // （新段取 --to）；否则是独立版本号的包（如 cordis-plugin-loader，段 1.1.0），
   // 新文件名沿用原段。用 --to 命名独立包会给同一包生成两份补丁，patch-package
   // 会两个都打，而 verify:patches 对独立包的版本段判据是循环的（期望值来自
   // 文件名自身），抓不到这种重复——2026-09-30 实测踩过。

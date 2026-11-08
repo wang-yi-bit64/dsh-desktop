@@ -16,8 +16,8 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.1-rc.4`**（2026-10-29 从 `0.2.1-rc.2` 推进；上游 rc.3 给三栏加「更多」菜单、修新会话草稿丢失，rc.4 修 ACP 诊断混入 stdout；本轮 **0 退役、0 语义重做**，预检 clean 10 / conflict 2，两处冲突均为机械修复——`dsh` 主包按新家族版本串重生成、`ui-sidebar` 行号重算） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
-| `alpha` | npm `alpha` dist-tag（当前 `0.2.1-alpha.5`）（2026-10-07 从 `0.1.7-alpha.2` 跨 minor 推进到 `0.2.1-alpha.1`；补丁按 retireWhen 退役 1 个、语义重做 3 个；2026-10-10 另加 2 个 functional 补丁修启动缺陷；2026-10-14 推进到 `0.2.1-alpha.2`，**该次推进的** 12 个补丁全部 clean，3 个需人工校正行号/上下文，0 退役 0 语义重做；同日另加 1 个 `ui-behavior` 加固补丁（`dsh-typert-registry`，见下文「typert lookup 守卫」节）；2026-10-18 推进到 `0.2.1-alpha.5`，**退役 1 个**（`settings-models`，上游 alpha.4 起原生提供每模型推理等级）、**重定向 1 个**（`typert-registry` 覆盖上游拆分出的三个文件）；预检 clean 7 / conflict 6，经三路合并 + 人工裁定后 12 个补丁全部 clean） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.2-rc.1`**（2026-11-07 从 `0.2.1-rc.4` 推进；上游 rc.1 汇总自 v0.2.1-rc.5 以来的变更，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口；本轮 **0 退役**，12 个补丁经三路合并移植、4 处冲突人工裁定——`dsh` 主包依赖串随上游、`file-upload` 接管语义映射新字段名 `agentResolution.resolver`、`deliverables` 删 `paths===null` 早退保留上游新参数表、`ui-sidebar` 锚点属性与上游 a11y 演进并存；预检 clean 5 / conflict 7，合并后复检 clean 12 / conflict 0） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
+| `alpha` | npm `alpha` dist-tag（当前 `0.2.2-alpha.3`），2026-11-08 从 `0.2.1-alpha.5` 推进；上游 alpha.3 与 rc 线同代，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口；本轮 **0 退役**，12 个补丁经三路合并移植、4 处冲突人工裁定——`dsh` 主包依赖串随上游、`file-upload` 接管语义映射新字段名 `agentResolution.resolver`、`deliverables` 删 `paths===null` 早退保留上游新参数表、`ui-sidebar` 锚点属性与上游 a11y 演进并存；另 `cordis-plugin-loader` 补丁按**独立版本号 `1.0.7-alpha.2`** 重做，旧文件名 `1.0.3` 会把 loader 钉回 1.0.3 与上游 `~1.0.7-alpha.2` 不符） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
 通道名**自动推导（`release.yml` 的 preflight 调 `scripts/dsh-targets.mjs --channel-of`）。
@@ -68,7 +68,7 @@
 
 ---
 
-## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核；2026-10-14 新增 `dsh-typert-registry` 加固；2026-10-29 next 线推进后复核）
+## 3. 逐个补丁的分类判据（2026-09-10 人工确认；2026-09-15 alpha 线复核；2026-09-30 双线推进后复核；2026-10-07 alpha 线推进后复核；2026-10-14 新增 `dsh-typert-registry` 加固；2026-10-29 next 线推进后复核；2026-11-07 双线推进后复核）
 
 分类原则：**只有当缺失会导致「补丁体系失效」或「桌面插件挂不上 / 起不来」时才归 `functional`**；
 其余一律 `ui-behavior`（可降级）。产品功能增强（如会话永久删除）虽然影响功能，
@@ -83,7 +83,7 @@
 | 补丁（包名） | 判据 | 退役条件 |
 |---|---|---|
 | `@deepseek-ai/dsh` | 把 `dsh-desktop-client-ui` / `dsh-desktop-hmr-fallback` / `dsh-desktop-market-installer` 三个桌面插件包声明为 dsh 依赖（第四个 `dsh-desktop-preset-transfer` 已于 2026-09-30 整链退役）。缺失则 `build/dsh-desktop.patch.yml` 的 `insert: name` 解析不到包，**profile 启动即失败** | 官方提供声明式扩展点（无需改 `package.json` 即可挂载外部插件） |
-| `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败**。<br>**2026-10-10（B4）同一补丁加了另一半**：入口 specifier 被交成**绝对 `file://` URL 而该文件并不存在**（典型形态：硬写的 `<pkgDir>/index.js`，而包的真实入口在 `main`/`exports` 里）时，那条 URL 是一条**死路**——`require.resolve` 不收 URL，URL 也从不走包解析 ⇒ 热挂载无声失败、回落重启（用户感知为「点了插件没反应」）。补丁在**任何下游解析之前**把失效的 `file://` URL 修成其 owning package 的裸名（按 `/node_modules/` 取**最内层**，覆盖作用域包与 pnpm 虚拟 store），并留 warn 让这次替换**可见**（AGENTS §7.1 禁无声降级）。<br>🔴 落点必须在 `composeError` 异步体的**顶部**：`this.ctx.loader.internal` 存在时第一路直接 `return`，写在 `else` 分支里的救援在真机上**永不可达**（本仓实测判据 C1） | 官方 loader 支持从 `baseUrl` 解析裸包名，**且**上游解析器不再把绝对入口 URL 交给 loader |
+| `@deepseek-ai/cordis-plugin-loader` | 插件 loader 对裸 specifier 的 import 失败时，基于 `ctx.baseUrl` 用 `createRequire` 回退解析。桌面插件包位于 `node_modules`，缺失则**插件 import 失败**。<br>**2026-10-10（B4）同一补丁加了另一半**：入口 specifier 被交成**绝对 `file://` URL 而该文件并不存在**（典型形态：硬写的 `<pkgDir>/index.js`，而包的真实入口在 `main`/`exports` 里）时，那条 URL 是一条**死路**——`require.resolve` 不收 URL，URL 也从不走包解析 ⇒ 热挂载无声失败、回落重启（用户感知为「点了插件没反应」）。补丁在**任何下游解析之前**把失效的 `file://` URL 修成其 owning package 的裸名（按 `/node_modules/` 取**最内层**，覆盖作用域包与 pnpm 虚拟 store），并留 warn 让这次替换**可见**（AGENTS §7.1 禁无声降级）。<br>🔴 落点必须在 `composeError` 异步体的**顶部**：`this.ctx.loader.internal` 存在时第一路直接 `return`，写在 `else` 分支里的救援在真机上**永不可达**（本仓实测判据 C1） | 官方 loader 支持从 `baseUrl` 解析裸包名，**且**上游解析器不再把绝对入口 URL 交给 loader。<br>⚠️ **2026-11-07 复核：前半已满足（loader 1.1.0 的 `createResolve`），后半未满足（`dsh-app-boot` 仍交绝对 URL；产出方 `resolveProfileEntry()` 在本仓外的 `dshmarket`）⇒ 保留**。同日补丁文件名由 `1.0.3` 前进到 `1.1.0`（文件名决定 `overrides`，钉旧版会装错版本），内容按 1.1.0 结构重做，裸名回退降为 `catch` 兜底——详见本文件 2026-11-07 节 |
 | `@deepseek-ai/dsh-client-modules` | `ClientModuleRegistry` 解析 `${expectedPackageName}/package.json` 定位插件模块，渲染侧装载的最后一段依赖 | 官方 registry 自带 `createRequire` 解析 |
 | `@deepseek-ai/dsh-typert-loader` | 上游把**启动路径**上「任一 contributor 注册失败」升级成 `AggregateError` 并从 `apply()` 抛出，而 typert-loader 本身是 profile 的一个 loader entry ⇒ 一个插件的 typert 声明有问题就让**整棵插件树**加载失败（`dsh: plugin tree failed to load`）。同一份代码在**动态路径**（后挂载的 entry）上只 `logger.error` 不抛——启动路径缺的正是这个降级。补丁把启动路径的失败也降级为带 entry 名的 logged error（保留 `AggregateError` 作结构化载荷） | 官方把 contributor 注册失败降级为非致命（或按 entry 隔离、不再整树原子） |
 | `@deepseek-ai/dsh-client-file-upload` | `registerAgentResolver` 在「已注册」时抛错，而 Cordis `Fiber._reload()` 是**先重跑 apply、后处置上一轮 effects** ⇒ 任何对该 entry 的重放（插件管理器 live-apply、热挂载 bundle 重列核心行）都会命中守卫抛错，让 session-controller 整个 fiber 回滚；回滚连带摘掉它注册的 `typert.lookups.configure("agent"/"session")` ⇒ 冷会话切模式报 `lookup provider "agent" did not resolve`。补丁把守卫改为**接管 + warn**（旧 disposer 的 `=== resolve` 比较保证不误伤新注册者） | 官方把该注册改为幂等（或 reload 前先处置旧注册） |
@@ -275,6 +275,17 @@ registry 内容做应用判定，13 个补丁全部干净可用（vendoring 的�
 变为 `~1.0.6-alpha.1`，本仓**保持补丁文件名 `1.0.3`**——`prepare-harness.mjs` 由文件名推导
 override，把它反向钉到补丁所针对的 `1.0.3`；这与两线既有做法一致（`~1.0.5` 时同样钉 `1.0.3`），
 且 1.0.x 段代码未变（`EntryTree` 的裸 specifier 回退逻辑逐字相同）。
+
+> 🔴 **该前提已于 2026-11-07 失效，勿再照抄这条做法**：上面「1.0.x 段代码未变」是当时
+> 的事实，**不是**一条可以一直沿用的规则。上游 `dsh@0.2.2-rc.1` 把 loader 的解析范围推到
+> `~1.1.0`，而 1.1.0 **改了 1.0.x 的代码**（`internal/config` 由 `function(_config, next)`
+> 改为取 `fiber` 形参，修掉 cordis 4.1 `Proxy.waterfall` 下 null `this` 的崩溃）。
+> 继续把文件名钉在 `1.0.3` 的后果不是「保守一点」，而是**装错版本**：`prepare-harness.mjs`
+> 由文件名推导 overrides ⇒ 强行装回 1.0.3 ⇒ 启动即崩
+> （`Cannot read properties of null (reading 'entry')`，实测于 L1 烟雾）。
+> 因此 2026-11-07 起**补丁文件名随上游前进到 `1.1.0`**，补丁内容按 1.1.0 的
+> `createResolve` 结构重做（原 `createRequire` 回退降为 `catch` 兜底，见本文件 2026-11-07 节）。
+> 判据是**上游是否改了该包代码**，不是「DSH 版本号是否变化」。
 
 **退役后的净结果**：alpha 11 → 10 条（**与 next 线补丁集在包名层面归一**）。
 
@@ -488,6 +499,137 @@ rc.3 给左侧栏 / 会话视图 / 右侧栏加「更多」菜单（浏览与创
 1 removed = 7，新 6 context + 2 added = 8）。⇒ 这是 `relocate` 的解析口径差异，**不是本轮
 引入的补丁缺陷**，故不动——改它会引入与升级无关的补丁重写。最终裁据是真实组装
 （`patch-package`）结果，见本节末的组装记录。
+
+---
+
+### next 线（0.2.2-rc.1）的移植裁定（2026-11-07；**补丁 12 → 12，0 退役**）
+
+上游 rc 线从 `0.2.1-rc.4` 直接跳到 `0.2.2-rc.1`（**跳过了 `0.2.1-rc.5`**，上游 Release
+`dsh-v0.2.2-rc.1` 发布于 2026-11-04），跨度比 10-29 那轮大：rc.1 汇总自 v0.2.1-rc.5 以来的
+变更，含统一右键 / 键盘菜单（左侧栏 / 会话视图 / 右侧栏）、自动化任务的宿主级管理、
+Git 工作树入口。
+
+**预检基线**：`clean 5 / conflict 7`（12 个补丁）。预检按**内容搜索**判定，比
+`patch-package` 的「`@@ -N` 行号起探 + ±20 行窗口」宽松，因此 7 处 conflict 里只有 4 处是
+真冲突——其余 3 个（`dsh-client-modules` / `dsh-client-ui-chat` / `dsh-client-ui-trajectory`）
+经三路合并**自动合并干净**。
+
+**迁移路径**：本轮统一走 [`merge-migrate-patches.mjs`](../scripts/merge-migrate-patches.mjs)
+（`merge` → 人工裁定 → `regen --write`），**未混用 `recount-patches.mjs` / `relocate-patch-hunks.mjs`**
+——上游同时改了定位与上下文，纯行号重算覆盖不到。纯净树与取证目录一律放仓库外
+（`D:\works\pristine\merge-next\`）。裁定依据为逐包 `retireWhen` 复核 + 上游 0.2.2-rc.1 基线。
+
+**4 处冲突的逐个裁定**：
+
+| 补丁 | 冲突性质 | 裁定 |
+|---|---|---|
+| `dsh`（`package.json`） | 上游整段重写 `dependencies` 的家族版本串，与我们在顶部插入的 3 个桌面包冲突 | **只保留桌面插入行，其余取上游**——补丁的意图是「声明桌面包依赖」，不是钉上游版本串 |
+| `dsh-client-file-upload`（`lib/index.js`） | `retireWhen` 未命中（上游仍抛「已注册」错误），但上游把 `agentResolution` 收进了新字段名 | **保留「接管 + warn」语义，映射到新字段名 `this.agentResolution.resolver`**；`resolve` 形参名随上游 |
+| `dsh-client-ui-deliverables`（`lib/client.js`） | 我们删掉的 `paths === null` 早退，正好落在上游新增的参数表上 | **保留删除早退的意图（含注释），参数表取上游新形态**——上游扩了形参，不能因移植把它退回旧签名 |
+| `dsh-client-ui-sidebar`（`lib/client.js`） | 我们的 `data-dsh-sidebar-*` 锚点属性与上游新增的 a11y 属性 / `className` / `style` 同行冲突 | **锚点属性必留（注入挂载点），a11y 演进取上游**——两侧都要，不是二选一 |
+
+**0 个补丁退役**——12 条补丁的 `retireWhen` 在本轮上游改动里均未命中。特别复核了
+「统一右键 / 键盘菜单」是否让 `ui-*` 系补丁的判据成立：没有，上游加的是**新的**菜单入口，
+不是我们补丁在做的那件事。
+
+**`cordis-plugin-loader` 补丁重做并改名 `1.0.3` → `1.1.0`（本轮唯一的非机械改动）**：
+预检阶段它报 clean，因为 `targetPackageVersion()` 对独立版本号的包**以文件名版本段为基准**
+（`1.0.3` 对 `1.0.3`，自洽）——**但上游 0.2.2 已把 loader 的解析范围推到 `~1.1.0`**。真正的
+因果链是：`prepare-harness.mjs` 由补丁文件名推导 `overrides`，文件名把 loader **钉回 1.0.3**，
+而 1.0.3 的 `internal/config` 在 cordis 4.1 的 `Proxy.waterfall` 下取到 null `this` ⇒
+L1 烟雾启动即崩（`Cannot read properties of null (reading 'entry')`，
+`cordis-plugin-loader/lib/index.js:730:14`）。**这不是「保守地留在旧版」，是装错版本。**
+
+裁定与做法：
+- **不退役**。`retireWhen` 两半逐条复核：前半（官方 loader 支持从 `baseUrl` 解析裸包名）
+  1.1.0 **已满足**（`createResolve(this.ctx.baseUrl)`，`resolve.mjs` 即 `import.meta.resolve`）；
+  后半（上游解析器不再把绝对入口 URL 交给 loader）**未满足**——`dsh-app-boot` 仍在
+  `pathToFileURL(...)`，而 B4 的产出方 `resolveProfileEntry()` 位于 `dshmarket@1.52.0`（本仓外）。
+  ⇒ 保留，条数仍 12。
+- **按 1.1.0 的结构重做，不是照抄 1.0.3 的内容**。裸名回退（原 `createRequire` 救援）
+  **降为 `catch` 兜底**：1.1.0 自己有 `createResolve(baseUrl)`，它只在「baseUrl 够不到
+  `package.json` 作用域」或「`<scope>/.cordis` 写不进去」时返回 undefined 并降级为裸
+  `import(name)`（看不见只声明 CJS `main` 的包）——那正是兜底要覆盖的形状。前半（失效
+  `file://` URL 修成裸名）**原样保留**，落点仍在 `composeError` 异步体顶部（B4 判据 C1）。
+- **文件名必须跟着前进**。文件名版本段决定装哪一版，因此改名本身是修复的一部分，
+  不能只改补丁内容。判据是**上游是否改了该包代码**，不是「DSH 版本号是否变化」——
+  `patches/LAYERS.md` §3 表内旧文「一个刻意不改的值」的前提已于本轮失效（已在原位标注）。
+
+**组装侧同批适配（非补丁）**：上游 0.2.2 把 web manifest 的单个 `favicon.svg` 换成标准 PWA
+位图三件套（`icon-192.png` / `icon-512.png` / `icon-maskable-512.png`），`display` 也从
+`fullscreen` 变 `standalone`。`scripts/install-brand-assets.mjs` 的旧匹配链只认
+`favicon.svg`，会在组装时报 `no icon entry to replace`——本轮同批改为按**形状**匹配
+（`icon-(?:maskable-)?\d+\.png`）并按 `purpose` 决定优先级，同时修掉 `replaceIconLink`
+在「两个 scheme-gated link」上会写出重复标签的问题。自检 11 项（含可证伪性：旧匹配链必须
+在新形态上失败），已登记 `scripts/gate-manifest.mjs` 的 `brand-assets` 门禁。
+
+**最终裁据是真实组装**（`patch-package` 12/12 applied + 逐行读 `MANIFEST.json` 补丁表），
+不是预检结论——预检 clean ≠ 组装成功，这轮 4 处冲突正是预检报 conflict 的那几条。
+
+---
+
+### alpha 线（0.2.2-alpha.3）的移植裁定（2026-11-08；**补丁 12 → 12，0 退役**）
+
+alpha 线从 `0.2.1-alpha.5` 跨 minor 推进到 `0.2.2-alpha.3`（与 rc 线同一上游代次，见上一节）：
+统一右键 / 键盘菜单、自动化任务的宿主级管理、Git 工作树入口。**两线由此重新站在同一个上游
+minor（`0.2.2`）上**——这是自 2026-09-30 分叉（next 走 `0.2.0` / alpha 停 `0.1.7`）以来第一次。
+
+**预检基线**：`clean 5 / conflict 7 / skip 0`（12 个补丁），其中 **3 个 functional 层冲突**
+（`dsh` / `dsh-client-file-upload` / `dsh-client-modules`）——按预检口径属「缺失会阻断启动」，
+必须先解决。预检按内容搜索判定，比 `patch-package` 的「`@@ -N` 行号起探 + ±20 行窗口」宽松，
+因此 7 处 conflict 里只有 4 处是真冲突——其余 3 个（`dsh-client-modules` / `dsh-client-ui-chat` /
+`dsh-client-ui-trajectory`）经三路合并**自动合并干净**。
+
+**迁移路径**：与 rc 线同批统一走 [`merge-migrate-patches.mjs`](../scripts/merge-migrate-patches.mjs)
+（`merge` → 人工裁定 → `regen --write`），未混用 `recount-patches.mjs` / `relocate-patch-hunks.mjs`。
+纯净树与取证目录放仓库外（`D:\works\pristine\merge-alpha\`）。逐包取证记录
+`report.json`：`0.2.1-alpha.5 → 0.2.2-alpha.3`，**12 个包 / 4 CONFLICT ×1 / 2 upstream-unchanged /
+6 merged-clean**（文件级计数为 8 merged-clean，`typert-registry` 一个包覆盖
+`client.browser.js` / `client.node.js` / `index.js` 三个文件）。
+
+**4 处冲突的逐个裁定**：
+
+| 补丁 | 冲突性质 | 裁定 |
+|---|---|---|
+| `dsh`（`package.json`） | 上游整段重写 `dependencies` 的家族版本串（`@deepseek-ai/cordis` → `~4.0.6-alpha.2`、`cordis-plugin-include` → `~1.0.11-alpha.2`），与我们在 `dependencies` 顶部插入的 3 个桌面包冲突 | **只保留桌面插入行，其余取上游**——补丁意图是「声明桌面包依赖」，不是钉上游版本串 |
+| `dsh-client-file-upload`（`lib/index.js`） | `retireWhen` 未命中（上游仍抛「已注册」错误），但上游把 `agentResolution` 收进了新字段名 | **保留「接管 + warn」语义，映射到 `this.agentResolution.resolver`**，并保留 `resolver !== resolve` 的**身份比较**（旧 disposer 因此不会清掉新注册者）；`resolve` 形参名随上游 |
+| `dsh-client-ui-deliverables`（`lib/client.js`） | 我们删掉的 `paths === null` 早退，正好落在上游新增的参数表上 | **保留删除早退的意图，参数表取上游新形态**；实现用 `let path` + `if` 块而非三元链（三元里 `matches.size === 0` 与 `path === void 0` 两个条件读起来像一个条件，块形式把「先取唯一匹配，取不到才试本地路径，且仅在无匹配时」三步分开） |
+| `dsh-client-ui-sidebar`（`lib/client.js`） | 我们的 `data-dsh-sidebar-*` 锚点属性与上游新增的 a11y 属性 / `className` / `style` 同行冲突 | **锚点属性必留（注入挂载点），a11y 演进取上游**——两侧都要，不是二选一 |
+
+**0 个补丁退役**——12 条补丁的 `retireWhen` 在本轮上游改动里均未命中（与 rc 线同批复核结论一致：
+「统一右键 / 键盘菜单」是**新的**菜单入口，不是我们补丁在做的那件事）。
+
+**`cordis-plugin-loader` 补丁按 `1.0.7-alpha.2` 重做并改名（本轮唯一的非机械改动）**：
+预检阶段它报 `clean`，因为 `targetPackageVersion()` 对独立版本号的包**以文件名版本段为基准**
+（`1.0.3` 对 `1.0.3`，自洽）——**该判据是循环的，测不出「装错版本」**。真正的因果链与 rc 线
+同形：`prepare-harness.mjs` 由补丁文件名推导 `overrides`，文件名把 loader **钉回 `1.0.3`**，
+而 alpha 上游 `0.2.2-alpha.3` 已把解析范围推到 `~1.0.7-alpha.2`（cordis `~4.0.6-alpha.2`、
+`cordis-plugin-include` `~1.0.11-alpha.2`）⇒ 1.0.3 的 `internal/config` 在 cordis 4.x 的
+`Proxy.waterfall` 下取到 null `this`，L1 烟雾启动即崩
+（`Cannot read properties of null (reading 'entry')`，`cordis-plugin-loader/lib/index.js:730:14`）。
+
+- **补丁内容按 1.0.7-alpha.2 的结构重做，不是照抄 1.0.3 的内容**：单 hunk 从
+  `@@ -271,15 +271,58 @@` 变为 `@@ -339,18 +339,64 @@`；裸名回退（原 `createRequire` 救援）**降为
+  `catch` 兜底**（1.0.7 自带 `createResolve(baseUrl)`），失效 `file://` URL 修成裸名那半**原样保留**。
+  改完后与 rc 线的 `+1.1.0.patch` **逐字节一致**（`md5 7a5223574b0e39d75195b4854e3ec4aa`）——
+  两条线的 loader 代码同源，补丁自然同源，只有文件名版本段各自跟随本线上游。
+- **文件名版本段 `1.0.3` → `1.0.7-alpha.2` 是修复的一部分**：`overrides` 由文件名推导，
+  文件名写 `1.0.3` 就等于在 alpha 线上把 loader 钉回 1.0.3。
+
+**两线补丁同源性审计（本轮新做的对照，结论留档）**：12 个包里 **8 个与 rc 线逐字节一致**
+（loader / file-upload / modules / trajectory / llm-deepseek / llm-pi-ai / typert-loader /
+typert-registry），**4 个不同**——`dsh`（家族版本串按线不同，预期）、`ui-chat`（hunk 起点差 1 行
+`@@ -6037` vs `@@ -6038`，且 `FORBIDDEN` 那行相对 `ACCOUNT_SIGN_IN_REQUIRED` / `QUOTA` 的
+插入位置不同）、`ui-deliverables`（alpha 用 `let` + `if` 块，rc 用三元链 + 2 行中文注释）、
+`ui-sidebar`（**alpha 早在 2026-09-16 就退役了自定义 padding，本补丁只插一条说明注释、
+`tag.textContent = css;` 原样不动；rc 线在本轮才退役，因此那一 hunk 是「替换 `tag.textContent`」**）。
+两侧上游树本身不同（`lib/client.js` 行号与上下文各异），所以这 4 处差异是**真实的线间差异，
+不是漂移**——12 个补丁全部 apply 成功即为证。
+
+**最终裁据是真实组装**（`patch-package` 12/12 applied + 逐行读 `MANIFEST.json` 补丁表）：
+`target=alpha`、`versions.dsh=0.2.2-alpha.3`、`patchFilesPresent=12`、12 条全 `applied`、
+lockfile `86126a09dd46…`。组装侧的同批适配（brand assets 的 PWA 三件套匹配链）已在 rc 线提交里
+落地，alpha 线复用同一脚本，无需再改。
 
 ---
 
