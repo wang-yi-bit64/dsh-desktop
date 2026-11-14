@@ -121,7 +121,7 @@ boot / config-dump / 插件管理。
 
 ### Step 1 — 改版本锚点
 
-- [ ] `scripts/dsh-targets.mjs`：更新 `DSH_TARGETS[<target>].dshVersion`——**组装锚点**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取（补丁目录 / vendored 目录 / staging 目录也一并由它推导）。只改你正在升的那条线。⚠️ 同批还要更新 `harness-locks/dsh-releases.json` 的在役键（那是「本仓钉的是哪个上游版本」的 SSOT，两者不一致会被 `npm run gate -- plan-facts` 判红）
+- [ ] `scripts/dsh-targets.mjs`：更新 `DSH_TARGETS[<target>].dshVersion`——**组装锚点**；`scripts/prepare-harness.mjs` 不再写死版本，而是按 `--dsh-target` 经 `resolveTarget()` 从这里读取（补丁目录 / vendored 目录 / staging 目录也一并由它推导）。只改你正在升的那条线。⚠️ 同批还要更新 `harness-locks/dsh-releases.json` 的在役键（那是「本仓钉的是哪个上游版本」的 SSOT，两者不一致会被 `npm run gate -- plan-facts` 判红）——**工具路径**：`node scripts/sync-upstream-release.mjs --advance-key --apply --target <目标>`（核上游后旧键置 dormant、新锚点键 active、builds 留空；默认只读，连 `--apply` 才真写）。台账 `$comment` 明文「禁止手改」，手改只作为该工具不可用时的回退（按 2026-11-08 的 24a58dc 先例形态：旧键 dormant 保留 builds、新键 active 空 builds、upstreamTag/Commit 留空待发布回填）。2026-11-14 的 PR #22 就是手改路径；PR #24 起 `--advance-key` 是正路
 - [ ] **`overrides` 已无手工维护段**：它由该目标的 `patches/<target>/*.patch` 文件名与 `packages/<target>/*.tgz` 自动推导（`prepare-harness.mjs`），所以没有「要改的 overrides 段」。要检查的是**钉住是否仍然必要**——上游若已修复相关问题，按 Step 5 退役对应补丁，override 会随文件名一起消失
 - [ ] `packages/<target>/*.tgz` 与 `vendor/*` 中声明依赖 DSH 版本的地方
 - [ ] **重新生成提交式 lockfile（2026-09-23 起，必做）**：版本锚点、补丁集、vendored 包任何一个变了，`harness-locks/<target>/` 的 lockfile 就与输入失配，CI 的组装会**硬失败**（`lockInputsMatch` 四条规则，其中第 4 条校验快照自证的 `target` + `dshVersion`）。重新生成：
