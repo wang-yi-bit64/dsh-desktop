@@ -58,4 +58,4 @@ Thumbs.db
 /.delta/
 
 # 台账互斥锁：进程被强杀时 finally 不执行会残留——不能脏工作树、也不能被误提交（qodo #26-round2-finding-6）。
-harness-locks/.ledger.lock
+harness-locks/.ledger.lock*

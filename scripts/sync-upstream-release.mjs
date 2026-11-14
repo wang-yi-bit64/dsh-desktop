@@ -74,7 +74,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, cpSync, existsSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, cpSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { argv, exit } from 'node:process';
@@ -555,18 +555,21 @@ export function snapshotFiles(files) {
 /** 台账互斥锁文件的陈旧阈值。发布 --apply 全程含联网补丁适用性，须宽于其最坏时长。 */
 export const LEDGER_LOCK_STALE_MS = 30 * 60 * 1000;
 
-/** 台账互斥锁文件路径（与台账同目录，随仓走；已进 .gitignore——见该文件内注释）。 */
-export function ledgerLockPath(root = process.cwd()) {
-  return join(dirname(ledgerPath(root)), '.ledger.lock');
+/** 台账互斥锁文件的目录（与台账同目录，随仓走；锁文件已进 .gitignore——见该文件内注释）。 */
+export function ledgerLockDir(root = process.cwd()) {
+  return dirname(ledgerPath(root));
 }
+
+/** 每持锁者一个独占文件：前缀 + 唯一 token。谁也不碰别人的文件（结构上免疫共享路径 TOCTOU）。 */
+export const LEDGER_LOCK_PREFIX = '.ledger.lock-';
 
 function newLockToken() {
   return `${process.pid}-${randomUUID()}`;
 }
 
 /**
- * 独占创建锁文件并写入所有权 token（qodo #26-round2-finding-4）：**写失败必须摘掉自己
- * 刚建的锁再抛**——否则一次盘满会留下无人持有的新鲜锁，挡住后续所有运行直到陈旧。
+ * 独占创建**自己的**锁文件并写入 token（qodo #26-round2-finding-4）：**写失败必须摘掉自己
+ * 刚建的文件再抛**——否则一次盘满会留下无人持有的新鲜锁，挡住后续所有运行直到陈旧。
  */
 function writeLockFile(lockPath, token) {
   let fd;
@@ -577,8 +580,6 @@ function writeLockFile(lockPath, token) {
     throw error;
   }
   try {
-    // 🔴 只写 token、不写时间戳：release 与接管回读都要做**全文比对**（trim 后相等），
-    //    多一个字段比对就恒不等——release 会永远跳过删除（本机自测实测抓到）。
     writeSync(fd, `${token}\n`);
   } catch (error) {
     try { closeSync(fd); } catch { /* 关闭失败也要继续清理 */ }
@@ -589,76 +590,87 @@ function writeLockFile(lockPath, token) {
 }
 
 /**
- * 所有权句柄（qodo #26-round2-finding-2）：release **只删自己的锁**——读回内容与自己的
- * token 比对，不一致（本运行超阈值被接管 / 文件被换）时跳过删除并 warn。旧持有者迟到的
- * release 若无校验，会删掉接管者的锁、放进第三个写方。
+ * 写前所有权核验（qodo #26-round3-finding-2 的后半）：持锁者写盘前必须确认**自己的**
+ * 锁文件还在且内容仍是自己的 token。慢持有者（超过陈旧阈值被后继者当作死进程摘掉）在
+ * 这里 fail-closed——拒绝写，而不是覆盖后继者的操作。自己文件的读回没有共享路径
+ * TOCTOU：合规写方只摘「陈旧」的别人文件，摘掉的必然是 stale 的。
  */
-function ownLockHandle(lockPath, token) {
-  return {
-    token,
-    release() {
-      let content = '';
-      try { content = readFileSync(lockPath, 'utf8'); } catch { return; }
-      if (content.trim() !== token) {
-        console.warn(`⚠️  台账锁已易主（本运行超过陈旧阈值被接管）——release 跳过删除：${lockPath}`);
-        return;
-      }
-      rmSync(lockPath, { force: true });
-    },
-  };
+export function stillOwnsLedgerLock(handle) {
+  if (!handle || typeof handle.myPath !== 'string') return false;
+  try {
+    return readFileSync(handle.myPath, 'utf8').trim() === handle.token;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * **台账互斥锁**（qodo #26-finding-2 与 #26-round2-finding-1/2/4 的最终形态）。
+ * **台账互斥锁**（qodo #26-round3-finding-1/2 的终版：每持锁者独占文件 + 目录扫描定胜负）。
  *
- * 每次获取持有一个唯一 token；锁文件内容即 token。接管用 **rename 原子替换 + 回读验证**：
- * 两个接管者竞争时，两次 rename 串行、文件里只剩最后写者的 token——先写者回读发现不是
- * 自己的 token ⇒ 判负重试。这修掉了「基于过期 stat 无条件 unlink」的竞态（两个进程都能
- * 接管同一把陈旧锁）。release 有所有权校验；运行超过阈值被接管后，写盘前还有一道
- * 所有权核验（写路径内），慢持有者拒绝写而不是覆盖接管者的操作。
+ * 共享单文件锁（无论 wx / rename / 内容比对）都有**按路径操作的 TOCTOU**：比对（或 stat
+ * 陈旧）与 rename/unlink 之间，别的写方可以合法地建锁或释放锁，本方随后的按路径写就会
+ * 覆盖/删除**他们的**锁——qodo 三轮评审抓到的全是这一族。终版结构上消除它：
  *
- * 语义：空闲 ⇒ 持有；新鲜锁（含竞争输家的锁）⇒ 返回 null（调用方拒绝并如实提示）；
- * 陈旧锁 ⇒ 接管（warn 可见，§7.1 规则 3 的另一半）。调用方**必须**在 finally 里 release。
+ * · 每次获取创建**自己的**文件 `.ledger.lock-<token>`（wx，唯一路径，永不改名/替换别人
+ *   的文件）；release 只删自己的文件——「别人的锁」在协议里根本不会被本方触碰。
+ * · 胜负由**创建后的目录扫描**决出：存在任何**新鲜**的别人锁 ⇒ 输，摘自己的文件让位；
+ *   全部是陈旧锁 ⇒ 摘掉它们（死持有者的遗物；活持有者有写前所有权核验兜底）并持有。
+ *   「我创建后扫描时没看到新鲜对手」+「此后每个后来者都会看到我的新鲜文件并让位」
+ *   ⇒ 任意时刻至多一个持有者，且无需任何按路径的条件删除。
+ * · 陈旧 = mtime 超过 {@link LEDGER_LOCK_STALE_MS}（典型成因：进程被强杀，finally 没跑）。
+ *   活着的慢持有者被摘后由 {@link stillOwnsLedgerLock} 在写盘前 fail-closed。
  *
- * @param {string} lockPath - 锁文件路径（{@link ledgerLockPath}）。
+ * @param {string} lockDir - 锁文件目录（{@link ledgerLockDir}）。
  * @param {object} [options] - `staleMs` / `attempts` 可注入（自测用）。
- * @returns {{ token: string, release: () => void } | null} 锁句柄；null = 被占用（新鲜）。
+ * @returns {{ token: string, myPath: string, release: () => void } | null} 锁句柄；
+ *   null = 存在新鲜对手（调用方拒绝并如实提示）。
  */
-export function acquireLedgerLock(lockPath, { staleMs = LEDGER_LOCK_STALE_MS, attempts = 5 } = {}) {
-  const token = newLockToken();
+export function acquireLedgerLock(lockDir, { staleMs = LEDGER_LOCK_STALE_MS, attempts = 5 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    // ① 空闲路径：独占创建。
+    const token = newLockToken();
+    const myPath = join(lockDir, LEDGER_LOCK_PREFIX + token);
     try {
-      writeLockFile(lockPath, token);
-      return ownLockHandle(lockPath, token);
+      writeLockFile(myPath, token);
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      if (error.code !== 'EEXIST') throw error; // token 含 uuid，EEXIST 意外 ⇒ 重试
+      continue;
     }
-    // ② 已有锁：新鲜 ⇒ 让位；陈旧 ⇒ 原子接管。
-    let age;
+    // 扫描其他持锁文件：任何新鲜的别人 ⇒ 我输；陈旧的别人 ⇒ 摘掉（死持有者遗物）。
+    let lost = false;
+    const staleOthers = [];
+    let names = [];
     try {
-      age = Date.now() - statSync(lockPath).mtimeMs;
+      names = readdirSync(lockDir);
     } catch {
-      continue; // 锁在 stat 前被释放 ⇒ 回去重试独占创建
+      // 目录消失（理论上不可能——台账目录必然存在）；当作无对手
     }
-    if (age <= staleMs) return null;
-    console.warn(`⚠️  台账锁已陈旧（${Math.round(age / 60000)} 分钟未释放），接管：${lockPath}`);
-    const reclaimTemp = `${lockPath}.${randomUUID()}.reclaim`;
-    let renamed = false;
-    try {
-      writeLockFile(reclaimTemp, token);
-      renameSync(reclaimTemp, lockPath); // POSIX rename(2) / Windows MoveFileEx(REPLACE_EXISTING)：原子替换
-      renamed = true;
-    } catch {
-      try { rmSync(reclaimTemp, { force: true }); } catch { /* 清理失败不掩盖原路径 */ }
-      continue; // 竞争失败 ⇒ 回去重试（下一轮看到的是赢家的新鲜锁）
+    for (const name of names) {
+      if (!name.startsWith(LEDGER_LOCK_PREFIX)) continue;
+      if (name === LEDGER_LOCK_PREFIX + token) continue; // 自己的文件不是对手（漏了这行 = 每次都输给自己）
+      const otherPath = join(lockDir, name);
+      let age;
+      try {
+        age = Date.now() - statSync(otherPath).mtimeMs;
+      } catch {
+        continue; // 对手刚释放并删掉自己的文件 ⇒ 无竞争
+      }
+      if (age <= staleMs) {
+        lost = true;
+        break;
+      }
+      staleOthers.push(otherPath);
     }
-    if (renamed) {
-      // ③ 回读验证：只有文件里是**我的 token** 才算接管成功；否则另一个接管者赢了。
-      let content = '';
-      try { content = readFileSync(lockPath, 'utf8'); } catch { continue; }
-      if (content.trim() === token) return ownLockHandle(lockPath, token);
+    if (lost) {
+      rmSync(myPath, { force: true });
+      return null;
     }
+    for (const stale of staleOthers) {
+      try {
+        rmSync(stale, { force: true });
+        console.warn(`⚠️  摘除陈旧台账锁（持锁进程多半已死，活持有者写盘前会 fail-closed）：${stale}`);
+      } catch { /* 摘不掉留给下一轮；自己已持有，不影响互斥 */ }
+    }
+    return { token, myPath, release() { rmSync(myPath, { force: true }); } };
   }
   return null;
 }
@@ -895,35 +907,33 @@ export function selfTest() {
   })(), [true, true, null]);
   eq('建键：拒绝（targetStatus 缺失 ⇒ fail-closed）', advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
 
-  // 台账互斥锁（qodo #26-finding-2）：空闲可取 / 新鲜锁拒绝 / 陈旧锁接管；release 必须真删。
+  // 台账互斥锁（qodo #26-round3 终版协议：每持锁者独占文件 + 目录扫描定胜负）。
   {
     const lockDir = mkdtempSync(join(tmpdir(), 'dsh-lock-selftest-'));
-    const lockFile = join(lockDir, 'l.lock');
-    const first = acquireLedgerLock(lockFile);
+    const first = acquireLedgerLock(lockDir);
     eq('锁：空闲可取', first !== null, true);
-    eq('锁：句柄存在锁文件', existsSync(lockFile), true);
-    eq('锁：新鲜锁被拒（第二实例拿不到）', acquireLedgerLock(lockFile), null);
+    eq('锁：持有者文件存在且内容是自己的 token', stillOwnsLedgerLock(first), true);
+    // 第二实例见「新鲜的别人」⇒ 让位且**自摘**——目录里只剩赢家的文件。
+    eq('锁：新鲜对手 ⇒ 第二实例 null', acquireLedgerLock(lockDir), null);
+    eq('锁：输家自摘（目录只剩赢家一份）', readdirSync(lockDir).filter((n) => n.startsWith(LEDGER_LOCK_PREFIX)).length, 1);
     first.release();
-    eq('锁：release 真删锁文件', existsSync(lockFile), false);
-    writeFileSync(lockFile, 'stale');
+    eq('锁：release 只删自己的文件', readdirSync(lockDir).filter((n) => n.startsWith(LEDGER_LOCK_PREFIX)).length, 0);
+    // 陈旧对手 ⇒ 摘掉并持有（死持有者遗物；活持有者有写前 fail-closed 兜底）。
+    const staleFile = join(lockDir, LEDGER_LOCK_PREFIX + 'dead-beef');
+    writeFileSync(staleFile, 'dead-beef');
     const staleMinAgo = new Date(Date.now() - 40 * 60 * 1000);
-    utimesSync(lockFile, staleMinAgo, staleMinAgo);
-    const takeover = acquireLedgerLock(lockFile, { staleMs: 30 * 60 * 1000 });
-    eq('锁：陈旧锁被接管', takeover !== null, true);
-    // 回读验证语义：接管成功后文件里是**赢家的 token**（rename + 回读，qodo #26-round2-finding-1）。
-    eq('锁：接管后文件含非空 token', readFileSync(lockFile, 'utf8').trim().length > 0, true);
-    eq('锁：接管后的锁对后来者新鲜', acquireLedgerLock(lockFile, { staleMs: 30 * 60 * 1000 }), null);
-    takeover.release();
-    // 所有权 release（qodo #26-round2-finding-2）：锁内容被换成别人的 token ⇒ release 跳过删除。
-    const mine = acquireLedgerLock(lockFile);
-    writeFileSync(lockFile, 'someone-else-999');
-    mine.release();
-    eq('锁：release 有所有权校验（易主后不删）', existsSync(lockFile), true);
-    rmSync(lockFile, { force: true });
-    // 新鲜阈值内的锁必须被拒（可证伪：接管判据只认年龄，不认内容）。
-    writeFileSync(lockFile, 'fresh');
-    const fresh = acquireLedgerLock(lockFile, { staleMs: 30 * 60 * 1000 });
-    eq('锁：新鲜锁不被接管（哪怕内容是任意文本）', fresh, null);
+    utimesSync(staleFile, staleMinAgo, staleMinAgo);
+    const takeover = acquireLedgerLock(lockDir, { staleMs: 30 * 60 * 1000 });
+    eq('锁：陈旧对手被摘除并持有', takeover !== null, true);
+    eq('锁：陈旧对手的文件已消失', existsSync(staleFile), false);
+    eq('锁：接管后的锁对后来者新鲜', acquireLedgerLock(lockDir, { staleMs: 30 * 60 * 1000 }), null);
+    // 写前所有权核验（qodo #26-round3-finding-2 后半）：自己的文件被摘 ⇒ fail-closed。
+    rmSync(takeover.myPath, { force: true });
+    eq('锁：持有者文件被摘 ⇒ 写前核验拒绝', stillOwnsLedgerLock(takeover), false);
+    // 新鲜阈值内的锁必须让位（可证伪：让位判据只认年龄，不认内容）。
+    const freshFile = join(lockDir, LEDGER_LOCK_PREFIX + 'other-holder');
+    writeFileSync(freshFile, 'other-holder');
+    eq('锁：新鲜对手 ⇒ 让位（哪怕内容任意）', acquireLedgerLock(lockDir, { staleMs: 30 * 60 * 1000 }), null);
     rmSync(lockDir, { recursive: true, force: true });
   }
 
@@ -1256,9 +1266,9 @@ function main(args) {
   // 🔴 互斥锁（qodo #26-finding-2）：字节比对与写盘是两次独立的 fs 操作，比对通过后、
   //    写盘前仍有窗口——另一个写方可以插进来，陈旧 candidate 照样覆盖它。比对结果只有
   //    在互斥锁内才可信：比对 → 写 → 落盘复核 → 回滚全程持锁，finally 必释。
-  const ledgerLock = acquireLedgerLock(ledgerLockPath());
+  const ledgerLock = acquireLedgerLock(ledgerLockDir());
   if (!ledgerLock) {
-    console.error(`❌ 台账被另一个 sync-upstream-release 实例占用（${ledgerLockPath()} 新鲜）——等它结束后重试；确认无实例在跑可手工删除锁文件。`);
+    console.error(`❌ 台账被另一个 sync-upstream-release 实例占用（存在新鲜锁文件）——等它结束后重试；确认无实例在跑可手工删除锁文件。`);
     return 1;
   }
   try {
@@ -1271,12 +1281,10 @@ function main(args) {
       console.error(`❌ 台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，台账保持现状。请重跑 --apply 以新台账重算。`);
       return 1;
     }
-    // 🔴 慢持有者防线（qodo #26-round2-finding-2 的另一半，与 --advance-key 同款）：锁若
-    //    在核算窗口内被接管（本命令超过陈旧阈值），拒绝写——现在持锁的是别人。
-    let lockOwner = '';
-    try { lockOwner = readFileSync(ledgerLockPath(), 'utf8'); } catch { /* 锁文件消失 ⇒ 视为非本主 */ }
-    if (lockOwner.trim() !== ledgerLock.token) {
-      console.error(`❌ 台账锁已易主（本命令超过陈旧阈值被接管）——拒绝写盘，请重跑。`);
+    // 🔴 慢持有者防线（qodo #26-round3-finding-2 的后半，与 --advance-key 同款）：锁文件
+    //    被后继者当作死进程摘掉（本命令超过陈旧阈值）⇒ 拒绝写——现在持有互斥的是别人。
+    if (!stillOwnsLedgerLock(ledgerLock)) {
+      console.error(`❌ 台账锁已易主（本命令超过陈旧阈值，锁文件被摘）——拒绝写盘，请重跑。`);
       return 1;
     }
     const snapshot = snapshotFiles([ledgerPath(), ...versionFiles, lockFile]);
@@ -1427,9 +1435,9 @@ function mainAdvanceKey(args) {
 
   // 🔴 互斥锁（qodo #26-finding-2）：字节比对与写盘是两次独立的 fs 操作，比对通过后、
   //    写盘前仍有窗口。比对 → 写 → 落盘复核 → 回滚全程持锁，finally 必释。
-  const ledgerLock = acquireLedgerLock(ledgerLockPath());
+  const ledgerLock = acquireLedgerLock(ledgerLockDir());
   if (!ledgerLock) {
-    console.error(`❌ 台账被另一个 sync-upstream-release 实例占用（${ledgerLockPath()} 新鲜）——等它结束后重试；确认无实例在跑可手工删除锁文件。`);
+    console.error(`❌ 台账被另一个 sync-upstream-release 实例占用（存在新鲜锁文件）——等它结束后重试；确认无实例在跑可手工删除锁文件。`);
     return 1;
   }
   try {
@@ -1443,12 +1451,10 @@ function mainAdvanceKey(args) {
       if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
         post.push('台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，请重跑 --advance-key 以新台账重算。');
       } else {
-        // 🔴 慢持有者防线（qodo #26-round2-finding-2 的另一半）：锁若在核算窗口内被接管
-        //    （本命令超过陈旧阈值），这里必须拒绝写——现在持锁的是别人。
-        let lockOwner = '';
-        try { lockOwner = readFileSync(ledgerLockPath(), 'utf8'); } catch { /* 锁文件消失 ⇒ 视为非本主 */ }
-        if (lockOwner.trim() !== ledgerLock.token) {
-          post.push('台账锁已易主（本命令超过陈旧阈值被接管）——拒绝写盘，请重跑。');
+        // 🔴 慢持有者防线（qodo #26-round3-finding-2 的后半，与 --apply 同款）：锁文件被
+        //    后继者当作死进程摘掉 ⇒ 拒绝写——现在持有互斥的是别人。
+        if (!stillOwnsLedgerLock(ledgerLock)) {
+          post.push('台账锁已易主（本命令超过陈旧阈值，锁文件被摘）——拒绝写盘，请重跑。');
         } else {
           // 🔴 wrote 先置位再写盘：写盘中途失败（半套落盘）也要走 restore。
           wrote = true;
