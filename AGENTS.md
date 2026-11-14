@@ -213,7 +213,7 @@
 
 | 目标 | 上游线（`upstreamDistTag`） | 固定的 DSH | 补丁 / vendored | 桌面后缀（`publishChannel`） | 对应的桌面版本形态 |
 |------|--------|-----------|----------------|------------------|------------------|
-| `next`（默认） | npm `next` dist-tag | `0.2.2-rc.1` | `patches/next/`（条数以 `--list` 为准）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
+| `next`（默认） | npm `next` dist-tag | `0.2.2-rc.3` | `patches/next/`（条数以 `--list` 为准）、`packages/next/`（已清空） | `rc` | `<x.y.z>-rc.<n>[+<w>]` |
 | `alpha` | npm `alpha` dist-tag（2026-09-30 复役，[ADR-057](docs/adr/057-alpha-channel-restored-and-dual-promotion.md) 修订 ADR-056） | `0.2.2-alpha.3` | `patches/alpha/`（条数以 `--list` 为准）、`packages/alpha/`（已清空） | `alpha` | `<x.y.z>-alpha.<n>[+<w>]` |
 
 > 🔴 **桌面版本号 = 合成号**（[ADR-061](docs/adr/061-synthetic-version-model.md)），**不是上游版本号的副本**：
@@ -252,6 +252,17 @@
 > （`dsh` 主包按新家族版本串重生成、`ui-sidebar` 行号重算），**0 退役、0 语义重做**。
 > 真实组装 12/12 applied、L1 烟雾 5/5。逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md)
 > 的 2026-10-29 记录。
+
+> ✅ **next 线于 2026-11-14 从 `0.2.2-rc.1` 推进到 `0.2.2-rc.3`**（上游 `dsh-v0.2.2-rc.3`
+> 发布于 2026-11-13；alpha 线同日不动，仍锚 `0.2.2-alpha.3`）：**上游 rc.2 起把
+> `client-ui-*` 与 `typert-registry` 的浏览器产物从 pretty-printed 改为 minified 打包**
+> ——这不是行号漂移，三路合并对此无能为力。4 个 `ui-*` 补丁 + typert client.browser.js
+> 按 minified 锚点重建（逐锚点断言唯一命中 + 逐文件过 `node --check`），其余 7 个补丁
+> 三路合并移植；`llm-pi-ai` 采上游 `statusSource` 形态并保留 403→FORBIDDEN 拆分；
+> **补裁退役 `ui-sidebar` 的自定义 padding hunk**（§3 分级表 2026-09-16 已裁定、rc 线
+> 11-07 轮漏执行；上游 rc.1 起已原生适配 macOS）。预检 clean 4 / conflict 8 → 复检
+> clean 12 / conflict 0，**0 补丁退役**。真实组装 12/12 applied、L1 烟雾 5/5。
+> 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-11-14 记录。
 
 > ✅ **next 线于 2026-11-07 从 `0.2.1-rc.4` 推进到 `0.2.2-rc.1`**（**跳过 `0.2.1-rc.5`**；
 > 上游 `dsh-v0.2.2-rc.1` 发布于 2026-11-04）：rc.1 汇总自 v0.2.1-rc.5 以来的变更，含统一
