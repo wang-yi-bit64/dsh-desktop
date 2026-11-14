@@ -56,3 +56,6 @@ Thumbs.db
 # 造成「零消费者」类断言假阴性）。此前只写在 .git/info/exclude:7，
 # 那是本地文件、克隆不生效，必须先落 .gitignore 才能约束所有检出。
 /.delta/
+
+# 台账互斥锁：进程被强杀时 finally 不执行会残留——不能脏工作树、也不能被误提交（qodo #26-round2-finding-6）。
+harness-locks/.ledger.lock
