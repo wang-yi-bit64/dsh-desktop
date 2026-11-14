@@ -157,7 +157,7 @@ export const GATES = [
     name: 'sync-upstream',
     script: 'scripts/sync-upstream-release.mjs',
     title: '2c 前门的纯逻辑判据（锁 exact / 台账记录构造 / 发布前核算）',
-    why: '合成号的 n 只能由台账推出，而「写台账 + 写版本号」发生在同一次发布里——任何一步算错都会把一个没人发布过的版本号写进 package.json，updater 从此按它比较。这里守住三件事：④ 锁 exact（范围 / dist-tag / 带 build 段一律判红，否则两次组装可能装进两个不同上游）；台账记录必须由 (上游键, n, w) 合成且 channel 由 patchTarget 现算（台账刻意不存 releaseChannel）；发布前核算对「锚点未动的上游前进」显式判红（不静默新建台账键）。⚠️ 真检查要联网（npm view 上游精确版本），故不进任何分档；self-test 保持纯逻辑（不读盘、不联网）。正式线（无预发布段）在合成函数唯一产地显式抛错（ADR-061 决策 7）。',
+    why: '合成号的 n 只能由台账推出，而「写台账 + 写版本号」发生在同一次发布里——任何一步算错都会把一个没人发布过的版本号写进 package.json，updater 从此按它比较。这里守住三件事：④ 锁 exact（范围 / dist-tag / 带 build 段一律判红，否则两次组装可能装进两个不同上游）；台账记录必须由 (上游键, n, w) 合成且 channel 由 patchTarget 现算（台账刻意不存 releaseChannel）；发布前核算对「锚点未动的上游前进」显式判红（不静默新建台账键）。🔴 另守一条不变式：核算的**每条 null-plan 出口**必须已带 problems——main() 的 Release-Plan 消费点靠它守卫（null ⇒ 跳过消费、走 problems 如实退出）；缺守卫时 null 被解引用成 TypeError 崩溃、把缺键诊断顶掉（2026-11-14 推进 0.2.2-rc.3 时实测崩溃），自测逐出口钉住该不变式，缺键诊断还须分清「锚点未动」与「锚点已动、键未建」两种半套状态。⚠️ 真检查要联网（npm view 上游精确版本），故真检查不进任何分档；self-test 保持纯逻辑（不读盘、不联网）。正式线（无预发布段）在合成函数唯一产地显式抛错（ADR-061 决策 7）。',
     real: { tiers: [], args: [] },
     manual: '真检查联网（npm view 上游精确版本 + 可选 gh api 上游 Release），由发布流程按需调用：node scripts/sync-upstream-release.mjs（--plan 默认只读 / --apply 显式写）。进分档只会得到一条恒定绿或依赖网络的步骤。',
     selfTest: { tiers: ['fast', 'ci', 'release'], args: ['--self-test'] }
