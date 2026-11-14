@@ -381,6 +381,7 @@ npm run version:bump -- minor --commit --tag   # 改文件 + 提交 + 打本地 
 # 26b. **合成号发布主路径**（ADR-061；序号 n 只能由台账推导）
 npm run version:sync-upstream -- --plan     # 只读：打印将写的文件与委托步骤（--plan 是默认）
 npm run version:sync-upstream -- --apply    # 显式写：快照 → 台账 + 版本真源 → 跑守卫 → 失败回滚
+npm run version:sync-upstream -- --advance-key [--apply]   # 推进期建键（「锚点已动、台账键未建」半套状态）：核上游后旧键置 dormant、新锚点键 active（builds 留空）；默认只读，连 --apply 才真写
 npm run version:verify-upstream             # 只核上游可信性（不推 n、不写盘；= 前门 --no-counter）
 #     步骤①②（上游 Release / commit）**缺省即真检查**（slug 唯一产地 scripts/upstream-release.mjs）；
 #     离线时可显式关闭，但必须说出来：node scripts/sync-upstream-release.mjs --plan --no-upstream-release
