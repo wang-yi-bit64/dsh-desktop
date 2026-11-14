@@ -16,7 +16,7 @@
 
 | 目标 | 上游线 | 补丁目录 | vendored 覆盖包 | 对应桌面版本 |
 |---|---|---|---|---|
-| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.2-rc.1`**（2026-11-07 从 `0.2.1-rc.4` 推进；上游 rc.1 汇总自 v0.2.1-rc.5 以来的变更，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口；本轮 **0 退役**，12 个补丁经三路合并移植、4 处冲突人工裁定——`dsh` 主包依赖串随上游、`file-upload` 接管语义映射新字段名 `agentResolution.resolver`、`deliverables` 删 `paths===null` 早退保留上游新参数表、`ui-sidebar` 锚点属性与上游 a11y 演进并存；预检 clean 5 / conflict 7，合并后复检 clean 12 / conflict 0） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
+| `next` | npm `next` dist-tag，**当前锚在上游 `next` 线的 `0.2.2-rc.3`**（2026-11-14 从 `0.2.2-rc.1` 推进；上游 rc.2 起 `client-ui-*` 与 `typert-registry` 的浏览器产物从 pretty-printed 改为 **minified 打包**，4 个 `ui-*` 补丁 + typert client.browser.js 按 minified 锚点重建（逐锚点断言唯一命中），其余 7 个补丁三路合并移植；`llm-pi-ai` 采上游 `statusSource` 形态并保留 403→FORBIDDEN 拆分。本轮 **0 退役**；预检 clean 4 / conflict 8，合并后复检 clean 12 / conflict 0） | `patches/next/`（条数不写死：`--list` 为准） | `packages/next/`（**已清空**，2026-09-24） | `<x.y.z>-rc.<n>[+<w>]`（**合成号**，ADR-061；`<n>` = 台账 `builds[]` 同组 max+1；具体值以 `package.json` 为准） |
 | `alpha` | npm `alpha` dist-tag（当前 `0.2.2-alpha.3`），2026-11-08 从 `0.2.1-alpha.5` 推进；上游 alpha.3 与 rc 线同代，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口；本轮 **0 退役**，12 个补丁经三路合并移植、4 处冲突人工裁定——`dsh` 主包依赖串随上游、`file-upload` 接管语义映射新字段名 `agentResolution.resolver`、`deliverables` 删 `paths===null` 早退保留上游新参数表、`ui-sidebar` 锚点属性与上游 a11y 演进并存；另 `cordis-plugin-loader` 补丁按**独立版本号 `1.0.7-alpha.2`** 重做，旧文件名 `1.0.3` 会把 loader 钉回 1.0.3 与上游 `~1.0.7-alpha.2` 不符） | `patches/alpha/`（条数不写死：`--list` 为准） | `packages/alpha/`（已清空） | `<x.y.z>-alpha.<n>[+<w>]`（合成号；ADR-057 的**跨通道单调**要求继续有效——alpha 构建须排在最高 rc 构建之上，旧数值示例已作废） |
 
 构建时用 `npm run prepare:harness -- --dsh-target=<name>` 选一条；发布时由 **tag 的预发布
@@ -630,6 +630,82 @@ typert-registry），**4 个不同**——`dsh`（家族版本串按线不同，
 `target=alpha`、`versions.dsh=0.2.2-alpha.3`、`patchFilesPresent=12`、12 条全 `applied`、
 lockfile `86126a09dd46…`。组装侧的同批适配（brand assets 的 PWA 三件套匹配链）已在 rc 线提交里
 落地，alpha 线复用同一脚本，无需再改。
+
+---
+
+### next 线（0.2.2-rc.3）的移植裁定（2026-11-14；**补丁 12 → 12，0 退役，1 个 hunk 补裁退役**）
+
+next 线从 `0.2.2-rc.1` 推进到 `0.2.2-rc.3`（上游 Release `dsh-v0.2.2-rc.3` 发布于 2026-11-13，
+npm `next` dist-tag 同步）。rc.3 相对 rc.1 的可见变更集中在 `dsh` 主包；**真正的结构变化在
+打包形态**。
+
+**🔴 本轮的主发现：上游 rc.2 起把 `client-ui-*` 与 `typert-registry` 的浏览器产物从
+pretty-printed（万行级带缩进）改为 minified（单行压缩包）**——`ui-chat` 509KB 仅 19 行、
+`ui-sidebar` 41KB 仅 2 行。这不是行号漂移，**三路合并对它无能为力**（base 与 theirs 无任何
+公共行，merge-file 产出整文件冲突）。受影响的 5 个宿主文件：4 个 `client-ui-*` 的
+`lib/client.js` + `typert-registry` 的 `lib/client.browser.js`。
+
+**预检基线**：`clean 4 / conflict 8`（12 个补丁）。其中 `llm-deepseek` 是纯行号漂移
+（±20 窗口外 50 行，内容匹配）、`llm-pi-ai` 是真冲突（上游重写分类函数）；其余 6 个全是
+minified 形态变化。
+
+**迁移路径**：7 个 pretty 宿主的补丁照旧走 [`merge-migrate-patches.mjs`](../scripts/merge-migrate-patches.mjs)
+三路合并；5 个 minified 宿主**逐锚点手工重建**——先在 rc.3 纯净文件上核对每个锚点字符串
+**恰好命中 1 次**（fail-closed，0 或 2+ 即中止），替换后 `node --check` 逐文件过语法，再进
+工作目录由 regen 统一重生成。纯净树与取证目录在仓外（`D:\tmp\dsh-migrate-022-rc3\`）。
+
+**重建的语义判据（逐补丁）**：
+
+| 补丁 | minified 上的落点 | 语义 |
+|---|---|---|
+| `ui-chat` | 错误映射 `if(code===\`QUOTA\`…)return t(…)` 前插 FORBIDDEN 分支；zh/en 字典 quota 条目后各插 forbidden 条目 | 与旧补丁同意图；插入顺序（FORBIDDEN 先于 QUOTA）随旧补丁 |
+| `ui-deliverables` | `localPathReference` 函数体**逐字节取自旧 rc.1 补丁的 + 行**（pretty 形态插入 minified 巨型行间，合法且可读）；resolve 三元链扩出 `matches.size===0` 分支；`paths===null` 早退删除（注释改为块注释——minified 巨型行内 `//` 会吞掉行尾全部代码） | 与旧补丁同意图 |
+| `ui-sidebar` | 3 个锚点属性落点全部幸存（`pluginCss` style tag、`ref:column` div、settingsArea div） | **padding hunk 本轮退役**（见下）；锚点属性保留 |
+| `ui-trajectory` | zh/en 字典 auth→retry 相邻对（各恰 1 处）间插 quota/forbidden；`errorCode===\`AUTH\`` 映射后插 QUOTA/FORBIDDEN | 与旧补丁同意图 |
+| `typert-registry`（browser） | 3 处 `throw new Error(…already…)` → `ctx.logger?.warn(…; taking over during replay)` | 与 client.node.js / index.js 的同语义 hunk 对齐；v8-ignore 注释类 hunk 在 minified 里天然消失（注释被剥离），语义由 entry 身份比较行承担 |
+
+**🔴 补裁退役：`ui-sidebar` 的自定义 padding hunk（rc 线欠了 58 天的账）**。§3 分级表
+（按包名索引、两线共用）第 97 行明文「自定义 padding 已于 2026-09-16 移除（上游原生适配
+macOS，叠加会成双份留白）」，alpha 线补丁也一直是「退役注释 + `tag.textContent = css;`
+原样不动」；但 rc 线补丁直到 `0.2.2-rc.1` 仍带着 UA 嗅探版 padding 替换——**上游 rc.1 的
+sidebar 就已带 `topStrip` ×7 / `data-platform=darwin` ×7 的原生适配**（本轮实测），11-07
+轮在 rc 线漏裁了这一条（上一节同源性审计括注里「rc 线在本轮才退役」的说法与事实不符，
+以本节为准）。本轮按分级表补裁：padding 替换退役、留块注释（§7.1 规则 3：退役必须可见）、
+`data-dsh-sidebar-*` 锚点属性保留（`harness-ui-inject.js` 的挂载点依赖它们）。仓内核对：
+`src-tauri/frontend/harness-ui-inject.js` 只消费锚点属性，不依赖被退役的 padding。
+
+**`llm-pi-ai` 真冲突的裁定**：上游把 `classifyPiAiError` 重写为 `statusSource` 形态
+（`LEADING_HTTP_STATUS.exec(message)?.[0] ?? message`——只有**行首** HTTP 状态才参与分类，
+且把 401/403 合并进一条 `AUTH` 分支）。我们的意图（403 归 `FORBIDDEN`，文案才不会显示成
+「密钥无效」）上游仍未实现 ⇒ `retireWhen` 不命中，补丁保留：采上游 `statusSource` 纪律，
+在合并的 `(401|403)→AUTH` **之前**拆出 `403→FORBIDDEN`（401 仍落 AUTH）。`llm-deepseek`
+经三路合并自动干净，合并产物逐行复核：401→AUTH、403/permission_error→FORBIDDEN 的拆分
+在新基线上原样落地（rc.3 的 `providerError` 结构未变），无需人工干预。
+
+**0 个补丁退役**——12 条补丁全部保留；变化只有 hunk 形态（5 个 minified 重建 + 1 个
+padding hunk 退役）。
+
+**台账（`harness-locks/dsh-releases.json`）**：`0.2.2-rc.1` → dormant（builds 原样保留），
+新增 `0.2.2-rc.3` active（builds 为空 ⇒ 首个发布 n=1）；upstreamTag / upstreamCommit
+按纪律留空，待发布前门（`sync-upstream-release.mjs`，本轮 `--plan` 已核实 Release 存在 +
+npm 精确可解析，因脚本在「锚点已动、键未建」路径上有一个 plan 为 null 的空引用崩溃而未走
+`--apply`——那是发布时刻的事，此处只登记索引层）。
+
+**验证（分层，强弱不同）**：
+- 预检 clean 12 / conflict 0（合并后复检）。
+- 真实组装 `prepare:harness --force` 两轮（补丁定稿前后各一轮，最终轮为准）：MANIFEST
+  `target=next`、`versions.dsh=0.2.2-rc.3`、`patchFilesPresent=12`、**12/12 applied、
+  0 failed / 0 skipped**（逐行读补丁表）。
+- 语义抽查（组装后 staging 树逐字 grep）：ui-chat 有 `message.failure.forbidden`、
+  typert browser 有 `taking over during replay`、sidebar 有 `data-dsh-sidebar-root` 且
+  **`padding-top:32px` 零命中**（退役生效的直接证据）。
+- L1 无头烟雾 **5/5 PASS**（最终补丁集），日志自证 `dsh=0.2.2-rc.3 node=24.9.0 patches=12/12`。
+- 门禁：`patches` / `drift`（next 未落后：0.2.2-rc.3 ≥ 0.2.2-rc.3）/ `doc-facts` /
+  `plan-facts` / `verify:fast`（除 `cargo test` 一项外全绿——`supervisor_lifecycle_races`
+  在本机为已知 flaky，A/B 对照：**干净树同样失败**，与本轮零 Rust 改动无关）。
+- 提交式锁 `harness-locks/next/{inputs,package-lock}.json` 经 `--update-lockfile` 重生成
+  （首轮组装走了「lockfile 失配 → 在线解析」回退，staging 已是 rc.3 但锁未重写——plan-facts
+  抓住后补跑 `--update-lockfile`）。
 
 ---
 

@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 --- a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 +++ b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
-@@ -339,18 +339,64 @@ var EntryTree = class EntryTree {
+@@ -339,17 +339,63 @@ var EntryTree = class EntryTree {
  		if (name.startsWith("cordis:")) return this.ctx.loader.builtins[name.slice(7)];
  		return composeError(async (info) => {
  			info.offset += 3;
@@ -38,14 +38,12 @@ diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_
  				/* @vite-ignore */
  				new URL(name, this.ctx.baseUrl).href
  			));
--			else {
+ 			else {
 -				const resolve = await createResolve(this.ctx.baseUrl);
 -				return await import(__rewriteRelativeImportExtension(
 -					/* @vite-ignore */
 -					resolve ? resolve(name) : name
 -				));
--			}
-+			else {
 +				try {
 +					const resolve = await createResolve(this.ctx.baseUrl);
 +					return await import(__rewriteRelativeImportExtension(
@@ -69,7 +67,6 @@ diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_
 +					}
 +					throw error;
 +				}
-+			}
+ 			}
  		}, getOuterStack);
  	}
- };

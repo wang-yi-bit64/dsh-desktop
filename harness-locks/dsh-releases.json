@@ -109,7 +109,7 @@
     "0.2.2-rc.1": {
       "patchTarget": "next",
       "upstreamDistTag": "next",
-      "status": "active",
+      "status": "dormant",
       "builds": [
         {
           "channel": "rc",
@@ -121,6 +121,12 @@
           "upstreamCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db"
         }
       ]
+    },
+    "0.2.2-rc.3": {
+      "patchTarget": "next",
+      "upstreamDistTag": "next",
+      "status": "active",
+      "builds": []
     },
     "0.2.1-alpha.1": {
       "patchTarget": "alpha",

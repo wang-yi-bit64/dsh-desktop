@@ -109,9 +109,9 @@ export const DSH_TARGETS = {
     upstreamDistTag: 'next',
     publishChannel: 'rc',
     status: 'active',
-    dshVersion: '0.2.2-rc.1',
+    dshVersion: '0.2.2-rc.3',
     summary:
-      '上游 rc 线（当前 0.2.2-rc.1，2026-11-07 从 0.2.1-rc.4 推进；上游 rc.1 汇总自 v0.2.1-rc.5 以来的变更，含统一右键/键盘菜单、自动化任务宿主级管理、Git 工作树入口。本轮 0 退役：12 个补丁经三路合并移植，4 处冲突人工裁定——dsh 主包依赖串随上游、file-upload 接管语义映射新字段名 agentResolution.resolver、deliverables 删 paths===null 早退保留上游新参数表、sidebar 锚点属性与上游 a11y 演进并存。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
+      '上游 rc 线（当前 0.2.2-rc.3，2026-11-14 从 0.2.2-rc.1 推进；上游 rc.2 起 client-ui-* 与 typert-registry 的浏览器产物从 pretty-printed 改为 minified 打包，4 个 ui-* 补丁 + typert client.browser.js 按 minified 锚点重建（逐锚点断言唯一命中），其余 7 个补丁三路合并移植；llm-pi-ai 采上游 statusSource 形态并保留 403→FORBIDDEN 拆分。本轮 0 退役。当前条数不在此写死——以 node scripts/patch-layers.mjs --list 为准。见 patches/LAYERS.md）'
   },
   alpha: {
     upstreamDistTag: 'alpha',
