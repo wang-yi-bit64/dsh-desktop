@@ -73,8 +73,9 @@
  * ```
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { closeSync, cpSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { argv, exit } from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -365,12 +366,22 @@ export function withLedgerEntry(ledger, upstreamDsh, entry, target, upstreamDist
  * @param {string} input.target - 目标名（`next` / `alpha`）。
  * @param {string} input.upstreamDistTag - 新键记录的 dist-tag（取目标表同名字段，仅用于发现）。
  * @param {string} input.upstreamDsh - 新键（= 目标表当前锚点；调用方须先断言相等）。
+ * @param {string} input.targetStatus - 目标表该目标的 `status`。**缺省即拒**（fail-closed）：
+ *   休眠目标不得建新在役键（ADR-056/057 休眠机制；checkIndexAgainstTargets 对休眠目标
+ *   跳过在役检查，靠它拦不住——qodo #24-finding-3）。
  * @returns {{ releases: object, problems: string[], oldKey: string|null }} 新 releases 映射
  *   （不改入参）、拒绝清单与让位的旧键名（拒绝时为 null）。problems 非空时 releases 为
  *   **原样**副本——调用方不得在 problems 非空时落盘。
  */
-export function advanceLedgerKeys({ ledger, target, upstreamDistTag, upstreamDsh }) {
+export function advanceLedgerKeys({ ledger, target, upstreamDistTag, upstreamDsh, targetStatus }) {
   const releases = { ...ledger.releases };
+  if (targetStatus !== 'active') {
+    return {
+      releases,
+      problems: [`目标 ${target} 的目标表状态是 ${JSON.stringify(targetStatus ?? null)} 而非 'active'——休眠目标不得建新在役键（ADR-056/057）。`],
+      oldKey: null,
+    };
+  }
   if (releases[upstreamDsh] !== undefined) {
     return { releases, problems: [`台账已有 ${upstreamDsh} 这个键——无需（也不得）重复建键；若它是错建的，先手工收拾再回来。`], oldKey: null };
   }
@@ -467,6 +478,9 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
     return nullPlan(problems, notices);
   }
   // 用「假设已合入」的台账跑非空化判据：桌面号必须逐字可从 (上游键, n, w) 复算出来。
+  // ⚠️ 可达性（qodo #23-finding 勘误）：planNextDesktopVersion 成功 ⟹ composeDesktopVersion
+  //    已用同一组入参成功 ⟹ 下面 buildLedgerEntry 的 entry=null 分支（唯一来源是 compose
+  //    抛错）**不可达**。保留为 belt-and-suspenders，不据此宣称测试覆盖。
   const hypotheticalEntry = buildLedgerEntry({ target, upstreamDsh, n: planned.n, w });
   if (hypotheticalEntry.entry === null) {
     return nullPlan([...problems, ...hypotheticalEntry.problems], notices);
@@ -538,6 +552,156 @@ export function snapshotFiles(files) {
   };
 }
 
+/** 台账互斥锁文件的路径（与台账同目录，随仓走；已进 .gitignore——见该文件内注释）。 */
+export function ledgerLockPath(root = process.cwd()) {
+  return join(dirname(ledgerPath(root)), '.ledger.lock');
+}
+
+/**
+ * 台账互斥锁的**陈旧判据**（qodo #26-round4 终版）：不是文件年龄，而是**记录的 PID 是否
+ * 还活着**（`process.kill(pid, 0)`——ESRCH 即死）。为什么不能用年龄：qodo #26-round4
+ * finding-1 的根因正是「长同步操作（联网补丁适用性等）超过年龄阈值 ⇒ 活持有者被当作
+ * 死进程摘掉 ⇒ 后继者写入、先持有者回滚覆盖后继者」。PID 存活性下，**活持有者绝不被
+ * 接管**；只有持锁进程确实已死（强杀、崩溃）才会被接走。
+ *
+ * 代价（如实登记）：锁文件里记的 PID 被系统复用给别的进程时，接管会被拒绝 ⇒ 锁滞留，
+ * 直到该 PID 退出或人工删除锁文件——**fail-closed 方向**的滞留（卡住比双写安全），
+ * 错误信息里写明人工出口。
+ */
+export const LEDGER_LOCK_STALE_MS = 30 * 60 * 1000; // 仅供错误提示（滞留多久提示人工处理），不参与判据
+
+function newLockToken() {
+  return `${randomUUID()}`;
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null; // 解析不出 PID ⇒ 未知（调用方 fail-closed）
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    if (error.code === 'EPERM') return true; // 进程存在但拒绝信号 ⇒ 活着
+    return null; // 其它错误 ⇒ 未知
+  }
+}
+
+function readLockOwner(lockPath) {
+  // 🔴 读不出 / 解析不出（qodo #26-round4-finding-3）⇒ 抛错让调用方 fail-closed，
+  //    绝不当成「无对手」。
+  const raw = readFileSync(lockPath, 'utf8').trim();
+  const sep = raw.indexOf(' ');
+  if (sep <= 0) throw new Error(`台账锁文件格式非法（应为 "PID token"）：${lockPath}`);
+  const pid = Number(raw.slice(0, sep));
+  const token = raw.slice(sep + 1);
+  if (!Number.isInteger(pid) || pid <= 0 || token === '') throw new Error(`台账锁文件格式非法：${lockPath}`);
+  return { pid, token };
+}
+
+/**
+ * 独占创建锁文件并写入 `{PID} {token}`（qodo #26-round2-finding-4）：**写失败必须摘掉
+ * 自己刚建的锁再抛**——否则一次盘满会留下无人持有的新鲜锁，挡住后续所有运行。
+ */
+function writeLockFile(lockPath, pid, token) {
+  let fd;
+  try {
+    fd = openSync(lockPath, 'wx');
+  } catch (error) {
+    error.lockPath = lockPath;
+    throw error;
+  }
+  try {
+    writeSync(fd, `${pid} ${token}\n`);
+  } catch (error) {
+    try { closeSync(fd); } catch { /* 关闭失败也要继续清理 */ }
+    try { rmSync(lockPath, { force: true }); } catch { /* 清理失败只能如实上抛 */ }
+    throw error;
+  }
+  closeSync(fd);
+}
+
+/**
+ * 写前所有权核验（与 --apply / --advance-key 同款）：锁文件还在、内容仍是自己的
+ * `{PID} {token}` 才算持有。慢持有者的一切意外（文件被人工删除等）在此 fail-closed。
+ */
+export function stillOwnsLedgerLock(handle) {
+  if (!handle || typeof handle.token !== 'string' || typeof handle.lockPath !== 'string') return false;
+  try {
+    const owner = readLockOwner(handle.lockPath);
+    return owner.pid === process.pid && owner.token === handle.token;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * **台账互斥锁**终版（qodo #26 四轮评审收敛）：共享单文件 + `wx` 独占创建为唯一互斥原语；
+ * 陈旧判据是 **PID 存活性**而非文件年龄；一切 fs 错误 **fail-closed**（拒绝而非当无对手）。
+ *
+ * · 空闲 ⇒ `wx` 创建成功，持有。
+ * · 已有锁：PID 活着（含 PID 被系统复用）⇒ 返回 null，调用方拒绝并如实提示——活持有者
+ *   绝不被接管（round4-finding-1 的前提消失：长发布不会被摘锁）。
+ * · 已有锁：记录的 PID 确认已死（ESRCH）⇒ 接管：unlink 后回到 `wx` 重试。两个接管者
+ *   竞争时只有一个 `wx` 能成功；输家读到赢家的活 PID ⇒ 让位。unlink 误删「判死之后
+ *   被另一接管者新建的锁」仍可能在窗口内发生，但被误导者写盘前经
+ *   {@link stillOwnsLedgerLock} fail-closed ⇒ **任意时刻至多一个写方真正改台账**。
+ * · 锁文件读不出 / 格式非法 / unlink 失败（qodo #26-round4-finding-2/3）⇒ **抛错**，
+ *   调用方 ❌ 退出——绝不当成「无对手」。
+ * · 活持有者被人工删锁（文档登记的人工出口）后重新竞争 ⇒ 正常；原持有者写盘前
+ *   所有权核验会拒绝。
+ *
+ * @param {string} lockPath - 锁文件路径（{@link ledgerLockPath}）。
+ * @param {object} [options] - `attempts` 可注入（自测用）。
+ * @returns {{ token: string, release: () => void } | null} 锁句柄；null = 被活持有者占用。
+ * @throws {Error} 锁文件不可读 / 格式非法 / unlink 失败（fail-closed）。
+ */
+export function acquireLedgerLock(lockPath, { attempts = 5 } = {}) {
+  const token = newLockToken();
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let fd;
+    try {
+      fd = openSync(lockPath, 'wx');
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const owner = readLockOwner(lockPath);
+      if (pidAlive(owner.pid) !== false) return null; // 活持有者（或判不出）⇒ 让位（fail-closed）
+      // 记录的 PID 确认已死 ⇒ 接管。unlink 失败（EBUSY / EACCES 等）⇒ 抛错，不当成无对手。
+      try {
+        rmSync(lockPath, { force: true });
+      } catch (rmError) {
+        throw new Error(`台账锁的持有进程（PID ${owner.pid}）已死，但锁文件删除失败：${rmError.message}——人工删除 ${lockPath} 后重试。`);
+      }
+      continue; // 回去 wx 重试（另一个接管者抢先时，下轮读到它的活 PID ⇒ 让位）
+    }
+    try {
+      writeSync(fd, `${process.pid} ${token}\n`);
+    } catch (error) {
+      try { closeSync(fd); } catch { /* 关闭失败也要继续清理 */ }
+      try { rmSync(lockPath, { force: true }); } catch { /* 清理失败只能如实上抛 */ }
+      throw error;
+    }
+    closeSync(fd);
+    return {
+      token,
+      lockPath,
+      release() {
+        // release 有所有权校验（qodo #26-round2-finding-2 的教训）：只删内容仍属于自己的锁。
+        try {
+          const owner = readLockOwner(lockPath);
+          if (owner.token !== token) {
+            console.warn(`⚠️  台账锁内容已易主——release 跳过删除：${lockPath}`);
+            return;
+          }
+        } catch {
+          /* 读不出（已被人工删 / 损坏）⇒ 不再补刀，按已释放处理 */
+          return;
+        }
+        rmSync(lockPath, { force: true });
+      },
+    };
+  }
+  return null;
+}
 /**
  * 步骤⑧的**参数合成**（纯函数，可证伪）。
  *
@@ -651,7 +815,7 @@ export function attemptVersionWrite({ writer }) {
 }
 
 /**
- * 纯逻辑自测（**不读盘、不联网**）。含注入式可伪证夹具。
+ * 纯逻辑自测（**不读仓库盘、不联网**；互斥锁自测只写系统临时目录）。含注入式可伪证夹具。
  *
  * @returns {{ passed: number }} 通过项数。
  * @throws {Error} 任一断言失败时抛出。
@@ -713,14 +877,26 @@ export function selfTest() {
   eq('核算：锚点未动的上游前进必须判红（不静默新建键）', missing.plan, null);
   // 🔴 null-plan 不变式（2026-11-14 真实缺陷）：main() 的 Release-Plan 消费点靠
   //    「plan === null ⇒ 跳过消费、走 problems 如实退出」守卫——不变式一旦破缺，
-  //    守卫就成了「吞掉诊断的静默通过」。逐条 null 出口钉住「problems 非空」：
+  //    守卫就成了「吞掉诊断的静默通过」。可达的 null 出口逐个夹具（qodo #23-finding
+  //    勘误：此前宣称「逐出口」但 counter-error 出口无夹具；第 5 条 composition 出口在
+  //    计数器成功后**不可达**——planNextDesktopVersion 已用同一组入参合成过桌面号，
+  //    buildLedgerEntry 再失败只剩 deriveReleaseChannel 一类问题而 entry 不为 null，
+  //    该分支保留为 belt-and-suspenders，见 planSync 内注释）：
   eq('核算：null plan 必带 problems（缺键出口——本次崩溃点）', missing.problems.length > 0, true);
   const badShape = planSync({ target: 'alpha', upstreamDsh: 'not-a-version', ledger: base });
   eq('核算：null plan 必带 problems（版本形状非法出口）', [badShape.plan, badShape.problems.length > 0], [null, true]);
   const unknownTarget = planSync({ target: 'beta', upstreamDsh: '0.2.1-alpha.1', ledger: base });
   eq('核算：null plan 必带 problems（未知目标出口）', [unknownTarget.plan, unknownTarget.problems.length > 0], [null, true]);
+  // counter-error 出口：台账里**已建键**的正式线版本（无预发布段）——planNextDesktopVersion
+  // 的 ADR-061 决策 7 抛错路径（此前唯一没有夹具的可达出口，qodo #23-finding）。
+  const counterError = planSync({
+    target: 'next',
+    upstreamDsh: '0.2.1',
+    ledger: ledgerOf({ '0.2.1': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }),
+  });
+  eq('核算：null plan 必带 problems（counter-error 出口——已建键的正式线）', [counterError.plan, counterError.problems.length > 0], [null, true]);
   // 缺键诊断必须分得清「锚点未动」与「锚点已动、键未建」两种半套状态——
-  // 后者的修法（同批建键）与前者（走 --plan 审查）不同，混成一条会误导人。
+  // 后者的修法（--advance-key）与前者（走 --plan 审查）不同，混成一条会误导人。
   // 上游标识**动态读目标表锚点**（锚点随推进漂，写死必复刻上一条的教训）。
   const halfDone = planSync({ target: 'alpha', upstreamDsh: DSH_TARGETS.alpha.dshVersion, ledger: { releases: {} } });
   eq('核算：锚点已动而键未建 ⇒ 诊断说「半套状态」并指向同批建键', halfDone.problems.some((x) => x.includes('半套状态')), true);
@@ -739,16 +915,60 @@ export function selfTest() {
   const advBase = ledgerOf({
     '0.2.1-alpha.5': { patchTarget: 'alpha', upstreamDistTag: 'alpha', status: 'active', builds: [{ n: 1, desktopVersion: '0.2.1-alpha.5.1' }] },
   });
-  const adv = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' });
+  const adv = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' });
   eq('建键：旧键置 dormant 且 builds 原样保留', [adv.releases['0.2.1-alpha.5'].status, adv.releases['0.2.1-alpha.5'].builds.length, adv.oldKey], ['dormant', 1, '0.2.1-alpha.5']);
   eq('建键：新键 active + builds 空 + 身份字段随目标表', [adv.releases['0.2.2-alpha.4'].status, adv.releases['0.2.2-alpha.4'].builds, adv.releases['0.2.2-alpha.4'].patchTarget, adv.releases['0.2.2-alpha.4'].upstreamDistTag], ['active', [], 'alpha', 'alpha']);
   eq('建键：不改入参', advBase.releases['0.2.1-alpha.5'].status, 'active');
-  eq('建键：拒绝（键已存在）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-alpha.4': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
-  eq('建键：拒绝（无在役键）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({}), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
+  eq('建键：拒绝（键已存在）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-alpha.4': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' }).problems.length > 0, true);
+  eq('建键：拒绝（无在役键）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({}), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' }).problems.length > 0, true);
   // 只有别的目标的在役键 ≠ 有本目标可让位的键（falsifiability：next 的键不得替 alpha 让位）。
-  eq('建键：拒绝（本目标无在役键，他目标键不算数）', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-rc.3': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
-  const advMulti = advanceLedgerKeys({ ledger: ledgerOf({ 'x1': { patchTarget: 'alpha', status: 'active', builds: [] }, 'x2': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' });
+  eq('建键：拒绝（本目标无在役键，他目标键不算数）', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-rc.3': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' }).problems.length > 0, true);
+  const advMulti = advanceLedgerKeys({ ledger: ledgerOf({ 'x1': { patchTarget: 'alpha', status: 'active', builds: [] }, 'x2': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' });
   eq('建键：拒绝（多在役键）problems 非空且列出键名', [advMulti.problems.length > 0, advMulti.oldKey], [true, null]);
+  // 🔴 休眠目标不得建新在役键（qodo #24-finding-3）：checkIndexAgainstTargets 对休眠目标
+  //    跳过在役检查，靠它拦不住——targetStatus 必须显式为 'active'。缺省（undefined）同样
+  //    拒（fail-closed：调用方忘传比静默放行安全）。
+  eq('建键：拒绝（目标休眠）problems 非空且点明 ADR-056/057', (() => {
+    const r = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'dormant' });
+    return [r.problems.length > 0, r.problems[0].includes('ADR-056'), r.oldKey];
+  })(), [true, true, null]);
+  eq('建键：拒绝（targetStatus 缺失 ⇒ fail-closed）', advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
+
+  // 台账互斥锁（qodo #26-round4 终版：PID 存活性判据 + 一切 fs 错误 fail-closed）。
+  {
+    const lockDir = mkdtempSync(join(tmpdir(), 'dsh-lock-selftest-'));
+    const lockFile = join(lockDir, '.ledger.lock');
+    const first = acquireLedgerLock(lockFile);
+    eq('锁：空闲可取', first !== null, true);
+    eq('锁：写前核验通过（文件内容是自己的 PID+token）', stillOwnsLedgerLock(first), true);
+    // 活持有者（当前测试进程自身的 PID 记录在锁里）⇒ 第二实例让位（round4-finding-1：活持有者绝不被接管）。
+    eq('锁：活 PID 占用 ⇒ 第二实例 null', acquireLedgerLock(lockFile), null);
+    first.release();
+    eq('锁：release 真删锁文件', existsSync(lockFile), false);
+    // 死 PID ⇒ 接管成功（用已退出的子进程 PID 构造「确认已死」；容忍 PID 复用导致判活，换 PID 重试）。
+    let takeover = null;
+    for (let i = 0; i < 10 && takeover === null; i += 1) {
+      const dead = spawnSync(process.execPath, ['-e', 'process.exit(0)']);
+      const deadPid = dead.pid ?? 0;
+      if (deadPid <= 0) continue;
+      writeFileSync(lockFile, `${deadPid} dead-token-${i}
+`);
+      takeover = acquireLedgerLock(lockFile);
+    }
+    eq('锁：记录 PID 确认已死 ⇒ 接管成功', takeover !== null, true);
+    takeover.release();
+    // 锁文件格式非法 ⇒ 抛错 fail-closed（qodo #26-round4-finding-3：绝不当成「无对手」）。
+    writeFileSync(lockFile, 'not-a-valid-lock');
+    let threw = false;
+    try { acquireLedgerLock(lockFile); } catch { threw = true; }
+    eq('锁：格式非法 ⇒ fail-closed 抛错', threw, true);
+    rmSync(lockFile, { force: true }); // fail-closed 抛错不会摘掉坏锁——夹具自己清场
+    // 写前所有权核验（qodo #26-round4-finding-1 的兜底）：自己的锁文件被摘 ⇒ 拒绝。
+    const mine = acquireLedgerLock(lockFile);
+    rmSync(lockFile, { force: true });
+    eq('锁：持有者文件被摘 ⇒ 写前核验拒绝', stillOwnsLedgerLock(mine), false);
+    rmSync(lockDir, { recursive: true, force: true });
+  }
 
   // 🔴 步骤①②的降级必须**显式可见**（§7.1 规则 3）——静默跳过 = 伪造成功。
   const skipped = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', null);
@@ -967,6 +1187,9 @@ function main(args) {
 
   const problems = [];
   const notices = [];
+  // 并发防线基线：以**字节**记下本次核算所见的台账（与 --advance-key 同一防线；核算窗口
+  // 含联网核验与补丁适用性，时间不短——期间台账若被并发改写，陈旧 candidate 会丢改动）。
+  const ledgerRawBefore = readFileSync(ledgerPath(), 'utf8');
   const ledger = readLedger();
 
   // 步骤①②：上游 Release（缺省真检查；`--no-upstream-release` 才降级，且降级写进输出）。
@@ -1008,7 +1231,7 @@ function main(args) {
   // ⚠️ `--no-counter` 是纯上游可信性查询（不推导 n、无东西可写）⇒ 不要求计划。
   // 🔴 `plan !== null` 守卫的不变式：planSync 的**每条** null 出口（版本形状非法 / 未知目标 /
   //    台账缺键 / 计数器推导抛错 / 桌面号不可合成）都**已 push** 至少一条 problem 才返回 null
-  //    （自测「核算：null plan 必带 problems」逐出口钉住）。没有这个守卫，null 在这里被解引用
+  //    （nullPlan 构造级保证 + 自测对可达出口逐个夹具）。没有这个守卫，null 在这里被解引用
   //    成 TypeError 崩溃，把「台账里没有 X 这个键」那条如实诊断顶掉——2026-11-14 推进
   //    0.2.2-rc.3 时实测（台账键按 24a58dc 先例手改后才触不到这条路径）。守卫之后 problems
   //    非空 ⇒ 走下方「核算失败」如实退出，不静默、不崩溃。下游（`if (!apply)` 与 --apply 体）
@@ -1073,46 +1296,80 @@ function main(args) {
   //    新版本号」的半套状态（2026-10-10 首次 --apply 实测泄漏过一次：步骤⑧失败后
   //    Cargo.lock 里残留 0.2.1-alpha.1.1，而 package.json 已回滚成 0.7.4-alpha.1）。
   const lockFile = join(process.cwd(), 'Cargo.lock');
-  const snapshot = snapshotFiles([ledgerPath(), ...versionFiles, lockFile]);
-  console.log(`📸 快照：${snapshot.dir}`);
-
-  const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
-  writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
-  const backfilled = [release.tag ? `upstreamTag=${release.tag}` : '', release.commit ? `upstreamCommit=${release.commit.slice(0, 7)}…（${release.commitSource}）` : '']
-    .filter(Boolean)
-    .join('，');
-  console.log(
-    `✅ 步骤⑥⑨：台账 ${LEDGER_RELATIVE} 追加 n=${plan.n}${backfilled ? `，回填 ${backfilled}` : '（上游未核验 ⇒ 两个上游字段都不写，填猜测值等于伪造）'}`,
-  );
-
-  // 🔴 不得写 `if (!writeVersion(...).ok)`：writeVersion 失败靠**抛**、成功返回 `{ changed }`，
-  //    没有 `ok` 字段 ⇒ 该判断恒成立，成功也会被当成失败并回滚（真实缺陷，见 attemptVersionWrite）。
-  const wrote = attemptVersionWrite({ writer: () => writeVersion(plan.desktopVersion) });
-  if (!wrote.ok) {
-    snapshot.restore();
-    const cleaned = snapshot.cleanup();
-    if (cleaned) console.warn(`⚠️  ${cleaned}`);
-    console.error(`❌ 步骤⑦：写版本失败（已回滚）：${wrote.detail}`);
+  // 🔴 互斥锁（qodo #26-finding-2）：字节比对与写盘是两次独立的 fs 操作，比对通过后、
+  //    写盘前仍有窗口——另一个写方可以插进来，陈旧 candidate 照样覆盖它。比对结果只有
+  //    在互斥锁内才可信：比对 → 写 → 落盘复核 → 回滚全程持锁，finally 必释。
+  const ledgerLock = acquireLedgerLock(ledgerLockPath());
+  if (!ledgerLock) {
+    console.error(`❌ 台账被另一个活实例占用（存在锁文件且其记录 PID 存活）——等它结束后重试；确认无实例在跑可手工删除锁文件。`);
     return 1;
   }
-  console.log(`✅ 步骤⑦：package.json / Cargo.toml ← ${plan.desktopVersion}（改写 ${wrote.changed.length} 个文件）`);
-  const lock = refreshLock();
-  console.log(`${lock.ok ? '✅' : '⚠️ '} Cargo.lock：${lock.detail}`);
+  try {
+    const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
+    // 🔴 并发防线（qodo #24-finding-2）：台账在本命令核算窗口（含联网核验与步骤⑧补丁
+    //    适用性）内被并发改写 ⇒ 陈旧 candidate 会丢掉那笔改动。
+    // 🔴 拒写路径**不得** restore（qodo #26-finding-1）：此刻本命令还没有写任何东西，
+    //    磁盘上的台账正是并发写方的**更新**版本——restore 会用本命令的旧快照把它盖回去。
+    if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
+      console.error(`❌ 台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，台账保持现状。请重跑 --apply 以新台账重算。`);
+      return 1;
+    }
+    // 🔴 慢持有者防线（qodo #26-round3-finding-2 的后半，与 --advance-key 同款）：锁文件
+    //    被后继者当作死进程摘掉（本命令超过陈旧阈值）⇒ 拒绝写——现在持有互斥的是别人。
+    if (!stillOwnsLedgerLock(ledgerLock)) {
+      console.error(`❌ 台账锁已易主（本命令超过陈旧阈值，锁文件被摘）——拒绝写盘，请重跑。`);
+      return 1;
+    }
+    const snapshot = snapshotFiles([ledgerPath(), ...versionFiles, lockFile]);
+    console.log(`📸 快照：${snapshot.dir}`);
+    try {
+      writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
+    } catch (error) {
+      // 🔴 台账写盘中途失败也必须回滚（与 --advance-key 同一处理，qodo #24-finding-1）。
+      snapshot.restore();
+      const cleaned = snapshot.cleanup();
+      if (cleaned) console.warn(`⚠️  ${cleaned}`);
+      console.error(`❌ 台账写盘失败（已回滚）：${error.message}`);
+      return 1;
+    }
+    const backfilled = [release.tag ? `upstreamTag=${release.tag}` : '', release.commit ? `upstreamCommit=${release.commit.slice(0, 7)}…（${release.commitSource}）` : '']
+      .filter(Boolean)
+      .join('，');
+    console.log(
+      `✅ 步骤⑥⑨：台账 ${LEDGER_RELATIVE} 追加 n=${plan.n}${backfilled ? `，回填 ${backfilled}` : '（上游未核验 ⇒ 两个上游字段都不写，填猜测值等于伪造）'}`,
+    );
 
-  const patches = runPatchApplicability({ target, upstreamDsh });
-  if (!patches.ok) {
-    snapshot.restore();
+    // 🔴 不得写 `if (!writeVersion(...).ok)`：writeVersion 失败靠**抛**、成功返回 `{ changed }`，
+    //    没有 `ok` 字段 ⇒ 该判断恒成立，成功也会被当成失败并回滚（真实缺陷，见 attemptVersionWrite）。
+    const wrote = attemptVersionWrite({ writer: () => writeVersion(plan.desktopVersion) });
+    if (!wrote.ok) {
+      snapshot.restore();
+      const cleaned = snapshot.cleanup();
+      if (cleaned) console.warn(`⚠️  ${cleaned}`);
+      console.error(`❌ 步骤⑦：写版本失败（已回滚）：${wrote.detail}`);
+      return 1;
+    }
+    console.log(`✅ 步骤⑦：package.json / Cargo.toml ← ${plan.desktopVersion}（改写 ${wrote.changed.length} 个文件）`);
+    const lock = refreshLock();
+    console.log(`${lock.ok ? '✅' : '⚠️ '} Cargo.lock：${lock.detail}`);
+
+    const patches = runPatchApplicability({ target, upstreamDsh });
+    if (!patches.ok) {
+      snapshot.restore();
+      const cleaned = snapshot.cleanup();
+      if (cleaned) console.warn(`⚠️  ${cleaned}`);
+      console.error(`❌ 步骤⑧：补丁适用性失败（已回滚）：${patches.detail}`);
+      return 1;
+    }
+    console.log(`✅ 步骤⑧：补丁适用性通过`);
+
     const cleaned = snapshot.cleanup();
     if (cleaned) console.warn(`⚠️  ${cleaned}`);
-    console.error(`❌ 步骤⑧：补丁适用性失败（已回滚）：${patches.detail}`);
-    return 1;
+    console.log(`\n✅ 合成号 ${plan.desktopVersion} 已落地（台账 + 版本文件）。下一步：手动跑步骤⑤（更新 lock）→ 提交 → 打 tag。`);
+    return 0;
+  } finally {
+    ledgerLock.release();
   }
-  console.log(`✅ 步骤⑧：补丁适用性通过`);
-
-  const cleaned = snapshot.cleanup();
-  if (cleaned) console.warn(`⚠️  ${cleaned}`);
-  console.log(`\n✅ 合成号 ${plan.desktopVersion} 已落地（台账 + 版本文件）。下一步：手动跑步骤⑤（更新 lock）→ 提交 → 打 tag。`);
-  return 0;
 }
 
 const isDirectRun = (() => {
@@ -1177,8 +1434,10 @@ function mainAdvanceKey(args) {
   const upstreamRepo = at('--upstream-repo') ?? UPSTREAM_REPO;
 
   const problems = [];
+  // 并发防线基线：以**字节**记下本次核算所见的台账（qodo #24-finding-2）。
+  const ledgerRawBefore = readFileSync(ledgerPath(), 'utf8');
   const ledger = readLedger();
-  const advanced = advanceLedgerKeys({ ledger, target, upstreamDistTag: t.upstreamDistTag, upstreamDsh });
+  const advanced = advanceLedgerKeys({ ledger, target, upstreamDistTag: t.upstreamDistTag, upstreamDsh, targetStatus: t.status });
   problems.push(...advanced.problems);
   const candidate = { ...ledger, releases: advanced.releases };
   // 落盘前判据：合成结果必须台账自洽（锚点在役键唯一且与目标表对得上）。
@@ -1207,31 +1466,67 @@ function mainAdvanceKey(args) {
     return 0;
   }
 
-  const snapshot = snapshotFiles([ledgerPath()]);
-  writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
-  // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
-  const reread = readLedger();
-  const post = [];
-  post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
-  post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
-  const written = reread.releases[upstreamDsh];
-  if (written?.status !== 'active' || written?.patchTarget !== target || written?.builds?.length !== 0) {
-    post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
-  }
-  if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
-    post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
-  }
-  if (post.length > 0) {
-    snapshot.restore();
-    const cleaned = snapshot.cleanup();
-    if (cleaned) console.warn(`⚠️  ${cleaned}`);
-    for (const problem of post) console.error(`❌ ${problem}`);
-    console.error(`❌ 落盘复核失败（已回滚）。`);
+  // 🔴 互斥锁（qodo #26-finding-2）：字节比对与写盘是两次独立的 fs 操作，比对通过后、
+  //    写盘前仍有窗口。比对 → 写 → 落盘复核 → 回滚全程持锁，finally 必释。
+  const ledgerLock = acquireLedgerLock(ledgerLockPath());
+  if (!ledgerLock) {
+    console.error(`❌ 台账被另一个活实例占用（存在锁文件且其记录 PID 存活）——等它结束后重试；确认无实例在跑可手工删除锁文件。`);
     return 1;
   }
-  const cleaned = snapshot.cleanup();
-  if (cleaned) console.warn(`⚠️  ${cleaned}`);
-  console.log(`\n✅ 台账在役键已推进（${advanced.oldKey} → dormant，${upstreamDsh} → active）。`);
-  console.log(`   下一步：跑 npm run gate -- plan-facts 复核锚点与台账同批一致 → 提交。`);
-  return 0;
+  try {
+    const snapshot = snapshotFiles([ledgerPath()]);
+    const post = [];
+    let wrote = false;
+    try {
+      // 🔴 并发防线（qodo #24-finding-2）：网络核验窗口内台账可能被另一个写方（例如正在跑
+      //    的发布 --apply）改写——陈旧 candidate 覆盖回去会**丢掉那笔改动**，而结构性落盘
+      //    复核照样全绿。锁内写前比对字节，变了就拒绝（不静默合并）。
+      if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
+        post.push('台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，请重跑 --advance-key 以新台账重算。');
+      } else {
+        // 🔴 慢持有者防线（qodo #26-round3-finding-2 的后半，与 --apply 同款）：锁文件被
+        //    后继者当作死进程摘掉 ⇒ 拒绝写——现在持有互斥的是别人。
+        if (!stillOwnsLedgerLock(ledgerLock)) {
+          post.push('台账锁已易主（本命令超过陈旧阈值，锁文件被摘）——拒绝写盘，请重跑。');
+        } else {
+          // 🔴 wrote 先置位再写盘：写盘中途失败（半套落盘）也要走 restore。
+          wrote = true;
+          writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
+        }
+        // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
+        const reread = readLedger();
+        post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
+        post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
+        const writtenKey = reread.releases[upstreamDsh];
+        if (writtenKey?.status !== 'active' || writtenKey?.patchTarget !== target || writtenKey?.builds?.length !== 0) {
+          post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
+        }
+        if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
+          post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
+        }
+      }
+    } catch (error) {
+      // 🔴 写盘中途失败 / 复读抛错（如坏 JSON）也必须回滚（qodo #24-finding-1）——否则
+      //    进程带着半套台账退出且快照泄漏。
+      post.push(`写盘或复读失败：${error.message}`);
+    }
+    if (post.length > 0) {
+      // 🔴 只有**本命令已写盘**（wrote=true）才 restore：拒写路径（并发拒绝）绝不 restore
+      //    ——磁盘上的台账是并发写方的**更新**版本，restore 会用本命令的旧快照把它盖回去
+      //    （qodo #26-finding-1）。
+      if (wrote) snapshot.restore();
+      const cleaned = snapshot.cleanup();
+      if (cleaned) console.warn(`⚠️  ${cleaned}`);
+      for (const problem of post) console.error(`❌ ${problem}`);
+      console.error(`❌ ${wrote ? '落盘复核失败（已回滚）' : '建键被拒（台账未动）'}。`);
+      return 1;
+    }
+    const cleaned = snapshot.cleanup();
+    if (cleaned) console.warn(`⚠️  ${cleaned}`);
+    console.log(`\n✅ 台账在役键已推进（${advanced.oldKey} → dormant，${upstreamDsh} → active）。`);
+    console.log(`   下一步：跑 npm run gate -- plan-facts 复核锚点与台账同批一致 → 提交。`);
+    return 0;
+  } finally {
+    ledgerLock.release();
+  }
 }

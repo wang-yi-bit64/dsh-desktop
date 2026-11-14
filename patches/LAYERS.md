@@ -678,9 +678,23 @@ sidebar 就已带 `topStrip` ×7 / `data-platform=darwin` ×7 的原生适配**�
 （`LEADING_HTTP_STATUS.exec(message)?.[0] ?? message`——只有**行首** HTTP 状态才参与分类，
 且把 401/403 合并进一条 `AUTH` 分支）。我们的意图（403 归 `FORBIDDEN`，文案才不会显示成
 「密钥无效」）上游仍未实现 ⇒ `retireWhen` 不命中，补丁保留：采上游 `statusSource` 纪律，
-在合并的 `(401|403)→AUTH` **之前**拆出 `403→FORBIDDEN`（401 仍落 AUTH）。`llm-deepseek`
+在合并的 `(401|403)→AUTH` **之前**拆出 `403→FORBIDDEN`（401 仍落 AUTH）。
+🔴 **2026-11-14 当日勘误（qodo #22-finding-1）**：初版重建把 403/AUTH 分支放在
+`isQuotaExceededError` **之前**，跟随了上游 rc.3 的语句序——那是上游 statusSource 重构的
+**副产品**，不是产品决策；桌面意图一直是 **quota 优先**（rc.1 补丁与 alpha.3 补丁同序：
+quota 检查先于 401/403）。初版让「行首 401/403 且正文含配额耗尽」的错误从 QUOTA_EXCEEDED
+变成 FORBIDDEN/AUTH（文案错 + 两线行为分叉）。终版恢复 quota 首位：
+`quota → 403→FORBIDDEN → (401|403)→AUTH`——quota 优先（两线一致）、FORBIDDEN 拆分保留、
+`statusSource` 纪律保留。`llm-deepseek`
 经三路合并自动干净，合并产物逐行复核：401→AUTH、403/permission_error→FORBIDDEN 的拆分
 在新基线上原样落地（rc.3 的 `providerError` 结构未变），无需人工干预。
+
+🔴 **2026-11-14 当日勘误二（qodo #22-finding-2）**：`ui-sidebar` 退役注释初版锚在
+`tag.textContent=css$1;`——那是 **HeaderLeadingControls.module.css** 的 style tag；
+退役的 padding 属于 **SidebarRoot.module.css** 的块（`pluginCss=tagId;tag.textContent=css;`）。
+minified 后两个块都有同形的 `tag.textContent=css…` 行，初版断言的「唯一命中」命中的是**错的
+块**——「锚点唯一」只保证打得上，不保证打在对的地方。终版锚改为
+`pluginCss=tagId;tag.textContent=css;`（仍唯一），HeaderLeadingControls 块恢复上游原样。
 
 **0 个补丁退役**——12 条补丁全部保留；变化只有 hunk 形态（5 个 minified 重建 + 1 个
 padding hunk 退役）。
