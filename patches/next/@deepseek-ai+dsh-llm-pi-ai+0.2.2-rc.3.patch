@@ -1,11 +1,14 @@
 diff --git a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
 --- a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
 +++ b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
-@@ -1473,6 +1473,7 @@ function mapUsage(usage) {
+@@ -1473,8 +1473,9 @@ function mapUsage(usage) {
  const LEADING_HTTP_STATUS = /^[45]\d\d\b/;
  function classifyPiAiError(message) {
  	const statusSource = LEADING_HTTP_STATUS.exec(message)?.[0] ?? message;
-+	if (/\b403\b/.test(statusSource)) return "FORBIDDEN";
- 	if (/\b(?:401|403)\b/.test(statusSource)) return "AUTH";
+-	if (/\b(?:401|403)\b/.test(statusSource)) return "AUTH";
  	if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE;
++	if (/\b403\b/.test(statusSource)) return "FORBIDDEN";
++	if (/\b(?:401|403)\b/.test(statusSource)) return "AUTH";
  	if (/\b429\b/.test(statusSource) || /rate.?limit/i.test(message)) return "RATE_LIMIT";
+ 	if (/\b413\b/.test(statusSource) || /failed to buffer the request body:\s*length limit exceeded|payload too large|request body too large/i.test(message)) return "INVALID_REQUEST";
+ 	if (/\b400\b/.test(statusSource) || /invalid.?request/i.test(message)) return "INVALID_REQUEST";

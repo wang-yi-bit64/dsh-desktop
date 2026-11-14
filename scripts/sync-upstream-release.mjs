@@ -365,12 +365,22 @@ export function withLedgerEntry(ledger, upstreamDsh, entry, target, upstreamDist
  * @param {string} input.target - 目标名（`next` / `alpha`）。
  * @param {string} input.upstreamDistTag - 新键记录的 dist-tag（取目标表同名字段，仅用于发现）。
  * @param {string} input.upstreamDsh - 新键（= 目标表当前锚点；调用方须先断言相等）。
+ * @param {string} input.targetStatus - 目标表该目标的 `status`。**缺省即拒**（fail-closed）：
+ *   休眠目标不得建新在役键（ADR-056/057 休眠机制；checkIndexAgainstTargets 对休眠目标
+ *   跳过在役检查，靠它拦不住——qodo #24-finding-3）。
  * @returns {{ releases: object, problems: string[], oldKey: string|null }} 新 releases 映射
  *   （不改入参）、拒绝清单与让位的旧键名（拒绝时为 null）。problems 非空时 releases 为
  *   **原样**副本——调用方不得在 problems 非空时落盘。
  */
-export function advanceLedgerKeys({ ledger, target, upstreamDistTag, upstreamDsh }) {
+export function advanceLedgerKeys({ ledger, target, upstreamDistTag, upstreamDsh, targetStatus }) {
   const releases = { ...ledger.releases };
+  if (targetStatus !== 'active') {
+    return {
+      releases,
+      problems: [`目标 ${target} 的目标表状态是 ${JSON.stringify(targetStatus ?? null)} 而非 'active'——休眠目标不得建新在役键（ADR-056/057）。`],
+      oldKey: null,
+    };
+  }
   if (releases[upstreamDsh] !== undefined) {
     return { releases, problems: [`台账已有 ${upstreamDsh} 这个键——无需（也不得）重复建键；若它是错建的，先手工收拾再回来。`], oldKey: null };
   }
@@ -467,6 +477,9 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
     return nullPlan(problems, notices);
   }
   // 用「假设已合入」的台账跑非空化判据：桌面号必须逐字可从 (上游键, n, w) 复算出来。
+  // ⚠️ 可达性（qodo #23-finding 勘误）：planNextDesktopVersion 成功 ⟹ composeDesktopVersion
+  //    已用同一组入参成功 ⟹ 下面 buildLedgerEntry 的 entry=null 分支（唯一来源是 compose
+  //    抛错）**不可达**。保留为 belt-and-suspenders，不据此宣称测试覆盖。
   const hypotheticalEntry = buildLedgerEntry({ target, upstreamDsh, n: planned.n, w });
   if (hypotheticalEntry.entry === null) {
     return nullPlan([...problems, ...hypotheticalEntry.problems], notices);
@@ -713,14 +726,26 @@ export function selfTest() {
   eq('核算：锚点未动的上游前进必须判红（不静默新建键）', missing.plan, null);
   // 🔴 null-plan 不变式（2026-11-14 真实缺陷）：main() 的 Release-Plan 消费点靠
   //    「plan === null ⇒ 跳过消费、走 problems 如实退出」守卫——不变式一旦破缺，
-  //    守卫就成了「吞掉诊断的静默通过」。逐条 null 出口钉住「problems 非空」：
+  //    守卫就成了「吞掉诊断的静默通过」。可达的 null 出口逐个夹具（qodo #23-finding
+  //    勘误：此前宣称「逐出口」但 counter-error 出口无夹具；第 5 条 composition 出口在
+  //    计数器成功后**不可达**——planNextDesktopVersion 已用同一组入参合成过桌面号，
+  //    buildLedgerEntry 再失败只剩 deriveReleaseChannel 一类问题而 entry 不为 null，
+  //    该分支保留为 belt-and-suspenders，见 planSync 内注释）：
   eq('核算：null plan 必带 problems（缺键出口——本次崩溃点）', missing.problems.length > 0, true);
   const badShape = planSync({ target: 'alpha', upstreamDsh: 'not-a-version', ledger: base });
   eq('核算：null plan 必带 problems（版本形状非法出口）', [badShape.plan, badShape.problems.length > 0], [null, true]);
   const unknownTarget = planSync({ target: 'beta', upstreamDsh: '0.2.1-alpha.1', ledger: base });
   eq('核算：null plan 必带 problems（未知目标出口）', [unknownTarget.plan, unknownTarget.problems.length > 0], [null, true]);
+  // counter-error 出口：台账里**已建键**的正式线版本（无预发布段）——planNextDesktopVersion
+  // 的 ADR-061 决策 7 抛错路径（此前唯一没有夹具的可达出口，qodo #23-finding）。
+  const counterError = planSync({
+    target: 'next',
+    upstreamDsh: '0.2.1',
+    ledger: ledgerOf({ '0.2.1': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }),
+  });
+  eq('核算：null plan 必带 problems（counter-error 出口——已建键的正式线）', [counterError.plan, counterError.problems.length > 0], [null, true]);
   // 缺键诊断必须分得清「锚点未动」与「锚点已动、键未建」两种半套状态——
-  // 后者的修法（同批建键）与前者（走 --plan 审查）不同，混成一条会误导人。
+  // 后者的修法（--advance-key）与前者（走 --plan 审查）不同，混成一条会误导人。
   // 上游标识**动态读目标表锚点**（锚点随推进漂，写死必复刻上一条的教训）。
   const halfDone = planSync({ target: 'alpha', upstreamDsh: DSH_TARGETS.alpha.dshVersion, ledger: { releases: {} } });
   eq('核算：锚点已动而键未建 ⇒ 诊断说「半套状态」并指向同批建键', halfDone.problems.some((x) => x.includes('半套状态')), true);
@@ -739,16 +764,24 @@ export function selfTest() {
   const advBase = ledgerOf({
     '0.2.1-alpha.5': { patchTarget: 'alpha', upstreamDistTag: 'alpha', status: 'active', builds: [{ n: 1, desktopVersion: '0.2.1-alpha.5.1' }] },
   });
-  const adv = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' });
+  const adv = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' });
   eq('建键：旧键置 dormant 且 builds 原样保留', [adv.releases['0.2.1-alpha.5'].status, adv.releases['0.2.1-alpha.5'].builds.length, adv.oldKey], ['dormant', 1, '0.2.1-alpha.5']);
   eq('建键：新键 active + builds 空 + 身份字段随目标表', [adv.releases['0.2.2-alpha.4'].status, adv.releases['0.2.2-alpha.4'].builds, adv.releases['0.2.2-alpha.4'].patchTarget, adv.releases['0.2.2-alpha.4'].upstreamDistTag], ['active', [], 'alpha', 'alpha']);
   eq('建键：不改入参', advBase.releases['0.2.1-alpha.5'].status, 'active');
-  eq('建键：拒绝（键已存在）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-alpha.4': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
-  eq('建键：拒绝（无在役键）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({}), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
+  eq('建键：拒绝（键已存在）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-alpha.4': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' }).problems.length > 0, true);
+  eq('建键：拒绝（无在役键）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({}), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' }).problems.length > 0, true);
   // 只有别的目标的在役键 ≠ 有本目标可让位的键（falsifiability：next 的键不得替 alpha 让位）。
-  eq('建键：拒绝（本目标无在役键，他目标键不算数）', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-rc.3': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
-  const advMulti = advanceLedgerKeys({ ledger: ledgerOf({ 'x1': { patchTarget: 'alpha', status: 'active', builds: [] }, 'x2': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' });
+  eq('建键：拒绝（本目标无在役键，他目标键不算数）', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-rc.3': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' }).problems.length > 0, true);
+  const advMulti = advanceLedgerKeys({ ledger: ledgerOf({ 'x1': { patchTarget: 'alpha', status: 'active', builds: [] }, 'x2': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'active' });
   eq('建键：拒绝（多在役键）problems 非空且列出键名', [advMulti.problems.length > 0, advMulti.oldKey], [true, null]);
+  // 🔴 休眠目标不得建新在役键（qodo #24-finding-3）：checkIndexAgainstTargets 对休眠目标
+  //    跳过在役检查，靠它拦不住——targetStatus 必须显式为 'active'。缺省（undefined）同样
+  //    拒（fail-closed：调用方忘传比静默放行安全）。
+  eq('建键：拒绝（目标休眠）problems 非空且点明 ADR-056/057', (() => {
+    const r = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4', targetStatus: 'dormant' });
+    return [r.problems.length > 0, r.problems[0].includes('ADR-056'), r.oldKey];
+  })(), [true, true, null]);
+  eq('建键：拒绝（targetStatus 缺失 ⇒ fail-closed）', advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
 
   // 🔴 步骤①②的降级必须**显式可见**（§7.1 规则 3）——静默跳过 = 伪造成功。
   const skipped = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', null);
@@ -967,6 +1000,9 @@ function main(args) {
 
   const problems = [];
   const notices = [];
+  // 并发防线基线：以**字节**记下本次核算所见的台账（与 --advance-key 同一防线；核算窗口
+  // 含联网核验与补丁适用性，时间不短——期间台账若被并发改写，陈旧 candidate 会丢改动）。
+  const ledgerRawBefore = readFileSync(ledgerPath(), 'utf8');
   const ledger = readLedger();
 
   // 步骤①②：上游 Release（缺省真检查；`--no-upstream-release` 才降级，且降级写进输出）。
@@ -1008,7 +1044,7 @@ function main(args) {
   // ⚠️ `--no-counter` 是纯上游可信性查询（不推导 n、无东西可写）⇒ 不要求计划。
   // 🔴 `plan !== null` 守卫的不变式：planSync 的**每条** null 出口（版本形状非法 / 未知目标 /
   //    台账缺键 / 计数器推导抛错 / 桌面号不可合成）都**已 push** 至少一条 problem 才返回 null
-  //    （自测「核算：null plan 必带 problems」逐出口钉住）。没有这个守卫，null 在这里被解引用
+  //    （nullPlan 构造级保证 + 自测对可达出口逐个夹具）。没有这个守卫，null 在这里被解引用
   //    成 TypeError 崩溃，把「台账里没有 X 这个键」那条如实诊断顶掉——2026-11-14 推进
   //    0.2.2-rc.3 时实测（台账键按 24a58dc 先例手改后才触不到这条路径）。守卫之后 problems
   //    非空 ⇒ 走下方「核算失败」如实退出，不静默、不崩溃。下游（`if (!apply)` 与 --apply 体）
@@ -1077,7 +1113,25 @@ function main(args) {
   console.log(`📸 快照：${snapshot.dir}`);
 
   const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
-  writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
+  // 🔴 并发防线（与 --advance-key 同一防线，qodo #24-finding-2）：台账在本命令核算窗口
+  //    （含联网核验与步骤⑧补丁适用性）内被并发改写 ⇒ 陈旧 candidate 会丢掉那笔改动。
+  if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
+    snapshot.restore();
+    const cleaned = snapshot.cleanup();
+    if (cleaned) console.warn(`⚠️  ${cleaned}`);
+    console.error(`❌ 台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖。请重跑 --apply 以新台账重算。`);
+    return 1;
+  }
+  try {
+    writeFileSync(ledgerPath(), `${JSON.stringify(newLedger, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    // 🔴 台账写盘中途失败也必须回滚（与 --advance-key 同一处理，qodo #24-finding-1）。
+    snapshot.restore();
+    const cleaned = snapshot.cleanup();
+    if (cleaned) console.warn(`⚠️  ${cleaned}`);
+    console.error(`❌ 台账写盘失败（已回滚）：${error.message}`);
+    return 1;
+  }
   const backfilled = [release.tag ? `upstreamTag=${release.tag}` : '', release.commit ? `upstreamCommit=${release.commit.slice(0, 7)}…（${release.commitSource}）` : '']
     .filter(Boolean)
     .join('，');
@@ -1177,8 +1231,10 @@ function mainAdvanceKey(args) {
   const upstreamRepo = at('--upstream-repo') ?? UPSTREAM_REPO;
 
   const problems = [];
+  // 并发防线基线：以**字节**记下本次核算所见的台账（qodo #24-finding-2）。
+  const ledgerRawBefore = readFileSync(ledgerPath(), 'utf8');
   const ledger = readLedger();
-  const advanced = advanceLedgerKeys({ ledger, target, upstreamDistTag: t.upstreamDistTag, upstreamDsh });
+  const advanced = advanceLedgerKeys({ ledger, target, upstreamDistTag: t.upstreamDistTag, upstreamDsh, targetStatus: t.status });
   problems.push(...advanced.problems);
   const candidate = { ...ledger, releases: advanced.releases };
   // 落盘前判据：合成结果必须台账自洽（锚点在役键唯一且与目标表对得上）。
@@ -1208,18 +1264,31 @@ function mainAdvanceKey(args) {
   }
 
   const snapshot = snapshotFiles([ledgerPath()]);
-  writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
-  // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
-  const reread = readLedger();
   const post = [];
-  post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
-  post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
-  const written = reread.releases[upstreamDsh];
-  if (written?.status !== 'active' || written?.patchTarget !== target || written?.builds?.length !== 0) {
-    post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
-  }
-  if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
-    post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
+  try {
+    // 🔴 并发防线（qodo #24-finding-2）：网络核验窗口内台账可能被另一个写方（例如正在跑
+    //    的发布 --apply）改写——陈旧 candidate 覆盖回去会**丢掉那笔改动**，而结构性落盘
+    //    复核照样全绿。写前比对字节，变了就拒绝（不静默合并）。
+    if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
+      post.push('台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，请重跑 --advance-key 以新台账重算。');
+    } else {
+      writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
+    }
+    // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
+    const reread = readLedger();
+    post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
+    post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
+    const written = reread.releases[upstreamDsh];
+    if (written?.status !== 'active' || written?.patchTarget !== target || written?.builds?.length !== 0) {
+      post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
+    }
+    if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
+      post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
+    }
+  } catch (error) {
+    // 🔴 写盘中途失败 / 复读抛错（如坏 JSON）也必须回滚（qodo #24-finding-1）——否则
+    //    进程带着半套台账退出且快照泄漏。
+    post.push(`写盘或复读失败：${error.message}`);
   }
   if (post.length > 0) {
     snapshot.restore();
