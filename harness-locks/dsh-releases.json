@@ -2,6 +2,7 @@
   "$comment": [
     "本仓「精确上游版本 → 本仓构建」索引与台账的唯一产地（D4 定案：不新开第三个 lock 目录）。",
     "逻辑与校验见 scripts/release-ledger.mjs；由 scripts/sync-upstream-release.mjs 读写，禁止手改（计划 2b）。",
+    "推进期建键（锚点已动、键未建）走 --advance-key --apply：核上游后旧键置 dormant、新锚点键 active（builds 留空）——不需要手改本文件。",
     "",
     "## 键 = 上游精确版本（含上游自己的预发布段，如 0.2.0-rc.2）",
     "## 它承担两个职责",

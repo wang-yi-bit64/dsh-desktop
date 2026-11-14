@@ -50,6 +50,14 @@
  *
  * 只跑 ①②③④（上游可信性），**不推导 n、不写任何东西**——供 `version:show` 与 CI 只读调用。
  *
+ * ## `--advance-key`（推进期建键）
+ *
+ * 服务于「**锚点已动、台账键未建**」的半套状态（2026-11-14 推进 0.2.2-rc.3 实测：此前
+ * 只能手改台账，与台账「禁止手改」纪律矛盾）。核上游后把该目标旧在役键置 `dormant`
+ * （builds 原样保留）、新建锚点键（builds 留空 ⇒ 首发时 n=1）。默认只读打印，连
+ * `--apply` 才真写。**刻意不做**：不推 n、不写版本号、不跑补丁适用性——那些属发布
+ * 时刻（`--apply`）与推进提交自身的组装/烟雾验证。
+ *
  * ## CLI
  *
  * ```
@@ -59,6 +67,7 @@
  *   --w <标签>                 可选人读标签（[0-9A-Za-z-]，禁 _）
  *   --upstream-repo <slug>     可选：上游 GitHub 仓库（启用步骤①②的硬检查）
  *   --no-counter               纯查询：只核上游，不推 n
+ *   --advance-key [--apply]    推进期建键：旧键置 dormant、新锚点键 active（builds 留空）
  *   --apply                    真写（快照 → 改 → 跑守卫 → 失败回滚）
  *   --self-test                纯逻辑自测（不读盘、不联网）
  * ```
@@ -74,6 +83,7 @@ import {
   LEDGER_RELATIVE,
   PLAN_RELATIVE,
   allBuilds,
+  checkIndexAgainstTargets,
   checkLedger,
   checkLedgerAgainstVersion,
   checkPlanLineFor,
@@ -342,6 +352,51 @@ export function withLedgerEntry(ledger, upstreamDsh, entry, target, upstreamDist
 }
 
 /**
+ * **推进期建键**（纯函数，可证伪）：「锚点已动、台账键未建」半套状态的唯一工具化出路。
+ *
+ * 把该目标的**唯一**在役键置 `dormant`（builds 原样保留），新建 `${upstreamDsh}` 的
+ * `active` 键（builds 留空 ⇒ 首个发布时 `planNextDesktopVersion` 推出 n=1）。此前这条路
+ * 只能按 24a58dc 先例**手改**台账——而台账 `$comment` 明文「禁止手改」，矛盾在
+ * 2026-11-14 推进 0.2.2-rc.3 时实际发生。联网核验（上游 Release 存在 + npm 精确可解析）
+ * 由调用方先行完成——本函数只做**台账层**的判定与合成。
+ *
+ * @param {object} input
+ * @param {object} input.ledger - 台账内容。
+ * @param {string} input.target - 目标名（`next` / `alpha`）。
+ * @param {string} input.upstreamDistTag - 新键记录的 dist-tag（取目标表同名字段，仅用于发现）。
+ * @param {string} input.upstreamDsh - 新键（= 目标表当前锚点；调用方须先断言相等）。
+ * @returns {{ releases: object, problems: string[], oldKey: string|null }} 新 releases 映射
+ *   （不改入参）、拒绝清单与让位的旧键名（拒绝时为 null）。problems 非空时 releases 为
+ *   **原样**副本——调用方不得在 problems 非空时落盘。
+ */
+export function advanceLedgerKeys({ ledger, target, upstreamDistTag, upstreamDsh }) {
+  const releases = { ...ledger.releases };
+  if (releases[upstreamDsh] !== undefined) {
+    return { releases, problems: [`台账已有 ${upstreamDsh} 这个键——无需（也不得）重复建键；若它是错建的，先手工收拾再回来。`], oldKey: null };
+  }
+  const activeKeys = Object.entries(releases)
+    .filter(([, entry]) => entry?.patchTarget === target && entry?.status === 'active')
+    .map(([key]) => key);
+  if (activeKeys.length === 0) {
+    return {
+      releases,
+      problems: [`台账里 ${target} 目标没有任何在役键可让位——每个在役目标必须恰有一条在役键，先检查台账是否已损坏。`],
+      oldKey: null,
+    };
+  }
+  if (activeKeys.length > 1) {
+    return {
+      releases,
+      problems: [`台账里 ${target} 目标有 ${activeKeys.length} 条在役键（${activeKeys.join(' / ')}）——无法判定谁让位，先手工收拾台账再回来。`],
+      oldKey: null,
+    };
+  }
+  releases[activeKeys[0]] = { ...releases[activeKeys[0]], status: 'dormant' };
+  releases[upstreamDsh] = { patchTarget: target, upstreamDistTag, status: 'active', builds: [] };
+  return { releases, problems: [], oldKey: activeKeys[0] };
+}
+
+/**
  * **发布前核算**（步骤③④⑥的纯逻辑部分）。联网核验由 {@link verifyNpmInstallable} 单独做，
  * 这里只做「给定核验结果，能不能发」的判定——因此可被自测**纯逻辑**地证伪。
  *
@@ -353,19 +408,33 @@ export function withLedgerEntry(ledger, upstreamDsh, entry, target, upstreamDist
  * @param {boolean} [input.noCounter] - 纯查询模式（不推导 n）。
  * @returns {{ problems: string[], notices: string[], plan: object|null }}
  */
+/**
+ * 🔴 planSync 的 null 出口**统一**走这里：`plan === null` 必须已带 problems——main() 的
+ * Release-Plan 消费点靠这条不变式守卫（null ⇒ 跳过消费、走 problems 如实退出）。把保证
+ * 从「自测夹具」升级成「构造」：未来新增 null 出口忘带 problems 时在源头即抛，而不是
+ * 让守卫退化成吞掉诊断的静默通过（2026-11-14 的崩溃正是没有构造保证时的真实后果）。
+ * @throws {Error} problems 为空时（编程错误，不是用户输入问题——响亮失败是正确行为）。
+ */
+export function nullPlan(problems, notices) {
+  if (!Array.isArray(problems) || problems.length === 0) {
+    throw new Error('planSync 不变式破缺：plan=null 的出口必须已 push 至少一条 problem，否则 main 的消费守卫会静默吞掉诊断');
+  }
+  return { problems, notices, plan: null };
+}
+
 export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = false }) {
   const problems = [];
   const notices = [];
   const shape = parseVersionShape(upstreamDsh);
   if (!shape.ok) {
-    return { problems: [...validateExactSpec(upstreamDsh)], notices, plan: null };
+    return nullPlan([...validateExactSpec(upstreamDsh)], notices);
   }
   problems.push(...validateExactSpec(upstreamDsh));
 
   const t = DSH_TARGETS[target];
   if (t === undefined) {
     problems.push(`未知目标 ${JSON.stringify(target)}（可用：${Object.keys(DSH_TARGETS).join(' / ')}）`);
-    return { problems, notices, plan: null };
+    return nullPlan(problems, notices);
   }
 
   // 步骤⑥：n 由台账推出。上游**前进**时锚点还停在旧版本 ⇒ 先把「台账没有这个键」如实报出来，
@@ -375,14 +444,15 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
     problems.push(
       t.dshVersion === upstreamDsh
         // 「锚点已动、台账键未建」的半套状态（2026-11-14 推进 0.2.2-rc.3 时实测踩到）：
-        // 此时「本仓钉的是哪个上游版本」在台账侧无从回答，推进提交必须同批建键
-        // （旧键置 dormant、新键 active、builds 留空待发布回填——24a58dc 先例）。
+        // 此时「本仓钉的是哪个上游版本」在台账侧无从回答。修法是 --advance-key（核上游后
+        // 旧键置 dormant、新锚点键 active、builds 留空）；2026-11-08 的 24a58dc 先例是
+        // 该模式出现之前的手改路径，历史记录保留在 patches/LAYERS.md 的推进节。
         ? `台账里没有 ${upstreamDsh} 这个键，而目标表的锚点已经是它——「锚点已动、台账键未建」的半套状态。` +
-          `推进提交必须与锚点同批更新台账在役键（旧键置 dormant、新键 active、builds 留空），见 patches/LAYERS.md 的推进记录。`
+          `修法：node scripts/sync-upstream-release.mjs --advance-key --apply --target <目标>（核上游后旧键置 dormant、新键 active、builds 留空）。`
         : `台账里没有 ${upstreamDsh} 这个键（当前锚点是 ${t.dshVersion}）。` +
           `若这是**上游前进**，锚点必须先经 --plan --upstream 审查；本脚本不会在锚点未动的情况下新建台账键。`,
     );
-    return { problems, notices, plan: null };
+    return nullPlan(problems, notices);
   }
 
   if (noCounter) {
@@ -394,12 +464,12 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
     planned = planNextDesktopVersion({ builds: allBuilds(ledger), upstreamDsh, w });
   } catch (error) {
     problems.push(error.message);
-    return { problems, notices, plan: null };
+    return nullPlan(problems, notices);
   }
   // 用「假设已合入」的台账跑非空化判据：桌面号必须逐字可从 (上游键, n, w) 复算出来。
   const hypotheticalEntry = buildLedgerEntry({ target, upstreamDsh, n: planned.n, w });
   if (hypotheticalEntry.entry === null) {
-    return { problems: [...problems, ...hypotheticalEntry.problems], notices, plan: null };
+    return nullPlan([...problems, ...hypotheticalEntry.problems], notices);
   }
   const hypothetical = withLedgerEntry(ledger, upstreamDsh, hypotheticalEntry.entry, target, t.upstreamDistTag);
   problems.push(...checkLedgerAgainstVersion({ ledger: hypothetical, version: planned.desktopVersion }));
@@ -658,6 +728,28 @@ export function selfTest() {
   const noCounter = planSync({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1', ledger: base, noCounter: true });
   eq('核算：--no-counter 不推 n', noCounter.plan.mode, 'no-counter');
 
+  // 🔴 nullPlan 构造级保证（2026-11-14 真实缺陷的另一半）：夹具只能钉住**现存**出口，
+  //    抓不住未来新增的出口——保证必须落在源头。空 problems 的 null 出口在此即抛。
+  eq('不变式：nullPlan 空 problems 必须 throw', (() => {
+    try { nullPlan([], []); return 'no-throw'; } catch { return 'throw'; }
+  })(), 'throw');
+  eq('不变式：nullPlan 带 problems 原样通过', [nullPlan(['x'], []).plan, nullPlan(['x'], []).problems], [null, ['x']]);
+
+  // 推进期建键（纯函数）：置 dormant / 新键 / 不改入参 / 四条拒绝路径全部 problems 非空。
+  const advBase = ledgerOf({
+    '0.2.1-alpha.5': { patchTarget: 'alpha', upstreamDistTag: 'alpha', status: 'active', builds: [{ n: 1, desktopVersion: '0.2.1-alpha.5.1' }] },
+  });
+  const adv = advanceLedgerKeys({ ledger: advBase, target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' });
+  eq('建键：旧键置 dormant 且 builds 原样保留', [adv.releases['0.2.1-alpha.5'].status, adv.releases['0.2.1-alpha.5'].builds.length, adv.oldKey], ['dormant', 1, '0.2.1-alpha.5']);
+  eq('建键：新键 active + builds 空 + 身份字段随目标表', [adv.releases['0.2.2-alpha.4'].status, adv.releases['0.2.2-alpha.4'].builds, adv.releases['0.2.2-alpha.4'].patchTarget, adv.releases['0.2.2-alpha.4'].upstreamDistTag], ['active', [], 'alpha', 'alpha']);
+  eq('建键：不改入参', advBase.releases['0.2.1-alpha.5'].status, 'active');
+  eq('建键：拒绝（键已存在）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-alpha.4': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
+  eq('建键：拒绝（无在役键）problems 非空', advanceLedgerKeys({ ledger: ledgerOf({}), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
+  // 只有别的目标的在役键 ≠ 有本目标可让位的键（falsifiability：next 的键不得替 alpha 让位）。
+  eq('建键：拒绝（本目标无在役键，他目标键不算数）', advanceLedgerKeys({ ledger: ledgerOf({ '0.2.2-rc.3': { patchTarget: 'next', upstreamDistTag: 'next', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' }).problems.length > 0, true);
+  const advMulti = advanceLedgerKeys({ ledger: ledgerOf({ 'x1': { patchTarget: 'alpha', status: 'active', builds: [] }, 'x2': { patchTarget: 'alpha', status: 'active', builds: [] } }), target: 'alpha', upstreamDistTag: 'alpha', upstreamDsh: '0.2.2-alpha.4' });
+  eq('建键：拒绝（多在役键）problems 非空且列出键名', [advMulti.problems.length > 0, advMulti.oldKey], [true, null]);
+
   // 🔴 步骤①②的降级必须**显式可见**（§7.1 规则 3）——静默跳过 = 伪造成功。
   const skipped = verifyUpstreamRelease('dsh-v0.2.1-alpha.1', null);
   eq('步骤①②：关掉 slug ⇒ skipped 且带显式说明', [skipped.status, skipped.notices.length > 0], ['skipped', true]);
@@ -808,6 +900,8 @@ const USAGE = `sync-upstream-release.mjs — 合成号发布的前门（计划 2
   --upstream-repo <slug>    覆盖上游 GitHub 仓库（默认 ${UPSTREAM_REPO}）
   --no-upstream-release     显式关闭步骤①②（会记 SKIPPED 及理由，不静默）
   --no-counter              纯查询：只核上游，不推 n
+  --advance-key [--apply]   推进期建键（「锚点已动、台账键未建」半套状态）：核上游后旧键置
+                            dormant、新 active 键 builds 留空。默认只读打印；连 --apply 才真写
   --self-test               纯逻辑自测
   --help                    显示本帮助`;
 
@@ -826,6 +920,10 @@ function main(args) {
     const { passed } = selfTest();
     console.log(`✅ sync-upstream-release 自测通过（${passed} 项）`);
     return 0;
+  }
+  // 推进期建键走独立入口（不与发布核算共用 planSync——它不推 n、不写版本号）。
+  if (args.includes('--advance-key')) {
+    return mainAdvanceKey(args);
   }
   const apply = args.includes('--apply');
   const noCounter = args.includes('--no-counter');
@@ -1027,4 +1125,113 @@ const isDirectRun = (() => {
 
 if (isDirectRun) {
   exit(main(argv.slice(2)));
+}
+
+/**
+ * **推进期建键**的 CLI 入口（`--advance-key`，默认只读；`--advance-key --apply` 真写）。
+ *
+ * 服务于「锚点已动、台账键未建」的半套状态（2026-11-14 推进 0.2.2-rc.3 实测：此前只能
+ * 按 24a58dc 先例**手改**台账，与台账 `$comment`「禁止手改」矛盾）。流程：半套状态前提
+ * 断言 → `advanceLedgerKeys` 纯合成 → 合成结果过 `checkLedger` +
+ * `checkIndexAgainstTargets` → 联网核验上游（Release 存在 + npm 精确可解析——键只能在
+ * 核实过上游之后建，反伪造的闸门，**不可关闭**）→ 默认只读打印 / `--apply` 快照写入 +
+ * 落盘复核、失败回滚。
+ *
+ * 🔴 **刻意不做**的事（与 `--apply` 发布路径的边界）：不推 n、不写版本号、不跑补丁
+ * 适用性——那些属发布时刻（`--apply`）与推进提交自身的组装/烟雾验证；本入口只登记
+ * 「本仓钉的是哪个上游版本」这条**索引层**事实。
+ */
+function mainAdvanceKey(args) {
+  const at = (flag) => {
+    const i = args.indexOf(flag);
+    return i !== -1 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
+  };
+  const apply = args.includes('--apply');
+  for (const [flag, why] of [
+    ['--no-counter', '建键不推 n，无计数器可关'],
+    ['--no-upstream-release', '键只能在核实过上游之后建——这一步不可关闭'],
+  ]) {
+    if (args.includes(flag)) {
+      console.error(`❌ 用法错误：--advance-key 与 ${flag} 互斥（${why}）`);
+      return 2;
+    }
+  }
+  if (at('--w') !== undefined) {
+    console.error(`❌ 用法错误：--advance-key 不接受 --w（建键不产生 builds 条目，没有人读标签可挂）`);
+    return 2;
+  }
+  const target = at('--target') ?? DEFAULT_TARGET;
+  const t = DSH_TARGETS[target];
+  if (t === undefined) {
+    console.error(`❌ 未知目标 ${JSON.stringify(target)}（可用：${Object.keys(DSH_TARGETS).join(' / ')}）`);
+    return 2;
+  }
+  const upstreamDsh = at('--upstream') ?? t.dshVersion;
+  if (upstreamDsh !== t.dshVersion) {
+    console.error(
+      `❌ --advance-key 拒绝：--upstream ${upstreamDsh} ≠ 当前锚点 ${t.dshVersion}。` +
+        `\n   建键只服务于「锚点已动、台账键未建」的半套状态；锚点未动的上游前进请走 --plan --upstream 审查。`,
+    );
+    return 2;
+  }
+  const upstreamRepo = at('--upstream-repo') ?? UPSTREAM_REPO;
+
+  const problems = [];
+  const ledger = readLedger();
+  const advanced = advanceLedgerKeys({ ledger, target, upstreamDistTag: t.upstreamDistTag, upstreamDsh });
+  problems.push(...advanced.problems);
+  const candidate = { ...ledger, releases: advanced.releases };
+  // 落盘前判据：合成结果必须台账自洽（锚点在役键唯一且与目标表对得上）。
+  problems.push(...checkLedger({ ledger: candidate, targets: DSH_TARGETS }));
+  problems.push(...checkIndexAgainstTargets(candidate.releases, DSH_TARGETS));
+  if (problems.length === 0) {
+    // 联网核验（闸门，不可关）：上游 Release 存在 + npm 精确可解析。
+    const release = verifyUpstreamRelease(tagForVersion(upstreamDsh), upstreamRepo);
+    problems.push(...release.problems);
+    for (const notice of release.notices) console.log(`✅ ${notice}`);
+    const npm = verifyNpmInstallable(upstreamDsh);
+    if (!npm.ok) problems.push(`步骤③：${npm.detail}`);
+    else console.log(`✅ ${npm.detail}`);
+  }
+  if (problems.length > 0) {
+    for (const problem of problems) console.error(`❌ ${problem}`);
+    console.error(`\n建键失败（${problems.length} 项）——台账未动。`);
+    return 1;
+  }
+
+  console.log(`\n📋 --advance-key（${apply ? '--apply 真写' : '只读，未落盘'}）：`);
+  console.log(`  · releases[${advanced.oldKey}].status：active → dormant（builds 原样保留）`);
+  console.log(`  · 新增 releases[${upstreamDsh}]：{ patchTarget: ${target}, upstreamDistTag: ${t.upstreamDistTag}, status: 'active', builds: [] }（首发时 n=1）`);
+  if (!apply) {
+    console.log('\n  加 --apply 执行写路径（快照 → 写 → 落盘复核 → 失败回滚）。');
+    return 0;
+  }
+
+  const snapshot = snapshotFiles([ledgerPath()]);
+  writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
+  // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
+  const reread = readLedger();
+  const post = [];
+  post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
+  post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
+  const written = reread.releases[upstreamDsh];
+  if (written?.status !== 'active' || written?.patchTarget !== target || written?.builds?.length !== 0) {
+    post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
+  }
+  if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
+    post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
+  }
+  if (post.length > 0) {
+    snapshot.restore();
+    const cleaned = snapshot.cleanup();
+    if (cleaned) console.warn(`⚠️  ${cleaned}`);
+    for (const problem of post) console.error(`❌ ${problem}`);
+    console.error(`❌ 落盘复核失败（已回滚）。`);
+    return 1;
+  }
+  const cleaned = snapshot.cleanup();
+  if (cleaned) console.warn(`⚠️  ${cleaned}`);
+  console.log(`\n✅ 台账在役键已推进（${advanced.oldKey} → dormant，${upstreamDsh} → active）。`);
+  console.log(`   下一步：跑 npm run gate -- plan-facts 复核锚点与台账同批一致 → 提交。`);
+  return 0;
 }
