@@ -373,8 +373,14 @@ export function planSync({ target, upstreamDsh, ledger, w = null, noCounter = fa
   const indexed = ledger.releases[upstreamDsh] !== undefined;
   if (!indexed) {
     problems.push(
-      `台账里没有 ${upstreamDsh} 这个键（当前锚点是 ${t.dshVersion}）。` +
-        `若这是**上游前进**，锚点必须先经 --plan --upstream 审查；本脚本不会在锚点未动的情况下新建台账键。`,
+      t.dshVersion === upstreamDsh
+        // 「锚点已动、台账键未建」的半套状态（2026-11-14 推进 0.2.2-rc.3 时实测踩到）：
+        // 此时「本仓钉的是哪个上游版本」在台账侧无从回答，推进提交必须同批建键
+        // （旧键置 dormant、新键 active、builds 留空待发布回填——24a58dc 先例）。
+        ? `台账里没有 ${upstreamDsh} 这个键，而目标表的锚点已经是它——「锚点已动、台账键未建」的半套状态。` +
+          `推进提交必须与锚点同批更新台账在役键（旧键置 dormant、新键 active、builds 留空），见 patches/LAYERS.md 的推进记录。`
+        : `台账里没有 ${upstreamDsh} 这个键（当前锚点是 ${t.dshVersion}）。` +
+          `若这是**上游前进**，锚点必须先经 --plan --upstream 审查；本脚本不会在锚点未动的情况下新建台账键。`,
     );
     return { problems, notices, plan: null };
   }
@@ -635,6 +641,20 @@ export function selfTest() {
   eq('核算：委托串不得用裸 --target <名字>（会静默回落 next）', /--target\s/.test(delegated), false);
   const missing = planSync({ target: 'alpha', upstreamDsh: '0.2.2-alpha.1', ledger: base });
   eq('核算：锚点未动的上游前进必须判红（不静默新建键）', missing.plan, null);
+  // 🔴 null-plan 不变式（2026-11-14 真实缺陷）：main() 的 Release-Plan 消费点靠
+  //    「plan === null ⇒ 跳过消费、走 problems 如实退出」守卫——不变式一旦破缺，
+  //    守卫就成了「吞掉诊断的静默通过」。逐条 null 出口钉住「problems 非空」：
+  eq('核算：null plan 必带 problems（缺键出口——本次崩溃点）', missing.problems.length > 0, true);
+  const badShape = planSync({ target: 'alpha', upstreamDsh: 'not-a-version', ledger: base });
+  eq('核算：null plan 必带 problems（版本形状非法出口）', [badShape.plan, badShape.problems.length > 0], [null, true]);
+  const unknownTarget = planSync({ target: 'beta', upstreamDsh: '0.2.1-alpha.1', ledger: base });
+  eq('核算：null plan 必带 problems（未知目标出口）', [unknownTarget.plan, unknownTarget.problems.length > 0], [null, true]);
+  // 缺键诊断必须分得清「锚点未动」与「锚点已动、键未建」两种半套状态——
+  // 后者的修法（同批建键）与前者（走 --plan 审查）不同，混成一条会误导人。
+  // 上游标识**动态读目标表锚点**（锚点随推进漂，写死必复刻上一条的教训）。
+  const halfDone = planSync({ target: 'alpha', upstreamDsh: DSH_TARGETS.alpha.dshVersion, ledger: { releases: {} } });
+  eq('核算：锚点已动而键未建 ⇒ 诊断说「半套状态」并指向同批建键', halfDone.problems.some((x) => x.includes('半套状态')), true);
+  eq('核算：半套状态出口同样 plan=null 且 problems 非空', [halfDone.plan, halfDone.problems.length > 0], [null, true]);
   const noCounter = planSync({ target: 'alpha', upstreamDsh: '0.2.1-alpha.1', ledger: base, noCounter: true });
   eq('核算：--no-counter 不推 n', noCounter.plan.mode, 'no-counter');
 
@@ -888,7 +908,14 @@ function main(args) {
   //    放进每次 PR 都跑的门禁则不成立（发完之后计划里的 n 必然成为历史值，会逼人乱改 n）。
   //    两组判据的分工见 `release-ledger.mjs::diagnoseReleasePlan()` 的 boxed 段。
   // ⚠️ `--no-counter` 是纯上游可信性查询（不推导 n、无东西可写）⇒ 不要求计划。
-  if (plan.mode !== 'no-counter') {
+  // 🔴 `plan !== null` 守卫的不变式：planSync 的**每条** null 出口（版本形状非法 / 未知目标 /
+  //    台账缺键 / 计数器推导抛错 / 桌面号不可合成）都**已 push** 至少一条 problem 才返回 null
+  //    （自测「核算：null plan 必带 problems」逐出口钉住）。没有这个守卫，null 在这里被解引用
+  //    成 TypeError 崩溃，把「台账里没有 X 这个键」那条如实诊断顶掉——2026-11-14 推进
+  //    0.2.2-rc.3 时实测（台账键按 24a58dc 先例手改后才触不到这条路径）。守卫之后 problems
+  //    非空 ⇒ 走下方「核算失败」如实退出，不静默、不崩溃。下游（`if (!apply)` 与 --apply 体）
+  //    的解引用都在 problems 早退之后，由同一条不变式保护。
+  if (plan !== null && plan.mode !== 'no-counter') {
     let releasePlan = null;
     try {
       releasePlan = readReleasePlan();
