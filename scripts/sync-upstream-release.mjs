@@ -1208,18 +1208,22 @@ function mainAdvanceKey(args) {
   }
 
   const snapshot = snapshotFiles([ledgerPath()]);
-  writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
-  // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
-  const reread = readLedger();
   const post = [];
-  post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
-  post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
-  const written = reread.releases[upstreamDsh];
-  if (written?.status !== 'active' || written?.patchTarget !== target || written?.builds?.length !== 0) {
-    post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
-  }
-  if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
-    post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
+  try {
+    writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
+    // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
+    const reread = readLedger();
+    post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
+    post.push(...checkIndexAgainstTargets(reread.releases, DSH_TARGETS));
+    const written = reread.releases[upstreamDsh];
+    if (written?.status !== 'active' || written?.patchTarget !== target || written?.builds?.length !== 0) {
+      post.push(`落盘复核：${upstreamDsh} 不是预期的 active/patchTarget=${target}/builds=[] 形状`);
+    }
+    if (reread.releases[advanced.oldKey]?.status !== 'dormant') {
+      post.push(`落盘复核：${advanced.oldKey} 未置 dormant`);
+    }
+  } catch (err) {
+    post.push(`写盘/复核异常：${err instanceof Error ? err.message : String(err)}`);
   }
   if (post.length > 0) {
     snapshot.restore();
