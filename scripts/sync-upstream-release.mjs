@@ -1115,8 +1115,8 @@ function main(args) {
   const newLedger = withLedgerEntry(ledger, upstreamDsh, entry, target, t.upstreamDistTag);
   // 🔴 并发防线（与 --advance-key 同一防线，qodo #24-finding-2）：台账在本命令核算窗口
   //    （含联网核验与步骤⑧补丁适用性）内被并发改写 ⇒ 陈旧 candidate 会丢掉那笔改动。
+  // 拒绝发生在本命令写之前 ⇒ 不 restore 快照（否则会用旧内容覆盖并发方的新改动），只清理。
   if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
-    snapshot.restore();
     const cleaned = snapshot.cleanup();
     if (cleaned) console.warn(`⚠️  ${cleaned}`);
     console.error(`❌ 台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖。请重跑 --apply 以新台账重算。`);
@@ -1264,16 +1264,19 @@ function mainAdvanceKey(args) {
   }
 
   const snapshot = snapshotFiles([ledgerPath()]);
+  // 🔴 并发防线（qodo #24-finding-2）：网络核验窗口内台账可能被另一个写方（例如正在跑
+  //    的发布 --apply）改写——陈旧 candidate 覆盖回去会**丢掉那笔改动**，而结构性落盘
+  //    复核照样全绿。写前比对字节，变了就拒绝（不静默合并）。
+  //    拒绝发生在本命令写之前 ⇒ 不得 restore 快照（那会用旧内容覆盖并发方的新改动），只清理快照。
+  if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
+    const cleaned = snapshot.cleanup();
+    if (cleaned) console.warn(`⚠️  ${cleaned}`);
+    console.error(`❌ 台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，请重跑 --advance-key 以新台账重算。`);
+    return 1;
+  }
   const post = [];
   try {
-    // 🔴 并发防线（qodo #24-finding-2）：网络核验窗口内台账可能被另一个写方（例如正在跑
-    //    的发布 --apply）改写——陈旧 candidate 覆盖回去会**丢掉那笔改动**，而结构性落盘
-    //    复核照样全绿。写前比对字节，变了就拒绝（不静默合并）。
-    if (readFileSync(ledgerPath(), 'utf8') !== ledgerRawBefore) {
-      post.push('台账在本命令核算期间被并发修改（字节不一致）——拒绝覆盖，请重跑 --advance-key 以新台账重算。');
-    } else {
-      writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
-    }
+    writeFileSync(ledgerPath(), `${JSON.stringify(candidate, null, 2)}\n`, 'utf8');
     // 落盘复核：重读 + 同一套判据，防「写盘内容与内存对象不一致」的半套状态。
     const reread = readLedger();
     post.push(...checkLedger({ ledger: reread, targets: DSH_TARGETS }));
