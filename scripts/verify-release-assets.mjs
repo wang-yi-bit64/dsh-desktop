@@ -41,6 +41,16 @@
  * | `prerelease` | 版本号**带**预发布段 ⇔ `true` | 预发布进 latest ⇒ stable 用户收到 rc；正式版被标预发布 ⇒ 从 latest 里消失 |
  * | `draft` | 必须 `false` | 草稿对用户不可见，而资产与滚动端点都已是新版（外表完全正常） |
  *
+ * ⚠️ **F15 在 2026-11-15 复发过一次**（判据有了、流水线没接，同类缺陷又发生 5 次）：
+ * L2 此前**只支持手动跑**（发布后人工执行 `--check-release`），于是 rc 线随后 5 个
+ * Release（`v0.2.0-rc.2.1`/`rc.2.2`/`v0.2.1-rc.2.1`/`rc.4.1`/`v0.2.2-rc.1.1`/`rc.3.1`）
+ * 实际仍是 `prerelease=false`，直到 11-15 发布 rc.3.1 后**手动**跑 L2 才当场抓到。
+ * 根因链：tauri-action（钉住的 84b9d35）命中**已存在**的 Release 对象时原样使用、
+ * 绝不设置 flag；而 Release 对象每次都早于 tauri-action 首次调用就存在。
+ * 修法（release.yml 的 `publish-assets` job，发布末尾两步）：按版本号**如实归一**
+ * prerelease（两个方向都走 `gh api -X PATCH`）+ **自动跑 L2**。
+ * 教训与 AGENTS.md §7.3「写了却不在任何自动流程里」同族：判据存在 ≠ 判据在跑。
+ *
  * ⚠️ 覆盖面边界（诚实说明）：**不**断言「正式版应当等于 `releases/latest`」——
  * 那需要额外一次 API 调用去解 ref，且 `make_latest` 的语义会随 GitHub 侧变化
  * （本仓无 stable 发布，这条路径至今零执行，写判据等于凭空规定行为）。

@@ -107,3 +107,49 @@ imported from /tmp/dsh-publish-dryrun-85OKdf/scripts/package-cli.mjs
 
 `changelog.mjs --self-test` 里有一条建临时 git 仓库实跑区间解析的断言钉着这点（渲染层纯逻辑断言抓不到它——错在「与 git 的交互」上）。实测：同一首次发布场景，旧实现读到 0 条提交、新实现读到全部历史（98 行 / 13063 字符 / 8 章节，对比修复前的 5 行 / 115 字符 / 0 章节）。
 
+
+### F15 复发：rc 线 Release 的 prerelease 标记连续 6 次为 false（2026-11-15 实测，已修复勿回归）
+
+`v0.2.2-rc.3.1` 发布后按 runbook §8.5 **手动**跑发布后核对
+（`node scripts/verify-release-assets.mjs --check-release`），当场判红：
+`prerelease=false`，而版本号带预发布段应为 `true`。**这是 F15（2026-10-10）的复发**——
+同一缺陷在 `v0.2.0-rc.2.1` / `rc.2.2` / `v0.2.1-rc.2.1` / `rc.4.1` / `v0.2.2-rc.1.1` /
+`rc.3.1` 上连续发生 6 次（F15 当时的 3 个：`v0.7.2-rc.1`、`v0.2.0-rc.2.1`、`rc.2.2`）。
+后果：rc 包进 `releases/latest`，stable 用户看到的「最新版」是 rc 构建（自动更新链本身
+走 `updater-rc` 滚动端点，未受影响）。
+
+**根因链（全部实测，2026-11-15）**：
+
+1. tauri-action（本仓钉住 `84b9d35`，2026-03-14）的 `getOrCreateRelease` 在
+   `draft=false` 路径下：`getReleaseByTag` **命中**已存在的 Release 时**原样使用**——
+   该版本没有任何 `updateRelease` 调用，**绝不设置 `prerelease`**（main 分支的后续版本
+   也只是 update name/body，同样不碰 flag）。
+2. 而 Release 对象每次都**早于** tauri-action 首次调用就存在：rc.3.1 的 Release
+   `created_at` 09:38:03Z，而 release.yml 运行 09:38:09Z 才创建、ubuntu job 09:38:28Z
+   启动、tauri-action 首次日志 09:40:02Z（10-29 的 rc.4.1 更夸张：早于 run 12 分钟）。
+   两次探针实验（`v` 前缀与非 `v` 前缀 tag 各推一次）证明 **GitHub 不自动建 Release**
+   （两次都 404）——创建者身份未归因，但修法不依赖它。
+3. 于是 flag 由「谁先建了 Release 对象」决定：实测 rc 线 6 个全 `false`、alpha 线 4 个全
+   `true`。
+
+**为什么 F15 的判据没拦住**：L2 判据（`verify-release-assets.mjs --check-release`，
+含 prerelease/draft 断言）确实存在且可证伪，但它**只支持手动跑**——发布流水线里没有
+调用点，靠的是「发布后人记得跑」。这是 AGENTS.md §7.3「写了却不在任何自动流程里」
+缺陷族的又一例：**判据存在 ≠ 判据在跑**。
+
+**修法（三层）**：
+
+1. **流水线自动归一 + 自动核对**（release.yml `publish-assets` job 末尾两步）：按版本号
+   如实归一 prerelease（两个方向都走 `gh api -X PATCH`——`gh release edit` 没有
+   `--no-prerelease`），随后自动跑 L2 核对（资产清单 + prerelease + draft）。
+   发布自此不再依赖「人记得跑」。
+2. **线上存量修正**：6 个 rc 线 Release 全部 `gh release edit --prerelease` 改为 true；
+   复核后 11 个版本 Release 全 `prerelease=true`，`releases/latest` 返回 404
+   （合成号模型下没有 stable 通道，stable 用户不应经该路径收到任何包——这是**正确**
+   状态，不是故障）。
+3. **档案登记**（本节）+ 脚本头注补复发记录与修法指针。
+
+**防回归**：`npm run gate -- release-workflow`（YAML 结构守卫）与
+`npm run gate -- release-assets:self-test`（判据自测）继续全档跑；新增的流水线两步
+让 L2 从「人工步骤」变成「每次发布必跑」。若将来 tauri-action 升级到会正确设置 flag 的
+版本，归一化两步仍是幂等无害的（按版本号如实设置）。
