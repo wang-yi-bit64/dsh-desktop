@@ -93,6 +93,7 @@ import {
   ledgerPath,
   planNextDesktopVersion,
   readLedger,
+  readLedgerFromRaw,
   readReleasePlan,
 } from './release-ledger.mjs';
 import {
@@ -1189,8 +1190,11 @@ function main(args) {
   const notices = [];
   // 并发防线基线：以**字节**记下本次核算所见的台账（与 --advance-key 同一防线；核算窗口
   // 含联网核验与补丁适用性，时间不短——期间台账若被并发改写，陈旧 candidate 会丢改动）。
+  // 🔴 台账对象与基线必须来自**同一次读取**（CodeRabbit #26-round2 finding）：两次独立
+  // readFileSync 之间另一写方可以写入并随后回滚到同字节状态，字节比对会漏检、而对象已混
+  // 入它的中间内容 ⇒ 用 readLedgerFromRaw 从**同一字节**解析。
   const ledgerRawBefore = readFileSync(ledgerPath(), 'utf8');
-  const ledger = readLedger();
+  const ledger = readLedgerFromRaw(ledgerRawBefore);
 
   // 步骤①②：上游 Release（缺省真检查；`--no-upstream-release` 才降级，且降级写进输出）。
   // ⚠️ tag 由 tagForVersion() 拼（`dsh-v<x.y.z>`）——**不要**在这里手写 `v${...}`：
@@ -1435,8 +1439,9 @@ function mainAdvanceKey(args) {
 
   const problems = [];
   // 并发防线基线：以**字节**记下本次核算所见的台账（qodo #24-finding-2）。
+  // 🔴 台账对象与基线必须来自**同一次读取**（CodeRabbit #26-round2 finding，与 --apply 同款）。
   const ledgerRawBefore = readFileSync(ledgerPath(), 'utf8');
-  const ledger = readLedger();
+  const ledger = readLedgerFromRaw(ledgerRawBefore);
   const advanced = advanceLedgerKeys({ ledger, target, upstreamDistTag: t.upstreamDistTag, upstreamDsh, targetStatus: t.status });
   problems.push(...advanced.problems);
   const candidate = { ...ledger, releases: advanced.releases };

@@ -717,14 +717,45 @@ npm 精确可解析，因脚本在「锚点已动、键未建」路径上有一�
 - **scope=full 三平台烟雾全绿**（run
   [43664041543](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/43664041543)，main
   `a92d283`，2026-11-15 补跑：真实资源树 L1 + 打包 + L2 GUI + 故障注入，三平台 job 全部
-  success）——发布前证据链（runbook §8.6「两条线各自都要有证据」）至此完备；alpha 线树与其
-  已发布的 0.2.2-alpha.3.1 相同，无需重跑。
+  success）；alpha 线同日补跑 **run
+  [43691550361](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/43691550361) 同样
+  三平台全绿**（CodeRabbit #29-finding-1 指出 runbook §8.6 没有「树未变即免跑」的豁免条款，
+  本仓先例是每轮推进都实跑——2026-11-15 起该句不再作依据，改为实跑证据）——发布前证据链
+  （runbook §8.6「两条线各自都要有证据」）至此完备。
 - 门禁：`patches` / `drift`（next 未落后：0.2.2-rc.3 ≥ 0.2.2-rc.3）/ `doc-facts` /
   `plan-facts` / `verify:fast`（除 `cargo test` 一项外全绿——`supervisor_lifecycle_races`
   在本机为已知 flaky，A/B 对照：**干净树同样失败**，与本轮零 Rust 改动无关）。
 - 提交式锁 `harness-locks/next/{inputs,package-lock}.json` 经 `--update-lockfile` 重生成
   （首轮组装走了「lockfile 失配 → 在线解析」回退，staging 已是 rc.3 但锁未重写——plan-facts
   抓住后补跑 `--update-lockfile`）。
+
+#### 2026-11-15 补勘：CodeRabbit 四个 PR 的 actionable findings 全量复核（补丁侧 4 项语义修正）
+
+**流程教训先行**：2026-11-14 的合并只盯三平台 CI 与 check 状态，**没有读 CodeRabbit 的
+review 正文**（"Actionable comments posted: N" 是独立通道），qodo 又因订阅暂停没有出
+findings——事后审计（`gh api pulls/<n>/reviews` + `pulls/<n>/comments` 双通道）发现 4 个
+PR 共 **11 条 actionable**（#22×4 / #26×3 / #29×1 / #30×3），全部逐条核实：#26 的 3 条已被
+后续轮次修复（拒写不 restore / 扫描错误 fail-closed / 年龄判据换 PID 存活性），其余 8 条
+本轮全量修复。
+
+**补丁侧 4 项语义修正**（全部重建、组装、L1 烟雾 5/5 后落盘）：
+
+| 补丁 | finding | 修复 |
+|---|---|---|
+| `cordis-plugin-loader`（**Major**） | 回退 `try` 同时包住 `createResolve` 解析与 `import` 执行 ⇒ 插件顶层异常被 catch 吞掉、半执行的模块经 **require 入口二次执行**（条件导出下 import/require 指向不同文件） | 去掉 try：require 兜底**只在 `createResolve` 返回 undefined（裸 import 降级路径）** 时发生（与 11-07 节登记的意图逐字对齐）——插件自身异常原样上抛，双入口执行消失。初版 11-07 的「catch 兜底」写宽了，本轮勘误 |
+| `llm-pi-ai`（Minor） | 403 检查在 401 之前：无行首状态、正文同时含 401+403 的消息会判 FORBIDDEN，而 rc.1/alpha 判 AUTH（11-14 节的顺序裁定引入的两线分叉） | 终版顺序 `quota → 401→AUTH → 403→FORBIDDEN`（全部经 `statusSource`；上游的合并 `(401\|403)` 行被两条拆分覆盖）——401 仍落 AUTH，与 11-14 节「401 仍落 AUTH」的登记逐字一致 |
+| `ui-chat`（Minor） | `message.failure.forbidden` 只登记了 zh/en；quota 键在 **8 种语言**字典里都有（ja/es/fr/de/ru/pt 缺失） | 补齐 6 种语言（逐字典锚点断言唯一命中）；8 字典全部实装 |
+| `ui-deliverables`（Minor） | 带位置后缀的引用（`report.md:12`）不参与 paths/basename 匹配（后缀在 value 上）⇒ 落到 `localPathReference` 只剥后缀不查产出集 ⇒ 打开错误的文件 | `matches` 过滤**先剥位置后缀**再匹配（`report.md:12` 命中 `src/report.md`） |
+
+**alpha 线跟进事项（登记，非欠账批次）**：alpha 的 0.2.2-alpha.3 补丁集仍是移植前形态
+（loader 宽 catch、pi-ai rc.1 序、i18n 缺 6 语言、deliverables 无后缀剥离——除 pi-ai 顺序
+外其余三项 alpha 本来就与 rc.1 同形，不构成两线分叉；pi-ai 顺序在 alpha 下轮推进移植时按
+本节终版对齐即可）。
+
+**门禁侧 1 项修正**（CodeRabbit #26-round2-finding）：sync 的并发比较基线与台账对象必须
+来自**同一次读取**——`release-ledger.mjs` 抽出 `readLedgerFromRaw(raw)`（解析+校验），两条
+写路径改为 `readFileSync` 拿基线字节后从**同一字节**解析对象。原两段式读取存在「另一写方
+写入后又回滚到同字节状态」的漏检窗口。
 
 ---
 
