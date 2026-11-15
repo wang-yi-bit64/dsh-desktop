@@ -267,8 +267,19 @@ npm run gate -- release-assets -- --print-expected   # 打印期望清单，供�
 | 判据 | 守什么 | 跑在哪 |
 |---|---|---|
 | `npm run gate -- release-assets`（默认） | `release.yml` **形状上能不能**产出 13 项 | 静态，进 `ci.yml` 与 release `preflight` |
-| `node scripts/verify-release-assets.mjs --check-release <tag>` | 某次发布**实际**产出几项 | 发布后手动（需 `gh` + 联网） |
+| `node scripts/verify-release-assets.mjs --check-release <tag>` | 某次发布**实际**产出几项 | **发布末尾自动跑**（release.yml `publish-assets` job 的「Normalize prerelease flag and verify the release (L2)」步，2026-11-15 起）；本地手动仍可 |
 | `npm run gate -- release-workflow` | 上传动作的**宾语**是 `dist/portable/*` 而非 `dist/cli/*` | 静态，进 `ci.yml` 与 `preflight` |
+
+🔴 **2026-11-15：L2 从「手动」改为「发布末尾自动跑」——F15 复发 6 次的直接修法**。
+`--check-release` 里的 prerelease/draft 属性判据（F15，2026-10-10 加）此前**只支持手动**，
+于是 rc 线又连续 6 个 Release 带着 `prerelease=false` 发布（进 `releases/latest`，
+stable 用户被投递 rc 构建）。根因链与修法见
+[`docs/incidents/release-and-ci.md`](incidents/release-and-ci.md) 的 F15 复发节：
+tauri-action 命中**已存在**的 Release 对象时绝不设置 flag，而对象每次都早于它就存在
+⇒ 发布末尾按版本号**如实归一**（两个方向都走 `gh api -X PATCH`）+ 自动 L2。
+同一 job 里还修掉了线上存量：6 个 rc Release 已改 `prerelease=true`，
+`releases/latest` 现返回 404（合成号模型下无 stable 通道，属**正确**状态）。
+⚠️ **自动跑之后人工那步仍是允许的**（本地复核同一判据），但不再是唯一防线。
 
 🔴 **命名模式取自实测，不得从 `tauri.conf.json` 反推**。`productName` 是 `DSH Desktop`（带空格），
 tauri-bundler 把它渲染成 `DSH.Desktop_<ver>_x64-setup.exe`（**点号分隔产品名、下划线分隔版本**），
