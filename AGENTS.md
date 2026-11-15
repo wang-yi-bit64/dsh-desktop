@@ -197,6 +197,11 @@
 - **计划文档的预算纪律（2026-09-30 起，S2-2）**：新增任何计划类文档，必须同时归档或改写一份旧计划文档——在役 docs 总量不得只增不减；**计划文档无权延期或改写任何 ADR**，要改 ADR 只能走 superseding / 状态修订 ADR（ADR-055 之于 ADR-047、ADR-056 之于 ADR-052 是正确形态）。违反这条即视为文档回归。
 - 与 B1 的联动：任何新增 `patch-package` 补丁必须同时登记进 `patches/LAYERS.md` 与 `scripts/patch-layers.mjs`，否则 `prepare-harness.mjs` 会以「未登记」告警并回退默认层。
 - **门禁清单只有一个产地（2026-10-03，治理 G1/G2/S4-5）**：每条门禁（脚本 / 参数 / 分档 / **为什么有它**）登记在 `scripts/gate-manifest.mjs`，编排器是 `npm run gate`。**新增门禁只登记总表**——不要在 `ci.yml`、`release.yml` 或本地快档里另抄一行清单：改版前三份手抄清单互相漂移且漂移不报错，直接后果是 `unwrap-hygiene` 的**真检查**、`doc-facts`、`github-config`、`fault-patterns` 四个守卫**写了却不在任何自动流程里**，而文档还在宣称它们盯着代码（§7.1 规则 2 的同类形态）。判据：`npm run gate -- gates`（每个支持 `--self-test` 的脚本要么登记、要么带理由豁免且扫出数 > 0；每个分档步数 > 0；每种模式要么进分档、要么写 `manual` 理由）。旧名 `verify:<name>` 仍是可解析的别名，历史文书因此不必改写。
+- 🔴 **合并 PR 前必须等评审机器人出结论、且无未裁定 findings（2026-11-15，#22~#30 十五条漏读 findings 的教训）**：`gh pr checks` 的 ✅ 只代表 **CI**，评审结论在两个**独立通道**里，合并前各拉一次、逐条裁定（成立的修，不成立的在 PR 里写明理由）：
+  ① `gh api repos/<owner>/<repo>/pulls/<n>/comments`——qodo 的 inline findings。⚠️ qodo 可能因订阅暂停不出评审（实测报 "Qodo reviews are paused for this user"）⇒ **「qodo 零 findings」不等于「无 findings」**，通道 ② 是必须查的。
+  ② `gh api repos/<owner>/<repo>/pulls/<n>/reviews` 的**正文**——CodeRabbit 的 findings 写在 review body 的 **"Actionable comments posted: N"** 里，它的 check `pass`/`skipping` 与 N 是否为 0 **无关**（N > 0 时 pass 照样出现）。
+  **合并前提**：三平台 CI 绿 **＋** 两个通道均无未裁定 findings **＋** 自测/相关门禁绿。findings 的裁定记录写进 PR（修了什么 / 为什么不修）。已知 flaky 不算 findings：macOS runner 的 `mobile_bridge` 时间敏感用例与本机 `supervisor_lifecycle_races` 用 `--rerun-failed` / A/B 对照处置即可。qodo 单 PR 评审有次数上限：多轮 review-fix 后可能不再出评审，此时以「CodeRabbit 无未裁定 + CI 绿」为前提合并，并在合并说明里如实登记该事实。
+  事故存档：2026-11-14~15 只盯 CI 状态合并了 6 个 PR，事后审计出 **17 条漏读 findings**（qodo 6 条：#22×2 / #23×1 / #24×3；CodeRabbit 11 条：#22×4 / #26×3 / #29×1 / #30×3），全部核实成立，#31 一轮全量修复。
 - **本表只覆盖「契约 / 能力」级宣称**。比它更细一层的问题是「命令写了但没人调用、页面打包了但不可达」——那类断线在 Rust 里不可见（`src-tauri` 是 `rlib`，`pub` 项一律算「可达」，`dead_code` 永不触发），只能靠 `npm run gate -- ipc-surface` 静态比对。该脚本的检查项、允许清单与「为什么必须有它」，写在脚本头部注释里，新增例外必须**在 `ALLOW_*` 里写明理由**。
   - 其中 **E7（菜单项 id ↔ `handle_menu_event` 分支）** 是批次 0.2-B1 新增的：托盘与应用菜单**共用同一批 id**，而「加了菜单项忘了接处理器」的后果是一个点了完全没反应的项——没有编译错误、没有日志、没有既有守卫能看见。`--self-test` 用三组夹具（缺分支 / 守卫式早退 / 注释里的 id）钉住该判定本身，已进 CI 与 release preflight。
 
