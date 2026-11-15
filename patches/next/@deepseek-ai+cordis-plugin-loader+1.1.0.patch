@@ -1,7 +1,7 @@
 diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 --- a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
 +++ b/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js
-@@ -339,17 +339,63 @@ var EntryTree = class EntryTree {
+@@ -339,6 +339,34 @@ var EntryTree = class EntryTree {
  		if (name.startsWith("cordis:")) return this.ctx.loader.builtins[name.slice(7)];
  		return composeError(async (info) => {
  			info.offset += 3;
@@ -36,37 +36,34 @@ diff --git a/node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js b/node_
  			if (this.ctx.loader.internal) return await this.ctx.loader.internal.import(name, this.ctx.baseUrl, {});
  			else if (name.startsWith(".")) return await import(__rewriteRelativeImportExtension(
  				/* @vite-ignore */
- 				new URL(name, this.ctx.baseUrl).href
+@@ -346,9 +374,29 @@ var EntryTree = class EntryTree {
  			));
  			else {
--				const resolve = await createResolve(this.ctx.baseUrl);
--				return await import(__rewriteRelativeImportExtension(
--					/* @vite-ignore */
--					resolve ? resolve(name) : name
--				));
-+				try {
-+					const resolve = await createResolve(this.ctx.baseUrl);
-+					return await import(__rewriteRelativeImportExtension(
-+						/* @vite-ignore */
-+						resolve ? resolve(name) : name
-+					));
-+				} catch (error) {
+ 				const resolve = await createResolve(this.ctx.baseUrl);
++				if (!resolve) {
 +					// `createResolve` returns undefined when no `package.json` scope is
 +					// reachable from baseUrl, or when `<scope>/.cordis` cannot be
-+					// written — and it degrades to a bare `import(name)` in that case,
-+					// which cannot see a package that only declares a CJS `main`.
-+					// Keep the require-based rescue as the last resort.
++					// written — it then degrades to a bare `import(name)`, which cannot
++					// see a package that only declares a CJS `main`. Rescue that shape —
++					// and only that shape — via the require-based resolver: a top-level
++					// exception thrown by the plugin itself must propagate unmasked (a
++					// try/catch around the whole import would re-run a half-executed
++					// module through the require entry, whose conditional exports may
++					// differ from the import entry).
 +					if (this.ctx.baseUrl) {
 +						try {
 +							const { createRequire } = await import("node:module");
 +							const { pathToFileURL } = await import("node:url");
 +							const req = createRequire(new URL("package.json", this.ctx.baseUrl).href);
-+							const resolved = req.resolve(name);
-+							return await import(pathToFileURL(resolved).href);
++							return await import(pathToFileURL(req.resolve(name)).href);
 +						} catch {}
 +					}
-+					throw error;
++					return await import(name);
 +				}
+ 				return await import(__rewriteRelativeImportExtension(
+ 					/* @vite-ignore */
+-					resolve ? resolve(name) : name
++					resolve(name)
+ 				));
  			}
  		}, getOuterStack);
- 	}

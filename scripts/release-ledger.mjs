@@ -134,17 +134,19 @@ export function ledgerPath(root = process.cwd()) {
  * @throws {Error} 文件缺失、JSON 不可解析、`schemaVersion` 不符、`releases` 非对象
  *   或 `bridges` 不是数组时。
  */
-export function readLedger(root = process.cwd()) {
-  const file = ledgerPath(root);
-  if (!existsSync(file)) {
-    throw new Error(
-      `台账不存在：${LEDGER_RELATIVE}（相对 ${root}）。` +
-        `它是「本仓第几次交付」的唯一产地，缺失时无法推导 n——不要用「当成空台账」蒙过去。`,
-    );
-  }
+/**
+ * 从**给定的原始字节**解析并校验台账（CodeRabbit #26-round2 finding：sync 的并发比较
+ * 基线与台账对象必须来自**同一次读取**——两次独立 readFileSync 之间另一个写方可以写入，
+ * 基线字节比对会漏检它的中间内容，而对象里已经混进去了）。
+ *
+ * @param {string} raw - 台账文件原文。
+ * @returns {object} 校验过的台账。
+ * @throws {Error} JSON 非法 / schemaVersion 不符 / releases 或 bridges 形状非法。
+ */
+export function readLedgerFromRaw(raw) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf8'));
+    parsed = JSON.parse(raw);
   } catch (error) {
     throw new Error(`台账 ${LEDGER_RELATIVE} 不是合法 JSON：${error.message}`);
   }
@@ -171,6 +173,17 @@ export function readLedger(root = process.cwd()) {
     );
   }
   return parsed;
+}
+
+export function readLedger(root = process.cwd()) {
+  const file = ledgerPath(root);
+  if (!existsSync(file)) {
+    throw new Error(
+      `台账不存在：${LEDGER_RELATIVE}（相对 ${root}）。` +
+        `它是「本仓第几次交付」的唯一产地，缺失时无法推导 n——不要用「当成空台账」蒙过去。`,
+    );
+  }
+  return readLedgerFromRaw(readFileSync(file, 'utf8'));
 }
 
 /**
