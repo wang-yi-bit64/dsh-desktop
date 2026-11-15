@@ -7,6 +7,33 @@
 
 <!-- changelog-entries -->
 
+## [0.2.2-rc.3.1] - 2026-11-15
+
+### ✨ 新功能
+
+- **release**: sync-upstream-release 加 --advance-key 推进期建键；planSync null 出口改构造级保证 (#24) ([4fdb4a9](https://github.com/wang-yi-bit64/dsh-desktop/commit/4fdb4a99583e154660a7b9992be29ec0785027ff))
+
+### 🐛 修复
+
+- CodeRabbit 11 条 actionable findings 全量复核——补丁侧 4 项语义修正 + 门禁侧 1 项 + 文档 3 项 (#31) ([a96a6c4](https://github.com/wang-yi-bit64/dsh-desktop/commit/a96a6c4c28e351b5946b9c7e00f270fe774398e0))
+- qodo 评审五项 findings 全量修复（跨 #22/#23/#24） (#26) ([4be5edf](https://github.com/wang-yi-bit64/dsh-desktop/commit/4be5edf744d61753330a9ba607e1896b2c84826c))
+- **release**: sync-upstream-release 的 null-plan 消费点加守卫——「锚点已动、台账键未建」时如实判红而非 TypeError 崩溃 (#23) ([d17d10f](https://github.com/wang-yi-bit64/dsh-desktop/commit/d17d10f0117275a1349f0f9c58d6abd77e88b098))
+
+### 📝 文档
+
+- **AGENTS**: 合并前评审机器人双通道核查规则（§7.3） (#32) ([b21be9b](https://github.com/wang-yi-bit64/dsh-desktop/commit/b21be9b3f92a88735e6e2b40de1609bb76826c9f))
+- **checklist**: 第 4 条台账补 2026-11-15 复核——跟踪的 3 条告警已清，open 集换血为 undici 族 (#30) ([3e14035](https://github.com/wang-yi-bit64/dsh-desktop/commit/3e1403506ea63df6f96fbfbe8d734be3ca0dca35))
+- rc.3 推进补登 scope=full 三平台烟雾证据（run 43664041543 全绿） (#29) ([d03d708](https://github.com/wang-yi-bit64/dsh-desktop/commit/d03d70820d2d527dd884dbe154bcf3a7386a2cae))
+- **commands**: 26b 节补 --advance-key 旗标（PR #24 引入的推进期建键模式） (#28) ([a92d283](https://github.com/wang-yi-bit64/dsh-desktop/commit/a92d283f341d67dc0fc4994dcdaa1b1d47c01a68))
+
+### 📦 构建与打包
+
+- **next**: upgrade DSH to 0.2.2-rc.3 —— 5 个 minified 宿主补丁逐锚点重建，补裁 sidebar padding 退役 (#22) ([4e85aca](https://github.com/wang-yi-bit64/dsh-desktop/commit/4e85acaea3276f26e3ba8834128ed5815decc8d2))
+
+### 🧹 其他
+
+- **release**: 0.2.2-alpha.3.1 ([8e36188](https://github.com/wang-yi-bit64/dsh-desktop/commit/8e3618892d54fc011931e81fa9e6d6c95aff3353))
+
 ## [0.2.2-alpha.3.1] - 2026-11-08
 
 ### ✨ 新功能

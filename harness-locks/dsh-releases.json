@@ -127,7 +127,17 @@
       "patchTarget": "next",
       "upstreamDistTag": "next",
       "status": "active",
-      "builds": []
+      "builds": [
+        {
+          "channel": "rc",
+          "n": 1,
+          "desktopVersion": "0.2.2-rc.3.1",
+          "tag": "v0.2.2-rc.3.1",
+          "date": "2026-11-15",
+          "upstreamTag": "dsh-v0.2.2-rc.3",
+          "upstreamCommit": "38a6a5c965aa99ab525161efb7cc5cf1fe62fced"
+        }
+      ]
     },
     "0.2.1-alpha.1": {
       "patchTarget": "alpha",
