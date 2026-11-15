@@ -345,7 +345,7 @@ git fetch --prune --prune-tags   # 让本地跟随远端清掉
 > 三路合并移植；`llm-pi-ai` 采上游 `statusSource` 形态并保留 403→FORBIDDEN 拆分；
 > **补裁退役 `ui-sidebar` 的自定义 padding hunk**（§3 分级表 2026-09-16 已裁定、rc 线
 > 11-07 轮漏执行）。预检 clean 4 / conflict 8 → 复检 clean 12 / conflict 0，**0 补丁退役**。
-> 真实组装 12/12 applied、L1 烟雾 5/5。逐条裁定见 [`patches/LAYERS.md`](../patches/LAYERS.md)
+> 真实组装 12/12 applied、L1 烟雾 5/5、scope=full 三平台烟雾全绿（2026-11-15 补跑，发布前证据链）。逐条裁定见 [`patches/LAYERS.md`](../patches/LAYERS.md)
 > 的 2026-11-14 记录。
 
 > 🔴 **最后一列给的是「形态」而不是值**：桌面版本号是**合成号**（[ADR-061](../docs/adr/061-synthetic-version-model.md)），
