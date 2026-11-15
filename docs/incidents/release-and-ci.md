@@ -137,12 +137,16 @@ imported from /tmp/dsh-publish-dryrun-85OKdf/scripts/package-cli.mjs
 调用点，靠的是「发布后人记得跑」。这是 AGENTS.md §7.3「写了却不在任何自动流程里」
 缺陷族的又一例：**判据存在 ≠ 判据在跑**。
 
-**修法（三层）**：
+**修法（三层，2026-11-15；第 1 层按 CodeRabbit #33 finding 修正过一次落点）**：
 
-1. **流水线自动归一 + 自动核对**（release.yml `publish-assets` job 末尾两步）：按版本号
-   如实归一 prerelease（两个方向都走 `gh api -X PATCH`——`gh release edit` 没有
-   `--no-prerelease`），随后自动跑 L2 核对（资产清单 + prerelease + draft）。
-   发布自此不再依赖「人记得跑」。
+1. **流水线自动归一 + 自动核对**。归一化步骤放在 **build job 内**（三个平台腿各自在
+   tauri-action 之后跑，`if: always()`，**不依赖任何其它 job**）——第一版放在
+   `publish-assets` job，而它 `needs: portable`，portable 一失败整条归一化就被跳过、
+   公开的 Release 留着错误标记（CodeRabbit #33 抓到）。对同一 Release 的 PATCH 幂等
+   （同值覆盖），三腿并发无需互斥；Release 不存在时容错跳过。归一按版本号**双向**
+   如实设置（`gh api -X PATCH`——`gh release edit` 没有 `--no-prerelease`）。
+   L2 核对（资产清单 + prerelease + draft）仍在 `publish-assets`（等便携版挂完后的
+   完整核对），从「手动」变为「每次发布自动跑」。
 2. **线上存量修正**：6 个 rc 线 Release 全部 `gh release edit --prerelease` 改为 true；
    复核后 11 个版本 Release 全 `prerelease=true`，`releases/latest` 返回 404
    （合成号模型下没有 stable 通道，stable 用户不应经该路径收到任何包——这是**正确**
@@ -150,6 +154,7 @@ imported from /tmp/dsh-publish-dryrun-85OKdf/scripts/package-cli.mjs
 3. **档案登记**（本节）+ 脚本头注补复发记录与修法指针。
 
 **防回归**：`npm run gate -- release-workflow`（YAML 结构守卫）与
-`npm run gate -- release-assets:self-test`（判据自测）继续全档跑；新增的流水线两步
-让 L2 从「人工步骤」变成「每次发布必跑」。若将来 tauri-action 升级到会正确设置 flag 的
-版本，归一化两步仍是幂等无害的（按版本号如实设置）。
+`npm run gate -- release-assets:self-test`（判据自测）继续全档跑；流水线里的归一化
+（build 腿，`if: always()`）与 L2（publish-assets）让「flag 正确 + 资产齐全」从人工
+步骤变成每次发布必跑。若将来 tauri-action 升级到会正确设置 flag 的版本，归一化仍是
+幂等无害的（按版本号如实设置）。

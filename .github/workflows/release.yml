@@ -365,6 +365,35 @@ jobs:
         if: always()
         run: node scripts/report-bundle-size.mjs --markdown
 
+      # 🔴 2026-11-15：F15 复发的归一化步骤——**刻意放在 build job 内**（CodeRabbit #33
+      #    finding：原先放在 publish-assets，而它 needs: portable，portable 一失败整条
+      #    归一化就被跳过，公开的 Release 会留着错误的 prerelease 标记）。
+      #    tauri-action（钉住的 84b9d35）命中**已存在**的 Release 对象时原样使用、绝不
+      #    设置 flag（该版本没有 updateRelease 调用），而对象每次都早于它就存在 ⇒ flag
+      #    由「谁先建了对象」决定（实测 rc 线 6 个全 false）。三个平台腿各自跑一次，
+      #    对同一 Release 的 PATCH 是**幂等**的（同值覆盖），无需互斥。
+      #    `if: always()`：tauri-action 建了 Release 却在上传中途失败时也要归一——
+      #    那时 Release 已公开。Release 不存在（tauri-action 没建）时容错跳过。
+      - name: Normalize prerelease flag (F15, not gated on other jobs)
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+          RELEASE_ID=$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id 2>/dev/null || true)
+          if [ -z "${RELEASE_ID}" ]; then
+            echo "Release ${TAG} 尚不存在（tauri-action 未建）——无需归一"
+            exit 0
+          fi
+          # 两个方向都走 API：gh release edit 没有 --no-prerelease，正式版要取消标记时
+          # 只能 PATCH。-F 走 gh 的类型推断（"true"/"false" → JSON 布尔）。
+          gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -F prerelease="${PRERELEASE}" >/dev/null
+          echo "prerelease 已归一为 ${PRERELEASE}"
+
       # 补丁健康度写进 job summary（组装后 MANIFEST.json 才有逐条证据）。
       # 报告不作门禁——补丁失败的分级策略已由 prepare:harness 执行。
       - name: Report patch health
@@ -616,33 +645,19 @@ jobs:
           gh release upload "${TAG}" dist/portable/* --clobber
           echo "已把便携版资产挂到 Release ${TAG}"
 
-      - name: Normalize prerelease flag and verify the release (L2)
-        # 🔴 2026-11-15：F15（2026-10-10）的**复发**修好。同一缺陷此前只补了判据、
-        #    没接流水线，于是又复发了 5 次。根因链（全部实测）：
-        #    ① tauri-action（钉住的 84b9d35，2026-03-14）的 getOrCreateRelease 在
-        #       draft=false 路径下 getReleaseByTag **命中**已存在的 Release 时原样使用
-        #       ——该版本没有任何 updateRelease 调用，**绝不设置 prerelease**；
-        #    ② 而 Release 对象每次都**早于** tauri-action 首次调用就存在（09:38:03 vs
-        #       09:40:02；10-29 的 rc.4.1 早 12 分钟；两次探针证明 GitHub 不自动建
-        #       Release，创建者身份未归因）；
-        #    ③ 于是 flag 由「谁先建了对象」决定：rc 线 6 个 Release 全是 false ⇒
-        #       进 releases/latest，stable 用户被投递 rc；alpha 线全 true。
-        # 修法**不依赖创建者身份**：发布末尾按版本号如实归一（两个方向都走 API——
-        # gh release edit 没有 --no-prerelease，正式版要取消标记时只能 PATCH），
-        # 并把 L2 核对（资产清单 + prerelease + draft）接进流水线——它此前只支持
-        # 手动 `--check-release`，而「人工步骤」在 F15 上已经失败了 6 次。
+      - name: Verify the release (L2: assets + prerelease + draft)
+        # 🔴 2026-11-15：F15 复发的另一半修法。归一化**不在本 job**——它在 build job 内
+        #    （`if: always()`，不依赖任何其它 job，portable 失败也跑）；本 job needs:
+        #    portable，只承担「全部资产挂完后的完整 L2 核对」。分工：flag 归一不等待
+        #    便携版，完整资产核对等待（CodeRabbit #33 finding 的处置）。
+        #    此前 L2 只支持手动 `--check-release`，靠「发布后人记得跑」——F15 因此复发
+        #    6 次（AGENTS §7.3「写了却不在任何自动流程里」缺陷族）。
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.preflight.outputs.tag }}
-          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
         run: |
           set -euo pipefail
-          REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-          RELEASE_ID=$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id)
-          # -F 走 gh 的类型推断（"true"/"false" → JSON 布尔）。
-          gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -F prerelease="${PRERELEASE}" >/dev/null
-          echo "prerelease 已归一为 ${PRERELEASE}"
           node scripts/verify-release-assets.mjs --check-release "${TAG}"
 
   # ---------------------------------------------------------------------------
