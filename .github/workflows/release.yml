@@ -645,7 +645,7 @@ jobs:
           gh release upload "${TAG}" dist/portable/* --clobber
           echo "已把便携版资产挂到 Release ${TAG}"
 
-      - name: Verify the release (L2: assets + prerelease + draft)
+      - name: "Verify the release (L2: assets + prerelease + draft)"
         # 🔴 2026-11-15：F15 复发的另一半修法。归一化**不在本 job**——它在 build job 内
         #    （`if: always()`，不依赖任何其它 job，portable 失败也跑）；本 job needs:
         #    portable，只承担「全部资产挂完后的完整 L2 核对」。分工：flag 归一不等待
