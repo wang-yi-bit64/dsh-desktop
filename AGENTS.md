@@ -261,7 +261,8 @@
 > 三路合并移植；`llm-pi-ai` 采上游 `statusSource` 形态并保留 403→FORBIDDEN 拆分；
 > **补裁退役 `ui-sidebar` 的自定义 padding hunk**（§3 分级表 2026-09-16 已裁定、rc 线
 > 11-07 轮漏执行；上游 rc.1 起已原生适配 macOS）。预检 clean 4 / conflict 8 → 复检
-> clean 12 / conflict 0，**0 补丁退役**。真实组装 12/12 applied、L1 烟雾 5/5。
+> clean 12 / conflict 0，**0 补丁退役**。真实组装 12/12 applied、L1 烟雾 5/5、scope=full
+> 三平台烟雾全绿（2026-11-15 补跑，发布前证据链）。
 > 逐条裁定见 [`patches/LAYERS.md`](patches/LAYERS.md) 的 2026-11-14 记录。
 
 > ✅ **next 线于 2026-11-07 从 `0.2.1-rc.4` 推进到 `0.2.2-rc.1`**（**跳过 `0.2.1-rc.5`**；

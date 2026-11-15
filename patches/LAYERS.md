@@ -714,6 +714,11 @@ npm 精确可解析，因脚本在「锚点已动、键未建」路径上有一�
   typert browser 有 `taking over during replay`、sidebar 有 `data-dsh-sidebar-root` 且
   **`padding-top:32px` 零命中**（退役生效的直接证据）。
 - L1 无头烟雾 **5/5 PASS**（最终补丁集），日志自证 `dsh=0.2.2-rc.3 node=24.9.0 patches=12/12`。
+- **scope=full 三平台烟雾全绿**（run
+  [43664041543](https://github.com/wang-yi-bit64/dsh-desktop/actions/runs/43664041543)，main
+  `a92d283`，2026-11-15 补跑：真实资源树 L1 + 打包 + L2 GUI + 故障注入，三平台 job 全部
+  success）——发布前证据链（runbook §8.6「两条线各自都要有证据」）至此完备；alpha 线树与其
+  已发布的 0.2.2-alpha.3.1 相同，无需重跑。
 - 门禁：`patches` / `drift`（next 未落后：0.2.2-rc.3 ≥ 0.2.2-rc.3）/ `doc-facts` /
   `plan-facts` / `verify:fast`（除 `cargo test` 一项外全绿——`supervisor_lifecycle_races`
   在本机为已知 flaky，A/B 对照：**干净树同样失败**，与本轮零 Rust 改动无关）。
